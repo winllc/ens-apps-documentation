@@ -1,0 +1,120 @@
+site_name: ENS Applications Documentation
+site_description: Install, configuration, operator, administrator and user documentation for the ENS application suite.
+repo_url: https://github.com/winllc/ens-apps-documentation
+repo_name: winllc/ens-apps-documentation
+edit_uri: edit/master/docs/
+copyright: Copyright &copy; WIN LLC
+
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.tabs.link
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  icon:
+    repo: fontawesome/brands/github
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.keys
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+plugins:
+  - search
+
+nav:
+  - Home: index.md
+  - CertAlert:
+      - cert-alert/index.md
+      - Install guide: cert-alert/install.md
+      - Configuration guide: cert-alert/configuration.md
+      - Operator guide: cert-alert/operator-guide.md
+      - Admin guide: cert-alert/admin-guide.md
+      - User guide: cert-alert/user-guide.md
+      - Additional guidance:
+          - Architecture: cert-alert/architecture.md
+          - Security: cert-alert/security.md
+          - API reference: cert-alert/api-reference.md
+          - Troubleshooting: cert-alert/troubleshooting.md
+  - Directory Services Portal:
+      - directory-services-portal/index.md
+      - Install guide: directory-services-portal/install.md
+      - Configuration guide: directory-services-portal/configuration.md
+      - Operator guide: directory-services-portal/operator-guide.md
+      - Admin guide: directory-services-portal/admin-guide.md
+      - User guide: directory-services-portal/user-guide.md
+      - Additional guidance:
+          - Architecture: directory-services-portal/architecture.md
+          - Security: directory-services-portal/security.md
+          - API reference: directory-services-portal/api-reference.md
+  - ReadyRoom:
+      - readyroom/index.md
+      - Install guide: readyroom/install.md
+      - Configuration guide: readyroom/configuration.md
+      - Operator guide: readyroom/operator-guide.md
+      - Admin guide: readyroom/admin-guide.md
+      - User guide: readyroom/user-guide.md
+      - Additional guidance:
+          - Windows client: readyroom/windows-client.md
+          - Security: readyroom/security.md
+          - API reference: readyroom/api-reference.md
+          - Troubleshooting: readyroom/troubleshooting.md
+  - RSA Operations Portal:
+      - rsa-operations-portal/index.md
+      - Install guide: rsa-operations-portal/install.md
+      - Configuration guide: rsa-operations-portal/configuration.md
+      - Operator guide: rsa-operations-portal/operator-guide.md
+      - Admin guide: rsa-operations-portal/admin-guide.md
+      - User guide: rsa-operations-portal/user-guide.md
+      - Additional guidance:
+          - Architecture: rsa-operations-portal/architecture.md
+          - RSA AM integration: rsa-operations-portal/rsa-integration.md
+          - Security: rsa-operations-portal/security.md
+          - HTTP route reference: rsa-operations-portal/api-reference.md
+          - Build & release: rsa-operations-portal/build-and-release.md
+          - Troubleshooting: rsa-operations-portal/troubleshooting.md
