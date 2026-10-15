@@ -46,6 +46,12 @@ set of guides, so you can find the same kind of information in the same place fo
 
 </div>
 
+## Licensing
+
+Each application runs its core features without a license; a license file from ENS Solutions
+turns on the rest. See [Licensing](licensing.md) for what each license unlocks and where the
+file goes.
+
 ## How each section is organised
 
 | Guide | Read it if you… |
