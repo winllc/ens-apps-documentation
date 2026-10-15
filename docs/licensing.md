@@ -17,9 +17,10 @@ reporting and analysis on top.
 - The file is re-read when it changes, within about 30 seconds, so a renewal takes effect without
   a restart. Expiry is checked continuously: the licensed features switch off after the end of the
   expiry date (UTC).
-- A request for a feature that is not licensed gets **403**. API callers get
-  `{"error": "license_required", "feature": "<id>", ...}`, and pages say the feature needs a
-  license. Menu items for unlicensed features are hidden, and scheduled jobs that belong to them
+- A request for a feature that is not licensed gets **403**. API callers get a JSON body naming
+  the feature (`"feature": "<id>"`) and the reason `license_required` (in the `error` field, or in
+  `code` in Directory Services Portal, whose `error` carries the message it shows), and pages say
+  the feature needs a license. Menu items for unlicensed features are hidden, and scheduled jobs that belong to them
   are skipped.
 
 ## Installing a license
@@ -36,6 +37,10 @@ docker run -v /srv/ens/license:/etc/ens/license:ro ...
 With Compose, put the file at `./license/license.lic` next to the compose file; the application
 service mounts `./license` there. With Kubernetes or Docker secrets, mount the secret anywhere and
 set `ENS_LICENSE_FILE` to its path.
+
+Signed-in users can check the license state at `GET /api/v1/license` (CertAlert),
+`GET /api/license` (Directory Services Portal, ReadyRoom) or `GET /license/status` (RSA Operations
+Portal); administrators also see a status line in the application.
 
 Outside a container, set `ENS_LICENSE_FILE` (Spring property `ens.license.file`). The default is
 `license.lic` in the working directory.
