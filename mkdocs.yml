@@ -71,6 +71,7 @@ nav:
   - Home: index.md
   - Licensing: licensing.md
   - Releases and downloads: releases.md
+  - Audit logging: audit-logging.md
   - CertAlert:
       - cert-alert/index.md
       - Install guide: cert-alert/install.md
