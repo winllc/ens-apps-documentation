@@ -48,8 +48,8 @@ set of guides, so you can find the same kind of information in the same place fo
 
 ## Licensing
 
-Each application runs its core features without a license; a license file from ENS Solutions
-turns on the rest. See [Licensing](licensing.md) for what each license unlocks and where the
+Each application needs a license file from ENS Solutions, issued through the ENS licensing portal,
+where customers can also download a free 30-day evaluation. See [Licensing](licensing.md) for what each license unlocks and where the
 file goes.
 
 ## How each section is organised

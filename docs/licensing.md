@@ -1,132 +1,107 @@
 # Licensing
 
-Every application in the suite runs without a license, but only with its **core** features. A
-license file signed by ENS Solutions turns on the **licensed** features it lists. The core of
-each application is complete enough to do its main job; the licensed features add automation,
-reporting and analysis on top.
+Every application in the suite needs a license file from ENS Solutions. Licenses are issued through
+the **ENS licensing portal**:
+- customers download free evaluations and the licenses they have bought;
+- ENS staff issue, renew and revoke licenses against orders.
 
-## How it works
+Each application checks its license offline, against public keys built into it, so licensing works the
+same on an air-gapped network.
 
-- A license is a small text file (`*.lic`) naming the product, the licensee, an expiry date and
-  the licensed features (`*` means all of them). It is signed with ENS Solutions' Ed25519 key,
-  and editing any line invalidates it.
-- Each application checks the signature with the public key built into it, and checks that the
-  license is for that product.
-- If the file is missing, invalid, for another product or expired, the application logs why and
-  runs with core features only. It does not refuse to start.
-- The file is re-read when it changes, within about 30 seconds, so a renewal takes effect without
-  a restart. Expiry is checked continuously: the licensed features switch off after the end of the
-  expiry date (UTC).
-- A request for a feature that is not licensed gets **403**. API callers get a JSON body naming
-  the feature (`"feature": "<id>"`) and the reason `license_required` (in the `error` field, or in
-  `code` in Directory Services Portal, whose `error` carries the message it shows), and pages say
-  the feature needs a license. Menu items for unlicensed features are hidden, and scheduled jobs that belong to them
-  are skipped.
+## Getting a license
+
+1. **Create an account** on the ENS licensing portal (`/account`) and confirm your email address.
+2. **Evaluate**: download a free 30-day evaluation license for any product, one per product. An
+   evaluation covers the smallest size band, unlocks every feature, and shows an evaluation banner.
+3. **Buy**: licenses for your order (pilot, subscription or perpetual) are issued into the same
+   account by ENS. Download them from **Account → Licenses**.
+4. **Bind (optional)**: a license can be tied to one installation by entering that installation's id,
+   shown on the application's license screen. A bound file is refused by every other installation.
 
 ## Installing a license
 
-The production images look for the license at **`/etc/ens/license/license.lic`**. Mount it
-read-only:
+The simplest way is the application's **license screen**: an administrator signs in, opens it, and
+uploads the `.lic` file. It shows whether the file was accepted and why not if it was refused.
+The license takes effect immediately; no restart is needed.
+
+| Application | License screen | Who can open it |
+|---|---|---|
+| CertAlert | `/admin/license` | Administrators |
+| Directory Services Portal | `/admin/license` | Administrators |
+| ReadyRoom | `/app/admin/license` (**License** in the admin menu) | Administrators |
+| RSA Operations Portal | `/admin/license` | PMO |
+
+While an application is unlicensed, administrators are taken to the license screen as soon as they
+sign in. Everyone else sees a page asking them to contact their administrator.
+
+The applications keep the license, the installation id and their license history in one directory:
+
+| Setting | In the container images | Outside a container (default) |
+|---|---|---|
+| `ENS_LICENSE_FILE` | `/var/lib/ens/<product>/license.lic` | `/etc/ens/<product>.lic` |
+| `ENS_LICENSE_STATE_DIR` | `/var/lib/ens/<product>` | `/var/lib/ens/<product>` |
+
+`<product>` is `certalert`, `directory-portal`, `readyroom` or `mfa-portal`.
+
+The images declare `/var/lib/ens` as a volume, and the release bundles' compose files keep it on a
+named volume, `ens-license`. **Keep that volume.** The installation id lives there: if it is lost,
+the installation gets a new id and any license bound to the old one must be re-bound on the portal.
+
+You can also skip the upload screen. Put the file at `license/license.lic` next to the bundle's
+`docker-compose.yml` before running `install.sh` or `upgrade.sh`, and they copy it in. Or copy it in
+yourself:
 
 ```bash
-docker run -v /srv/ens/license.lic:/etc/ens/license/license.lic:ro ...
-# or mount the directory that holds license.lic
-docker run -v /srv/ens/license:/etc/ens/license:ro ...
+docker compose cp license.lic <service>:/var/lib/ens/<product>/license.lic
 ```
 
-With Compose, put the file at `./license/license.lic` next to the compose file; the application
-service mounts `./license` there. With Kubernetes or Docker secrets, mount the secret anywhere and
-set `ENS_LICENSE_FILE` to its path.
+## What the license controls
 
-Signed-in users can check the license state at `GET /api/v1/license` (CertAlert),
-`GET /api/license` (Directory Services Portal, ReadyRoom) or `GET /license/status` (RSA Operations
-Portal); administrators also see a status line in the application.
-
-Outside a container, set `ENS_LICENSE_FILE` (Spring property `ens.license.file`). The default is
-`license.lic` in the working directory.
-
-The application logs the license state at startup, for example:
-
-```text
-License: licensed to Acme Corp (5f0c...), features [*], expires 2027-12-31
-License: no license file at /etc/ens/license/license.lic; running with core features only
-```
-
-## Licensed features
-
-### CertAlert (`cert-alert`)
-
-| Feature id | What it unlocks |
+| License state | What the application does |
 |---|---|
-| `revocation` | OCSP and CRL revocation checks |
-| `tls-probe` | Probing a server's TLS endpoint for the certificate it actually serves |
-| `changelog` | Near-real-time sync from the directory changelog |
-| `directory-cleanup` | Certificate cleanup and prune, which write back to the directory |
-| `email-notifications` | Email digests, email alerts and email delivery of notifications |
-| `projects` | Projects and project administrators |
-| `metrics` | The metrics dashboard |
+| Valid | Everything the license's feature list unlocks. Evaluations show a banner. |
+| Expired, within the grace period (subscriptions: 30 days) | The same, plus a renewal warning for administrators. |
+| Expired past grace | **Read-only**: data stays visible and exportable; nothing can be changed; scheduled jobs, syncs and notifications pause. |
+| Perpetual, but this release was built after its maintenance ended | Read-only. Renew maintenance or run an older release. |
+| Missing, invalid, for another product or installation, superseded by a newer revision, or not yet valid | **Unlicensed**: only sign-in and the license screen work. |
 
-Core: directory sweeps and refresh, the People and Servers tables, certificate expiry status,
-sign-in, in-app notifications, logging alerts, server attributes, contacts, the audit trail
-and the banner.
+Administrators see a renewal reminder from 30 days before expiry.
 
-### Directory Services Portal (`directory-services-portal`)
+**Size limits.** Each license covers a number of directory users, tracked people or SecurID users. Up
+to 10% over, the application warns. Further over, it stops taking on more, though it never removes
+anything. CertAlert enforces this as it sweeps the directory, and ReadyRoom as new people are tracked.
+The RSA Operations Portal and Directory Services Portal show usage only.
 
-| Feature id | What it unlocks |
+## Features
+
+A license lists every standard feature of its product. Enterprise features come with the top size
+band, evaluations and pilots, or when ENS adds them to an order.
+
+| Product | Feature ids |
 |---|---|
-| `analysis` | Data-quality analysis, its findings and CSV export |
-| `metrics` | Metrics, the metrics explorer and dashboards |
-| `schema-transfer` | Schema import and export |
+| CertAlert (`certalert`) | `directory-sync`, `changelog-sync`, `notifications`, `metrics`, `projects`, `revocation-checks`, `endpoint-checks`, `risky-names`, `directory-cleanup`, `classification-banners`, `multi-directory` (Enterprise, not yet in the product) |
+| Directory Services Portal (`directory-portal`) | `directory-editor`, `form-builder`, `self-service-profile`, `white-pages`, `smart-card-sign-in`, `metrics`, `data-analysis`, `schema-transfer` |
+| ReadyRoom (`readyroom`) | `attendance`, `calendar`, `absence-alerts`, `metrics` (metrics and reports), `org-chart`, `classification-banners` |
+| RSA Operations Portal (`mfa-portal`) | `self-service`, `trusted-agents`, `help-desk`, `shipments`, `scheduled-jobs`, `branding`, `reports`, `bulk-upload`, `group-email` |
 
-Core: sign-in (password and X.509), directory browse, search and editing, self-service
-profiles, administration of definitions, forms, schema and permissions, the audit log and the
-banner.
+The catalog lives in the portal's source, in `src/data/licensing.ts` in the products-page
+repository. Every feature is checked by its application, so moving one between tiers changes only
+that file. Never rename an id once licenses carrying it have been issued.
 
-### ReadyRoom (`readyroom`)
+## For ENS: keys and issuing
 
-| Feature id | What it unlocks |
-|---|---|
-| `metrics` | The metrics dashboard |
-| `reports` | My Reports and group reports, including PDF export |
-| `org-chart` | The org chart |
-| `absence-alerts` | Absence email notifications to managers |
+- **Signing key.** The portal signs licenses with an Ed25519 key passed in `LICENSE_SIGNING_KEY` or
+  `LICENSE_SIGNING_KEY_FILE`. Generate one with `npm run license -- keygen` in the products-page
+  repository. Keep the private key in a secret store and never commit it.
+- **Public keys.** Each application has the public key built in, as `EnsKeys`, by key id. Licenses
+  name the key that signed them, so keys can be rotated:
+  1. add the new public key to every application and release;
+  2. switch the portal to the new private key;
+  3. remove the old public key once no license signed with it is still in use.
 
-Core: the Windows client check-in and check-out API, the home dashboard, profile and calendar,
-groups, user search, in-app notifications, settings, and every sign-in method.
-
-### RSA Operations Portal (`rsa-operations-portal`)
-
-| Feature id | What it unlocks |
-|---|---|
-| `reports` | The overview, site and trusted-agent reports |
-| `bulk-upload` | Bulk trusted-agent upload from CSV |
-| `group-email` | Group email messages |
-| `automation` | The scheduled jobs (expiry and appointment emails, TA re-sync, lost-token monitoring, delayed registration emails, PIN-reset checks) and manual job runs |
-
-Core: sign-in and every token operation (enrollment, testing, PIN resets, lost, deprovisioned and
-distributed tokens), user search, appointments, shipments, sites, trusted agents, exemptions,
-system notifications, role mapping and the admin page.
-
-## Issuing licenses
-
-Licenses are issued with the single-file
-[license tool](https://github.com/winllc/ens-apps-documentation/tree/master/tools/license-tool),
-which needs only a JDK:
-
-```bash
-java LicenseTool.java sign --key keys/ens-license.private.pem \
-    --product readyroom --licensee "Acme Corp" --expires 2027-12-31 --out acme-readyroom.lic
-```
-
-A license looks like this:
-
-```properties
-# ENS Solutions license. Any edit invalidates the signature.
-expires=2027-12-31
-features=*
-issued=2026-10-15
-licenseId=0bb2325b-745c-433b-9db3-8f2abb981e40
-licensee=Acme Corp
-product=readyroom
-signature=BBd3w4TKJe8m...
-```
+  Until the old key is removed from the applications, keep it trusted on the portal with
+  `LICENSE_TRUSTED_KEYS`.
+- **Inspecting and checking files.** `npm run license -- inspect file.lic` decodes a license, and
+  `npm run license -- verify file.lic <public-key>` checks its signature.
+- **The file format** is described in `licensing/README.md` in the products-page repository. That
+  directory also holds the Java library every application embeds.
