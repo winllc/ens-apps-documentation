@@ -14,7 +14,15 @@ and the ENS licensing portal.
 
 ## For administrators: the audit page
 
-<!-- PRODUCT-TABLE -->
+Each application has an **Audit log** page for its administrators:
+
+| Application | Audit page | Who can open it |
+|---|---|---|
+| CertAlert | `/admin/audit` | Administrators (ADMIN) |
+| Directory Services Portal | `/admin/audit` | Administrators |
+| ReadyRoom | `/app/admin/audit` | Administrators (ADMIN) |
+| RSA Operations Portal | `/admin/audit` | PMO |
+| ENS licensing portal | `/admin/audit` | ENS staff administrators. Customers see their own account's events on their account page. |
 
 The page lists events newest first. You can filter by:
 - time;
@@ -126,7 +134,7 @@ environment. Spring-based applications also accept them as `ens.audit.*` propert
 |---|---|---|
 | `ENS_AUDIT_STDOUT` | `true` | Write each event as a raw JSON line on the `ens.audit` log stream |
 | `ENS_AUDIT_FILE` | *(off)* | Also append to this file, for example `/var/log/ens/<product>/audit.jsonl`. Rotated daily or at 100 MB. |
-| `ENS_AUDIT_FILE_KEEP` | `30` | Rotated files to keep |
+| `ENS_AUDIT_FILE_KEEP` | `30` | Days of rotated files to keep |
 | `ENS_AUDIT_SPLUNK_URL` | *(off)* | HEC base URL, for example `https://splunk.example.com:8088` |
 | `ENS_AUDIT_SPLUNK_TOKEN` / `ENS_AUDIT_SPLUNK_TOKEN_FILE` | | HEC token, or a file holding it |
 | `ENS_AUDIT_SPLUNK_INDEX` | *(token's default)* | Index to write to |
