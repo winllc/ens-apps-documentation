@@ -70,6 +70,7 @@ plugins:
 nav:
   - Home: index.md
   - Licensing: licensing.md
+  - Releases and downloads: releases.md
   - CertAlert:
       - cert-alert/index.md
       - Install guide: cert-alert/install.md
