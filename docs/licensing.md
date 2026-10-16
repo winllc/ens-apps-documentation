@@ -26,10 +26,13 @@ The license takes effect immediately; no restart is needed.
 
 | Application | License screen | Who can open it |
 |---|---|---|
-| CertAlert | Administration → License | Administrators |
-| Directory Services Portal | Administration → License | Administrators |
-| ReadyRoom | Settings → License | Administrators |
-| RSA Operations Portal | Admin → License | PMO |
+| CertAlert | `/admin/license` | Administrators |
+| Directory Services Portal | `/admin/license` | Administrators |
+| ReadyRoom | `/app/admin/license` (**License** in the admin menu) | Administrators |
+| RSA Operations Portal | `/admin/license` | PMO |
+
+While an application is unlicensed, administrators are taken to the license screen as soon as they
+sign in. Everyone else sees a page asking them to contact their administrator.
 
 The applications keep the license, the installation id and their license history in one directory:
 
