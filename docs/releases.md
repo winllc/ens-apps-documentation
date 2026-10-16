@@ -89,9 +89,8 @@ gpg --armor --export releases@ens-solutions.com > ens-solutions-release.asc   # 
 gpg --fingerprint releases@ens-solutions.com                   # send separately, for them to check
 ```
 
-This key signs downloads. It is separate from the license signing key in
-[tools/license-tool](https://github.com/winllc/ens-apps-documentation/tree/master/tools/license-tool),
-and the two should never be the same key.
+This key signs downloads. It is separate from the license signing key the licensing portal uses
+(see [Licensing](licensing.md)), and the two should never be the same key.
 
 ### Sending a customer their download
 
