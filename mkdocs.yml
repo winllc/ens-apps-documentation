@@ -94,6 +94,8 @@ nav:
       - Additional guidance:
           - Architecture: directory-services-portal/architecture.md
           - Security: directory-services-portal/security.md
+          - FIPS 140-3 and DISA STIG: directory-services-portal/fips-and-stig.md
+          - Sizing, availability and recovery: directory-services-portal/availability-and-sizing.md
           - API reference: directory-services-portal/api-reference.md
   - ReadyRoom:
       - readyroom/index.md

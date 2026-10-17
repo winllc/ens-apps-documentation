@@ -19,21 +19,37 @@ This page summarises the portal's security controls and the settings that affect
 | Password sign-in | Service-account search with `LDAP_USER_FILTER` (exactly one match), then an LDAP bind as the user |
 | Anonymous bind prevention | Empty passwords are rejected before any bind |
 | Username validation | Letters, digits and `. _ @ + -`, at most 128 characters; values are filter-escaped |
-| Brute-force throttling | 8 failures per client address and username within 15 minutes → HTTP 429. Relies on the real client address, so set `FORWARD_HEADERS_STRATEGY` behind a proxy |
+| Brute-force throttling | `LOGIN_MAX_FAILURES` failures (default 8) per client address and username within `LOGIN_LOCKOUT_WINDOW` (default 15 minutes) → HTTP 429, audited as `auth.lockout` (severity alert). Relies on the real client address, so set `SERVER_FORWARD_HEADERS_STRATEGY=framework` behind a proxy. The counters are in memory, so a restart clears them |
+| Notice and consent banner | `ENS_CONSENT_BANNER_ENABLED=true`: no sign-in of any kind succeeds until the browser session has acknowledged the DoD banner. Enforced by the API (403 `consent_required`), audited as `auth.consent-acknowledged`. See [Configuration](configuration.md#notice-and-consent-banner) |
 | Certificate-only mode | `PASSWORD_LOGIN_ENABLED=false` |
-| Administrator role | `ROLE_ADMIN` from `ADMIN_USERS` / `ADMIN_GROUPS`; required for `/api/admin/**` |
+| Administrator role | `ROLE_ADMIN` from `ADMIN_USERS` / `ADMIN_GROUPS`; required for `/api/admin/**`. Read again from the directory every `GROUP_REFRESH_INTERVAL` (default 5 minutes) |
 
 ## Sessions and CSRF
 
-- Spring Security `HttpSession`, cookie `DSP_SESSION`: `HttpOnly`, `SameSite=Strict`, and `Secure` when
-  `COOKIE_SECURE=true` (always under the `mtls` profile). The session ID is rotated at sign-in and
-  the session is invalidated at sign-out.
+- Spring Security `HttpSession`, cookie `DSP_SESSION`: `HttpOnly`, `SameSite=Strict`, and `Secure`
+  over direct TLS or when `ENS_COOKIE_SECURE=true` (always under the `mtls` profile). The session ID
+  is rotated at sign-in and the session is invalidated at sign-out.
+- **Timeouts and limits** (DISA STIG): an idle timeout (`ENS_SESSION_IDLE_TIMEOUT`, default `30m`),
+  a shorter one for administrators if you set `ENS_SESSION_ADMIN_IDLE_TIMEOUT`, an absolute
+  lifetime (`ENS_SESSION_ABSOLUTE_TIMEOUT`, default `12h`) and an optional limit on concurrent
+  sessions per user (`ENS_SESSION_MAX_PER_USER`; over it the oldest session ends). The web client's
+  background polling is marked `X-DSP-Background: 1` and does not keep a session alive. Each expiry
+  is audited as `auth.session-expired` with the reason `idle`, `absolute`, `concurrent` or
+  `account-removed`.
+- **Group refresh**: a signed-in user's groups and administrator status are read again every
+  `GROUP_REFRESH_INTERVAL`. Removing someone from `ADMIN_GROUPS` takes effect within that
+  interval. If the account was deleted, its sessions end; if the directory is down, the session
+  keeps its groups.
 - **CSRF defence**: every state-changing `/api/` request (anything except GET, HEAD, OPTIONS and TRACE)
   must carry `X-DSP-Request: 1`, or it is refused with 403 *Missing request verification header*.
   Browsers can't add custom headers to cross-site requests without a CORS preflight, which the API
-  never approves. The `SameSite=Strict` cookie is a second layer.
-- Response headers from the API: `X-Frame-Options: DENY` and `Referrer-Policy: same-origin`. nginx
-  adds `X-Content-Type-Options: nosniff` (and HSTS in the mTLS configuration).
+  never approves. The `SameSite=Strict` cookie is a second layer. Spring Security's own CSRF token
+  is turned off because this header check replaces it.
+- **Security headers**: the ENS baseline set (Content-Security-Policy without inline scripts,
+  HSTS on HTTPS, `nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy:
+  strict-origin-when-cross-origin`, `Permissions-Policy`). nginx sends them and hides the API's
+  copies on `/api`; the API sends the same set to anyone who reaches it directly. See
+  [Configuration → Security headers](configuration.md#security-headers).
 - Sessions are held in memory. Run a single API instance.
 
 ## Authorization
@@ -72,9 +88,21 @@ Before a certificate is accepted, the API checks that:
 
 1. it is within its validity period
 2. it is allowed for TLS client authentication (extended key usage / key usage)
-3. when `X509_TRUSTED_CA_FILE` is set, it chains to a trusted CA, and revocation is checked through
-   OCSP or CRL distribution points when `X509_CHECK_REVOCATION=true`. In header mode this check is
-   mandatory: a forwarded certificate is refused without `X509_TRUSTED_CA_FILE`
+3. when `ENS_X509_ALLOWED_ISSUERS` is set, its issuer is one of those DNs
+4. when `X509_TRUSTED_CA_FILE` is set, it chains to a trusted CA and is not revoked
+   (`ENS_X509_REVOCATION`). In header mode the chain check is mandatory: a forwarded certificate is
+   refused without `X509_TRUSTED_CA_FILE`
+
+**Revocation checking** is configured per sign-in: the JDK's PKIX validator runs with its own
+revocation checker, and no global JDK security property is changed. The API fetches OCSP responses
+and CRLs itself with fixed limits: http or https only, 5 s to connect and 10 s to read, at most 3
+redirects, 1 MB per OCSP response and 32 MB per CRL, and never to link-local, multicast or
+cloud-metadata addresses. It checks the target address before connecting, so a host name that
+changes its answer between that check and the connection (DNS rebinding) is not ruled out. On an
+air-gapped network, use a CRL directory (`ENS_X509_CRL_DIR`) or a local OCSP responder
+(`ENS_X509_OCSP_RESPONDER_URL`). With `ENS_X509_REVOCATION_FAIL=closed` (the default), a
+certificate whose status can't be determined is refused. See
+[Configuration → Revocation checking](configuration.md#revocation-checking).
 
 The API then maps the certificate to **exactly one** directory user, with `X509_USER_FILTER` or the
 subject DN. With `X509_REQUIRE_CERTIFICATE_MATCH=true`, the certificate must also be published in
@@ -117,16 +145,68 @@ issuer.
 - The container images run as unprivileged users (uid 185 / 1001, group 0) on unprivileged ports,
   and are compatible with the OpenShift `restricted` SCC.
 
+- The native package's systemd unit also sets `ProtectKernelTunables`, `ProtectKernelModules`,
+  `ProtectControlGroups`, `RestrictSUIDSGID`, `LockPersonality`, an empty capability set,
+  `PrivateDevices`, `SystemCallFilter=@system-service` (a denied call fails with `EPERM`),
+  `RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX`, `RestrictNamespaces`, `RestrictRealtime` and
+  `UMask=0077`, so the files the API creates are private to it.
+- The Docker package runs both containers with all capabilities dropped, `no-new-privileges`, a
+  read-only root file system and a memory limit. The Helm chart does the same through the pod
+  security contexts (`readOnlyRootFilesystem`, no privilege escalation, `RuntimeDefault` seccomp).
+- With the Helm chart, the LDAP bind password and the X.509 proxy secret are mounted as files, not
+  set as environment variables. The Splunk HEC token and the trust store password are passed as
+  environment variables from Secrets.
+- The management port (`MANAGEMENT_SERVER_PORT`) serves health and Prometheus without sign-in. It
+  is never published by the compose files, the ingress or the route; the native package binds it to
+  `127.0.0.1`.
+
+## Supply chain
+
+- Every GitHub Action in the build is pinned to a commit SHA and every base image to a digest.
+  Dependabot proposes weekly updates.
+- Every push and pull request runs CodeQL (Java and TypeScript), `npm audit --omit=dev
+  --audit-level=high`, and a Trivy scan of both images that fails on fixable HIGH or CRITICAL
+  findings.
+- On a release tag, both images (by digest) and the Helm chart are signed with cosign (keyless,
+  GitHub OIDC), and each image gets its SPDX SBOM as a signed attestation. Verify an image before
+  you deploy it:
+
+    ```bash
+    cosign verify ghcr.io/winllc/directory-services-portal-api@<digest> \
+      --certificate-identity-regexp 'https://github.com/winllc/directory-services-portal/.github/workflows/.*' \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com
+    ```
+
+    Do the same for `ghcr.io/winllc/directory-services-portal-web` and
+    `ghcr.io/winllc/charts/directory-services-portal`, and use `cosign verify-attestation --type
+    spdxjson` for the SBOMs. The release download itself is verified with `SHA256SUMS.asc`; see
+    [Releases](../releases.md).
+
+## FIPS 140-3 and DISA STIG
+
+See [FIPS 140-3 and DISA STIG](fips-and-stig.md) for what the portal relies on, the settings a STIG
+deployment needs, and the options that are not FIPS-appropriate.
+
 ## Hardening checklist
 
 - [ ] `DIRECTORY_MODE=ldap` with a dedicated, least-privilege service account
+- [ ] The bind password in a file (`LDAP_BIND_PASSWORD_FILE`) rather than the environment, where the
+      deployment allows it
 - [ ] `ldaps://` or `LDAP_STARTTLS=true`, with `LDAP_TLS_REJECT_UNAUTHORIZED=true`
-- [ ] HTTPS in front of the portal and `COOKIE_SECURE=true`
-- [ ] `FORWARD_HEADERS_STRATEGY=framework` only when the API is reachable solely through your proxy
+- [ ] HTTPS in front of the portal and `ENS_COOKIE_SECURE=true`
+- [ ] `SERVER_FORWARD_HEADERS_STRATEGY=framework` only when the API is reachable solely through your
+      proxy
 - [ ] `ADMIN_GROUPS` set to a small, controlled group
 - [ ] `SEED_DEMO_CONFIG=false` in production
+- [ ] Session limits as your policy requires (DISA STIG suggests `ENS_SESSION_ADMIN_IDLE_TIMEOUT=15m`,
+      `ENS_SESSION_MAX_PER_USER=3` and `LOGIN_MAX_FAILURES=3`)
+- [ ] For DoD systems: `ENS_CONSENT_BANNER_ENABLED=true`
+- [ ] For X.509: `ENS_X509_REVOCATION` other than `off`, and `ENS_X509_ALLOWED_ISSUERS` if only
+      some trusted CAs issue user certificates
 - [ ] For X.509 in header mode: the proxy secret kept private (`.env` mode `600`, or the secret
       file), `X509_TRUSTED_CA_FILE`, and tight `X509_TRUSTED_PROXIES`
 - [ ] With Helm edge termination: `networkPolicy.webIngressFrom` limited to the ingress controller
-- [ ] Audit files protected, archived and forwarded (`audit` logger → SIEM)
-- [ ] Images rebuilt regularly to pick up UBI security updates
+- [ ] The management port kept off user networks
+- [ ] Audit store protected and forwarded (`ENS_AUDIT_*` → SIEM), with `ENS_AUDIT_RETENTION_DAYS` set
+      to your policy
+- [ ] Images verified with `cosign verify`, and kept current to pick up UBI security updates

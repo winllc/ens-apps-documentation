@@ -211,12 +211,26 @@ flowchart TD
 ```
 
 - Users are matched by username (case-insensitive) or DN. Groups are matched by DN, using the
-  groups resolved at sign-in. Group membership therefore changes take effect at the user's next
-  sign-in, while grant changes take effect immediately.
+  groups resolved at sign-in and read again every `GROUP_REFRESH_INTERVAL` (5 minutes by default).
+  Group membership changes therefore take effect within that interval, while grant changes take
+  effect immediately.
 - A grant for the same definition and subject replaces the previous access level.
 - Read-only definitions accept only view grants.
 - **Self-service**: users can always see definitions that can locate them (self match) on
   **My profile**, and edit their own entry's **Self-service** fields there, even without a grant.
+
+### What the license changes
+
+Two license features decide whether these grants can be used at all:
+
+| Feature | Without it |
+|---|---|
+| `directory-editor` | Nobody, administrators included, can browse, search or edit directories: `/api/definitions` and `/api/directories/**` answer 403 `feature_not_licensed`, and the **Directories** menu is hidden. **My profile** still works with `self-service-profile` |
+| `white-pages` | Read access for users who are not administrators is removed: "Every signed-in user can read" definitions, **Can view** grants and read-only white pages definitions. Such users keep only the definitions they hold **Can view and edit** on. Administrators keep everything |
+
+`white-pages` only widens access inside the directory editor, so it needs `directory-editor` as
+well: a license with `white-pages` but without `directory-editor` gives nobody a directory to
+browse.
 
 ## Metrics dashboards
 
@@ -319,25 +333,42 @@ Each source reads at most `METRICS_MAX_ENTRIES` entries.
 *Admin → Audit log*
 
 Every write goes to the directory as the service account, so the directory's own logs can't say
-who made a change. The portal records it instead.
+who made a change. The portal records it instead, in the `ens-audit/1` format shared by every ENS
+application. The format, the outputs to Splunk and syslog, and integrity checking are described in
+[Audit logging](../audit-logging.md).
 
 | Recorded | Activity names | Includes |
 |---|---|---|
-| Entries created, updated, renamed, deleted (through a directory or **My profile**) | `entry.create`, `entry.update`, `entry.self_update`, `entry.delete` | Each changed attribute's values before and after. A delete keeps everything the entry held |
-| Sign-ins and sign-outs (password or certificate) | `auth.login`, `auth.logout` | For failures: the name tried, or the certificate subject, serial and issuer, and the reason. A certificate header that did not come from the portal's proxy is recorded with `reasonCode` `untrusted_certificate_header` and the connecting `peerAddress` |
+| Entries created, updated, renamed, deleted (through a directory or **My profile**) | `entry.create`, `entry.update`, `entry.self_update`, `entry.delete` | Each changed attribute's values before and after. A delete keeps everything the entry held; a rename records `previousDn` |
+| Sign-ins and sign-outs (password or certificate) | `auth.login`, `auth.logout`, `auth.lockout` | For failures: the name tried, or the certificate subject, serial and issuer, and the reason. A certificate header that did not come from the portal's proxy is recorded with `reasonCode` `untrusted_certificate_header` and the connecting `peerAddress`. A revoked certificate, or one whose status is unknown, is recorded with `certificate_revoked` or `revocation_unknown`. A sign-in before the consent banner was acknowledged is recorded with `consent_required` |
+| Sessions ending | `auth.session-expired` | The reason: `idle`, `absolute`, `concurrent` or `account-removed` |
+| The consent banner | `auth.consent-acknowledged` | The client address |
+| Password changes | `auth.password-changed`, `auth.password-reset` | A password attribute changed by the user themselves (`changed`), or by someone else through a directory (`reset`). The value is never recorded |
+| Refused requests | `access.denied` | Method, path and reason (role, license, feature, CSRF header, the portal's own permission checks). Identical denials within 60 seconds are folded into one event with a count |
 | Configuration changes | `grant.save`, `grant.revoke`, `definition.*`, `form.*`, `schema.import`, `schema.attribute_type.save/delete`, `schema.object_class.save/delete`, `dashboard.*`, `analysis.*` | The settings that changed, before and after |
-| Analysis CSV exports | `analysis.export` | Which analysis or run |
+| The license | `license.installed`, `license.rejected`, `license.mode-changed` | The reason for a rejection; the old and new mode |
+| Exports | `analysis.export`, `data.exported`, `audit.exported` | Which analysis, run or filter |
+| The audit trail itself and the system | `audit.*`, `system.started`, `system.stopped`, `job.*` | See [Audit logging](../audit-logging.md#what-is-recorded) |
 
-Every event records who did it (with their DN and sign-in method), the client address, and an outcome:
-**Success**, **Denied** (the portal's permission checks refused it) or **Failed** (the directory or
-the credentials said no). Requests that fail validation and saves that change nothing are not
-recorded. Values of password attributes are recorded as `(redacted)`.
+Every event records who did it (with their DN and sign-in method), the client address, an outcome
+(**Success**, **Denied** or **Failed**) and a severity. Requests that fail validation and saves that
+change nothing are not recorded. Password attributes, tokens, keys and license text are recorded
+as `[redacted]`.
 
-The page filters by activity, outcome, date range (from/to), person and target, and has a
-free-text search ("Search people, entries, actions, addresses…"). It shows 50 events per page. An entry's
-**History** button opens the log filtered to that entry, including events from before a rename.
-The page searches the newest `AUDIT_MEMORY_EVENTS` events. Use the `audit-YYYY-MM.jsonl` files for
-anything older (see the [Operator guide](operator-guide.md#data-and-backups)).
+The page searches all retained history, newest first, by time range, category, activity, outcome,
+severity, person, target, source address and free text. It shows 50 events per page. An entry's
+**History** button opens the log filtered to that entry, including events from before a rename. A
+search reads at most `ENS_AUDIT_QUERY_MAX_SCAN` events (2,000,000 by default) and says when it
+stopped there. From the page you can also:
+
+- **Export** the current filter (up to 100,000 events) as CSV or NDJSON;
+- **Verify integrity** of the hash chain;
+- see each output's **Delivery** status;
+- create and revoke **API tokens** for a SIEM to pull events.
+
+The page works whatever the license says. How long events are kept is an operator setting,
+`ENS_AUDIT_RETENTION_DAYS` (default: keep everything); see the
+[Operator guide](operator-guide.md#data-and-backups).
 
 ## Site-wide settings
 
@@ -345,6 +376,8 @@ Some settings are environment variables rather than admin-UI settings, so an ope
 
 - login page text: `LOGIN_HINT`
 - classification banner: `BANNER_TEXT`, `BANNER_FOREGROUND`, `BANNER_BACKGROUND`
+- the DoD notice-and-consent banner: `ENS_CONSENT_BANNER_ENABLED` and its text
+- session timeouts and limits: `ENS_SESSION_*`
 - certificate-only sign-in: `PASSWORD_LOGIN_ENABLED=false`
 - administrators: `ADMIN_USERS`, `ADMIN_GROUPS`
 

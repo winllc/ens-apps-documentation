@@ -13,7 +13,9 @@ but scripts can call it too. Behind the bundled nginx, use the portal's own orig
 | CSRF | Every POST, PUT and DELETE must send `X-DSP-Request: 1` (otherwise 403) |
 | Admin | `/api/admin/**` requires an administrator (otherwise 403 *Administrator access required*) |
 | Errors | `{"error": "message"}`, with field details for validation errors (400 *Invalid request*) |
-| Status codes | 200, 201 (created), 202 (background job), 204 (deleted), 400, 401 (*Authentication required*), 403, 404, 405, 409 (conflict, e.g. form in use), 429 (throttled / too many tasks), 500 |
+| Status codes | 200, 201 (created), 202 (background job), 204 (deleted), 400, 401 (*Authentication required*, or `"code": "session_expired"`), 403, 404, 405, 409 (conflict, e.g. form in use), 429 (throttled / too many tasks), 500, 503 (the audit store can't be written) |
+| License errors | 403 with `"code"` `license_required` (unlicensed), `license_read_only` (a write while read-only) or `feature_not_licensed` (with `"feature": "<id>"`) |
+| Background polling | Requests that should not count as user activity send `X-DSP-Background: 1`; they don't extend the session's idle time |
 | Background work | `202 {"pending": true, "job": {...}}`; follow it with `/api/jobs/{id}` and `/api/jobs/{id}/result` |
 | DN parameters | Entries are addressed with a `dn` query parameter (URL-encoded) |
 
@@ -28,17 +30,21 @@ curl -b jar https://portal.example.com/api/definitions
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/health` | Liveness: `{"ok": true}` |
-| GET | `/api/info` | `mode`, `ldapUrl`, `baseDn`, `connected`, `error`, `version`, `auth` (`password`, `x509`, `x509AutoLogin`), `loginHint`, `banner` |
+| GET | `/api/health` | Liveness, kept for existing monitoring: `{"ok": true}` |
+| GET | `/api/info` | `mode`, `connected` (whether the directory answers), `version`, `auth` (`password`, `x509`, `x509AutoLogin`), `loginHint`, `banner`, and `consent` (the consent banner's `title` and `text`, or null). `baseDn` only for signed-in users; `ldapUrl` and `error` only for administrators |
+| GET | `/livez`, `/readyz` | Liveness and readiness probes on the API's own port. Not published by the web tier |
+| GET | `/actuator/health`, `/actuator/health/liveness`, `/actuator/health/readiness` | Spring Boot's probes (on the management port when `MANAGEMENT_SERVER_PORT` is set). Details only for administrators. Not published by the web tier |
+| GET | `/actuator/prometheus` | Prometheus metrics, on the management port only |
 
 ## Authentication
 
 | Method | Path | Body / params | Description |
 |---|---|---|---|
-| POST | `/api/auth/login` | `{"username", "password"}` | Password sign-in. Returns `{"user": SessionUser}`. 401 for bad credentials, 429 when throttled, 403 when password sign-in is disabled |
-| POST | `/api/auth/x509` | — | Sign in with the presented client certificate |
-| POST | `/api/auth/logout` | — | Sign out and invalidate the session |
-| GET | `/api/auth/me` | — | `{"user": SessionUser or null}`. With X.509 auto-login enabled, it may sign the user in, or return `certificateError` |
+| POST | `/api/auth/consent` | — | Acknowledge the notice-and-consent banner for this browser session. Returns `{"consentRequired": false}`. Reachable without signing in |
+| POST | `/api/auth/login` | `{"username", "password"}` | Password sign-in. Returns `{"user": SessionUser}`. 401 for bad credentials, 429 when throttled, 403 when password sign-in is disabled, 403 `consent_required` when the consent banner has not been acknowledged |
+| POST | `/api/auth/x509` | — | Sign in with the presented client certificate. 403 `consent_required` as above |
+| POST | `/api/auth/logout` | — | Sign out and invalidate the session. Returns `{"ok": true, "consentRequired": ...}`: whether the banner must be acknowledged again before the next sign-in |
+| GET | `/api/auth/me` | — | `{"user": SessionUser or null, "consentRequired": ...}`. With X.509 auto-login enabled, it may sign the user in (only once the banner, if enabled, has been acknowledged), or return `certificateError` |
 
 `SessionUser` contains `username`, `dn`, `displayName`, `mail`, `groups`, `isAdmin`, `authMethod`
 (`password` or `x509`) and `certificateSubject` (certificate sign-ins only).
@@ -167,8 +173,24 @@ Analysis body: `name`, `description`, `type` (`compare` or `quality`), `sources`
 `rules` [`{attribute, type, pattern, format, values, min, max, scope, ignoreCase, severity,
 description}`]).
 
+### License
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/license` | Any signed-in user: the mode, state, message, evaluation flag and every feature with whether it is enabled. Administrators also get `details` (licensee, edition, dates, size, this installation's id) and the renewal warning |
+| POST | `/api/admin/license` | Install a license: the file as the request body (`text/plain`), or the multipart field `file`. Says why a file is refused |
+
 ### Audit log
+
+These work whatever the license says.
 
 | Method | Path | Params | Description |
 |---|---|---|---|
-| GET | `/api/admin/audit` | `q`, `action`, `outcome`, `actor`, `target`, `definitionId`, `from`, `to` (`YYYY-MM-DD` or ISO instant), `page` (1–10000), `pageSize` (1–200, default 50) | Search the in-memory window of recent events |
+| GET | `/api/admin/audit` | `q`, `category`, `action`, `outcome`, `severity`, `actor`, `target`, `ip`, `definitionId`, `from`, `to` (`YYYY-MM-DD` or ISO instant), `page`, `pageSize` (1–200, default 50) | Search all retained history, newest first. A search reads at most `ENS_AUDIT_QUERY_MAX_SCAN` events and says when it stopped |
+| GET | `/api/admin/audit/actions` | — | The filter choices: categories, outcomes, severities and known actions |
+| GET | `/api/admin/audit/export` | `format` (`csv` or `ndjson`) plus the search filters | The current filter's events (up to 100,000), oldest first. Audited as `audit.exported` |
+| POST | `/api/admin/audit/verify` | — | Recompute the hash chain. Audited as `audit.verified` |
+| GET | `/api/admin/audit/status` | — | Each output's delivery state, the retention setting and the chain's extent |
+| GET, POST | `/api/admin/audit/tokens` | `{"name"}` to create | List or create pull-API tokens. A new token's value is shown once |
+| DELETE | `/api/admin/audit/tokens/{id}` | — | Revoke a token |
+| GET | `/api/audit/events` | `after` (seq), `limit` (1–1000, default 500) | The pull API: `Authorization: Bearer <token>`, no session or CSRF header. NDJSON in seq order, or `{"events": [...], "next": <seq>}` with `Accept: application/json`. See [Audit logging](../audit-logging.md#the-pull-api) |

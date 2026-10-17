@@ -10,13 +10,18 @@ Open the portal's address in your browser. The login page shows the portal name 
 your organisation has configured (for example help-desk contact details), and, if configured, a coloured banner at the top and
 bottom of every page.
 
+If your organisation has turned on the **notice and consent banner** (the U.S. Government
+information system notice), the login page shows it first. Read it and choose **I agree**; you
+can't sign in until you do. You see it again before each sign-in.
+
 === "Username and password"
 
     Enter your **directory** username and password. These are the same credentials as your LDAP
     / directory account; the portal has no separate passwords.
 
-    - After 8 failed attempts within 15 minutes, further attempts from your address are refused for
-      that username ("Too many failed login attempts. Try again later.").
+    - After repeated failed attempts (8 within 15 minutes unless your administrator has changed
+      it), further attempts from your address are refused for that username for a while ("Too many
+      failed login attempts. Try again later.").
     - If the portal cannot reach the directory, the page shows **Directory unreachable**.
 
 === "Certificate (smart card)"
@@ -29,8 +34,16 @@ bottom of every page.
     - If your certificate is refused, **Certificate not accepted** explains why. For example, it
       has expired, it wasn't issued by a trusted authority, or no directory account matches it.
 
-Your session ends after a period of inactivity (8 hours by default). Use the **Sign out** button
-in the top bar to end it yourself.
+Your session ends:
+
+- after a period of inactivity (30 minutes by default; administrators may have a shorter limit).
+  Leaving the portal open in a tab doesn't keep you signed in;
+- a fixed time after you signed in, whatever you are doing (12 hours by default);
+- when you sign in somewhere else, if your organisation limits how many sessions you may have:
+  the oldest one ends.
+
+The sign-in page then tells you why you were signed out. Use the **Sign out** button in the top
+bar to end your session yourself.
 
 ## Layout
 
@@ -213,5 +226,7 @@ directory's own tools.
 | *You do not have access to this directory* | No view permission for that directory |
 | *This directory is read only* | Writes through a white pages directory are not allowed |
 | *You can only edit your own entry* | A self-service edit was attempted on another entry |
-| *Authentication required* | Your session has expired; sign in again |
+| *Authentication required* | You are not signed in, or your session has ended; sign in again |
+| **Signed out**, on the sign-in page | Your session timed out (idle, or the maximum session length), or ended because you signed in elsewhere; the notice says which. Sign in again |
+| *... is not included in this portal's license* | That feature isn't licensed for your organisation; ask your administrator |
 | *Page not found* | The address doesn't match any screen |
