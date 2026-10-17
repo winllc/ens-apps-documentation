@@ -92,29 +92,33 @@ Windows sign-in is optional and **off by default**. It applies only to `POST /ap
 
     Treat `http.keytab` like a password: anyone who has it can pose as the application.
 
-2. **Server.**
+2. **Server.** Turn Windows sign-in on with the service principal and the keytab:
 
-    ```yaml
-    application:
-      windows-auth:
-        enabled: true
-        service-principal: HTTP/readyroom.example.com@EXAMPLE.COM
-        keytab-location: /etc/in-n-out/http.keytab
-        account-attribute: sAMAccountName   # or userPrincipalName with strip-realm: false
-    ```
+    === "Release package"
 
-    In a container, mount the keytab read-only (the image creates `/etc/in-n-out` for it) and make
-    sure the container user can read it:
+        Put `krb5.conf` and `http.keytab` in `kerberos/` (keytab: `chgrp 0`, `chmod 0640`), and set
+        in `.env`:
 
-    ```bash
-    docker run ... \
-      -v /secure/http.keytab:/etc/in-n-out/http.keytab:ro \
-      -e APPLICATION_WINDOWSAUTH_ENABLED=true \
-      -e APPLICATION_WINDOWSAUTH_SERVICEPRINCIPAL=HTTP/readyroom.example.com@EXAMPLE.COM \
-      -e APPLICATION_WINDOWSAUTH_KEYTABLOCATION=/etc/in-n-out/http.keytab \
-      in-n-out-work
-    docker exec <container> klist -kte /etc/in-n-out/http.keytab
-    ```
+        ```bash
+        COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml:docker-compose.windows-auth.yml
+        APPLICATION_WINDOWSAUTH_ENABLED=true
+        APPLICATION_WINDOWSAUTH_SERVICEPRINCIPAL=HTTP/readyroom.example.com@EXAMPLE.COM
+        ```
+
+        `docker-compose.windows-auth.yml` mounts the keytab read-only at
+        `/etc/in-n-out/http.keytab`. Check it with
+        `docker compose exec app klist -kte /etc/in-n-out/http.keytab`.
+
+    === "Helm"
+
+        Put the keytab in a Secret and set `windowsAuth.enabled`, `windowsAuth.servicePrincipal`
+        and `windowsAuth.keytab.secretName`. See
+        [Installation → Windows sign-in](install.md#windows-kerberos-sign-in). Check it with
+        `kubectl -n readyroom exec deploy/readyroom -- klist -kte /etc/in-n-out/http.keytab`.
+
+    To match accounts by `userPrincipalName` instead of `sAMAccountName`, set
+    `application.windows-auth.account-attribute` (with `strip-realm: false`); see
+    [Configuration](configuration.md#windows-kerberos-sign-in).
 
     The server's clock must be within 5 minutes of the domain controllers' clocks.
 
@@ -171,21 +175,21 @@ A refused page is logged at `info` as `Access denied for <METHOD> <URI>`, and th
 - **Notes field:** the profile form warns *Do not enter any classified or PII data!*. Notes are
   shown to anyone who can see the person.
 - **Server TLS validation on the client** is on by default. `SkipCertificateCheck` is for labs only.
-  The superseded scripts trusted every server certificate.
 - **SMTP:** the packaged configuration trusts any SMTP certificate (`mail.smtp.ssl.trust: "*"`).
   Name your mail host instead.
 
 ## Hardening checklist
 
-- [ ] Replace every committed keystore, truststore and CA key. Treat the repository's copies as
-      compromised.
-- [ ] Supply all passwords (keystore, truststore, database, LDAP bind, SMTP) through environment
-      variables or an external file, not the packaged `application.yml`.
+- [ ] Use your own keystore, truststore and CA. Treat the development keystores packaged in the
+      application as compromised.
+- [ ] Supply all passwords (keystore, truststore, database, LDAP bind, SMTP) in `.env` (mode 600)
+      or in Kubernetes Secrets, never in a ConfigMap or the values file you commit.
 - [ ] Use `ldaps://` (or StartTLS) for the directory, with a least-privilege bind account that can
       only read.
 - [ ] Restrict Actuator exposure.
 - [ ] Set `super-user-dns` to the real administrators only.
-- [ ] Mount the Kerberos keytab read-only and keep it out of images and source control.
+- [ ] Keep the Kerberos keytab in `kerberos/` (mounted read-only) or a Secret, and out of images
+      and source control.
 - [ ] Install the Windows client under Program Files (as the installer does), so non-admins cannot
       change a script that runs elevated or as SYSTEM.
 - [ ] Leave `SkipCertificateCheck` off on workstations.

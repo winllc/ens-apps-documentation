@@ -119,5 +119,4 @@ nav:
           - RSA AM integration: rsa-operations-portal/rsa-integration.md
           - Security: rsa-operations-portal/security.md
           - HTTP route reference: rsa-operations-portal/api-reference.md
-          - Build & release: rsa-operations-portal/build-and-release.md
           - Troubleshooting: rsa-operations-portal/troubleshooting.md

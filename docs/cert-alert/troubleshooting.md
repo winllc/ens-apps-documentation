@@ -14,29 +14,26 @@ Symptoms, likely causes and fixes. Start with the application log (stdout) and
     `cert-alert.notifications.email.template-directory` is set but **empty**. The setting must be
     absent to be off. Remove it, or point it at a directory.
 
-??? failure "The image will not start with the `dev` profile"
-    Expected. The embedded sample directory is a `developmentOnly` dependency and is not in the
-    jar. Use `./gradlew bootRun --args='--spring.profiles.active=dev'` from source, or the Docker
-    Compose demo.
+??? failure "Release package: `set CERT_ALERT_... in .env`"
+    `docker compose` stops before starting anything when a required setting is empty. Fill in the
+    named setting in `.env` and run `./install.sh` (or `docker compose up -d`) again.
 
-??? failure "Compose: `UnknownHostException: directory`"
-    The application and the stand-in directory are on different networks, typically because a
-    directory container from an earlier run is still attached to an old network. Run
-    `docker compose down` and bring the stack up again.
+??? failure "Helm: the install stops with a message about a required value"
+    `ldap.url`, `ldap.base` and either `database.host` or `database.embedded.enabled` are
+    required. Add the named value to your values file and run the command again.
 
 ## Health
 
 ??? warning "`/actuator/health` is DOWN but the UI works"
     The aggregate includes the LDAP indicator and goes `DOWN` when the directory is unreachable,
     while cached data is still served. Use `/actuator/health/liveness` and `/readiness` for
-    orchestrator probes. The image's built-in Docker `HEALTHCHECK` uses the aggregate, so under
-    plain Docker the container shows *unhealthy* in this state. See
+    probes. The release package and the Helm chart already do. See
     [Operator guide → Health checks](operator-guide.md#health-checks).
 
-??? warning "Container is unhealthy after enabling TLS"
-    The image's `HEALTHCHECK` calls `http://localhost:${SERVER_PORT}/actuator/health` over plain
-    HTTP. With `server.ssl.enabled: true` that request fails. Use your orchestrator's own probe
-    with HTTPS.
+??? warning "Container or pod is unhealthy after enabling TLS"
+    With TLS on, CertAlert serves HTTPS on 8080. The release package's health check tries HTTP and
+    then HTTPS, so it keeps working. With Helm, set `tls.enabled: true` in your values rather than
+    passing the TLS settings in `extraEnv`, so the chart's probes switch to HTTPS too.
 
 ## Signing in
 
@@ -101,7 +98,7 @@ Symptoms, likely causes and fixes. Start with the application log (stdout) and
     space the crons further apart or tune `page-size` / `batch-size` / `search-timeout`.
 
 ??? failure "No scheduled jobs run at all"
-    `cert-alert.ldap.sync.enabled` is `false` (as in the `dev` profile). That switch disables the
+    `cert-alert.ldap.sync.enabled` is `false`. That switch disables the
     whole scheduler, including revocation and the round-up.
 
 ??? warning "*Use not known* on credentials, or missing revocation/risk data after an upgrade"

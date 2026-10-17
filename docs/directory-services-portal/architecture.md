@@ -132,6 +132,10 @@ stateDiagram-v2
 
 ## Code layout
 
+This section and the next describe the source code, for engineers reviewing the product. You do
+not need the source to install or run the portal: install it from a release, as described in
+[Installation](install.md).
+
 | Path | Contents |
 |---|---|
 | `backend/` | Spring Boot service, package `com.winllc.dsp`: `ldap/`, `schema/`, `service/`, `web/` (controllers, DTOs, validation), `store/`, `x509/`, `metrics/`, `analysis/`, `jobs/`, `audit/`, `config/` |
@@ -140,11 +144,11 @@ stateDiagram-v2
 | `web/` | React client: `src/pages` (user, metrics, admin), `src/components` (including SVG charts), `nginx/` |
 | `deploy/openldap/` | Demo OpenLDAP image (`slapd.conf` template, ACME schema, LDIF) |
 | `deploy/package/` | Templates for the docker and native deployment packages |
-| `scripts/` | `package.sh`, `generate-dev-certs.sh` |
+| `scripts/` | Release packaging, and `generate-dev-certs.sh` (also shipped in the Docker package) |
 
 ## Testing
 
-`npm test` runs the backend JUnit + MockMvc tests against the embedded LDAP server, then the web
+Each release is tested before it is published. In the source tree, `npm test` runs the backend JUnit + MockMvc tests against the embedded LDAP server, then the web
 Vitest tests. The backend tests cover sign-in and throttling, CSRF, permission enforcement
 (including white pages and namespace confinement), CRUD and renames, form validation,
 directory-search drop-downs, schema pull/import/export, the audit log, metrics, jobs, analyses,

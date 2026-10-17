@@ -8,7 +8,8 @@ ReadyRoom has two kinds of HTTP endpoints:
 
 Every endpoint requires a signed-in session, a client certificate or (where noted) a Kerberos
 ticket, except `POST /api/check/out` and `/actuator/**`. The base URL is
-`https://<host>:8444`. Timestamps in JSON records use the pattern `MM/dd/yyyy HH:mm a z`.
+`https://<host>:8181` with TLS on (`http://` while it is off), or your ingress or route host with
+Helm. Timestamps in JSON records use the pattern `MM/dd/yyyy HH:mm a z`.
 
 ## Check-in API
 
@@ -71,7 +72,7 @@ The Windows client saves `sessionId` from the `in` response and sends it back on
     curl --cert user.crt --key user.key --cacert ca.crt \
       -H 'Content-Type: application/json' \
       -d '{"windowsUserId":"jdoe"}' \
-      https://readyroom.example.com:8444/api/check/in
+      https://readyroom.example.com:8181/api/check/in
     ```
 
 === "curl, logout"
@@ -79,13 +80,13 @@ The Windows client saves `sessionId` from the `in` response and sends it back on
     ```bash
     curl --cacert ca.crt -H 'Content-Type: application/json' \
       -d '{"sessionId":"8f6c0f3e-5d1b-4b8e-9d7a-3c1e2f4a5b6c","windowsUserId":"jdoe"}' \
-      https://readyroom.example.com:8444/api/check/out
+      https://readyroom.example.com:8181/api/check/out
     ```
 
 === "PowerShell with Windows sign-in"
 
     ```powershell
-    Invoke-RestMethod -Method Post -Uri https://readyroom.example.com:8444/api/check/in `
+    Invoke-RestMethod -Method Post -Uri https://readyroom.example.com:8181/api/check/in `
       -ContentType application/json -Body '{"windowsUserId":"jdoe"}' `
       -UseDefaultCredentials -MaximumRedirection 0
     ```

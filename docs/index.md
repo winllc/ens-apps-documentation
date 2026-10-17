@@ -62,25 +62,25 @@ in the application, and it can be sent to Splunk or any other SIEM. See [Audit l
 | Guide | Read it if you… |
 |---|---|
 | **Overview** | want to know what the application does and how it is put together |
-| **Install guide** | are deploying the application for the first time |
+| **Install guide** | are installing the application for the first time, from the release package or the Helm chart, or upgrading it |
 | **Configuration guide** | need the full list of settings and environment variables |
 | **Operator guide** | keep the application running: start/stop, health, logs, backups, upgrades |
 | **Admin guide** | administer the application from inside it: roles, permissions, settings |
 | **User guide** | use the application day to day |
 
 Most sections also include **Architecture**, **Security**, **API reference** and
-**Troubleshooting** pages. The RSA Operations Portal adds an **RSA AM integration** page and a
-**Build & release** page. ReadyRoom adds a **Windows client** page.
+**Troubleshooting** pages. The RSA Operations Portal adds an **RSA AM integration** page. ReadyRoom adds a
+**Windows client** page.
 
 ## At a glance
 
 | | CertAlert | Directory Services Portal | ReadyRoom | RSA Operations Portal |
 |---|---|---|---|---|
 | Server | Spring Boot 4 / Java 21 | Spring Boot 4 / Java 21 + React | Spring Boot 4 / Java 21 | Spring Boot 3 + Tomcat connector |
-| Data store | H2 or PostgreSQL | JSON config file | PostgreSQL | MySQL |
+| Data store | PostgreSQL | JSON config file | PostgreSQL | MySQL |
 | Directory | LDAP (IC FSD schema) | LDAP (any schema) | LDAP | RSA Authentication Manager |
 | Sign-in | X.509 or directory password | X.509 or directory password | X.509, LDAP password, Kerberos (client) | RSA AM user ID + SecurID passcode |
-| Deployment | Container / Compose | Containers / Compose / packages | Container / jar + Windows agent | docker-compose install package |
+| Install | Release package (Compose) or Helm chart | Release package (Compose or native systemd) or Helm chart | Release package (Compose) or Helm chart, plus the Windows agent | Release package (Compose) or Helm chart |
 
 !!! note "Source of truth"
     These pages were written from each application's source code. Where the code and a

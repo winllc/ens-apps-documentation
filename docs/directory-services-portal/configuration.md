@@ -1,17 +1,16 @@
 # Configuration
 
-All settings of the API live in `backend/src/main/resources/application.yml` and can be supplied
-as environment variables. The tables below list each environment variable, the Spring property
+The API's defaults are packaged in its `application.yml`. You change them with environment
+variables. The tables below list each environment variable, the Spring property
 it maps to, its default and its meaning. Defaults are the values used when the variable is unset.
 
 Where to set them:
 
 | Deployment | File |
 |---|---|
-| Source tree / jar | Environment of the `java` process (template: `.env.example` in the repository root) |
-| Docker Compose (source tree) | `environment:` of the `api` service in `docker-compose.yml` |
 | Docker deployment package | `.env` next to the compose files, applied with `./portal.sh up` |
 | Native package | `/etc/directory-services-portal/portal.env`, applied with `systemctl restart directory-services-portal` |
+| Helm chart | Your values file, applied with `helm upgrade`. Most settings have a named value (see [Installation → Key values](install.md#key-values) and the chart's `README.md`); any other goes in `api.extraEnv` as its environment variable |
 
 !!! note "Lists of DNs"
     `ADMIN_USERS` and `ADMIN_GROUPS` are separated by `;` (or newlines), because DNs contain
@@ -41,12 +40,28 @@ Where to set them:
 ### LDAPS with a private CA
 
 Certificates are verified against the **JVM default trust store**. For a private CA, provide a
-trust store with JVM options:
+trust store that holds every CA the API must trust:
 
-```ini
-# Docker package (.env): put the trust store in the data volume
-JAVA_TOOL_OPTIONS=-Djavax.net.ssl.trustStore=/data/truststore.p12 -Djavax.net.ssl.trustStorePassword=changeit
-```
+=== "Docker package"
+
+    Put the trust store in the data volume and point Java at it in `.env`:
+
+    ```ini
+    JAVA_TOOL_OPTIONS=-Djavax.net.ssl.trustStore=/data/truststore.p12 -Djavax.net.ssl.trustStorePassword=changeit
+    ```
+
+=== "Native package"
+
+    Put the trust store where user `dsp` can read it, and set in `portal.env`:
+
+    ```ini
+    JAVA_TOOL_OPTIONS=-Djavax.net.ssl.trustStore=/etc/directory-services-portal/truststore.p12 -Djavax.net.ssl.trustStorePassword=changeit
+    ```
+
+=== "Helm"
+
+    Put the trust store in a Secret and set `ldap.truststore.existingSecret` (and the password's
+    Secret in `ldap.truststore.password`). See [Installation → Secrets](install.md#secrets).
 
 `JAVA_TOOL_OPTIONS` is listed in the package `env.template` and can also carry heap settings such as `-Xmx2g`.
 The container image starts Java with `-XX:MaxRAMPercentage=75.0`.
@@ -213,11 +228,18 @@ The profile enables TLS on `PORT` (default **8443**) with `client-auth: want`, f
 `Secure`, sets `X509_ENABLED` to `true` by default, and validates chains again in the portal
 against `TLS_CLIENT_CA_FILE` (which also enables optional revocation checking).
 
-```bash
-SPRING_PROFILES_ACTIVE=mtls \
-TLS_CERT_FILE=$PWD/certs/server.pem TLS_KEY_FILE=$PWD/certs/server.key TLS_CLIENT_CA_FILE=$PWD/certs/ca.pem \
-  java -jar backend/target/directory-services-portal.jar
+For example, in the native package's `portal.env` (the files must be readable by user `dsp`):
+
+```ini
+SPRING_PROFILES_ACTIVE=mtls
+TLS_CERT_FILE=/etc/directory-services-portal/certs/server.pem
+TLS_KEY_FILE=/etc/directory-services-portal/certs/server.key
+TLS_CLIENT_CA_FILE=/etc/directory-services-portal/certs/ca.pem
 ```
+
+The Docker package (`install.sh --https`) and the Helm chart (`tls.enabled`) use the web-tier setup
+above instead. In the native package, the nginx site proxies plain HTTP to the API on
+`127.0.0.1:3001`, so change or remove that site when the API serves TLS itself.
 
 Use servlet mode when clients connect to the API directly. A browser goes through it only if the
 web tier passes TLS straight through to the API.

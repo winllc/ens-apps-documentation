@@ -7,10 +7,10 @@ The root `pom.xml` (`com.winllc.rsaapp:rsaapp:1.0-SNAPSHOT`, packaging `pom`) bu
 | Module | Artifact | Packaging | Purpose |
 |---|---|---|---|
 | `rsaapp-api` | `com.winllc.rsaapp.api:rsaapp-api` | jar | The shared contract. It holds `RSAAuthManagerServiceInterface`, DTO wrappers (`PrincipalDTOWrapper`, `RSALoginWrapper`, `UpdatePrincipalCommandWrapper`, `AppAuthenticationToken`) and about 45 `Rsa*`/`Token*` exception types. It depends on the RSA `am-client.jar`. |
-| `rsaapp-connector` | `com.winllc.rsaapp.connector:rsaapp-connector` | war (built with `mvnw war:war -pl rsaapp-connector`) | Implements `RSAAuthManagerServiceInterface` with the RSA AM SDK and exports it with Spring's `HessianServiceExporter` at `/connector`. |
+| `rsaapp-connector` | `com.winllc.rsaapp.connector:rsaapp-connector` | war (deployed in Tomcat in the Connector image) | Implements `RSAAuthManagerServiceInterface` with the RSA AM SDK and exports it with Spring's `HessianServiceExporter` at `/connector`. |
 | `rsaapp-portal` | `rsaapp-portal` | Spring Boot jar | The web application. Its main class is `com.winllc.rsaapp.portal.configuration.AppConfig`. |
 
-The repository also has a `util/` directory with operational scripts (`backupdb.sh`, `propdiff.sh` and the compiled `PropDiff.class`), but `util/` is not a Maven module.
+The release package's `util/` folder holds operational scripts (`check-env.sh`, `backupdb.sh`); it is not a Maven module.
 
 ## Runtime components
 
@@ -134,4 +134,4 @@ The last-run details are held **in memory only**. The PMO can see them, and trig
 | `banner.png`, `header-logo.png` | `classpath:/static/custom/` | Home-page banner and site logo |
 | `countries.csv` | `/resources/countries.csv` (absolute path in the container) | Country list on the site forms |
 
-The `default_build/` directory in the repository holds editable copies of these assets, which `docker-compose.yaml` mounts into the containers. [Configuration](configuration.md#branding-text-and-email-templates) explains how to point the portal at them.
+The release package's `default_build/` directory holds editable copies of these assets, which its `docker-compose.yml` mounts into the containers (with Helm, ConfigMaps in `branding.*`). [Configuration](configuration.md#branding-text-and-email-templates) explains how to point the portal at them.

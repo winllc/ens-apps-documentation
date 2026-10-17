@@ -7,30 +7,38 @@ screens) see the [Admin guide](admin-guide.md); for symptoms and fixes see
 
 ## Start and stop
 
-=== "Docker Compose"
+=== "Release package"
+
+    Run these in the release directory (`cert-alert-<version>/`):
 
     ```bash
-    docker compose up -d --build     # start (or rebuild and start)
+    docker compose up -d             # start, or apply a changed .env
+    docker compose ps                # status and health
     docker compose logs -f cert-alert
+    docker compose restart cert-alert
     docker compose stop              # stop, keep data
     docker compose down              # remove containers, keep volumes
-    docker compose down -v           # remove containers AND the postgres / directory volumes
     ```
 
-=== "docker run"
+    `docker compose restart` does not re-read `.env`. After editing `.env`, run
+    `docker compose up -d`.
+
+    !!! danger "`docker compose down -v` deletes your data"
+        It removes the database volume and the `ens-license` volume, and with it the
+        installation id.
+
+=== "Helm"
 
     ```bash
-    docker run -d --name cert-alert -p 8080:8080 --env-file cert-alert.env cert-alert:latest
-    docker stop cert-alert           # SIGTERM -> graceful shutdown (30s per phase)
-    docker logs -f cert-alert
+    kubectl -n cert-alert get pods
+    kubectl -n cert-alert logs -f deploy/cert-alert
+    kubectl -n cert-alert rollout restart deploy/cert-alert
+    kubectl -n cert-alert scale deploy/cert-alert --replicas=0   # stop, keep data
+    kubectl -n cert-alert scale deploy/cert-alert --replicas=1   # start again
     ```
 
-=== "Jar"
-
-    ```bash
-    java $JAVA_OPTS -jar cert-alert-0.0.1-SNAPSHOT.jar --spring.profiles.active=postgres
-    # stop with SIGTERM (kill <pid>) for a graceful shutdown
-    ```
+    Change settings in your values file and run `helm upgrade` (see [Upgrades](#upgrades)).
+    The names above are for a release named `cert-alert`.
 
 Shutdown is graceful (`server.shutdown: graceful`, 30s per phase): in-flight requests finish and
 the changelog connector stops between changes rather than mid-batch. In the container the JVM is
@@ -51,21 +59,13 @@ PID 1 and receives `SIGTERM` directly.
     no reason to restart a process that is still serving cached data. Point orchestrator probes at
     the liveness and readiness endpoints.
 
-    The image's own Docker `HEALTHCHECK` curls the **aggregate** `http://localhost:${SERVER_PORT}/actuator/health`
-    (interval 30s, timeout 5s, start period 60s, 3 retries). Under plain Docker this marks the
-    container *unhealthy* while LDAP is down, and it uses plain HTTP, so it will also fail once
-    `server.ssl.enabled` is on. Kubernetes ignores `HEALTHCHECK`; define your own probes.
+    Both install methods already do this:
 
-```yaml
-# Kubernetes example
-livenessProbe:
-  httpGet: { path: /actuator/health/liveness, port: 8080 }
-  initialDelaySeconds: 60
-readinessProbe:
-  httpGet: { path: /actuator/health/readiness, port: 8080 }
-```
-
-(Use `scheme: HTTPS` when TLS is enabled.)
+    - The release package's `docker-compose.yml` checks `/actuator/health/liveness`, over HTTP
+      and then HTTPS, so it keeps working once TLS is on. `docker compose ps` shows the result.
+    - The Helm chart sets liveness, readiness and startup probes on the liveness and readiness
+      endpoints. Tune them with `livenessProbe.*`, `readinessProbe.*` and `startupProbe.*` in
+      your values. The startup probe allows 10 minutes, for first-start migrations.
 
 ## Logs
 
@@ -181,20 +181,32 @@ servers and certificates, but the following exist **only** in CertAlert's databa
 Everything else (`directory_user`, `directory_server`, `cached_certificate`, identifiers, POCs)
 can be rebuilt by a sweep.
 
-=== "PostgreSQL"
+=== "Release package"
+
+    The database runs in the `postgres` service. Run these in the release directory:
 
     ```bash
-    pg_dump -h db -U certalert -Fc certalert > cert-alert-$(date +%F).dump
-    pg_restore -h db -U certalert -d certalert --clean cert-alert-YYYY-MM-DD.dump
+    docker compose exec -T postgres pg_dump -U certalert -Fc certalert > cert-alert-$(date +%F).dump
+    docker compose exec -T postgres pg_restore -U certalert -d certalert --clean < cert-alert-YYYY-MM-DD.dump
     ```
 
-=== "H2 (default profile)"
+    `upgrade.sh` also writes a backup to `backups/` before it upgrades.
 
-    Stop the application and copy `./data/cert-alert.mv.db` (in the image: `/app/data`). H2 is
-    for evaluation only.
+    Also back up the configuration: `.env`, `license/`, `tls/` and `email-templates/`.
 
-Also back up configuration: external `application.yml`, keystores/truststores, the
-`issuer-directory` contents and any email template override directory.
+=== "Helm"
+
+    The database is your own PostgreSQL. Back it up with your usual tools, for example:
+
+    ```bash
+    pg_dump -h postgres.example.gov -U certalert -Fc certalert > cert-alert-$(date +%F).dump
+    ```
+
+    Also keep your values file and the Secrets it names. The license PVC holds the installation
+    id; see [Install with Helm](install.md#4-license).
+
+    The chart's evaluation database (`database.embedded.enabled`) is not backed up. Do not keep
+    data you need in it.
 
 ## Monitoring
 
@@ -213,7 +225,24 @@ Also back up configuration: external `application.yml`, keystores/truststores, t
 ## Upgrades
 
 1. Back up the database.
-2. Deploy the new image by an immutable `sha-<short>` or version tag.
+2. Install the new release:
+
+    === "Release package"
+
+        Unpack the new release next to the old one, then run
+        `./upgrade.sh --from ../cert-alert-<old>`. It backs up the database to `backups/`, copies
+        your settings across and restarts on the new images. See
+        [Upgrade with upgrade.sh](install.md#6-upgrade-with-upgradesh).
+
+    === "Helm"
+
+        ```bash
+        helm upgrade cert-alert oci://ghcr.io/winllc/charts/cert-alert --version X.Y.Z \
+          --namespace cert-alert -f cert-alert-values.yaml
+        ```
+
+        The chart's version is the application's version. See [Upgrade](install.md#6-upgrade).
+
 3. On start, Flyway applies any new migrations; Hibernate `validate` then checks the mapping. A
    failure here stops startup; restore and investigate rather than editing the schema.
 4. Some features read certificate details at **parse time**, so rows cached by an older version
@@ -225,11 +254,11 @@ Migrations shipped: `V1` (directory tables) through `V17` (user additional email
 
 ## Scaling
 
-- **Single-instance by design.** The overlap guard on jobs is per-process; there is no
-  distributed lock. Running several instances means every instance runs every scheduled job.
-- To run more than one instance (for UI availability), set `cert-alert.ldap.sync.enabled: false`
-  on all but one so only one runs the schedule, and set `cert-alert.ldap.changelog.auto-start:
-  false` on all but one. A second changelog follower is harmless but wasted work.
+- **One instance.** The scheduled jobs and the changelog connector run inside the process, and
+  the overlap guard on jobs is per process; there is no distributed lock. A second instance would
+  run every job twice. The release package runs one container, and the Helm chart supports only
+  `replicaCount: 1` (with the `Recreate` strategy, so the old pod stops before the new one
+  starts). Scale up, not out.
 - **Directory size**: sweeps are paged (`page-size`), streamed, and written in batches
   (`batch-size`); built for 100,000+ entries. Raise `search-timeout` if a single page search is
   slow.
@@ -244,4 +273,4 @@ Migrations shipped: `V1` (directory tables) through `V17` (user additional email
 | Daily | Check last sweep runs succeeded; glance at the Notifications round-up status |
 | Weekly | Review Admin → System audit log for unexpected activity; check revocation *Unknown* counts |
 | Monthly | Review `serverPOC` warnings in logs; confirm the round-up lead days are still right |
-| Per release | Back up, deploy by tag, run Sync directory |
+| Per release | Back up, run `upgrade.sh` or `helm upgrade`, run Sync directory |

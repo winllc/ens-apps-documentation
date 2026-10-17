@@ -136,8 +136,8 @@ acceptable.
 - Keep `admin-identifiers` short; keep `contact-editors: ADMIN` unless servers' owners are expected
   to curate projects and addresses themselves.
 - Never set `cert-alert.security.enabled: false` outside local development.
-- Mount keystores read-only; the image's `.dockerignore` already prevents baking in `*.p12`,
-  `*.jks`, `*.pem`, `*.key`.
+- Keep keystores out of the image: in the release package's `tls/` directory (mounted
+  read-only), or in Kubernetes Secrets with Helm.
 - Set `revocation.allow-unverified-crl: false` once `issuer-directory` is populated.
 - Leave `server.error.include-message: never`.
 - Configure the classification banner where policy requires it.

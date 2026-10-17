@@ -3,7 +3,7 @@
 The **RSA Operations Portal** is a web application that simplifies the day-to-day operational work of an organization that uses **RSA SecurID tokens** for multi-factor authentication (MFA). It sits in front of **RSA Authentication Manager (AM)** and gives end users, Trusted Agents, Help Desk staff and the Project Management Office (PMO) a single place to issue, enroll, test, reset, recover and track hardware tokens.
 
 !!! info "Source of truth"
-    Everything in this section comes from the `rsa-operations-portal` source repository (Maven project `com.winllc.rsaapp:rsaapp`). Where the repository leaves something undefined (for example, the deployment `dev.env` file, which is not committed), the docs say so.
+    Everything in this section comes from the `rsa-operations-portal` source (Maven project `com.winllc.rsaapp:rsaapp`) and its release package and Helm chart. Where the product leaves something undefined, the docs say so.
 
 ## Key features
 
@@ -20,7 +20,7 @@ The **RSA Operations Portal** is a web application that simplifies the day-to-da
 
 ## Architecture at a glance
 
-The deployment is three Docker containers on one bridge network (`portal-net`), started with `docker-compose`.
+The release package runs three Docker containers on one bridge network (`portal-net`), started with `docker compose`. The Helm chart runs the Portal and the Connector as two Deployments and uses your MySQL server.
 
 ```mermaid
 flowchart LR
@@ -29,10 +29,10 @@ flowchart LR
         TA[Trusted Agents / Help Desk / PMO]
     end
 
-    subgraph Host["Docker host (docker-compose, network portal-net)"]
+    subgraph Host["Docker host (docker compose, network portal-net)"]
         P["portal<br/>Spring Boot 3 / Java 17<br/>:8080 / :8443"]
         C["connector<br/>Tomcat 8.5 WAR<br/>/app/connector (Hessian)"]
-        DB[("mysql 8.0.25<br/>schema RSAAPP")]
+        DB[("mysql 8.0<br/>schema RSAAPP")]
     end
 
     AM["RSA Authentication Manager<br/>Command API :7002<br/>(HttpInvoker / t3s)"]
@@ -57,21 +57,20 @@ flowchart LR
 
 ## Tech stack
 
-| Layer | Technology (from the build files) |
+| Layer | Technology |
 |---|---|
 | Portal | Java 17, Spring Boot 3.0.6 (web, security, data JPA, mail, validation, actuator, Thymeleaf), Thymeleaf Layout Dialect, Spring LDAP 2.4.1, spring-data-jpa-datatables 6.0.1, Log4j2, MySQL Connector/J 8.0.33 |
 | Connector | Java 1.8 source/target, Spring 3.2.18 (webmvc), Hessian 4.0.38, Guava 30, RSA AM SDK jars in `rsaapp-connector/rsa-lib/`, Log4j 1.x, Apache Tomcat 8.5.88 |
 | Front end | Bootstrap 4, jQuery and jQuery UI, DataTables, Font Awesome, appointment-picker |
-| Database | MySQL 8.0.25 (official `mysql` image) |
-| Packaging | Maven wrapper (Maven 3.8.7), Docker, docker-compose, Git LFS for `*.jar` |
-| CI | Jenkins (`Jenkinsfile`) and GitLab CI (`.gitlab-ci.yml`) |
+| Database | MySQL 8.0 (in the release package; your own server with Helm) |
+| Delivery | Container images `ghcr.io/winllc/rsa-operations-portal` and `ghcr.io/winllc/rsa-operations-portal-connector`, in a signed release package (Docker Compose) and a Helm chart |
 
 ## Documentation map
 
 | Page | Audience | Contents |
 |---|---|---|
 | [Architecture](architecture.md) | Engineers, operators | Components, request flows, data model, scheduled jobs |
-| [Installation](install.md) | Operators | Prerequisites, `install.sh`, RSA AM preparation, first start, upgrades |
+| [Installation](install.md) | Operators | Prerequisites, the release package (`install.sh`, `upgrade.sh`), the Helm chart, RSA AM preparation, first start |
 | [Configuration](configuration.md) | Operators | Every property and environment variable, with defaults |
 | [RSA AM Integration](rsa-integration.md) | Engineers, RSA admins | How the connector talks to RSA AM; trust store, command client, admin roles |
 | [Operator Guide](operator-guide.md) | Operators | Start/stop, health, logs, backup/restore, upgrades, certificates, runbook |
@@ -79,5 +78,4 @@ flowchart LR
 | [User Guide](user-guide.md) | End users, Trusted Agents, Help Desk | Every screen and workflow |
 | [Security](security.md) | Security reviewers | Authentication, authorization, TLS and client certificates, known issues |
 | [HTTP Route Reference](api-reference.md) | Engineers | Every controller route, its HTTP method and the role it requires |
-| [Build & Release](build-and-release.md) | Engineers | Maven build, Docker images, Jenkins and GitLab pipelines, offline package |
 | [Troubleshooting](troubleshooting.md) | Operators | Symptom → cause → fix |

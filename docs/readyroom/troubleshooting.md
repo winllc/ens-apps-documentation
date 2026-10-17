@@ -11,9 +11,9 @@ workstation log (`%ProgramData%\InOutWorker\logs\inoutworker-yyyyMMdd.log`). For
 | `Could not resolve placeholder 'application.banner-text'` | `application.banner-text` has no default. Set it. |
 | `application.windows-auth.enabled is true but application.windows-auth.service-principal is not set` | Set `service-principal`, or turn Windows sign-in off. |
 | `... keytab-location is not set` / `Windows sign-in keytab ... does not exist or cannot be read` | Mount the keytab and make it readable by the container user. The image runs as user `185`, and `/etc/in-n-out` is group `0`, mode `0750`. |
-| Keystore or truststore errors | Check the path (`classpath:` or `file:`), password and `PKCS12` type in `server.ssl.*`. |
-| Database connection refused | Check `spring.datasource.*` and that PostgreSQL accepts connections from the server. |
-| Port in use | Another process holds `server.port` (8444). The local test CA (`step-ca`) uses 8443. |
+| Keystore or truststore errors | Release package: check that `tls/keystore.p12` and `tls/truststore.p12` exist, are readable by group 0, and match `SERVER_SSL_KEYSTOREPASSWORD` and `SERVER_SSL_TRUSTSTOREPASSWORD`, and that `docker-compose.tls.yml` is in `COMPOSE_FILE`. Helm: check the `tls.keystore` and `tls.truststore` Secrets and their password keys. |
+| Database connection refused | Release package: check `docker compose ps` shows `postgres` healthy. Helm: check `database.*` and that PostgreSQL accepts connections from the pod. |
+| Port in use (release package) | Another process holds the host port `READYROOM_PORT` (8181). Choose another host port in `.env`; ReadyRoom inside the container stays on 8181. |
 
 ## Sign-in and access
 
@@ -101,11 +101,10 @@ On the client, `The server redirected instead of accepting Windows sign-in` mean
 | Requests hang on the directory | The connect and read timeouts under `spring.ldap.base-environment` must be set (5 s and 30 s in the packaged configuration). Check pool exhaustion: the pool holds at most 20 connections by default. |
 | Database connections exhausted | Keep `spring.jpa.open-in-view: false`. |
 
-## Test stack
+## Reaching the server
 
 | Symptom | Cause and fix |
 |---|---|
-| `docker compose up` fails with container-name conflicts | `docker-compose.yml` and `docker-compose.app.yml` use the same container names. Run only one of them. |
-| The app container is up, but `https://localhost:8444` does not answer | At the current commit, `test/application.yml` sets `server.port: 8181` with SSL off, while the compose file publishes `8444:8444`. Align the two. |
-| Controller tests return 404 for every request | `@SpringBootApplication` is in `com.winllc.innoutwork.config`, so `@WebMvcTest` slices do not scan controllers. Import the controller explicitly, as the existing tests do, and use `subjectPrincipalRegex("(.*)")` in test security configurations. |
-| Testcontainers tests are skipped | Docker is not available. That is expected; they need Docker. |
+| The app container is healthy, but `https://<host>:8181` does not answer | TLS is off by default, so ReadyRoom speaks plain HTTP: use `http://`, or turn TLS on (`SSL_ENABLED=true` with `docker-compose.tls.yml`, or `tls.enabled` in Helm). |
+| `http://<host>:8181` returns an empty or garbled reply | TLS is on, so the port speaks HTTPS. Use `https://`. |
+| Certificate sign-in or the Windows client fails behind an ingress | TLS must reach the pod unchanged. Use TLS passthrough or a `LoadBalancer` Service. See [Installation → Expose ReadyRoom](install.md#5-expose-readyroom). |

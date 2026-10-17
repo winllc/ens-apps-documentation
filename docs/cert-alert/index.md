@@ -66,7 +66,7 @@ flowchart LR
     end
 
     LDAP[("LDAP directory<br/>IC FSD")]
-    DB[("H2 or PostgreSQL<br/>Flyway schema")]
+    DB[("PostgreSQL<br/>Flyway schema")]
     SMTP[["SMTP server"]]
     CA[["CRL / OCSP<br/>endpoints"]]
     TLS[["Server TLS<br/>endpoints"]]
@@ -98,8 +98,8 @@ See [Architecture](architecture.md) for components, data model and the sync pipe
 
 | Component | Role |
 |---|---|
-| **CertAlert application** | A single Spring Boot executable jar (or container image) that serves the UI and API and runs every scheduled job. |
-| **Database** | H2 file database by default (for trying it out); PostgreSQL for deployment (`postgres` profile). Flyway owns the schema. |
+| **CertAlert application** | A single Spring Boot application, shipped as the container image `ghcr.io/winllc/cert-alert`, that serves the UI and API and runs every scheduled job. |
+| **Database** | PostgreSQL (included in the release package; your own with Helm). Flyway owns the schema. |
 | **LDAP directory** | The source of truth. Read with a service account; written to only by the optional certificate clean-up job and by editable server attributes. |
 | **SMTP server** *(optional)* | For the daily round-up email and the operator email alert channel. |
 | **CRL / OCSP endpoints** *(optional)* | Queried by the revocation job. |
@@ -113,7 +113,7 @@ See [Architecture](architecture.md) for components, data model and the sync pipe
 | Build | Gradle (Kotlin DSL) with wrapper |
 | Directory | Spring LDAP, paged searches; Spring Security LDAP for password sign-in |
 | Persistence | Spring Data JPA + Flyway migrations |
-| Database | H2 by default, PostgreSQL for deployment |
+| Database | PostgreSQL |
 | Tables | spring-data-jpa-datatables |
 | UI | Tabler + Thymeleaf + DataTables + jQuery, all served from webjars (no CDN) |
 | Container | Red Hat UBI 9 OpenJDK 21 (build) / OpenJDK 21 runtime |
@@ -123,7 +123,7 @@ See [Architecture](architecture.md) for components, data model and the sync pipe
 
 | Page | For | Contents |
 |---|---|---|
-| [Installation](install.md) | Operators | Prerequisites, building, container image, Docker Compose, first start |
+| [Installation](install.md) | Operators | Prerequisites, the release package, the Helm chart, first start |
 | [Configuration](configuration.md) | Operators | Every property and environment variable, profiles, example files |
 | [Operator guide](operator-guide.md) | Operators | Day-to-day running, jobs, health, backups, upgrades, scaling |
 | [Admin guide](admin-guide.md) | Application administrators | In-app administration: sync, revocation, attributes, audit log, projects, notifications |

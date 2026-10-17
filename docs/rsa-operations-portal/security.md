@@ -43,7 +43,7 @@ This matrix reflects the `@PreAuthorize` annotations and the menu visibility (`s
 
 ## TLS and client certificates
 
-* The portal publishes **8080** (HTTP) and **8443**, but the repository configures **no** `server.ssl.*` settings. TLS on 8443 must be configured in `dev.env` with the standard Spring Boot properties, using keystores placed in `default_build/ssl/` (mounted at `/ssl`). Do not expose 8080 outside the host once HTTPS is in place.
+* The release package publishes **8080** (HTTP) and **8443**, but configures **no** `server.ssl.*` settings by default. Configure TLS on 8443 in `.env` with the standard Spring Boot properties, using keystores placed in `default_build/ssl/` (mounted at `/ssl`). Do not expose 8080 outside the host once HTTPS is in place. With Helm, set `tls.*` and pass TLS through to the pod, or terminate it at the ingress (then the client-certificate features see no certificate). See [Installation](install.md#6-ingress-openshift-and-client-certificates).
 * Several public features read the browser's **X.509 client certificate** from the servlet attribute `jakarta.servlet.request.X509Certificate` (`CertUtil`):
 
     | Feature | How the certificate DN is used |
@@ -75,10 +75,10 @@ The following points were found by reading the source. Assess them for your envi
 !!! warning "Actuator is public"
     `/actuator/**` is `permitAll`. Spring Boot 3 exposes only `health` over HTTP by default. Do not enable more endpoints without restricting this pattern.
 
-!!! warning "Secrets in the repository and scripts"
-    * `application.properties`, the connector's `config.properties` and `mysql/01-databases.sql` contain sample credentials. Rotate anything that was ever deployed with them.
-    * `install.sh`, `add_node.sh` and the backup crontab line use MySQL `root`/`root`, and `add_node.sh` passes the sudo password on command lines.
-    * `dev.env` holds every secret in plain text. Restrict its file permissions (for example `chmod 600`) and keep it out of version control.
+!!! warning "Secrets"
+    * The `application.properties` and connector `config.properties` packaged in the images contain sample credentials. Override every one, and rotate anything that was ever deployed with them.
+    * The release package's `.env` holds every secret in plain text. `install.sh` makes it mode 600; keep it that way and keep it out of version control.
+    * With Helm, keep secrets in Kubernetes Secrets (`existingSecret` values), not in a values file you commit.
 
 !!! warning "LDAP trust-all socket factory"
     `ActiveDirectorySocketFactory` disables certificate validation for LDAPS. Use it only if you accept that risk, or use a factory that validates certificates.

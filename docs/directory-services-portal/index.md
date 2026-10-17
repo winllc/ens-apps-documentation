@@ -57,14 +57,14 @@ See [Architecture](architecture.md) for components, request flow and data storag
 | Web client | React 19, React Router 7, TanStack Query 5, Vite 6, TypeScript 5, lucide-react icons, hand-written SVG charts |
 | Shared code | `shared/` TypeScript workspace: types, DN utilities, validation and schema helpers used by the client |
 | Container images | Red Hat UBI 9: `openjdk-21-runtime` (API, uid 185) and `nginx-126` (web, uid 1001) |
-| Demo directory | Embedded UnboundID in-memory LDAP server, or an OpenLDAP (`slapd`) image built from `deploy/openldap` |
+| Demo directory | Embedded UnboundID in-memory LDAP server, or a demo OpenLDAP (`slapd`) container |
 | Tests | JUnit + MockMvc against the embedded LDAP server, and Vitest + Testing Library for the client |
 
 ## Documentation map
 
 | Page | For | Contents |
 |---|---|---|
-| [Installation](install.md) | Operators | Prerequisites, demo quick start, building from source, Docker Compose (including mTLS), deployment packages, verification |
+| [Installation](install.md) | Operators | Prerequisites, the Docker and native packages (including HTTPS and the demo directory), the Helm chart, verification |
 | [Configuration](configuration.md) | Operators | Every environment variable and property, grouped by area, with examples |
 | [Operator guide](operator-guide.md) | Operators | Start/stop, health, logs, backups, monitoring, upgrades, troubleshooting runbook |
 | [Administrator guide](admin-guide.md) | Portal administrators | Schema, forms, directory definitions, permissions, dashboards, data analysis, audit log |
@@ -73,7 +73,7 @@ See [Architecture](architecture.md) for components, request flow and data storag
 | [Security](security.md) | Security reviewers | Authentication, sessions, CSRF, X.509, LDAP injection defences, audit |
 | [API reference](api-reference.md) | Integrators | Every REST endpoint under `/api` |
 
-!!! tip "Try it in two commands"
-    With Java 21 and Node.js 20+ installed, run `npm install && npm run dev` in the source tree.
-    Then open <http://localhost:5173> and sign in as `admin` / `password`. See
-    [Installation → Demo quick start](install.md#demo-quick-start).
+!!! tip "Try it with the demo directory"
+    Unpack the Docker package and run `./install.sh --demo --http 8080 --start`. Then open
+    <http://localhost:8080>, sign in as `admin` / `password` and install your evaluation license.
+    See [Installation → Docker package](install.md#docker-package).
