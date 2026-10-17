@@ -39,7 +39,7 @@ Most routes return HTML (Thymeleaf views). Several POST handlers redirect to `/m
 | GET | `/user/pinReset/passwordReset` | Public | Windows-password reset form (`?noFooter`) |
 | POST | `/user/pinReset/passwordReset/submit` | Public | Submit username, password and token serial |
 | GET | `/user/pinReset/start/{resetCode}` | Public | PIN-check email link |
-| POST | `/user/pinReset/verify` | Public | Verify a passcode for a reset code |
+| POST | `/user/pinReset/verify` | Public | Verify the current tokencode of the reset code's token (`tokencode`, 6 to 8 digits, no PIN; with `resetCode`). Each reset code accepts at most `cron.tokenPinCheck.resetLinkMaxAttempts` codes |
 | POST | `/user/pinReset/reset` | Public | Reset the PIN for a reset code |
 | GET, POST | `/user/exemption/request` | Public (client certificate required) | Request an MFA exemption |
 

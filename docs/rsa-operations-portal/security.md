@@ -49,8 +49,8 @@ This matrix reflects the `@PreAuthorize` annotations and the menu visibility (`s
     | Feature | How the certificate DN is used |
     |---|---|
     | Token enrollment (`/user/registration/complete`) | Stored on the enrollment record (`NOCERT` if no certificate was presented) |
-    | PIN reset with certificate (`/user/pinReset/certReset`) | Must match the DN recorded at the user's last enrollment or by an emailed PIN-check link (`CertTokenMapping`). Required. |
-    | PIN-check link (`/user/pinReset/start/{code}`) | Records a certificate-to-user mapping for later self-service reset |
+    | PIN reset with certificate (`/user/pinReset/certReset`) | Must match the DN recorded at the user's last enrollment, or an existing certificate-to-user mapping (`CertTokenMapping`). Required. |
+    | PIN-check link (`/user/pinReset/start/{code}`) | Not required, and no certificate mapping is recorded; a DN, if presented, goes only into the audit record. The reset needs the emailed link and the code the link's token shows now (no PIN). One link accepts at most `cron.tokenPinCheck.resetLinkMaxAttempts` (5) codes; reaching the limit is audited as an `auth.lockout` alert with `details.feature=pin-reset-link`. A reset is audited as `token.pin-reset-by-user` with the token serial and `details.method=reset-link`. |
     | Exemption request (`/user/exemption/request`) | Required. The request is tied to the DN. |
     | Appointment cancel by the requester | Allowed only when the DN matches the DN recorded when the appointment was booked |
 
@@ -77,7 +77,7 @@ The following points were found by reading the source. Assess them for your envi
 
 !!! warning "Secrets"
     * The `application.properties` and connector `config.properties` packaged in the images contain sample credentials. Override every one, and rotate anything that was ever deployed with them.
-    * The release package's `.env` holds every secret in plain text. `install.sh` makes it mode 600; keep it that way and keep it out of version control.
+    * The release package keeps its secrets in plain text in three files, each given only to its own service: the AM credentials only in `connector.env`, the MySQL root password only in `mysql.env`, and the Portal's own secrets in `.env`. `install.sh` makes them mode 600; keep them that way and keep them out of version control. On an older installation that kept every setting in `.env`, `upgrade.sh` splits it.
     * With Helm, keep secrets in Kubernetes Secrets (`existingSecret` values), not in a values file you commit.
 
 !!! warning "LDAP trust-all socket factory"

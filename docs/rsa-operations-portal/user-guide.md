@@ -52,7 +52,7 @@ The page offers two **Pin Reset Options**:
     `/user/pinReset/certReset`. Your browser must present a client certificate.
 
     1. Enter your User ID.
-    2. The portal checks that this certificate was used at your last token enrollment, or was recorded by a PIN-check email link. If it matches, it lists your tokens that have a PIN set.
+    2. The portal checks that this certificate is the one recorded for you, normally at your last token enrollment. If it matches, it lists your tokens that have a PIN set.
     3. Choose the token. The PIN is cleared (new-PIN mode) and you go to **Enroll your token** to set a new one.
 
     If the certificate does not match: *"We were unable to match your previous RSA Enrollment with your PKI Credentials. Please contact the Help Desk…"*.
@@ -69,7 +69,7 @@ The page offers two **Pin Reset Options**:
 If your assigned token has not been used recently, the nightly job may email you:
 
 * an **initial PIN** reminder with your enrollment link (token never enrolled), or
-* a **check your PIN** email with a personal link. On that page, enter your passcode to **verify** it. If verification works, nothing else is needed. If it fails, click **reset** to clear the PIN and go to enrollment. The link stops working once it has been used, or once you sign in successfully with the token.
+* a **check your PIN** email with a personal link, for when you have forgotten your PIN. Have your token with you: the page asks for the 6 or 8 digit code the token shows now, without your PIN. If the code is right, click **Reset Pin**: the portal clears the PIN and takes you to enrollment to set a new one. A link accepts at most five codes. After that it can no longer be used: reset your PIN with your PKI certificate or Windows password, or contact a Trusted Agent. The link also stops working once it has been used, when it expires (the email says after how many days), or once you sign in successfully with the token.
 
 ### Request an exemption
 

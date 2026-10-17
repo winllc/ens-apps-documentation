@@ -45,7 +45,7 @@ Commands then run in one of four modes:
 | Sign-in (SecurID) and multi-step prompts | `login`, `loginAttempt` | `LoginCommand` (in-progress logins are cached for 4 minutes) |
 | Sign-out | `logout` | `LogoutCommand` |
 | Test My Token | `testTokenLogin` | `LoginCommand` + `LogoutCommand` |
-| Verify passcode (PIN-check reset link) | `validateUsersTokenCode` | `ValidateCommand` |
+| Verify tokencode (PIN-check reset link) | `verifyTokencodeOfToken` | `ValidateFirstTokencodeForResyncTokenCommand` (in the Connector's admin session; no PIN, and not a logon) |
 | Windows-password PIN reset | `loginWithPassword` | `LoginCommand` (password) |
 | Enrollment step 1 | `verifyTokenCodeDuringRegistration` | `LoginCommand` |
 | Enrollment step 2 (set PIN) | `updateTokenPin` | `LookupTokenCommand`, `UpdateTokenCommand` |

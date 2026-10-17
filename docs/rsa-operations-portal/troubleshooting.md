@@ -7,11 +7,17 @@ Start with `docker compose ps`, `docker compose logs -f` and `logs/rsaapp-portal
 ??? failure "`install.sh` stops because Docker or Docker Compose is missing"
     The installer needs Docker Engine 23 or later and the Docker Compose plugin (`docker compose version` must work). Install the plugin from your Docker packages; the old `docker-compose` v1 binary is not used.
 
-??? failure "`install.sh` or `upgrade.sh` stops after checking `.env`"
-    `util/check-env.sh` found a `CHANGE_ME`, a missing setting, or a value with `$` or ` #` in it. Fix the setting it names in `.env` and run the script again.
+??? failure "`install.sh` or `upgrade.sh` stops after checking the settings"
+    `util/check-env.sh` found a `CHANGE_ME`, a missing setting or settings file, or a value with `$` or ` #` in it. Fix the setting it names in the file it names (`.env`, `connector.env` or `mysql.env`) and run the script again.
+
+??? failure "`check-env.sh`: `.env holds the Connector's Authentication Manager settings in JAVA_OPTS` or `.env holds MySQL's settings (MYSQL_*)`"
+    The Portal's `.env` must not hold the AM settings or the MySQL root password. If there is no `connector.env` yet, `util/split-env.sh .env` moves them to `connector.env` and `mysql.env` and keeps a copy of the original as `.env.before-split.<time>`. If `connector.env` exists already, remove them from `.env` yourself. Then run the script again.
+
+??? failure "`check-env.sh`: `CONNECTOR_AUTH_PASSWORD differs between .env and connector.env`"
+    The Connector would refuse every request from the Portal. Set the same value in both files and run the script again.
 
 ??? failure "Portal container keeps restarting; log shows a datasource or Hibernate error"
-    * Release package: check that `spring.datasource.url` points at the MySQL service (host `mysql`, schema `RSAAPP`), and that `spring.datasource.password` equals `MYSQL_PASSWORD`.
+    * Release package: check that `spring.datasource.url` points at the MySQL service (host `mysql`, schema `RSAAPP`), and that `spring.datasource.password` in `.env` equals `MYSQL_PASSWORD` in `mysql.env`.
     * MySQL reads `MYSQL_DATABASE`, `MYSQL_USER` and `MYSQL_PASSWORD` only when the `mysql_data` volume is new. If you changed them later, change the user's password in MySQL as well. See [Installation → Database](install.md#6-database).
     * Helm: check `database.*`, and that the database and user exist on your server ([Prepare the database](install.md#2-prepare-the-database)). The chart connects with `sslMode=REQUIRED`.
 
@@ -37,7 +43,7 @@ Start with `docker compose ps`, `docker compose logs -f` and `logs/rsaapp-portal
     3. **Network to AM**: from the host or a pod, `curl -vk https://<am>:7002/ims-ws/httpinvoker/CommandServer` must connect.
     4. **TLS trust**: `PKIX path building failed` or `unable to find valid certification path` means `trust.jks` is missing, unreadable or does not contain AM's root CA. Check `ims.ssl.client.trust.keystore.filename` (`/custom/ssl/trust.jks` in both install methods) and both trust store passwords. Rebuild it as in [Installation](install.md#export-the-am-root-certificate-and-build-trustjks).
     5. **Command client credentials**: authentication errors to the command server mean `com.rsa.cmdclient.user` or `com.rsa.cmdclient.user.password` is wrong. Read them again with `rsautil manage-secrets --action list`. The package's `GUIDE.md` spells the password key `com.rsa.cmdclient.password`; the packaged file uses `…user.password`.
-    6. **System properties**: the connector loads its settings from `config.properties.location`, or from `-D` options in `JAVA_OPTS`. If neither is set, it silently uses the packaged development `config.properties`.
+    6. **System properties**: the connector loads its settings from `config.properties.location`, or from `-D` options in `JAVA_OPTS` in `connector.env`. If neither is set, it silently uses the packaged development `config.properties`.
 
 ??? failure "Operations fail and the user is suddenly sent to the login page"
     The connector runs operator actions **as the signed-in user's AM session**. When that AM session has expired, the connector raises `RsaUserSessionEndedException`, and the portal logs the user out. Sign in again. If it happens often, compare the AM session lifetime with the portal's `server.servlet.session.timeout`.
@@ -62,7 +68,7 @@ Start with `docker compose ps`, `docker compose logs -f` and `logs/rsaapp-portal
     Certificate-based PIN reset and exemption requests read the TLS client certificate. Serve the portal over HTTPS on 8443 with client-certificate negotiation enabled (`server.ssl.*`), and do not terminate TLS in front of it. See [Security → TLS and client certificates](security.md#tls-and-client-certificates).
 
 ??? failure "*We were unable to match your previous RSA Enrollment with your PKI Credentials…*"
-    The certificate DN must match the DN stored at the user's last enrollment, or the DN recorded when they opened a PIN-check email link. Enrollments done over plain HTTP were stored as `NOCERT`. Use the Windows-password option or ask a Trusted Agent or Help Desk user to reset the PIN.
+    The certificate DN must match the DN stored at the user's last enrollment, or an existing certificate-to-user mapping (`CertTokenMapping`). A PIN-check email link records none. Enrollments done over plain HTTP were stored as `NOCERT`. Use the Windows-password option or ask a Trusted Agent or Help Desk user to reset the PIN.
 
 ## Email
 
@@ -99,10 +105,10 @@ Start with `docker compose ps`, `docker compose logs -f` and `logs/rsaapp-portal
 ## Upgrades
 
 ??? failure "Upgrade finished but the portal is not running"
-    If `util/check-env.sh` found a problem in `.env`, `upgrade.sh` stopped **before restarting**. Fix the settings it names, then run `./upgrade.sh` again. `upgrade.sh` also lists the settings that are new in `env.template`; add the ones you need. If the Portal did not become healthy in time, check `docker compose logs portal connector`.
+    If `util/check-env.sh` found a problem in the settings, `upgrade.sh` stopped **before restarting**. Fix the settings it names, then run `./upgrade.sh` again. `upgrade.sh` also lists the settings that are new in each template; add the ones you need to the file it names. If the Portal did not become healthy in time, check `docker compose logs portal connector`.
 
 ??? failure "Local changes to `docker-compose.yml` disappeared"
-    `upgrade.sh` replaces `docker-compose.yml` with the new release's copy. Keep your settings in `.env`, not in `docker-compose.yml`.
+    `upgrade.sh` replaces `docker-compose.yml` with the new release's copy. Keep your settings in `.env`, `connector.env` and `mysql.env`, not in `docker-compose.yml`.
 
 ## Getting more detail
 
