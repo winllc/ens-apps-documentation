@@ -60,3 +60,5 @@ Decisions waiting on the user:
 4. Dismiss DSP CodeQL false positives.
 Round 2 (not started): RR-07/RR-12 (stack on RR platform), RSA-05/06/07 (stack on RSA platform), docs agent for
 item 23 + all Wave 2 docs (use the reports' docs lists).
+
+UPDATE 19:15 UTC: directory-services-portal#10 MERGED (DSP Wave 2 done). Check main CI on DSP at resume; CodeQL alerts now on main (dismiss false positives).
