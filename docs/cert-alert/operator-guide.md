@@ -170,8 +170,9 @@ When `cert-alert.ldap.changelog.enabled: true`:
 
 ## Backups
 
-All state CertAlert owns is in the database. The directory remains the source of truth for people,
-servers and certificates, but the following exist **only** in CertAlert's database:
+All state CertAlert owns is in the database, apart from the license and the installation id, which
+are in the license volume. The directory remains the source of truth for people, servers and
+certificates, but the following exist **only** in CertAlert's database:
 
 | Table | Content |
 |---|---|
@@ -179,7 +180,9 @@ servers and certificates, but the following exist **only** in CertAlert's databa
 | `user_email_alias` | Addresses added to people (personal and group) |
 | `project`, `project_user`, `project_server`, `project_admin` | Projects, membership, project administrators |
 | `notification`, `notification_setting` | Notifications and the round-up lead-days setting |
-| `audit_event` | The audit trail |
+| `audit_event`, `audit_chain_head` | The audit trail (`ens-audit/1`, hash-chained) and the chain's newest sequence number and hash |
+| `audit_delivery`, `audit_api_token` | How far each audit output (Splunk HEC, syslog) has delivered; the pull API's tokens |
+| `outbound_email` | Email waiting to be sent, and what became of recent messages |
 | `server_attribute_definition`, `server_attribute_option` | Editable-attribute definitions (the values themselves live in the directory) |
 | `changelog_cursor` | Changelog position |
 | `sync_run` | Job run log |
@@ -187,18 +190,38 @@ servers and certificates, but the following exist **only** in CertAlert's databa
 Everything else (`directory_user`, `directory_server`, `cached_certificate`, identifiers, POCs)
 can be rebuilt by a sweep.
 
+!!! note "No scheduled backup is included"
+    The release package and the Helm chart have no backup script or backup CronJob. The only
+    automatic backup is the one `upgrade.sh` takes before an upgrade. Schedule the commands below
+    with your own tools.
+
 === "Release package"
 
-    The database runs in the `postgres` service. Run these in the release directory:
+    The database runs in the `postgres` service (PostgreSQL 17). Run these in the release
+    directory:
 
     ```bash
+    # back up (custom format, compressed), while CertAlert runs
     docker compose exec -T postgres pg_dump -U certalert -Fc certalert > cert-alert-$(date +%F).dump
-    docker compose exec -T postgres pg_restore -U certalert -d certalert --clean < cert-alert-YYYY-MM-DD.dump
     ```
 
-    `upgrade.sh` also writes a backup to `backups/` before it upgrades.
+    A nightly crontab line, for example:
 
-    Also back up the configuration: `.env`, `license/`, `tls/` and `email-templates/`.
+    ```cron
+    15 1 * * * cd /opt/cert-alert-<version> && docker compose exec -T postgres pg_dump -U certalert -Fc certalert > /backup/cert-alert/cert-alert-$(date +\%F).dump
+    ```
+
+    Use the user and database names from `CERT_ALERT_DB_USER` and `CERT_ALERT_DB_NAME` if you
+    changed them. `pg_dump` takes a consistent snapshot without stopping the application.
+
+    **The upgrade backup.** `upgrade.sh` (and `install.sh --upgrade`) writes
+    `backups/cert-alert-before-<version>-<time>.sql.gz` (mode 600) before it upgrades, unless
+    you pass `--no-backup`. It is a plain SQL dump, restored with `psql` (below).
+
+    **The license volume** (`cert-alert_ens-license`, mounted at `/var/lib/ens/certalert`) holds the
+    license and this installation's id. Copy it with your volume backup tool, and keep the `.lic`
+    file you received. Also back up the configuration: `.env`, `license/`, `tls/` and
+    `email-templates/`.
 
 === "Helm"
 
@@ -209,10 +232,43 @@ can be rebuilt by a sweep.
     ```
 
     Also keep your values file and the Secrets it names. The license PVC holds the installation
-    id; see [Install with Helm](install.md#4-license).
+    id; snapshot it, see [Install with Helm](install.md#4-license).
 
     The chart's evaluation database (`database.embedded.enabled`) is not backed up. Do not keep
     data you need in it.
+
+### Restore
+
+Stop CertAlert first, so nothing writes while the database is replaced, and restore into the same
+release that made the backup (or an older backup into a newer release, which migrates it on start;
+never the other way round).
+
+=== "Release package"
+
+    ```bash
+    docker compose stop cert-alert
+
+    # a custom-format dump (pg_dump -Fc)
+    docker compose exec -T postgres pg_restore -U certalert -d certalert --clean --if-exists < cert-alert-YYYY-MM-DD.dump
+
+    # or a plain SQL dump, such as upgrade.sh's: into an empty database
+    docker compose exec -T postgres dropdb -U certalert certalert
+    docker compose exec -T postgres createdb -U certalert certalert
+    gunzip -c backups/cert-alert-before-<version>-<time>.sql.gz | docker compose exec -T postgres psql -U certalert -d certalert
+
+    docker compose up -d
+    ```
+
+=== "Helm"
+
+    ```bash
+    kubectl -n cert-alert scale deploy/cert-alert --replicas=0
+    pg_restore -h postgres.example.gov -U certalert -d certalert --clean --if-exists cert-alert-YYYY-MM-DD.dump
+    kubectl -n cert-alert scale deploy/cert-alert --replicas=1
+    ```
+
+After a restore, run **Sync directory** to bring the cached directory data up to date, and read
+[Disaster recovery](availability-and-sizing.md#disaster-recovery) about the audit trail.
 
 ## Monitoring
 
@@ -256,7 +312,16 @@ can be rebuilt by a sweep.
    person's credentials), revocation endpoints, and risky-name flags (the migration backfills
    these from stored names). Run **Sync directory** after an upgrade to refresh them.
 
-Migrations shipped: `V1` (directory tables) through `V17` (user additional email).
+Migrations shipped: `V1` (directory tables) through `V19`:
+
+| Migration | What it does |
+|---|---|
+| `V17__create_user_additional_email` | People's additional addresses read from the directory (`directory_user_email`) |
+| `V18__ens_audit_format` | Moves the audit trail to the shared `ens-audit/1` format in the same `audit_event` table, and adds `audit_chain_head`, `audit_delivery` and `audit_api_token`. Rows written before it are numbered and chained by the application at its first start, oldest first, before it writes anything new; on a large audit table that first start takes longer |
+| `V19__create_outbound_email` | The email outbox: a message is stored in the same transaction as whatever decided to send it, and sent after that commits, retried until it goes or is old enough to give up on |
+
+Migrations are not undone. Going back to an older release means restoring the backup taken before
+the upgrade; see [Rolling back an upgrade](availability-and-sizing.md#rolling-back-an-upgrade).
 
 ## Scaling
 
@@ -266,8 +331,9 @@ Migrations shipped: `V1` (directory tables) through `V17` (user additional email
   `replicaCount: 1` (with the `Recreate` strategy, so the old pod stops before the new one
   starts). Scale up, not out.
 - **Directory size**: sweeps are paged (`page-size`), streamed, and written in batches
-  (`batch-size`); built for 100,000+ entries. Raise `search-timeout` if a single page search is
-  slow.
+  (`batch-size`), so memory does not grow with the directory. They have not been load-tested at
+  100,000 certificates; see [Sizing](availability-and-sizing.md#sizing) for starting figures. Raise
+  `search-timeout` if a single page search is slow.
 - **Memory**: the heap follows the container limit (`MaxRAMPercentage=75`).
 - **Database pool**: `CERT_ALERT_DB_POOL_SIZE` (default 10).
 - **Revocation throughput**: `cert-alert.revocation.workers` (default 8) concurrent OCSP requests.

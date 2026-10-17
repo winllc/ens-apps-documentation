@@ -442,7 +442,7 @@ nothing else needs mirroring.
 
 ## First start checklist
 
-1. **Database**: the log shows Flyway applying migrations `V1` … `V17` on an empty database.
+1. **Database**: the log shows Flyway applying migrations `V1` … `V19` on an empty database.
 2. **Liveness**: `curl -fsS http://<host>:8080/actuator/health/liveness` returns
    `{"status":"UP"}`. With Helm, `helm test cert-alert -n cert-alert` checks it through the
    Service.
