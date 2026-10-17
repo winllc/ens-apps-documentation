@@ -108,6 +108,8 @@ nav:
       - Additional guidance:
           - Windows client: readyroom/windows-client.md
           - Security: readyroom/security.md
+          - FIPS 140-3 and DISA STIG: readyroom/fips-and-stig.md
+          - Sizing, availability and recovery: readyroom/availability-and-sizing.md
           - API reference: readyroom/api-reference.md
           - Troubleshooting: readyroom/troubleshooting.md
   - RSA Operations Portal:

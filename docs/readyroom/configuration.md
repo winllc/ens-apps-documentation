@@ -18,8 +18,14 @@ property.
 | JVM options | `JAVA_OPTS="-Dapplication.timezone=America/Chicago"` | The image passes `$JAVA_OPTS` to `java`. Keep the default `-XX:MaxRAMPercentage=75.0` when you set it. |
 
 !!! warning "Override every secret"
-    The packaged `application.yml` contains development passwords for the database, the LDAP bind
-    and SMTP. Override them all in production. See [Security](security.md).
+    The packaged `application.yml` contains development passwords for the database and the LDAP
+    bind. Override them in production. No mail server or mail password is packaged. See
+    [Security](security.md).
+
+!!! info "Settings are checked at startup"
+    A setting with an invalid value stops ReadyRoom at startup with a message naming the variable,
+    for example `APPLICATION_USERBASEDN`, `APPLICATION_BASE_URL`, an `ENS_SESSION_*` duration or
+    `ENS_AUDIT_SYSLOG_PROTOCOL`.
 
 In the tables below, **Packaged** is the value in the packaged `application.yml`, and **Built-in**
 is the value the code uses when the property is not set anywhere. A dash means there is none.
@@ -39,7 +45,8 @@ is the value the code uses when the property is not set anywhere. A dash means t
 | `server.ssl.trust-store-type` | `SERVER_SSL_TRUSTSTORETYPE` | `PKCS12` | |
 | `server.servlet.session.cookie.same-site` | – | `lax` | The session cookie is not sent with another site's posts or scripted requests, but is sent when someone follows a link from elsewhere, such as an absence notification email. |
 | `server.servlet.session.cookie.http-only` | – | `true` | |
-| `server.servlet.session.cookie.secure` | `SESSION_COOKIE_SECURE` | the value of `SSL_ENABLED` | Mark the session cookie `Secure`. Set `SESSION_COOKIE_SECURE=true` when a reverse proxy terminates TLS for browsers and ReadyRoom itself serves HTTP. |
+| `server.servlet.session.cookie.secure` | `ENS_COOKIE_SECURE` | the value of `SSL_ENABLED` | Mark the session cookie `Secure`. Set `ENS_COOKIE_SECURE=true` when a reverse proxy terminates TLS for browsers and ReadyRoom itself serves HTTP. `SESSION_COOKIE_SECURE`, the older name, still works. |
+| `server.forward-headers-strategy` | `SERVER_FORWARD_HEADERS_STRATEGY` | – | `framework` behind a reverse proxy that terminates TLS: ReadyRoom then reads `X-Forwarded-Proto`, `-Host` and `-For`, so it knows requests are HTTPS (Strict-Transport-Security, redirects) and records the client's address. Only when every request comes through that proxy. |
 
 With TLS on, ReadyRoom refuses to start if no keystore is set, or if no truststore is set while
 `client-auth` is `want` or `need`. The error names the settings to add (for example
@@ -49,11 +56,13 @@ With TLS on, ReadyRoom refuses to start if no keystore is set, or if no truststo
 
 | Property | Packaged | Description |
 |---|---|---|
-| `spring.datasource.url` | `jdbc:postgresql://localhost:5432/appdb` | JDBC URL. |
-| `spring.datasource.username` | `appuser` | |
-| `spring.datasource.password` | `secret123` | |
+| `spring.datasource.url` | `jdbc:postgresql://${DB_HOST:postgres}:${DB_PORT:5432}/${DB_NAME:appdb}` | JDBC URL. Set `DB_HOST`, `DB_PORT` and `DB_NAME`, or `SPRING_DATASOURCE_URL` whole. |
+| `spring.datasource.username` | `DB_USERNAME`, packaged `appuser` | |
+| `spring.datasource.password` | `DB_PASSWORD`, packaged `secret123` | Override it. |
 | `spring.datasource.driver-class-name` | `org.postgresql.Driver` | |
-| `spring.jpa.hibernate.ddl-auto` | `update` | Hibernate creates and alters tables. Indexes and constraints come from `db/migrations/` (see [Installation](install.md#prepare-postgresql)). |
+| `spring.jpa.hibernate.ddl-auto` | `validate` | Hibernate only checks, at startup, that the tables and columns it maps are there. Flyway creates and changes the schema (see [Installation](install.md#prepare-postgresql)). |
+| `spring.flyway.baseline-on-migrate`, `spring.flyway.baseline-version` | `true`, `0` | A database an earlier ReadyRoom created, with tables but no `flyway_schema_history`, is recorded at version 0, and `V1` then adds what is missing. Leave them as they are. |
+| `spring.flyway.user`, `spring.flyway.password` | – (`DB_USERNAME`, `DB_PASSWORD`) | `SPRING_FLYWAY_USER`, `SPRING_FLYWAY_PASSWORD`: an optional separate account that owns and migrates the schema, so `DB_USERNAME` only reads and writes rows. Helm: `database.migration.*` |
 | `spring.jpa.open-in-view` | `false` | Keep it off. Otherwise a request holds its database connection while it waits on LDAP, and a slow directory can exhaust the pool. |
 | `spring.jpa.show-sql` | `false` | |
 | `spring.jpa.properties.hibernate.dialect` | `org.hibernate.dialect.PostgreSQLDialect` | |
@@ -64,7 +73,7 @@ With TLS on, ReadyRoom refuses to start if no keystore is set, or if no truststo
 
 | Property | Packaged | Built-in | Description |
 |---|---|---|---|
-| `spring.ldap.urls` | `ldap://localhost:1389` | – | Directory URL(s). |
+| `spring.ldap.urls` | `ldap://${LDAP_HOST:openldap}:${LDAP_PORT:389}` | – | Directory URL(s), `SPRING_LDAP_URLS`, comma-separated for failover. The release package's `.env` and the Helm chart default to `ldaps://...:636`. Password sign-in over `ldap://` without StartTLS logs a warning at startup. |
 | `spring.ldap.username` | `cn=admin,dc=winllc,dc=com` | – | Bind DN for searches. |
 | `spring.ldap.password` | `adminpassword` | – | Bind password. |
 | `spring.ldap.base-environment."[com.sun.jndi.ldap.connect.timeout]"` | `5000` | – | Connect timeout in ms. Without it, an unresponsive directory holds requests indefinitely. |
@@ -90,7 +99,7 @@ you pass them with `-D`:
 | `application.user-base-dn` | `dc=winllc,dc=com` | – | Base DN for every user search, the login form's user search and the org chart scan. **Required.** |
 | `application.user-ldap-filter` | `(objectclass=inetOrgPerson)` | `(objectclass=inetOrgPerson)` | Identifies user entries. It is used alone to list and count users, and combined into an AND for search, reports, direct reports and Windows sign-in. Parentheses are added if you leave them out, and a blank value falls back to the default. Example: `(&(objectclass=inetOrgPerson)(!(employeeType=CONTRACTOR)))`. |
 | `application.groups[].groups-base-dn` | `ou=Groups,dc=winllc,dc=com`, `ou=Companies,dc=winllc,dc=com` | none | One entry per top-level group tree shown on the **Groups** page. Groups are `groupOfUniqueNames` entries. |
-| `application.super-user-dns` | `CN=user3,OU=Users,DC=winllc,DC=com` | none | DNs that always get the `ADMIN` role (matched without regard to case). |
+| `application.super-user-dns` | none | none | DNs that always get the `ADMIN` role (matched without regard to case), `APPLICATION_SUPERUSERDNS_0`, `_1`, ... None are packaged: name at least one, or nobody can administer ReadyRoom or reach the license screen (startup logs a warning). The demo profile and the development compose file name their own. |
 | `application.user-ldap-organization-attribute` | `o` | `organization` | Organization of a user. |
 | `application.user-ldap-employee-type-attribute` | `employeeType` | `employeeType` | Employee type. Used in metrics and org-chart breakdowns. |
 | `application.user-ldap-location-attribute` | `l` | `location` | Location. |
@@ -136,7 +145,7 @@ Admins and managers can evict cached group trees from **Settings** (see
 
 | Property | Packaged | Built-in | Description |
 |---|---|---|---|
-| `application.check-out-after-minutes` (`checkOutAfterMinutes`) | `2` | `240` | How long someone's latest event of the day can be a screen lock before they are automatically checked out. The packaged value of 2 minutes is a development setting. |
+| `application.check-out-after-minutes` (`checkOutAfterMinutes`) | `240` | `240` | How long someone's latest event of the day can be a screen lock before they are automatically checked out. |
 | `application.extra-time-before-absent-notification-minutes` | – | `60` | Grace period after a person's expected login time before an absence alert is raised. The help dialog shows this value. |
 | `application.inactive-cron.fixed-rate` | `60000` | `1800000` | Milliseconds between auto check-out runs. It is used as a fixed **delay** after each run finishes, so runs never overlap. |
 | `application.inactive-cron.initial-delay` | `60000` | `1800000` | Delay before the first auto check-out run, in ms. |
@@ -155,13 +164,14 @@ What each job does is described in [Operations](operator-guide.md#scheduled-jobs
 
 | Property | Packaged | Built-in | Description |
 |---|---|---|---|
-| `spring.mail.host` | `mailcow.winllc-dev.com` | – | SMTP host. |
+| `spring.mail.host` | – | – | SMTP host (`SPRING_MAIL_HOST`). Without it, absence alerts are recorded but not emailed, and startup logs a warning. |
 | `spring.mail.port` | `587` | – | SMTP port. |
-| `spring.mail.username` / `spring.mail.password` | dev values | – | SMTP credentials. |
+| `spring.mail.username` / `spring.mail.password` | – | – | SMTP credentials. |
 | `spring.mail.properties.mail.smtp.auth` | `true` | – | |
-| `spring.mail.properties.mail.smtp.starttls.enable` | `true` | – | |
-| `spring.mail.properties.mail.smtp.ssl.trust` | `"*"` | – | Trusts any SMTP server certificate. Set it to your mail host's name in production. |
-| `application.notification-sender-email` | `user1@winllc-dev.com` | `noreply@test.com` | From address of absence emails. |
+| `spring.mail.properties.mail.smtp.starttls.enable` / `.required` | `true` / `true` | – | STARTTLS, and refuse to send (credentials included) when the server does not offer it. For a relay that takes neither TLS nor AUTH, set `SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH` and `..._STARTTLS_ENABLE` to `false`. |
+| `spring.mail.properties.mail.smtp.connectiontimeout`, `.timeout`, `.writetimeout` | `30000` each | – | A server that stops answering fails the send after 30 seconds instead of holding the job. |
+| `spring.mail.properties.mail.smtp.ssl.trust` | – | – | Unset: the mail server's certificate is checked against the JVM's trust store. Earlier releases trusted any certificate. Naming a host here (or `*`) trusts it without checking: an explicit opt-in, not FIPS- or STIG-appropriate. Helm: `smtp.sslTrust` |
+| `application.notification-sender-email` | `""` | – | From address of absence emails (`APPLICATION_NOTIFICATIONSENDEREMAIL`). Must be a valid address; required when `SPRING_MAIL_HOST` is set, or startup fails. |
 | `application.application-base-url` | `http://localhost:8181` | `https://localhost` | Base of the link in absence emails (`<base>/app/notifications/id/<id>`). Set it to the URL users really use. |
 
 ## User interface
@@ -202,8 +212,31 @@ For the setup procedure, see [Security](security.md#windows-kerberos-sign-in).
 |---|---|---|
 | `logging.level.root` | `info` | |
 | `logging.level.com.winllc.innoutwork` | `info` | At `info`: records written by jobs, permission grants and revocations, report generation, org-chart rebuilds and job summaries. Set it to `debug` for per-query detail, timings and authorization decisions. |
-| `management.endpoints.web.exposure.include` | `health` | Actuator endpoints exposed under `/actuator`. `health` needs no authentication and shows the status only. Any other endpoint you add needs an `ADMIN` sign-in; see [Security](security.md#unauthenticated-endpoints). |
+| `management.endpoints.web.exposure.include` | `health` | Actuator endpoints exposed under `/actuator` on the application's port. `health` needs no authentication and shows the status only; details for `ADMIN`. Any other endpoint you add needs an `ADMIN` sign-in; see [Security](security.md#unauthenticated-endpoints). |
+| `management.server.port` (`MANAGEMENT_SERVER_PORT`) | – | Spring Boot's own setting. A separate, plain-HTTP port for the actuator: there `/actuator/health` (with `liveness` and `readiness`) and `/actuator/prometheus` are open without sign-in, and the application's port then has no actuator. Unset: no Prometheus endpoint at all. Never publish this port through an ingress, route or the host. Helm: `metrics.enabled` (default `true`), `metrics.port` (9090) |
+| `management.health.mail.enabled` (`MANAGEMENT_HEALTH_MAIL_ENABLED`) | Spring Boot's default, `true` | Whether the aggregate `/actuator/health` includes the mail server. Readiness never does. Helm: `smtp.healthCheck` |
+| `logging.structured.format.console` (`LOGGING_STRUCTURED_FORMAT_CONSOLE`) | – | `ecs` writes each log line as one JSON object (Elastic Common Schema). Helm: `logFormat: json`, the default. The audit lines on stdout are raw `ens-audit/1` JSON either way |
 | `application.diagnostics.request-metrics` | `false` | When `true`, every request logs `GET /app/home -> 200: <n> SQL statement(s), <n> LDAP operation(s), <n>ms`. Use it for measuring, not for normal running. |
+
+## Security headers, banner and sessions
+
+The ENS platform settings: every ENS application has them, with the same names and defaults.
+
+| Env var | Default | Description |
+|---|---|---|
+| `ENS_CSP_REPORT_ONLY` | `false` | `true` sends `Content-Security-Policy-Report-Only` instead of enforcing the policy: an escape hatch for a page the policy breaks. Startup warns while it is on. Helm: `csp.reportOnly` |
+| `ENS_CONSENT_BANNER_ENABLED` | `false` | Show the DoD notice-and-consent banner before sign-in, enforced by the server. Helm: `consentBanner.enabled` |
+| `ENS_CONSENT_BANNER_TITLE` | empty: `U.S. Government (USG) Information System (IS) Notice and Consent` | Its heading |
+| `ENS_CONSENT_BANNER_TEXT` | empty: the standard DoD notice-and-consent text | Plain text, blank lines between paragraphs |
+| `ENS_CONSENT_BANNER_FILE` | – | A file to read the text from; wins over `ENS_CONSENT_BANNER_TEXT`. Helm: `consentBanner.existingConfigMap` |
+| `ENS_SESSION_IDLE_TIMEOUT` | `30m` | A browser session ends after this long idle. Setting `SERVER_SERVLET_SESSION_TIMEOUT` no longer changes the timeout of signed-in sessions |
+| `ENS_SESSION_ADMIN_IDLE_TIMEOUT` | empty: the idle timeout | Idle timeout for administrators. DISA STIG suggests `15m` |
+| `ENS_SESSION_ABSOLUTE_TIMEOUT` | `12h` | A session ends this long after sign-in, whatever its activity |
+| `ENS_SESSION_MAX_PER_USER` | `0` (no limit) | Sessions per user; over the limit the oldest ends. DISA STIG suggests `3` |
+
+The durations are Spring durations (`30m`, `12h`), each at least one minute. Helm: `session.*`.
+The settings for client certificates (`ENS_X509_*`) are in
+[Installation → Client certificates](install.md#client-certificates-cacpiv).
 
 ## Example: production settings
 
@@ -229,8 +262,13 @@ SPRING_MAIL_HOST=smtp.example.com
 SPRING_MAIL_PORT=587
 SPRING_MAIL_USERNAME=readyroom@example.com
 SPRING_MAIL_PASSWORD=...
-SPRING_MAIL_PROPERTIES_MAIL_SMTP_SSL_TRUST=smtp.example.com
 APPLICATION_NOTIFICATIONSENDEREMAIL=readyroom@example.com
+
+ENS_CONSENT_BANNER_ENABLED=true
+ENS_SESSION_ADMIN_IDLE_TIMEOUT=15m
+ENS_SESSION_MAX_PER_USER=3
+ENS_X509_REVOCATION=ocsp-then-crl
+LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs
 
 APPLICATION_TIMEZONE=America/Chicago
 SPRING_JACKSON_TIMEZONE=America/Chicago

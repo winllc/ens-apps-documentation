@@ -122,7 +122,8 @@ address; a logout with a usable `sessionId` never is.
 | Server | Container image `ghcr.io/winllc/in-n-out-work` (in the release package's `images/`, and run by the Helm chart) | Spring Boot 4 application: web UI, REST API, scheduled jobs, LDAP and database access. |
 | Web UI | Inside the server | Thymeleaf pages using the Tabler UI kit, Tabulator tables, FullCalendar, ApexCharts and flatpickr. |
 | Windows client | The release package's `windows-client/` folder | `Update-WorkStatus.ps1`, the `Install-InOutWorker.ps1` installer, a sample configuration file and five Task Scheduler XML definitions. See [Windows client](windows-client.md). |
-| Database scripts | The release package's `migrations/` folder; the Helm chart runs them in a Job | SQL run with `psql`. Hibernate creates the tables; these scripts add the indexes and constraints. |
+| Database migrations | Inside the server | Flyway migrations, applied at startup. There is no `migrations/` folder and no migration Job. |
+| Backup scripts | The release package's `backup.sh` and `restore.sh`; the Helm chart's optional backup CronJob | The database and, in the release package, the license volume. See [Operations](operator-guide.md#backups). |
 
 ## Technology stack
 
@@ -132,7 +133,8 @@ address; a logout with a usable `sessionId` never is.
 | Framework | Spring Boot 4.1.1 (Web MVC, Security, Data JPA, Data LDAP, Mail, Actuator, Cache) |
 | Security | Spring Security 7.1.1: X.509, `spring-security-ldap`, `spring-security-kerberos-core` |
 | Views | Thymeleaf with the layout dialect and Spring Security extras |
-| Database | PostgreSQL (Hibernate with `ddl-auto: update`) |
+| Database | PostgreSQL (16 in the release package and the chart's embedded database). Flyway owns the schema; Hibernate only validates it (`ddl-auto: validate`) |
+| Observability | Micrometer with Prometheus, on a separate management port; ECS JSON logs |
 | Directory | Any LDAP v3 server. People are `inetOrgPerson` by default; groups are `groupOfUniqueNames`. |
 | Caching | Caffeine |
 | Delivery | Signed release package (Docker Compose) and Helm chart |
@@ -149,6 +151,8 @@ address; a logout with a usable `sessionId` never is.
 | Use the web application day to day | [User guide](user-guide.md) |
 | Manage roles, group managers, the calendar and org-chart rules | [Administration](admin-guide.md) |
 | Run, monitor, back up and upgrade the server | [Operations](operator-guide.md) |
+| Size it, plan for availability and recover from a disaster | [Sizing, availability and recovery](availability-and-sizing.md) |
 | Understand authentication, authorization and hardening | [Security](security.md) |
+| Run it on FIPS-enabled hosts, or to DISA STIG settings | [FIPS 140-3 and DISA STIG](fips-and-stig.md) |
 | Call or integrate with the HTTP endpoints | [API reference](api-reference.md) |
 | Fix a problem | [Troubleshooting](troubleshooting.md) |

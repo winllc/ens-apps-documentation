@@ -9,7 +9,7 @@ the workstation agents, and upgrades.
 | Item | Value |
 |---|---|
 | Process | One Java 21 process in a container: the `app` service of the release package, or the `readyroom` Deployment of the Helm chart |
-| Listener | Port **8181**: plain HTTP, or HTTPS once TLS is turned on. There is no separate management port. |
+| Listener | Port **8181**: plain HTTP, or HTTPS once TLS is turned on. With `MANAGEMENT_SERVER_PORT` set (the Helm chart sets 9090), a separate plain-HTTP management port for the probes and Prometheus. |
 | State | PostgreSQL (all records) and in-memory Caffeine caches (directory data). The server keeps no files of its own. |
 | Sessions | HTTP sessions are held in memory. A restart signs out password users. Certificate users are signed in again on their next request. |
 | Outbound | LDAP, PostgreSQL, SMTP. With Windows sign-in enabled, a domain controller is **not** contacted: tickets are checked with the keytab alone. |
@@ -17,7 +17,8 @@ the workstation agents, and upgrades.
 !!! warning "Run a single instance"
     The scheduled jobs have no cluster coordination: every instance runs every job. With two
     instances, auto check-outs and absence alerts can be produced twice. The release package runs one
-    container, and the Helm chart runs one replica; more are not supported.
+    container, and the Helm chart runs one replica; more are not supported. See
+    [High availability](availability-and-sizing.md#high-availability).
 
 ## Start and stop
 
@@ -58,25 +59,59 @@ Windows sign-in enabled for /api/check/in, /api/check/lock, /api/check/unlock as
 ```
 
 The application does not start (it fails with a clear message) if `application.banner-text` is
-missing, if Windows sign-in is enabled without a service principal or a readable keytab, or if TLS
-is on without a keystore, or without a truststore while client certificates are requested.
+missing, if Windows sign-in is enabled without a service principal or a readable keytab, if TLS
+is on without a keystore, or without a truststore while client certificates are requested, if
+header mode for client certificates lacks its proxy secret or CA, if a database migration fails,
+or if a setting has an invalid value (the message names the variable).
+
+It starts, with a warning, when: the directory is reached over `ldap://` without StartTLS; no mail
+server is configured; no administrator is configured; certificates are in use with revocation
+checking off; or `ENS_CSP_REPORT_ONLY` is on.
 
 ## Health and monitoring
 
-Spring Boot Actuator exposes only `health`, under `/actuator/health`, **without authentication**.
-It is what the container health check and the Kubernetes probes use:
+| Path | Includes |
+|---|---|
+| `/actuator/health/liveness` | ReadyRoom's own state only, so an outage elsewhere never restarts it |
+| `/actuator/health/readiness` | Also the database (`db`), the directory (`ldap`) and whether the audit trail can be written (`auditStore`). Never the mail server |
+| `/actuator/health` | The aggregate, including the mail server unless `MANAGEMENT_HEALTH_MAIL_ENABLED=false` |
+
+All three are open without sign-in and show the status only; component details are shown to `ADMIN`
+users. Without `MANAGEMENT_SERVER_PORT` they are on port 8181. With it, the actuator moves to that
+port, plain HTTP, and port 8181 has none.
+
+- **Release package:** the container's health check calls `/actuator/health` on port 8181, or on
+  `MANAGEMENT_SERVER_PORT` when that is set in `.env`.
+- **Helm:** the startup and liveness probes use liveness and the readiness probe uses readiness, on
+  the management port (9090) while `metrics.enabled` is `true` (the default). Tune them with
+  `probes.*`.
 
 ```bash
-curl -sk https://readyroom.example.com:8181/actuator/health
+curl -sk https://readyroom.example.com:8181/actuator/health/readiness
 ```
 
-Use `http://` while TLS is off, and your ingress or route host with Helm.
+**Prometheus.** Set `MANAGEMENT_SERVER_PORT` (the Helm chart does, on 9090, with `metrics.enabled`)
+and scrape `/actuator/prometheus` there, without sign-in. Unset, no metrics are exposed at all.
+Never publish that port through an ingress, route or the host. With the Prometheus Operator, set
+`metrics.serviceMonitor.enabled`; with `networkPolicy.enabled`, admit your Prometheus with
+`metrics.allowFrom`. Besides Spring Boot's JVM, HTTP, database pool and Tomcat metrics, all tagged
+`application="readyroom"`:
 
-`/actuator/health` returns the overall status only, with no details. Spring Boot includes its
-auto-configured health indicators for the configured database, LDAP and mail connections, so a
-broken dependency turns the status to `DOWN`. If you add other endpoints to
-`management.endpoints.web.exposure.include` (for example `metrics`), they need an `ADMIN` sign-in.
-See [Security](security.md#unauthenticated-endpoints).
+| Metric | Type | Meaning |
+|---|---|---|
+| `ens_license_mode{mode}` | gauge | 1 for the license mode in effect (`full`, `read_only`, `unlicensed`), 0 for the others |
+| `ens_license_days_remaining` | gauge | Days until the license (or its grace period) ends; no value for a perpetual license |
+| `ens_audit_events_total{category,outcome}` | counter | Audit events stored |
+| `ens_audit_forward_failures_total{output}` | counter | Failed deliveries to an audit output (`splunk`, `syslog`) |
+| `ens_auth_attempts_total{method,outcome}` | counter | Sign-ins by method (`ldap`, `x509`, `sso`, `api-token`, `session-id`) and outcome, the Windows client's included |
+| `ens_readyroom_checkins_total{action}` | counter | The Windows client's events recorded (`in`, `lock`, `unlock`, `out`) |
+| `ens_readyroom_people_in` | gauge | People whose latest event today is a check-in or unlock (refreshed at most once a minute) |
+| `ens_readyroom_alerts_sent_total` | counter | Absence alert emails sent |
+| `ens_readyroom_logoffs_refused_total{reason}` | counter | Logoffs refused: `unknown_session`, `rate_limited` |
+
+Suggested alerts: readiness failing; `ens_readyroom_checkins_total` flat during working hours;
+`ens_license_mode{mode="full"}` at 0, or `ens_license_days_remaining` under 30;
+`ens_audit_forward_failures_total` rising; no new backup in a day.
 
 ### Request diagnostics
 
@@ -94,6 +129,9 @@ Turn it off again afterwards.
 ReadyRoom logs to standard output through Spring Boot's default logging. There is no log file
 unless you configure one (for example with `logging.file.name`). Read it with
 `docker compose logs app` (release package) or `kubectl -n readyroom logs deploy/readyroom` (Helm).
+`LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs` writes each line as one JSON object (Elastic Common Schema);
+the Helm chart does so by default (`logFormat: json`). The audit lines on stdout (logger `ens.audit`)
+are raw `ens-audit/1` JSON either way.
 
 | Level for `com.winllc.innoutwork` | What is logged |
 |---|---|
@@ -147,40 +185,66 @@ background after `cache-duration-refresh-minutes` and discarded after
 
 ### Backups
 
-ReadyRoom has no built-in backup. Back up the PostgreSQL database with your usual tooling, for
-example:
-
 === "Release package"
 
-    In the release directory:
+    `./backup.sh`, in the release directory, backs up the database and the license volume while
+    ReadyRoom keeps running:
 
     ```bash
-    docker compose exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' > readyroom-$(date +%F).sql
+    ./backup.sh                 # into ./backups
+    ./backup.sh /mnt/backups    # or a directory of your own
     ```
 
-    Also keep `.env`, `license/`, `tls/` and `kerberos/`, and the `readyroom_ens-license` volume,
-    which holds the installation id.
+    It writes, with a UTC timestamp, `readyroom-db-<stamp>.dump` (`pg_dump`, custom format) and
+    `readyroom-license-<stamp>.tar.gz` (the license and this installation's id), and removes dumps
+    older than `BACKUP_RETENTION_DAYS` (default 14; `0` keeps every one). Schedule it with cron, and
+    copy the files off the host: a backup on the same disk does not survive the disk.
+
+    ```cron
+    17 2 * * * cd /opt/readyroom-1.2.3 && ./backup.sh >> backups/backup.log 2>&1
+    ```
+
+    To restore, `./restore.sh` stops ReadyRoom, replaces the database (and, if given, the license
+    volume) with the backup's in one transaction, and starts it again:
+
+    ```bash
+    ./restore.sh backups/readyroom-db-20261017T021700Z.dump [backups/readyroom-license-20261017T021700Z.tar.gz]
+    ```
+
+    Everything recorded since that backup is lost. Restore into the same or a newer release, never an
+    older one: on start, Flyway brings an older backup's schema up to date.
+
+    Also keep `.env`, `license/`, `tls/` and `kerberos/`.
 
 === "Helm"
 
-    Back up your own PostgreSQL server, for example:
+    With `backup.enabled`, a CronJob runs `pg_dump` (custom format, with the database image, so the
+    version matches) into a PVC and deletes dumps older than `backup.retentionDays`. It works with
+    your PostgreSQL or the embedded one, but is no substitute for your database's own backups and
+    point-in-time recovery.
 
-    ```bash
-    pg_dump -Fc -h db.example.com -U readyroom readyroom > readyroom-$(date +%F).dump
-    # restore into an empty database:
-    pg_restore -d readyroom_restore readyroom-$(date +%F).dump
-    ```
+    | Value | Default | Meaning |
+    |---|---|---|
+    | `backup.enabled` | `false` | Turn on the CronJob `readyroom-backup` |
+    | `backup.schedule`, `backup.timeZone` | `17 2 * * *`, the controller's | When it runs |
+    | `backup.retentionDays` | `14` | Dumps older than this are deleted |
+    | `backup.activeDeadlineSeconds` | `3600` | The longest one run may take |
+    | `backup.persistence.*` | `10Gi`, ReadWriteOnce | The PVC the dumps go to, or `existingClaim` |
 
-    Also keep your values file, the Secrets it names, and the `readyroom-license` claim.
+    To back up now: `kubectl -n readyroom create job --from=cronjob/readyroom-backup readyroom-backup-now`.
+    The chart's `README.md` gives the restore steps. The license PVC (the installation id) is not
+    in the dumps: snapshot it too, and copy the dumps off the cluster as well. Also keep your values
+    file and the Secrets it names.
 
 Everything that cannot be rebuilt from the directory is in the database: attendance history,
 statuses, roles, notes, additional managers, group managers, notifications and responses, the
-organization calendar and parse rules. Take a backup before every upgrade and before running a
-migration script.
+organization calendar and parse rules, and the audit trail. Take a backup before every upgrade.
 
 ### Retention
 
-**ReadyRoom never deletes old data.** `check_in_out_records` grows by one row for every logon,
+**ReadyRoom never deletes old attendance data.** The audit trail is pruned only when
+`ENS_AUDIT_RETENTION_DAYS` is set (see [Audit logging](../audit-logging.md#retention)).
+`check_in_out_records` grows by one row for every logon,
 lock, unlock and logoff on every workstation. 5,000 users over 90 days make about 1.2 million
 rows. `notification_records` and `user_event_records` also grow.
 If you need a retention policy, apply it with SQL on a schedule of your own, after a backup. For
@@ -196,13 +260,13 @@ My Reports look back 30 days, and agent coverage looks back 90 days.
 
 ### Schema changes and migrations
 
-Hibernate (`ddl-auto: update`) adds new tables and columns at startup, but does not drop anything
-or change constraints. It creates one index, `ix_check_in_out_session_id` on
-`check_in_out_records`, if it is missing. The other indexes and the constraints come from
-numbered database scripts: in the release package's `migrations/` directory, which you run with
-`psql`, and in the Helm chart, whose migration Job runs them on every install and upgrade (see
-[Installation](install.md#prepare-postgresql)). Currently there is one script:
-`001_indexes_and_unique_user_dn.sql`. It is safe to run again.
+Flyway owns the schema. The migrations are versioned `V<n>__<description>.sql` files inside the
+application; at every start, before it serves anything, ReadyRoom applies the ones the database
+does not have yet (recorded in `flyway_schema_history`), each in one transaction. Hibernate then
+only validates the schema (`ddl-auto: validate`). Nothing is run by hand, and neither the release
+package nor the Helm chart carries scripts. The current release has one migration, `V1__baseline`;
+see [Installation → Prepare PostgreSQL](install.md#prepare-postgresql). Developer notes on adding a
+migration are in `db/README.md` in the source.
 
 ## Certificate and key rotation
 
@@ -248,9 +312,10 @@ stored, and audited as a failed `auth.login` with the reason *unknown session*. 
 
 ## Upgrades
 
-1. Read the release's changes and note any new database script or configuration property.
-2. **Back up the database.**
-3. Install the new release. Hibernate adds any new tables and columns on start.
+1. Read the release's changes and note any new configuration property.
+2. **Back up the database and the license volume**: `./backup.sh` (release package), or your
+   database's backups and a license PVC snapshot (Helm).
+3. Install the new release. ReadyRoom migrates its schema on start (Flyway).
 
     === "Release package"
 
@@ -265,28 +330,24 @@ stored, and audited as a failed `auth.login` with the reason *unknown session*. 
             -n readyroom -f readyroom-values.yaml
         ```
 
-4. Run any new database scripts. Release package: from `migrations/`, with
-   `psql -v ON_ERROR_STOP=1`, without `--single-transaction` (see
-   [Prepare PostgreSQL](install.md#prepare-postgresql)). Helm: the migration Job runs them; check
-   its log.
-5. Verify: health is `UP`, the startup log lines look right, Home loads, and a test check-in
-   arrives.
-6. Re-run `Install-InOutWorker.ps1` from the new release's `windows-client/` folder on every
+4. Verify: readiness is `UP`, the log shows the migrations applied (or the schema up to date),
+   the startup log lines look right, Home loads, and a test check-in arrives.
+5. Re-run `Install-InOutWorker.ps1` from the new release's `windows-client/` folder on every
    workstation. Without arguments it keeps the existing `inoutworker.config.json`, installs the new
    script, re-registers the five tasks, and corrects the folder permissions an older client left on
    `%ProgramData%\InOutWorker`.
 
-To roll back, run the previous release again: `docker compose up -d` in its directory, or
-`helm rollback`. Columns added by Hibernate do no harm to an older version. Restore the database
-backup only if a migration changed data you need back.
+To roll back, see [Rolling back an upgrade](availability-and-sizing.md#rolling-back-an-upgrade).
+Rolling back past a release that added migrations needs the database backup taken before the
+upgrade.
 
 ## Runbook
 
 | Symptom | First checks |
 |---|---|
-| Nobody's status updates | Is the server up (`/actuator/health`)? Are agents reaching it (workstation log; Metrics → Agent coverage)? Did the server certificate or truststore change? |
+| Nobody's status updates | Is the server up (`/actuator/health/readiness`)? Are agents reaching it (workstation log; Metrics → Agent coverage)? Did the server certificate or truststore change? |
 | One person's status never updates | Their workstation log and the task's *Last Run Result*. Is their certificate valid and issued with their directory DN? |
-| People show `OUT` shortly after locking | `check-out-after-minutes` is too low. The release package and the chart set 240; the application's own default without them is 2. |
+| People show `OUT` shortly after locking | `check-out-after-minutes` is too low. The default is 240. |
 | No absence emails | SMTP errors in the log, the manager's email attribute, `application-base-url`, whether today is a weekend or holiday, and whether the person has an expected time. |
 | Pages slow or hanging | LDAP response times. Turn on `request-metrics`. The timeouts are 5 s connect and 30 s read. |
 | Group changes in the directory not visible | Cache lifetimes. Evict the group in **Settings → Group Cache**. Membership-based access is cached for 300 s. |

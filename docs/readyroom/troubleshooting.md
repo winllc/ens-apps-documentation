@@ -19,6 +19,10 @@ SYSTEM logout task. For background, see [Operations](operator-guide.md) and
 | Helm: `tls.truststore.secretName is required when tls.enabled with clientAuth ...` | The chart does not render with `tls.enabled` and no truststore. Set `tls.truststore.secretName`, or `tls.clientAuth: none`. |
 | Keystore or truststore errors | Release package: check that `tls/keystore.p12` and `tls/truststore.p12` exist, are readable by group 0, and match `SERVER_SSL_KEYSTOREPASSWORD` and `SERVER_SSL_TRUSTSTOREPASSWORD`, and that `docker-compose.tls.yml` is in `COMPOSE_FILE`. Helm: check the `tls.keystore` and `tls.truststore` Secrets and their password keys. |
 | Database connection refused | Release package: check `docker compose ps` shows `postgres` healthy. Helm: check `database.*` and that PostgreSQL accepts connections from the pod. |
+| Flyway fails at startup (`Migration ... failed`, `Validate failed`) | A migration could not be applied, or the schema doesn't match what ReadyRoom expects. Nothing of the failed migration was applied: each runs in one transaction. Fix the cause the log names (often the database account's rights: it, or `SPRING_FLYWAY_USER`, must own the schema) and start again. Never switch `ddl-auto` to `update`. |
+| A setting fails validation (the message names it, for example `APPLICATION_USERBASEDN`, `APPLICATION_BASE_URL`, `ENS_SESSION_IDLE_TIMEOUT`, `ENS_AUDIT_SYSLOG_PROTOCOL`) | Fix the value the message names. Durations are Spring durations of at least one minute (`30m`, `12h`). |
+| Mail is configured but `APPLICATION_NOTIFICATIONSENDEREMAIL` is missing or not an address | With `SPRING_MAIL_HOST` set, the From address is required. Set it, or remove the mail host. |
+| Header mode refuses to start (proxy secret or CA missing) | `ENS_X509_SOURCE=header` needs `ENS_X509_PROXY_SECRET_FILE` or `ENS_X509_PROXY_SECRET` (32 characters or more) and `ENS_X509_TRUSTED_CA_FILE` (or the TLS trust store). The Helm chart refuses to render likewise. |
 | Port in use (release package) | Another process holds the host port `READYROOM_PORT` (8181). Choose another host port in `.env`; ReadyRoom inside the container stays on 8181. |
 
 ## Sign-in and access
@@ -26,7 +30,12 @@ SYSTEM logout task. For background, see [Operations](operator-guide.md) and
 | Symptom | Cause and fix |
 |---|---|
 | The browser goes to the login page although a certificate is installed | The certificate is not issued by a CA in the server truststore, or the browser did not offer it. Check the truststore, then restart the browser so it asks again. |
-| A browser with a trusted certificate is sent to the login form, and the audit log has a failed `auth.login` with the reason *unknown user* | The certificate subject DN is not a directory entry, so the certificate does not sign in. Make the subject equal the LDAP DN, or set `lookup-on-dn-attribute` and `user-dn-attribute`. |
+| A browser with a trusted certificate is sent to the login form, and the audit log has a failed `auth.login` with the reason *unknown user* | The certificate subject DN is not a directory entry, so the certificate does not sign in. Make the subject equal the LDAP DN, set `ENS_X509_USER_FILTER`, or set `lookup-on-dn-attribute` and `user-dn-attribute`. |
+| A certificate is refused with `certificate revoked` or `revocation unknown` | The certificate is revoked, or its status couldn't be determined with `ENS_X509_REVOCATION_FAIL=closed`: the OCSP responder or CRL distribution point didn't answer, or the issuer's certificate isn't known. Check the log (`Refusing ... revocation status unknown`), and on an air-gapped network use `ENS_X509_CRL_DIR` or `ENS_X509_OCSP_RESPONDER_URL`. |
+| A certificate is refused with `issuer not allowed` or `no single directory user matches` | Its issuer isn't in `ENS_X509_ALLOWED_ISSUERS`, or `ENS_X509_USER_FILTER` matched no entry or more than one. |
+| Header mode: the log shows `Ignoring the client certificate in <header> from <address>: <reason>` | The request didn't come from an address in `ENS_X509_TRUSTED_PROXIES`, or carried no or the wrong `X-ENS-Proxy-Secret`. With ingress-nginx, the secret is added with a `configuration-snippet` annotation, which the controller disables by default since 1.9. |
+| Users must click **I agree** before signing in | The consent banner is on (`ENS_CONSENT_BANNER_ENABLED`). Expected. |
+| Users are signed out sooner than before | The session lifetimes `ENS_SESSION_*` (idle `30m`, absolute `12h`). The audit log's `auth.session-expired` gives the reason. |
 | Login form says the credentials are wrong | The user is searched under `user-base-dn` by `uid`, `cn` or `mail`. Check the base DN, and that exactly the expected entry matches. |
 | No **Log out** in the user menu | Expected for certificate sessions. The certificate would sign you straight back in. |
 | A user cannot open a group | Only admins can open any group. Everyone else can open groups they are a member of in the directory (`uniqueMember`) or manage. Memberships are cached for 300 s. |
@@ -58,7 +67,7 @@ Work through these in order:
 | Symptom on the server | Cause and fix |
 |---|---|
 | Status stays `AWAY` all evening | No logoff event arrived: the PC was shut down, or the session ended without event 4647 (the Logout task) or a remote disconnect (the Disconnect task). The auto check-out job checks the person out once the lock is older than `check-out-after-minutes`. |
-| People show `OUT` minutes after locking | `check-out-after-minutes` is too low. The packaged value is `2`, while the built-in default is `240`. |
+| People show `OUT` minutes after locking | `check-out-after-minutes` is too low. The default is `240`; check `APPLICATION_CHECKOUTAFTERMINUTES` (Helm: `checkOutAfterMinutes`). |
 | Logouts missing, and the audit log has failed `auth.login` events with the reason *unknown session* | Logouts without a usable `sessionId` are refused and not stored. Look at the workstation logs for why the login failed or the session file is missing. |
 | Logouts get `429` (`rate_limited`), and the log shows `... sent more than N logoffs with an unusable session id this minute; refusing them with 429` | More than `application.logoff.refused-per-minute` (30) logouts with a stale or missing session id came from one address within a minute. They would have been refused anyway: a logout with a usable `sessionId` is never limited. Fix the workstations sending them. |
 | `IN` although the user only unlocked | Expected: the first unlock of the day is stored as `CHECK_IN`. |
@@ -101,13 +110,13 @@ On the client, `The server redirected instead of accepting Windows sign-in` mean
 | An organization is missing from the org chart | Its value matches a parse rule's prefix but not its regex. Look for `Parse rule ... did not match` in the log. Or `duty-sub-org-filter` excludes it. |
 | A group tree is cut short, or the log shows a paging warning | Results were truncated at `application.ldap.max-pages`, or the directory's size limit is below `page-size`. |
 | A group is missing from **Groups** | Its base DN is wrong (`Groups base DN not found, returning none` or `Skipping top level group ...` in the log), or the entry is not a `groupOfUniqueNames`. |
-| Duplicate users that differ only by DN case | Run `db/migrations/001_indexes_and_unique_user_dn.sql`, which merges them and adds a unique index. |
+| Duplicate users that differ only by DN case | Releases with Flyway merge them automatically: the `V1` migration merges user rows whose DNs differ only by letter case, and the user DN is unique regardless of case. The log shows `Merging N duplicate user record(s)`. |
 
 ## Performance
 
 | Symptom | Cause and fix |
 |---|---|
-| Pages slow | Turn on `application.diagnostics.request-metrics` to count SQL statements and LDAP operations per request. Make sure the migration's indexes exist. |
+| Pages slow | Turn on `application.diagnostics.request-metrics` to count SQL statements and LDAP operations per request. The indexes come from the `V1` migration; check that it was applied (`flyway_schema_history`). |
 | Requests hang on the directory | The connect and read timeouts under `spring.ldap.base-environment` must be set (5 s and 30 s in the packaged configuration). Check pool exhaustion: the pool holds at most 20 connections by default. |
 | Database connections exhausted | Keep `spring.jpa.open-in-view: false`. |
 
