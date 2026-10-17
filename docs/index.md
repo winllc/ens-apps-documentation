@@ -52,6 +52,11 @@ Each application needs a license file from ENS Solutions, issued through the ENS
 where customers can also download a free 30-day evaluation. See [Licensing](licensing.md) for what each license unlocks and where the
 file goes.
 
+## Audit logging
+
+Every application keeps the same tamper-evident audit trail. Administrators can search and export it
+in the application, and it can be sent to Splunk or any other SIEM. See [Audit logging](audit-logging.md).
+
 ## How each section is organised
 
 | Guide | Read it if you… |
