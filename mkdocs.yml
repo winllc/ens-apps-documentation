@@ -72,6 +72,8 @@ nav:
   - Licensing: licensing.md
   - Releases and downloads: releases.md
   - Audit logging: audit-logging.md
+  - FIPS 140-3 and DISA STIG: fips-and-stig.md
+  - Sizing, availability and recovery: availability-and-sizing.md
   - CertAlert:
       - cert-alert/index.md
       - Install guide: cert-alert/install.md

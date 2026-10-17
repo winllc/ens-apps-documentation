@@ -45,6 +45,45 @@ Both must succeed. `gpg` should report a good signature from the ENS Solutions r
 its fingerprint against the one ENS Solutions gave you separately, not against anything in the
 download itself.
 
+### Verifying the images and the chart
+
+On a release tag, CI for CertAlert, the Directory Services Portal and ReadyRoom also signs each
+published image and the Helm chart with cosign: keyless signatures (Sigstore), made with the release
+workflow's GitHub identity, always by digest. Each image also gets its SPDX SBOM attached as a
+signed attestation. The RSA Operations Portal's CI does not sign its images or chart yet; check
+its download with `SHA256SUMS.asc` as above.
+
+| Product | Images | Chart | Repository in the signing identity |
+|---|---|---|---|
+| CertAlert | `ghcr.io/winllc/cert-alert` | `ghcr.io/winllc/charts/cert-alert` | `winllc/cert-alert` |
+| Directory Services Portal | `ghcr.io/winllc/directory-services-portal-api`, `ghcr.io/winllc/directory-services-portal-web` | `ghcr.io/winllc/charts/directory-services-portal` | `winllc/directory-services-portal` |
+| ReadyRoom | `ghcr.io/winllc/in-n-out-work` | `ghcr.io/winllc/charts/readyroom` | `winllc/in-n-out-work` |
+| RSA Operations Portal | not signed | not signed | |
+
+For example, for ReadyRoom:
+
+```bash
+# A tag's digest
+docker buildx imagetools inspect ghcr.io/winllc/in-n-out-work:<version>
+
+# The image's signature, and its SBOM attestation
+cosign verify ghcr.io/winllc/in-n-out-work@<digest> \
+  --certificate-identity-regexp 'https://github.com/winllc/in-n-out-work/.github/workflows/.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+cosign verify-attestation --type spdxjson ghcr.io/winllc/in-n-out-work@<digest> \
+  --certificate-identity-regexp 'https://github.com/winllc/in-n-out-work/.github/workflows/.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+# The chart (its digest is the one `helm pull` or `helm push` prints)
+cosign verify ghcr.io/winllc/charts/readyroom@<digest> \
+  --certificate-identity-regexp 'https://github.com/winllc/in-n-out-work/.github/workflows/.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+For the other products, use their names and repository from the table. By default cosign
+contacts Sigstore's public services to verify a keyless signature, so on an air-gapped network,
+verify on a connected machine before you mirror the images.
+
 Then install it in one of two ways.
 
 === "Release package"
@@ -88,7 +127,8 @@ git tag v1.4.0 && git push origin v1.4.0
 CI then runs the tests, builds and smoke-tests the images, and publishes them to
 `ghcr.io/winllc/...:1.4.0`. From those same tested images it builds the bundle (and, for the Directory
 Services Portal, the native package), packages the Helm chart and publishes it to
-`oci://ghcr.io/winllc/charts/<chart>`, makes the SBOMs and `SHA256SUMS`, signs the checksums, and uploads everything to the release bucket under
+`oci://ghcr.io/winllc/charts/<chart>`, makes the SBOMs and `SHA256SUMS`, signs the checksums (and, for CertAlert, the Directory Services
+Portal and ReadyRoom, signs the images and the chart with cosign), and uploads everything to the release bucket under
 `<product>/<version>/`. A release without a pre-release suffix also updates `<product>/latest.txt`.
 Every pull request builds a dry-run bundle (`0.0.0-pr<n>`) as a workflow artifact, without signing
 or uploading, so packaging problems show up before a release.
