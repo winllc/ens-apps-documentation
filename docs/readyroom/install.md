@@ -7,10 +7,11 @@ one host) or the **Helm chart** (Kubernetes or OpenShift). Every setting mention
 in [Configuration](configuration.md).
 
 !!! danger "Use your own key material"
-    TLS is off by default. If you turn it on without supplying your own keystore, ReadyRoom falls back
-    to development keystores (`winhal.p12`, `truststore.p12`) built into the application, with
-    published passwords. Treat them as compromised. For any real deployment, supply your own server
-    keystore and client-certificate truststore, as described in [Certificates](#certificates).
+    TLS is off by default. ReadyRoom contains no keystore or truststore: with TLS on, it refuses to
+    start until you supply your own server keystore and, while client certificates are requested
+    (`client-auth: want`, the default), your own truststore. The Helm chart does not render with
+    `tls.enabled` and no `tls.truststore.secretName`, unless `tls.clientAuth` is `none`. Put only the
+    CAs that issue your users' certificates in the truststore. See [Certificates](#certificates).
 
 ## Prerequisites
 
@@ -23,7 +24,7 @@ in [Configuration](configuration.md).
 | SMTP server | Used to email absence alerts. Optional: see [Configure email](#configure-email). |
 | License | An ENS Solutions license file (`.lic`) from your account on the ENS licensing portal: an evaluation, or the license issued for your order. See [Licensing](../licensing.md). Without one, ReadyRoom offers only sign-in and its license screen. |
 | Server certificate | A PKCS#12 keystore for the HTTPS listener, if ReadyRoom terminates TLS itself. Needed for client certificates and the Windows client. |
-| Client certificate trust | A PKCS#12 truststore holding the CA(s) that issue the users' client certificates. |
+| Client certificate trust | A PKCS#12 truststore holding only the CA(s) that issue the users' client certificates. Required with TLS on, unless certificate sign-in is turned off. |
 | Windows workstations | Windows PowerShell 5.1 and Task Scheduler. Each user needs either a client certificate in `CurrentUser\My` or, with Windows sign-in turned on, a domain account on a domain-joined PC. |
 
 ### For the release package
@@ -98,7 +99,7 @@ The optional pieces are switched on with `COMPOSE_FILE` in `.env`:
 
 | File | Turns on | Files it needs |
 |---|---|---|
-| `docker-compose.tls.yml` | TLS with your own keystore, and client certificates | `tls/keystore.p12`, `tls/truststore.p12` |
+| `docker-compose.tls.yml` | TLS with your own keystore and truststore, and client certificates | `tls/keystore.p12` and `tls/truststore.p12`, both required |
 | `docker-compose.windows-auth.yml` | Windows (Kerberos) sign-in | `kerberos/krb5.conf`, `kerberos/http.keytab` |
 
 ```bash
@@ -107,6 +108,11 @@ COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml:docker-compose.windows-au
 
 The container runs as user 185, group 0. Make the files in `tls/` and `kerberos/` readable by
 group 0: `chgrp 0 <file> && chmod 0640 <file>`.
+
+`install.sh` and `upgrade.sh` stop if `SSL_ENABLED=true` but `docker-compose.tls.yml` is not in
+`COMPOSE_FILE`, or if it is and `tls/keystore.p12` or `tls/truststore.p12` is missing. When a reverse
+proxy terminates TLS for browsers and `SSL_ENABLED` stays `false`, set `SESSION_COOKIE_SECURE=true`
+so the session cookie is only sent over HTTPS.
 
 ### 4. License
 
@@ -142,6 +148,17 @@ license.
 
 ### 6. Upgrade
 
+Before upgrading:
+
+- If `.env` has `SSL_ENABLED=true`, make sure `COMPOSE_FILE` includes `docker-compose.tls.yml` and
+  that `tls/keystore.p12` and `tls/truststore.p12` are your own. The image contains no keystore or
+  truststore, and `upgrade.sh` stops otherwise.
+- If `migrations/001_indexes_and_unique_user_dn.sql` has never been run on this database and
+  `check_in_out_records` is large, run it now, from the new release's `migrations/` (see
+  [Prepare PostgreSQL](#prepare-postgresql)). ReadyRoom declares the index on the session id, and
+  Hibernate would otherwise build it when the new version starts, without `CONCURRENTLY`, blocking
+  writes to `check_in_out_records` while it builds.
+
 Back up the database, then unpack the new release next to the current one and run its `upgrade.sh`,
 naming the current directory:
 
@@ -158,6 +175,9 @@ loads the new images, lists any new settings in `env.template` that your `.env` 
 and recreates the containers. The database and license volumes are kept, and ReadyRoom updates its
 schema on start. Run any script from `migrations/` that the release notes name. Run ReadyRoom from
 the new directory from then on.
+
+Then re-run `Install-InOutWorker.ps1` from the new `windows-client/` on every workstation (see
+[Deploy the Windows client](#deploy-the-windows-client)).
 
 ## Install with Helm
 
@@ -301,6 +321,9 @@ certificates, ReadyRoom must terminate TLS itself, so traffic must reach the pod
       tls:
         - secretName: readyroom-ingress-tls
           hosts: [readyroom.example.com]
+    extraEnv:
+      - name: SESSION_COOKIE_SECURE   # the ingress terminates TLS: keep the cookie HTTPS-only
+        value: "true"
     ```
 
 === "Ingress with TLS passthrough"
@@ -382,6 +405,12 @@ helm upgrade readyroom oci://ghcr.io/winllc/charts/readyroom --version 1.2.4 \
 The license claim and the database are kept. ReadyRoom updates its schema on start, and the
 migration Job runs the database scripts again; they skip what is already done.
 
+Before upgrading with `tls.enabled`, set `tls.truststore.secretName` (or `tls.clientAuth: none`):
+the chart does not render without it. With `migrations.enabled: false`, run
+`001_indexes_and_unique_user_dn.sql` yourself before upgrading if it has never run and
+`check_in_out_records` is large, for the reason given in
+[Upgrade with the release package](#6-upgrade).
+
 ### 7. Uninstall
 
 ```bash
@@ -448,7 +477,7 @@ With the release package, PostgreSQL is already set up. With Helm, use your own 
 
     | Table | Holds |
     |---|---|
-    | `check_in_out_records` | Every check-in, lock, unlock and check-out event, with the session id and the user's organization attributes at that moment |
+    | `check_in_out_records` | Every check-in, lock, unlock and check-out event, with the session id (which no page or API shows, apart from the check-in's own answer) and the user's organization attributes at that moment |
     | `user_records` | One row per user DN: role, notes, favorite groups, additional managers, preferred and average login time, and directory metadata |
     | `user_event_records` | Per-day statuses (work from home, leave, late arrival, and so on) |
     | `notification_records` | Absence alerts and managers' responses |
@@ -457,7 +486,8 @@ With the release package, PostgreSQL is already set up. With Helm, use your own 
     | `global_calendar_records` | Organization calendar events and holidays |
     | `org_parse_rules` | Org-chart parse rules |
 
-3. **Run the database script.** Hibernate does not create indexes or constraints.
+3. **Run the database script.** Hibernate creates no constraints, and no index except the one on
+   the session id.
    `001_indexes_and_unique_user_dn.sql` adds the indexes that the DN and date lookups need, and makes
    the user DN unique regardless of case. Before it adds the constraint, it merges any user rows
    whose DNs differ only by case.
@@ -539,8 +569,10 @@ with it. One that does not is sent to the login form.
    The certificate's subject alternative name must match the host name that browsers and the
    Windows client's `BaseUrl` use. If you plan to turn on Windows sign-in, that is also the name
    registered as the service principal.
-2. **Truststore.** Create a PKCS#12 truststore holding the CA certificate(s) that issue user
-   certificates. Only certificates that chain to these CAs are accepted.
+2. **Truststore.** Create a PKCS#12 truststore holding only the CA certificate(s) that issue user
+   certificates. Only certificates that chain to these CAs are accepted, and any certificate they
+   issue with a user's DN signs in as that user. Both files are required with TLS on: ReadyRoom
+   contains no keystore or truststore.
 3. **User certificates.** Issue each user a client certificate whose subject DN equals their LDAP
    DN (or set up `lookup-on-dn-attribute`, described above). Install it with its private key in
    the user's `CurrentUser\My` store on the workstation.
@@ -666,10 +698,16 @@ Its host name must match the server certificate, and the SPN for Windows sign-in
 
 The installer:
 
-1. copies `Update-WorkStatus.ps1` to `C:\Program Files\InOutWorker` and writes
-   `inoutworker.config.json` there (only if you passed settings);
-2. creates `%ProgramData%\InOutWorker` and grants `BUILTIN\Users` Modify on it;
-3. registers four hidden tasks under `\InOutWork\`: **Login**, **Lock**, **Unlock** and **Logout**.
+1. copies `Update-WorkStatus.ps1` to `C:\Program Files\InOutWorker`, writes
+   `inoutworker.config.json` there (only if you passed settings), and makes the folder writable by
+   SYSTEM and Administrators only;
+2. prepares `%ProgramData%\InOutWorker` with its `logs\` and `sessions\` folders, writable by SYSTEM
+   and Administrators only, except that each user may add and rewrite their own session file;
+3. registers five hidden tasks under `\InOutWork\`: **Login**, **Lock**, **Unlock**, **Logout** and
+   **Disconnect**.
+
+Re-run it on every workstation after each upgrade: without arguments it keeps the configuration,
+and it corrects the permissions an older client left on `%ProgramData%\InOutWorker`.
 
 For mass deployment, configuration files, parameters and what each task does, see
 [Windows client](windows-client.md).
@@ -700,9 +738,11 @@ For mass deployment, configuration files, parameters and what each task does, se
 - [ ] **Groups** lists the trees under each configured group base DN.
 - [ ] On a workstation, `& 'C:\Program Files\InOutWorker\Update-WorkStatus.ps1' -Action login -WhatIf`
       reports the URL and the sign-in method it would use.
-- [ ] `Get-ScheduledTask -TaskPath "\InOutWork\"` lists four tasks.
-- [ ] After a real logon, `%ProgramData%\InOutWorker\logs\inoutworker-<yyyyMMdd>.log` contains
-      `Server accepted 'login'`, and the user's status on **Home** is `IN`.
+- [ ] `Get-ScheduledTask -TaskPath "\InOutWork\"` lists five tasks.
+- [ ] After a real logon, `%LOCALAPPDATA%\InOutWorker\logs\inoutworker-<yyyyMMdd>.log` in the
+      user's profile contains `Server accepted 'login'`, and the user's status on **Home** is `IN`.
+- [ ] After a logoff, `%ProgramData%\InOutWorker\logs\inoutworker-<yyyyMMdd>.log` contains
+      `Server accepted 'logout'`.
 - [ ] After the first scheduled directory refresh (5 minutes after startup by default), the log
       shows `Directory refresh: N scanned, N created, ...` when it created or updated user records.
       If nothing changed, the line is logged only at `debug`.

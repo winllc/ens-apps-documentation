@@ -15,8 +15,8 @@ ReadyRoom has three roles (`UserRoleEnum`):
 | `ADMIN` | The person's DN is listed in `application.super-user-dns` (matched without regard to case). The role list in the UI does not offer `ADMIN`. The application also honors `ADMIN` if it is stored in `user_records.user_role`, which can only be set directly in the database. |
 
 A user record is created automatically the first time someone signs in, and also by the hourly
-directory refresh, with the role `USER`. A sign-in whose DN cannot be found in the directory
-gets no roles at all, so every page shows *Unauthorized*.
+directory refresh, with the role `USER`. A certificate or account whose DN cannot be found in the
+directory does not sign in at all.
 
 ### Assigning a role
 
@@ -30,13 +30,16 @@ the stored role of someone listed in `super-user-dns` does not remove their `ADM
 !!! tip "Role versus reporting line"
     "Manager" means two different things in ReadyRoom:
 
-    - The **`MANAGER` role** grants organization-wide access: every group, Metrics, Settings and
-      every person's audit log.
-    - A **reporting line** in the directory (someone's `user-ldap-manager-id-attribute` pointing at
-      you) gives you **My Reports**, the team cards on **Home**, and absence alerts for those
-      people, whatever your role.
+    - The **`MANAGER` role** opens the manager pages: Metrics, Settings, group reports and the
+      **System Date** picker. It does not by itself show every group or every person's data.
+    - A **responsibility for people** gives you their details (times, notes, **Audit Log** and
+      **Event Calendar**), whatever your role: a **reporting line** in the directory (someone's
+      `user-ldap-manager-id-attribute` pointing at you), managing a **group** they are in, or being
+      named as an additional manager on their profile. A reporting line also gives you
+      **My Reports**, the team cards on **Home**, and absence alerts for those people.
 
-    Give the `MANAGER` role only to people who need the organization-wide view.
+    Give the `MANAGER` role only to people who need the manager pages. See
+    [Security → Authorization](security.md#authorization) for the full rules.
 
 ## What each role can do
 
@@ -46,12 +49,12 @@ the stored role of someone listed in `super-user-dns` does not remove their `ADM
 | Team cards on Home and **My Reports** (needs direct reports in the directory) | ✓ | ✓ | ✓ |
 | **Users** search and anyone's basic details page | ✓ | ✓ | ✓ |
 | **Org Chart** | ✓ | ✓ | ✓ |
-| **Groups**: groups the person is a member of in the directory | ✓ | – | – |
-| **Groups**: every configured group tree | – | ✓ | ✓ |
+| **Groups**: groups the person is a member of in the directory, and groups they manage | ✓ | ✓ | – |
+| **Groups**: every configured group tree | – | – | ✓ |
 | Star (favorite) groups | – | ✓ | ✓ |
-| Anyone's **Audit Log** and **Event Calendar** | own only, plus people in groups they manage | ✓ | ✓ |
-| Generate a **group report** | – | ✓ | ✓ |
-| Edit a group's **additional managers** | – | ✓ | ✓ |
+| Other people's times and notes, **Audit Log** and **Event Calendar** | only people they are responsible for | only people they are responsible for | everyone |
+| Generate a **group report** | – | groups they manage | ✓ |
+| Edit a group's **additional managers** | – | groups they manage | ✓ |
 | **Metrics** | – | ✓ | ✓ |
 | **Settings**: calendar, group cache, parse rules | – | ✓ | ✓ |
 | **System Date** picker (view another day) | – | ✓ | ✓ |
@@ -67,30 +70,34 @@ Group trees come from the directory: each entry under every `application.groups[
 whose object class is `groupOfUniqueNames`. Members are its `uniqueMember` values, and its
 directory manager is its `owner` attribute. ReadyRoom never writes to the directory.
 
-**Who can open a group** (`/app/users/<group DN>`) is decided by
-`PermissionEvaluator.groupCheck()`: the `ADMIN` and `MANAGER` roles can open any group, and anyone
-else can open a group only if they are a member of it in the directory. Group memberships are
-cached per user for `application.ldap.group-membership-cache-seconds` (300 s by default), so a
-directory change can take that long to apply.
+**Who can open a group** (`/app/users/<group DN>`) is decided by `AccessPolicy.canViewGroup()`:
+`ADMIN` can open any group, and anyone else can open a group they are a member of in the directory
+or manage. Group memberships are cached per user for
+`application.ldap.group-membership-cache-seconds` (300 s by default), so a directory change can take
+that long to apply. On a group's page, members whose details you may not see show only their
+directory fields and whether they are in.
 
 !!! note "Per-group permission records"
-    The database has a `permission_records` table, and `POST /api/permissions/update` (admins and
-    managers) grants or revokes a group for a user. No screen in the current UI calls this
+    The database has a `permission_records` table, and `POST /api/permissions/update` (admins, and
+    managers of that group) grants or revokes a group for a user. No screen in the current UI calls this
     endpoint, and in the current version the access checks for **Groups** and group pages read only
     directory membership, not these records. To give someone access to a group, add them to it in
     the directory.
 
 ### Group managers
 
-On a group's page, admins and managers see a **Group Managers** card:
+On a group's page, admins, and people with the `MANAGER` role who manage that group, see a
+**Group Managers** card:
 
 1. Type at least part of a name in **Add a manager** and pick people from the results.
 2. Remove anyone with the remove control next to their name.
 3. Choose **Update**. The list is saved in `group_records.alternate_managers`.
 
 A person counts as a **manager of a group** if they are its directory `owner` or are on this list.
-A group manager can see the **Audit Log** and **Event Calendar** of every member of every group they
-manage, even with only the `USER` role.
+A group manager can open the group and sees the details of every member of every group they manage
+(times, notes, **Audit Log** and **Event Calendar**), even with only the `USER` role. Changing the
+list and running the group's report also need the `MANAGER` role. A sub-group is a separate group
+with its own managers.
 
 !!! warning "Group managers and absence alerts"
     The card says that these managers receive absence notifications. In the current code, absence

@@ -58,27 +58,25 @@ Windows sign-in enabled for /api/check/in, /api/check/lock, /api/check/unlock as
 ```
 
 The application does not start (it fails with a clear message) if `application.banner-text` is
-missing, or if Windows sign-in is enabled without a service principal or a readable keytab.
+missing, if Windows sign-in is enabled without a service principal or a readable keytab, or if TLS
+is on without a keystore, or without a truststore while client certificates are requested.
 
 ## Health and monitoring
 
-Spring Boot Actuator exposes `health`, `info`, `metrics` and `env` under `/actuator` **without
-authentication**:
+Spring Boot Actuator exposes only `health`, under `/actuator/health`, **without authentication**.
+It is what the container health check and the Kubernetes probes use:
 
 ```bash
 curl -sk https://readyroom.example.com:8181/actuator/health
-curl -sk https://readyroom.example.com:8181/actuator/metrics
-curl -sk https://readyroom.example.com:8181/actuator/metrics/jvm.memory.used
 ```
 
 Use `http://` while TLS is off, and your ingress or route host with Helm.
 
-`/actuator/health` returns the overall status. Spring Boot includes its auto-configured health
-indicators for the configured database, LDAP and mail connections, so a broken dependency turns the
-status to `DOWN`. Details are not shown with the default settings. If the
-endpoints are reachable from untrusted networks, reduce
-`management.endpoints.web.exposure.include` to `health`. See
-[Security](security.md#unauthenticated-endpoints).
+`/actuator/health` returns the overall status only, with no details. Spring Boot includes its
+auto-configured health indicators for the configured database, LDAP and mail connections, so a
+broken dependency turns the status to `DOWN`. If you add other endpoints to
+`management.endpoints.web.exposure.include` (for example `metrics`), they need an `ADMIN` sign-in.
+See [Security](security.md#unauthenticated-endpoints).
 
 ### Request diagnostics
 
@@ -118,6 +116,7 @@ Useful messages:
 | `Serving stale cached ... after refresh failure` | A background cache refresh from LDAP failed. The previous data is still being shown. |
 | `<user> pinned their session system time to <date>` | Someone is viewing another day, which explains reports of "wrong-looking" data. |
 | `Windows sign-in refused for <principal>: <reason>` | See [Troubleshooting](troubleshooting.md#windows-sign-in). |
+| `<address> sent more than N logoffs with an unusable session id this minute; refusing them with 429 (application.logoff.refused-per-minute)` (`WARN`) | One client address had more than `refused-per-minute` logouts refused within a minute. See [Troubleshooting](troubleshooting.md#check-ins-not-arriving). |
 
 ## Scheduled jobs
 
@@ -197,8 +196,9 @@ My Reports look back 30 days, and agent coverage looks back 90 days.
 
 ### Schema changes and migrations
 
-Hibernate (`ddl-auto: update`) adds new tables and columns at startup but does not create indexes,
-does not drop anything, and does not change constraints. Indexes and constraints come from
+Hibernate (`ddl-auto: update`) adds new tables and columns at startup, but does not drop anything
+or change constraints. It creates one index, `ix_check_in_out_session_id` on
+`check_in_out_records`, if it is missing. The other indexes and the constraints come from
 numbered database scripts: in the release package's `migrations/` directory, which you run with
 `psql`, and in the Helm chart, whose migration Job runs them on every install and upgrade (see
 [Installation](install.md#prepare-postgresql)). Currently there is one script:
@@ -229,7 +229,8 @@ ReadyRoom shows agent health from the events it receives:
 | **Home → Workstation agent** (every user) | *Not reporting* when nothing has arrived from the user's PC for 7 days. |
 
 On the workstation itself, check the task's *Last Run Result* (the script's exit code), and the
-log in `%ProgramData%\InOutWorker\logs\`. See [Windows client](windows-client.md#exit-codes).
+logs: the Logout task's in `%ProgramData%\InOutWorker\logs\`, and the other tasks' in the user's
+`%LOCALAPPDATA%\InOutWorker\logs\`. See [Windows client](windows-client.md#exit-codes).
 
 A quick database check of the most recent event per user:
 
@@ -241,8 +242,9 @@ GROUP BY dn
 ORDER BY last_event;
 ```
 
-Rows with `dn IS NULL` are check-outs posted without a usable `sessionId`, usually because the
-login post on that machine failed.
+Every record names a user: a logout without a usable `sessionId` is refused with `401` and not
+stored, and audited as a failed `auth.login` with the reason *unknown session*. Rows with
+`dn IS NULL` can only have been written by an earlier version.
 
 ## Upgrades
 
@@ -269,9 +271,10 @@ login post on that machine failed.
    its log.
 5. Verify: health is `UP`, the startup log lines look right, Home loads, and a test check-in
    arrives.
-6. If the Windows client changed, re-run `Install-InOutWorker.ps1` from the new release's
-   `windows-client/` folder on workstations. Without arguments it keeps the existing
-   `inoutworker.config.json` and re-registers the tasks.
+6. Re-run `Install-InOutWorker.ps1` from the new release's `windows-client/` folder on every
+   workstation. Without arguments it keeps the existing `inoutworker.config.json`, installs the new
+   script, re-registers the five tasks, and corrects the folder permissions an older client left on
+   `%ProgramData%\InOutWorker`.
 
 To roll back, run the previous release again: `docker compose up -d` in its directory, or
 `helm rollback`. Columns added by Hibernate do no harm to an older version. Restore the database

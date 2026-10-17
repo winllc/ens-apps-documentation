@@ -84,10 +84,11 @@ particular application role for this.
 
 **Groups** (`/app/groups`) shows the directory group trees your organization configured.
 
-- **Admins and managers** see every group.
-- **Users** see only the groups they are a member of in the directory. Parent groups are shown
-  so you can reach them, but opening a parent you are not a member of shows *Unauthorized*. If you
-  are in no groups, the page says *No groups available*.
+- **Admins** see every group.
+- **Everyone else** sees the groups they are a member of in the directory and the groups they
+  manage. Parent groups are shown so you can reach them, but opening a parent you are neither a
+  member nor a manager of shows *Unauthorized*. If there are none, the page says
+  *No groups available*.
 
 Use the search box to filter by name, **Expand All** or **Collapse All**, and the **Favorites only**
 switch to show only favorite groups. Each group shows its member count. Click a group to open it.
@@ -100,11 +101,13 @@ without being able to change it.
 
 - **Members**: a table of each member's name, status, last status change and notes. Each column can
   be filtered. Turn on **Advanced** to also show the DN, check-in time and check-out time. Click a
-  row to open that person's details.
+  row to open that person's details. Other members' times and notes are shown only if you manage
+  the group (or can otherwise see their details, see [A person's details](#a-persons-details)).
+  Everyone else's row shows their status only.
 - **Favorite**: pins the group so it shows under *Favorites only* on the Groups page.
-- **Generate Group Report** (admins and managers): pick a date range, then **Generate Report**. See
-  [Group report](#group-report).
-- **Group Managers** (admins and managers): see [Administration](admin-guide.md#group-managers).
+- **Generate Group Report** (admins, and managers of this group with the `MANAGER` role): pick a
+  date range, then **Generate Report**. See [Group report](#group-report).
+- **Group Managers** (the same people): see [Administration](admin-guide.md#group-managers).
 
 !!! note
     Saving a favorite is limited to the `MANAGER` and `ADMIN` roles. For a user with only the `USER`
@@ -125,8 +128,9 @@ The report page shows the group name, the date range and the number of users, th
 
 **Users** (`/app/user/search`) finds anyone in the directory. Type at least three characters of a
 name and choose **Search**. The search matches any part of the common name. The results table has
-the same columns as a group's member list, including the **Advanced** switch. Click a row to open
-that person's details.
+the same columns as a group's member list, including the **Advanced** switch. For coworkers whose
+details you may not see, it shows their directory details and status only. Click a row to open that
+person's details.
 
 ## A person's details
 
@@ -134,8 +138,11 @@ that person's details.
 type, location, branch, email, phone, manager, average login time and notes. **Member Of** lists
 their directory groups, each linking to the group page.
 
-You also see the following if it is your own page, you are an admin or manager, or you manage one
-of the person's groups:
+Coworkers see only the status and the directory details: not the average login time, the notes, or
+the cards below. A status a manager recorded after an absence alert shows to them as
+*Out of Office*. You see everything, including the following, if it is your own page, you are an
+admin, or you are responsible for the person: you manage one of their groups, they report to you
+directly in the directory, or they named you as an additional manager.
 
 - **Audit Log**: every check-in, lock, unlock and check-out recorded for them, newest first.
 - **Event Calendar**: their statuses, their online periods ("Online: ..."), and organization events
@@ -163,7 +170,8 @@ If nobody does, the page says *No direct reports*.
 **Org Chart** (`/app/orgchart`) shows the organization hierarchy built from an attribute in the
 directory. Each organization shows **present / total**, counting sub-organizations, and a
 percentage. Filter by name, expand or collapse the tree, and click an organization to list its
-members, with the usual **Advanced** switch. Click a member to open their details.
+members, with the usual **Advanced** switch. As in **Users**, coworkers whose details you may not see
+show their status only. Click a member to open their details.
 
 ## My Profile
 
@@ -171,8 +179,9 @@ Open **My Profile** from the avatar menu (`/app/profile`).
 
 ### Update Profile
 
-- **Notes**: a free-text line shown to anyone who looks you up. Do not enter classified data or
-  personal data (PII).
+- **Notes**: a free-text line shown only to you, admins and the people responsible for you: your
+  manager, your groups' managers and the additional managers you chose. Do not enter classified
+  data or personal data (PII).
 - **Login Time**: your normal start time. It decides when you are expected in. If you leave it
   empty, your average arrival time is used.
 
@@ -187,7 +196,8 @@ the **Help Desk** link to report it. ReadyRoom cannot change directory data.
 ### Additional Managers
 
 Search for people by name and add them to the list, then choose **Update**. Additional managers
-are notified when you are not in on time, along with your directory manager.
+are notified when you are not in on time, along with your directory manager. They can also see your
+details: your times, notes, **Audit Log** and **Event Calendar**.
 
 ### Calendar
 
