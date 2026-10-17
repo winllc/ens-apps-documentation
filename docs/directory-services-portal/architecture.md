@@ -38,10 +38,10 @@ flowchart TB
 | Component | Responsibility | Source |
 |---|---|---|
 | Web client | Pages for directories, entries, profile, metrics and admin. Client-side validation mirrors the server | `web/src`, `shared/src` |
-| nginx | Serves the build, falls back to `index.html` for client routes, proxies `/api/`, and sets `X-Forwarded-*` and (mTLS) `X-SSL-Client-Cert` | `web/nginx` |
+| nginx | Serves the build, falls back to `index.html` for client routes, proxies `/api/`, and sets `X-Forwarded-*`, `X-DSP-Proxy-Secret` and (mTLS) `X-SSL-Client-Cert` | `web/nginx` |
 | Security | Session-based authentication, custom CSRF header filter, admin role on `/api/admin/**`, JSON 401/403 errors | `config/SecurityConfig`, `config/RequestHeaderCsrfFilter` |
 | Auth | Finds the user with the service account, verifies the password with an LDAP bind, resolves groups and admin status, throttles failures | `service/AuthService` |
-| X.509 auth | Extracts the certificate (servlet or trusted header), validates it, and maps it to one user | `x509/*` |
+| X.509 auth | Extracts the certificate (servlet, or a header from the authenticated proxy), validates it, and maps it to one user | `x509/*` |
 | Entries | List, search, sort, page, CRUD, rename, namespace enforcement, self-service | `service/EntryService`, `service/FormValidator` |
 | Permissions | Effective access per definition | `service/PermissionService` |
 | Schema | Pull `subschemaSubentry`, parse imports, merge custom definitions, lint forms | `schema/*`, `ldap/SchemaMapper` |

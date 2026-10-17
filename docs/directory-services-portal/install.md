@@ -97,7 +97,10 @@ Choose how the portal is published:
     ```
     Adds `docker-compose.mtls.yml`: nginx serves HTTPS on `HTTPS_PORT` with
     `certs/server.pem`, `certs/server.key` and `certs/ca.pem`, and the installer sets
-    `X509_ENABLED=true` and `COOKIE_SECURE=true`. Plain HTTP on 8080 redirects to HTTPS.
+    `X509_ENABLED=true` and `COOKIE_SECURE=true`. Plain HTTP on 8080 redirects to HTTPS. nginx
+    forwards a verified certificate to the API together with `X509_PROXY_SECRET` from `.env`; the
+    API accepts a forwarded certificate only with that secret, and checks it against
+    `certs/ca.pem` too.
 
 === "Nothing published"
 
@@ -128,7 +131,8 @@ Choose how the portal is published:
 | `--skip-verify` | Don't check `SHA256SUMS` |
 
 The installer checks for Docker and Compose v2, verifies the checksums, and loads the images
-from `images/`. It writes `.env` with mode `600` and validates the result with
+from `images/`. It writes `.env` with mode `600`, generates a random `X509_PROXY_SECRET` in it
+(also into an existing `.env` that has none), and validates the result with
 `docker compose config`. It **never overwrites an existing `.env`** unless you pass
 `--force-env`.
 
@@ -149,6 +153,10 @@ Every setting is in `.env`, with comments. After a change, run `./portal.sh up`.
 section chooses the compose files (`COMPOSE_FILE`) and ports. Set at least the directory
 connection and the administrators (see [Connecting to your directory](#connecting-to-your-directory)).
 All settings are described in [Configuration](configuration.md).
+
+`.env` holds the bind password and the generated `X509_PROXY_SECRET`, so keep it private (mode
+`600`). Leave `X509_PROXY_SECRET` as generated; to change it, set a new value of at least 32
+characters (for example `openssl rand -hex 32`) and run `./portal.sh up`.
 
 #### License
 
@@ -192,7 +200,8 @@ cd directory-services-portal-<new-version>
 ```
 
 `upgrade.sh` copies `.env`, `license/` and `certs/` across (it never overwrites), verifies the
-package and loads its images, and backs up the portal data to `backups/`. It then points `.env`
+package and loads its images, generates `X509_PROXY_SECRET` if the old `.env` has none, and backs
+up the portal data to `backups/`. It then points `.env`
 at the new images (keeping a `.env.bak-<time>`) and restarts with `./portal.sh up`. The data
 volume and the license volume are reused. To go back, run `./portal.sh up` in the old directory
 and, if needed, `./portal.sh restore` the backup.
@@ -216,6 +225,8 @@ The installer verifies `SHA256SUMS`, creates the system user `dsp` and installs:
 | `/opt/directory-services-portal/api/directory-services-portal.jar` | The API, run by systemd as user `dsp` on `127.0.0.1:3001` |
 | `/opt/directory-services-portal/web` | The web client (static files) |
 | `/etc/directory-services-portal/portal.env` | Settings (mode `640`, `root:dsp`); kept on upgrades |
+| `/etc/directory-services-portal/proxy-secret` | The X.509 proxy secret (mode `640`, `root:dsp`), generated once and kept. The API reads it through `X509_PROXY_SECRET_FILE`, set in the systemd unit |
+| `/etc/directory-services-portal/nginx-proxy-secret.conf` | The copy of the proxy secret that nginx includes (mode `600`, `root`), rewritten from `proxy-secret` on every run |
 | `/var/lib/directory-services-portal` | Data: configuration, audit log, analysis results (back this up) |
 | `/var/lib/ens/directory-portal` | The ENS license and this installation's id; keep it |
 | `/etc/systemd/system/directory-services-portal.service` | The systemd unit (hardened: `ProtectSystem=strict`, `ReadWritePaths` limited to the data and license directories) |
@@ -230,9 +241,23 @@ The installer verifies `SHA256SUMS`, creates the system user `dsp` and installs:
 - **SELinux:** with SELinux enforcing, run `setsebool -P httpd_can_network_connect 1` so that
   nginx can reach the API.
 - **X.509 sign-in through nginx:** use `X509_SOURCE=header` with
-  `X509_TRUSTED_PROXIES=127.0.0.1/32`. See
-  [Configuration](configuration.md#x509-client-certificate-sign-in).
-- **Upgrade:** run the new package's `install.sh`. Settings and data are kept.
+  `X509_TRUSTED_PROXIES=127.0.0.1/32` and `X509_TRUSTED_CA_FILE` (required). Any local process can
+  reach `127.0.0.1:3001`, so the API accepts a forwarded certificate only with the proxy secret.
+  The `location` that proxies `/api` in your HTTPS server must include the secret, as the packaged
+  site does, and set the certificate header itself:
+
+    ```nginx
+    include /etc/directory-services-portal/nginx-proxy-secret.conf;
+    proxy_set_header X-SSL-Client-Cert $ssl_client_escaped_cert;
+    ```
+
+    To change the secret, write a new value to `proxy-secret`, run `install.sh` again (it rewrites
+    nginx's copy and reloads nginx), and restart the API. See
+    [Configuration](configuration.md#x509-client-certificate-sign-in).
+
+- **Upgrade:** run the new package's `install.sh`. Settings and data are kept. It generates the
+  X.509 proxy secret if there is none yet; restart the API afterwards
+  (`systemctl restart directory-services-portal`).
 
 ## Install with Helm
 
@@ -288,7 +313,7 @@ same version. The chart's README lists every value. Run
 | `x509.*`, `tls.*` | Certificate sign-in, and HTTPS in the web pod |
 | `persistence.license`, `persistence.data` | The two volumes: `size`, `storageClass`, `accessModes`, `existingClaim` |
 | `ingress.*`, `route.*`, `service.*` | How users reach the portal |
-| `networkPolicy.*` | Optional NetworkPolicies for both workloads |
+| `networkPolicy.*` | Optional NetworkPolicies for both workloads; required for edge-terminated X.509 sign-in |
 | `api.*`, `web.*` | Images, resources, probes, scheduling, `extraEnv`, `extraEnvFrom` |
 | `global.imageRegistry`, `imagePullSecrets` | Registry mirror and pull secrets |
 
@@ -313,6 +338,15 @@ stores it in its own Secret) or taken from a Secret you create:
 | LDAPS trust store password | `ldap.truststore.password.value` | `ldap.truststore.password.existingSecret`, `.existingSecretKey` |
 | ENS license | `license.file` (`--set-file`) | `license.existingSecret` (key `license.lic`) |
 | Web server certificate | `tls.certificate`, `tls.key`, `tls.clientCa` | `tls.existingSecret` (keys `server.pem`, `server.key`, `ca.pem`) |
+| X.509 proxy secret | *(generated with `x509.enabled` into `<release>-directory-services-portal-x509-proxy`, kept across upgrades)* | `x509.proxySecret.existingSecret`, `.existingSecretKey` (default key `proxy-secret`) |
+
+The chart keeps the generated X.509 proxy secret by reading it back from the cluster. Rendering
+without access to the cluster (`helm template`, Argo CD) would generate a new one each time, so
+there, create the Secret yourself and set `x509.proxySecret.existingSecret`:
+
+```bash
+kubectl create secret generic dsp-x509-proxy -n dsp --from-literal=proxy-secret="$(openssl rand -hex 32)"
+```
 
 For LDAPS with a private CA, put a PKCS12 trust store in a Secret and set
 `ldap.truststore.existingSecret`. It replaces the JVM's default trust store, so include every CA
@@ -401,7 +435,10 @@ kubectl logs -n dsp deploy/dsp-directory-services-portal-api -c api | grep Licen
 ### X.509 smart-card sign-in
 
 The API takes the user's certificate from a header set by a trusted proxy. The license must
-include `smart-card-sign-in`. Two setups are supported.
+include `smart-card-sign-in`. Two setups are supported. In both, the API accepts that header only
+from the web pods' addresses (`x509.trustedProxies`) together with the proxy secret the web pods
+send with every request (see [Secrets](#secrets)). It checks the chain itself against
+`x509.trustedCa` (or `tls`'s `ca.pem`), which is required: the chart does not render without it.
 
 **TLS passthrough to the web pod (recommended).** The web pod serves HTTPS on port 8443 and asks
 browsers for a certificate. The request is optional, so password sign-in keeps working. nginx
@@ -434,7 +471,8 @@ than 443.
 
 **Edge termination at the ingress.** The ingress controller verifies the certificate and
 forwards it in its own header. Set `x509.header` to that header name, and give the API the CA
-with `x509.trustedCa`. With ingress-nginx:
+with `x509.trustedCa`. The web tier passes that header on and removes any other certificate
+header. With ingress-nginx:
 
 ```yaml
 x509:
@@ -459,10 +497,15 @@ networkPolicy:
 ```
 
 !!! warning
-    With edge termination, anything that reaches the web Service directly could send the
-    header. Restrict the web tier to the ingress controller, as above. Use `optional`, never
-    `optional_no_ca`. An OpenShift Route can't forward client certificates, so use passthrough
-    there.
+    With edge termination, anything that reaches the web pods without going through the ingress
+    controller could send the header with a user's certificate, which is public. The chart
+    refuses to render this setup unless `networkPolicy.enabled` is `true` and
+    `networkPolicy.webIngressFrom` lists the ingress controller's pods, as above. If other
+    controls already ensure that only the ingress controller reaches the web pods (a
+    cluster-wide policy, a service mesh), set `x509.allowUnrestrictedWebIngress: true` instead.
+    Keep `auth-tls-pass-certificate-to-upstream: "true"`, so that the controller always sets the
+    header itself and replaces any copy a client sends. Use `optional`, never `optional_no_ca`.
+    An OpenShift Route can't forward client certificates, so use passthrough there.
 
 ### Air-gapped clusters
 
@@ -495,6 +538,11 @@ helm upgrade dsp oci://ghcr.io/winllc/charts/directory-services-portal --version
 
 The old API pod stops before the new one starts. The PVCs, and with them the license, the
 installation id and the data, are kept. Back up the data volume before you upgrade.
+
+With `x509.enabled`, the upgrade generates the X.509 proxy secret if the release has none yet,
+and restarts both workloads. Before upgrading an edge-terminated setup (`x509.enabled` without
+`tls.enabled`), set `x509.trustedCa`, `networkPolicy.enabled` and `networkPolicy.webIngressFrom`
+(or `x509.allowUnrestrictedWebIngress`): otherwise the upgrade stops with a message saying so.
 
 ### Uninstall
 
