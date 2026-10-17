@@ -62,3 +62,4 @@ Round 2 (not started): RR-07/RR-12 (stack on RR platform), RSA-05/06/07 (stack o
 item 23 + all Wave 2 docs (use the reports' docs lists).
 
 UPDATE 19:15 UTC: directory-services-portal#10 MERGED (DSP Wave 2 done). Check main CI on DSP at resume; CodeQL alerts now on main (dismiss false positives).
+UPDATE 19:17 UTC: rsa-operations-portal#12 MERGED without CI having run (Actions billing block). At resume: once billing is fixed, confirm main CI on RSA is green; the RSA portal branch must merge main (now with #12) and resolve Helm/compose/AppConfig overlaps.
