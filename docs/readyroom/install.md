@@ -7,10 +7,10 @@ one host) or the **Helm chart** (Kubernetes or OpenShift). Every setting mention
 in [Configuration](configuration.md).
 
 !!! danger "Use your own key material"
-    The application ships with development keystores (`winhal.p12`, `truststore.p12`) and their
-    passwords as built-in defaults, so it can start with TLS and nothing configured. Treat them as
-    compromised. For any real deployment, supply your own server keystore and client-certificate
-    truststore, as described in [Certificates](#certificates).
+    TLS is off by default. If you turn it on without supplying your own keystore, ReadyRoom falls back
+    to development keystores (`winhal.p12`, `truststore.p12`) built into the application, with
+    published passwords. Treat them as compromised. For any real deployment, supply your own server
+    keystore and client-certificate truststore, as described in [Certificates](#certificates).
 
 ## Prerequisites
 
