@@ -63,3 +63,25 @@ item 23 + all Wave 2 docs (use the reports' docs lists).
 
 UPDATE 19:15 UTC: directory-services-portal#10 MERGED (DSP Wave 2 done). Check main CI on DSP at resume; CodeQL alerts now on main (dismiss false positives).
 UPDATE 19:17 UTC: rsa-operations-portal#12 MERGED without CI having run (Actions billing block). At resume: once billing is fixed, confirm main CI on RSA is green; the RSA portal branch must merge main (now with #12) and resolve Helm/compose/AppConfig overlaps.
+
+## Third pause 2026-10-17 ~20:00 UTC — how to resume
+While paused earlier, the owner merged the WIP branches (cert-alert#9, in-n-out-work#12, rsa#13), the notes
+branch into docs master (#8), and many Dependabot PRs (incl. majors). Main state at this pause:
+- DSP main red (web typecheck: duplicate Vite 6/8 in lockfile) -> fix PR directory-services-portal#27
+  (claude/fix-web-typecheck, 581b3c6), subscribed; local typecheck/tests/build/audit pass.
+- CertAlert main red (build + test-postgres jobs fail; WIP merged before final test run). Agent
+  a5f9ea0c019868558 was resumed to fix; it made no commits before this pause. Worktree w2-certalert at main.
+- ReadyRoom main green. Agent a6ff1b7e70dacdc30 wrap-up WIP pushed to claude/wip-do-not-merge-wave2-followup
+  (d13365e): Dependabot ignores eclipse-temurin majors; Dockerfile base images as named FROM stages so
+  Dependabot can update digests; test/Dockerfile back to 21-jdk (Dependabot had moved it to 24).
+- RSA main: Actions still blocked (billing; jobs get no runner). Local `./mvnw install` on main: 646 tests,
+  2 fail (LoggingConfigTest.textLinesHaveTheDateAndTheRequestId[1],[2]). Agent abf768b911bd16310's fix in
+  progress pushed to claude/wip-do-not-merge-wave2-followup (18c4976). Remaining RSA scope: Portal TLS 1.2
+  pin (RSA-15), monitoring docs, ConnectorHealthIndicator in readiness, SpotBugs/Trivy, image build check.
+- Docs agent a9f51fa95b0736665 (worktree /home/user/wt/w2-docs, branch claude/wave2-docs from master
+  23b6087) had only just started; no commits. Its prompt covers item 23 (CA-19, DSP-20, RSA-17), DSP and
+  Connector docs, cross-product FIPS/STIG + HA/DR + sizing pages. Remove wave2-notes/ from master in the
+  docs PR (internal notes, merged by #8).
+- WIP branches are named claude/wip-do-not-merge-* so they are not mistaken for finished work.
+Resume order: (1) DSP#27 CI, (2) CertAlert main fix, (3) RSA LoggingConfigTest + rest, (4) RR wrap-up
+PR, (5) docs, (6) round 2 (RR-07/RR-12, RSA-05/06/07). Disk ~6 GB free: prune Docker after builds.
