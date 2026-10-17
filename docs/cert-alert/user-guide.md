@@ -132,7 +132,7 @@ certificates, the contacts editor and recent audit records.
 | **IC Person** | Directory attributes |
 | **Addresses** | The five schema addresses (`mail`, `icEmail`, `internetEmail`, `niprnetEmail`, `siprnetEmail`) |
 | **Organization** | Duty organization / sub-organization, admin organization, country, IC member, last synced, … |
-| **Addresses this person answers to** | Directory addresses plus addresses **added here**. If you are allowed, add another address or a team list (tick **Group address**) and press **Add** |
+| **Addresses this person answers to** | Directory addresses plus addresses **added here**. If you are allowed, add another address or a team list (tick **Group address**) and press **Add**. An administrator's identifier cannot be added |
 | **Known to servers as** | Every value a `serverPOC` could use to name this person |
 | **Projects** | Projects they are in; green badges mark projects they run |
 | **Current credentials** | The signing and encryption certificates currently held, issue gap, and flags |

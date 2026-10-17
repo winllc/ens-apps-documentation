@@ -1,8 +1,10 @@
 # Troubleshooting
 
-Problems are grouped by where they show up. Most have a matching line in the server log or in the
-workstation log (`%ProgramData%\InOutWorker\logs\inoutworker-yyyyMMdd.log`). For background, see
-[Operations](operator-guide.md) and [Windows client](windows-client.md).
+Problems are grouped by where they show up. Most have a matching line in the server log or in a
+workstation log: `%LOCALAPPDATA%\InOutWorker\logs\inoutworker-yyyyMMdd.log` in the user's profile
+for login, lock, unlock and remote disconnects, and `%ProgramData%\InOutWorker\logs\` for the
+SYSTEM logout task. For background, see [Operations](operator-guide.md) and
+[Windows client](windows-client.md).
 
 ## Server will not start
 
@@ -11,6 +13,10 @@ workstation log (`%ProgramData%\InOutWorker\logs\inoutworker-yyyyMMdd.log`). For
 | `Could not resolve placeholder 'application.banner-text'` | `application.banner-text` has no default. Set it. |
 | `application.windows-auth.enabled is true but application.windows-auth.service-principal is not set` | Set `service-principal`, or turn Windows sign-in off. |
 | `... keytab-location is not set` / `Windows sign-in keytab ... does not exist or cannot be read` | Mount the keytab and make it readable by the container user. The image runs as user `185`, and `/etc/in-n-out` is group `0`, mode `0750`. |
+| `server.ssl.enabled is true but no key store is configured. ...` | TLS is on, but no keystore is set; none is packaged. Release package: put it in `tls/keystore.p12` and add `docker-compose.tls.yml` to `COMPOSE_FILE`. Helm: set `tls.keystore.secretName`. Otherwise set `SERVER_SSL_KEYSTORE` and `SERVER_SSL_KEYSTOREPASSWORD`. |
+| `server.ssl.client-auth is want but no trust store is configured, ...` | TLS is on and client certificates are requested, but no truststore is set; ReadyRoom does not fall back to Java's default CAs. Supply one holding only the CAs that issue your users' certificates (`tls/truststore.p12`, `tls.truststore.secretName`, or `SERVER_SSL_TRUSTSTORE` and its password), or set `client-auth` to `none` to turn certificate sign-in off. |
+| `install.sh` or `upgrade.sh`: `SSL_ENABLED=true needs your own keystore and truststore: ...` | `SSL_ENABLED=true`, but `docker-compose.tls.yml` is not in `COMPOSE_FILE`. Add it, and put `tls/keystore.p12` and `tls/truststore.p12` in place. The scripts also stop if either file is missing. |
+| Helm: `tls.truststore.secretName is required when tls.enabled with clientAuth ...` | The chart does not render with `tls.enabled` and no truststore. Set `tls.truststore.secretName`, or `tls.clientAuth: none`. |
 | Keystore or truststore errors | Release package: check that `tls/keystore.p12` and `tls/truststore.p12` exist, are readable by group 0, and match `SERVER_SSL_KEYSTOREPASSWORD` and `SERVER_SSL_TRUSTSTOREPASSWORD`, and that `docker-compose.tls.yml` is in `COMPOSE_FILE`. Helm: check the `tls.keystore` and `tls.truststore` Secrets and their password keys. |
 | Database connection refused | Release package: check `docker compose ps` shows `postgres` healthy. Helm: check `database.*` and that PostgreSQL accepts connections from the pod. |
 | Port in use (release package) | Another process holds the host port `READYROOM_PORT` (8181). Choose another host port in `.env`; ReadyRoom inside the container stays on 8181. |
@@ -20,10 +26,11 @@ workstation log (`%ProgramData%\InOutWorker\logs\inoutworker-yyyyMMdd.log`). For
 | Symptom | Cause and fix |
 |---|---|
 | The browser goes to the login page although a certificate is installed | The certificate is not issued by a CA in the server truststore, or the browser did not offer it. Check the truststore, then restart the browser so it asks again. |
-| Signed in, but every page says *Unauthorized* | The certificate subject DN (or the DN found through Windows sign-in) is not a directory entry, so the session has no roles. Make the subject equal the LDAP DN, or set `lookup-on-dn-attribute` and `user-dn-attribute`. |
+| A browser with a trusted certificate is sent to the login form, and the audit log has a failed `auth.login` with the reason *unknown user* | The certificate subject DN is not a directory entry, so the certificate does not sign in. Make the subject equal the LDAP DN, or set `lookup-on-dn-attribute` and `user-dn-attribute`. |
 | Login form says the credentials are wrong | The user is searched under `user-base-dn` by `uid`, `cn` or `mail`. Check the base DN, and that exactly the expected entry matches. |
 | No **Log out** in the user menu | Expected for certificate sessions. The certificate would sign you straight back in. |
-| A user cannot open a group | Non-admin users can open only groups they are a member of in the directory (`uniqueMember`). Memberships are cached for 300 s. |
+| A user cannot open a group | Only admins can open any group. Everyone else can open groups they are a member of in the directory (`uniqueMember`) or manage. Memberships are cached for 300 s. |
+| A manager sees only the status of some people, without times or notes | Expected. Details are shown only for the people they are responsible for: members of groups they manage, their direct reports, and people who named them as an additional manager. The `MANAGER` role alone does not grant them. See [Security → Authorization](security.md#authorization). |
 | An admin's role change does not show | Roles are loaded at sign-in. The user needs a new session. |
 | Metrics or Settings are missing from the sidebar | They need the `ADMIN` or `MANAGER` role. Check `super-user-dns`, or set the role on the user's details page. |
 
@@ -44,13 +51,16 @@ Work through these in order:
 | `'login' posts to an authenticated endpoint and no client certificate is available.` (exit 2) | No valid certificate with a private key in `CurrentUser\My`. |
 | `POST to ... failed (HTTP 401)` (exit 3) | The server did not accept the certificate or the ticket. |
 | A TLS trust error (exit 3) | The workstation does not trust the server's CA, or the host name does not match the server certificate. |
-| `Logout has no sessionId` | The morning's login post failed, so the logout cannot be attributed. Fix the login failure. |
+| `Logout has no sessionId` | The morning's login post failed, so the logout cannot be attributed. The server refuses it with `401`. Fix the login failure. |
+| `... failed (HTTP 401) [unknown_session] ...` on a logout | The `sessionId` is unknown, already used (for example by a remote disconnect earlier in the same logon) or older than 7 days. Nothing is recorded. |
+| `... failed (HTTP 429) [rate_limited] ...` on a logout | See the server-side row below. |
 
 | Symptom on the server | Cause and fix |
 |---|---|
-| Status stays `AWAY` all evening | No logoff event arrived (the PC was shut down, or the session ended without event 4647 or a remote disconnect). The auto check-out job checks the person out once the lock is older than `check-out-after-minutes`. |
+| Status stays `AWAY` all evening | No logoff event arrived: the PC was shut down, or the session ended without event 4647 (the Logout task) or a remote disconnect (the Disconnect task). The auto check-out job checks the person out once the lock is older than `check-out-after-minutes`. |
 | People show `OUT` minutes after locking | `check-out-after-minutes` is too low. The packaged value is `2`, while the built-in default is `240`. |
-| Check-outs with an empty DN in `check_in_out_records` | Logouts posted without a usable `sessionId`. |
+| Logouts missing, and the audit log has failed `auth.login` events with the reason *unknown session* | Logouts without a usable `sessionId` are refused and not stored. Look at the workstation logs for why the login failed or the session file is missing. |
+| Logouts get `429` (`rate_limited`), and the log shows `... sent more than N logoffs with an unusable session id this minute; refusing them with 429` | More than `application.logoff.refused-per-minute` (30) logouts with a stale or missing session id came from one address within a minute. They would have been refused anyway: a logout with a usable `sessionId` is never limited. Fix the workstations sending them. |
 | `IN` although the user only unlocked | Expected: the first unlock of the day is stored as `CHECK_IN`. |
 
 ## Windows sign-in
@@ -64,7 +74,7 @@ The server logs why each refused Windows sign-in failed. The ticket itself is ne
 | `Clock skew too great` | The server and the domain controller clocks differ by more than 5 minutes. |
 | `no single directory user has sAMAccountName=...` | No directory user, or more than one, has that account name. Check `account-attribute`, `user-base-dn` and `user-ldap-filter`. |
 | `realm not allowed` | The user is from another domain. Add it to `allowed-realms` if that is intended. |
-| `not a user account` | A service or host principal was presented. |
+| `not a user account` | A service or host principal, or a computer account (`PC01$`), was presented. |
 
 On the client, `The server redirected instead of accepting Windows sign-in` means
 `application.windows-auth.enabled` is off on that server. To inspect the keytab:

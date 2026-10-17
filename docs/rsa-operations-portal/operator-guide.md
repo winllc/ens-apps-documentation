@@ -21,12 +21,12 @@ Day-to-day operation of the RSA Operations Portal, installed from the release pa
     | View the services and their health | `docker compose ps` |
     | Start (existing containers) | `docker compose start` |
     | Stop | `docker compose stop` |
-    | Create or recreate containers after changing `.env` | `docker compose up -d` |
+    | Create or recreate containers after changing `.env`, `connector.env` or `mysql.env` | `docker compose up -d` |
     | Remove the containers (the volumes are kept) | `docker compose down` |
     | Restart one service | `docker compose restart portal` (or `connector`, `mysql`) |
 
     !!! warning "Changing configuration"
-        `.env` is read when a container is **created**, through `env_file`. After you edit it, run `docker compose up -d`, which recreates the affected containers. A plain `restart` re-reads the mounted `/application.properties` copy in the Portal, but **not** the environment variables (including `JAVA_OPTS`). Run `util/check-env.sh` after editing `.env`.
+        The settings files (`.env` for the Portal, `connector.env` for the Connector, `mysql.env` for MySQL) are read when a container is **created**, through `env_file`. After you edit one, run `docker compose up -d`, which recreates the affected containers. A plain `restart` re-reads the mounted `/application.properties` copy of `.env` in the Portal, but **not** the environment variables (including `JAVA_OPTS`). After editing any of them, run `util/check-env.sh .env`, which checks all three.
 
     !!! danger "`docker compose down -v` deletes your data"
         It removes the `mysql_data` and `ens-license` volumes: the database, the license and the installation id.
@@ -60,7 +60,7 @@ Day-to-day operation of the RSA Operations Portal, installed from the release pa
     |---|---|---|
     | Portal (Log4j2) | `./logs/rsaapp-portal.log` in the install folder (container `/var/log`) | Rolled daily or at 10 MB into `./logs/rsaapp-portal-YYYY-MM/app-MM-dd-yyyy-N.log.gz`. Configured by `default_build/portal/log4j2.xml`. |
     | Portal console | `docker compose logs -f portal` | Same events, pattern `HH:mm:ss.SSS [thread] LEVEL logger - msg` |
-    | Connector | `docker compose logs -f connector` | Packaged Log4j 1.x configuration logs to stderr at `DEBUG`. `default_build/log4j.xml` (rolling `/var/log/connector.log`, so `./logs/connector.log` on the host) applies only if you select it through `JAVA_OPTS`. |
+    | Connector | `docker compose logs -f connector` | Packaged Log4j 1.x configuration logs to stderr at `DEBUG`. `default_build/log4j.xml` (rolling `/var/log/connector.log`, so `./logs/connector.log` on the host) applies only if you select it through the Connector's `JAVA_OPTS` in `connector.env`. |
     | MySQL | `docker compose logs mysql` | |
     | All services | `docker compose logs -f` | Ctrl+C to exit |
 
@@ -93,7 +93,7 @@ Day-to-day operation of the RSA Operations Portal, installed from the release pa
     0 1 * * * cd /opt/rsa-operations-portal && util/backupdb.sh -d /opt/backup
     ```
 
-    Also keep copies of `.env`, `license/` and `default_build/` (including `ssl/trust.jks`).
+    Also keep copies of `.env`, `connector.env`, `mysql.env`, `license/` and `default_build/` (including `ssl/trust.jks`).
 
 === "Helm"
 
@@ -139,8 +139,9 @@ Back up the database first.
 
     [Installation → Upgrade with upgrade.sh](install.md#upgrade-with-upgradesh) lists exactly what is replaced, kept and checked. After the upgrade:
 
-    1. Add any settings that `upgrade.sh` reported as new to `.env`, then run `docker compose up -d`.
+    1. Add any settings that `upgrade.sh` reported as new to the file it names (`.env`, `connector.env` or `mysql.env`), then run `docker compose up -d`.
     2. Verify with the [checks in the install guide](install.md#verification).
+    3. If `upgrade.sh` split a single `.env`, delete the `.env.before-split.*` copy once the Portal runs: it still holds every secret.
 
 === "Helm"
 
@@ -157,10 +158,10 @@ The Portal updates its database tables itself on the first start of the new vers
 
 | Certificate | Where it lives | Renewal steps |
 |---|---|---|
-| **RSA AM root CA** (Connector trust) | Release package: `default_build/ssl/trust.jks` (the Connector sees it as `/custom/ssl/trust.jks`). Helm: the Secret in `authManager.trustStore.existingSecret`. | Export the new root as in [Installation](install.md#export-the-am-root-certificate-and-build-trustjks) and import it into `trust.jks` (`keytool -import … -alias rsa_am_ca`, using a new alias if you keep the old CA during overlap). Release package: `docker compose restart connector`. Helm: replace the Secret, then restart the Connector Deployment. If the password changed, update `ims.ssl.client.trust.keystore.password` and `com.rsa.ssl.trust.store.password` (Helm: `authManager.trustStore.password` or its Secret) and run `docker compose up -d` or `helm upgrade`. |
+| **RSA AM root CA** (Connector trust) | Release package: `default_build/ssl/trust.jks` (the Connector sees it as `/custom/ssl/trust.jks`). Helm: the Secret in `authManager.trustStore.existingSecret`. | Export the new root as in [Installation](install.md#export-the-am-root-certificate-and-build-trustjks) and import it into `trust.jks` (`keytool -import … -alias rsa_am_ca`, using a new alias if you keep the old CA during overlap). Release package: `docker compose restart connector`. Helm: replace the Secret, then restart the Connector Deployment. If the password changed, update `ims.ssl.client.trust.keystore.password` and `com.rsa.ssl.trust.store.password` in `connector.env` (Helm: `authManager.trustStore.password` or its Secret) and run `docker compose up -d` or `helm upgrade`. |
 | **Portal HTTPS (8443)** | Release package: a keystore under `default_build/ssl/` (mounted at `/ssl`), referenced by your `server.ssl.*` settings in `.env`. Helm: the Secret in `tls.keystore.existingSecret`. | Replace the keystore (same path and alias, or update the settings), then restart the Portal. See [Security](security.md#tls-and-client-certificates). With Helm and edge termination, renew the ingress or route certificate instead. |
 | **Client-certificate trust (8443)** | The trust store referenced by `server.ssl.trust-store` (Helm: `tls.truststore.existingSecret`) | Add the new issuing CAs for user PKI certificates and restart the Portal. |
-| **Command client password** | `com.rsa.cmdclient.user.password` (Helm: `authManager.commandClient`) | If AM regenerates it, read it again with `rsautil manage-secrets --action list`, update `.env` and run `docker compose up -d`, or update the Secret and restart the Connector. |
+| **Command client password** | `com.rsa.cmdclient.user.password` (Helm: `authManager.commandClient`) | If AM regenerates it, read it again with `rsautil manage-secrets --action list`, update `connector.env` and run `docker compose up -d`, or update the Secret and restart the Connector. |
 
 ## Routine checklist
 

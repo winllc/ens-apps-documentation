@@ -34,7 +34,7 @@ their data for correct and unique values.
 ```mermaid
 flowchart LR
     B[Browser] -- "HTTPS / HTTP<br/>one origin" --> W["web<br/>nginx + React build<br/>:8080 (:8443 mTLS)"]
-    W -- "/api/* proxied<br/>X-Forwarded-*, X-SSL-Client-Cert" --> A["api<br/>Spring Boot 4 / Java 21<br/>:3001"]
+    W -- "/api/* proxied<br/>X-Forwarded-*, X-SSL-Client-Cert,<br/>X-DSP-Proxy-Secret" --> A["api<br/>Spring Boot 4 / Java 21<br/>:3001"]
     A -- "LDAP / LDAPS / StartTLS<br/>pooled service account" --> L[(LDAP server)]
     A -- "read/write" --> D[("DATA_DIR<br/>portal-config.json<br/>audit/*.jsonl<br/>analysis-results/")]
 ```

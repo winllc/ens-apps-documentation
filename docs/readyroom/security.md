@@ -17,7 +17,7 @@ flowchart TD
     X1 -- no --> K{Authorization: Negotiate<br/>Kerberos ticket?}
     K -- valid --> OK2[Authenticated as the directory user<br/>with that account name]
     K -- none or invalid --> N401[401 + WWW-Authenticate: Negotiate]
-    W -- no --> P{Open path?<br/>/actuator/**, /api/check/out,<br/>/login, /error}
+    W -- no --> P{Open path?<br/>/actuator/health, /api/check/out,<br/>/login, /error}
     P -- yes --> PASS[Allowed without sign-in]
     P -- no --> X2{Client certificate?}
     X2 -- yes --> OK
@@ -30,18 +30,25 @@ flowchart TD
 
 - HTTPS is terminated by the application (`server.ssl.*`). `client-auth: want` means the server
   asks every client for a certificate but allows connections without one.
-- The certificate must chain to a CA in the configured truststore.
+- The certificate must chain to a CA in the configured truststore. ReadyRoom ships no keystore or
+  truststore, and does not fall back to Java's default CAs: with TLS on, it refuses to start until a
+  keystore is set and, while `client-auth` is `want` or `need`, a truststore. Put only the CAs that
+  issue your users' certificates in the truststore: any certificate one of them issues with a
+  user's DN signs in as that user.
 - The **full subject DN** is the username (`subjectPrincipalRegex("(.*)")`). `AppUserDetailsService`
   looks that DN up in LDAP, through the user cache. With `application.lookup-on-dn-attribute: true`,
   it instead searches `user-base-dn` for `<user-dn-attribute>=<subject DN>`.
-- If the DN is not found in the directory, the session gets **no roles**, so every page shows
-  *Unauthorized*.
+- If the DN is not found in the directory, the certificate does not sign in, and a browser falls
+  back to the login form. The refusal is audited as a failed `auth.login` with the reason
+  *unknown user*.
 - Certificate sessions have no *Log out* entry, because the browser would present the certificate
   again and sign straight back in.
 
 ### LDAP username and password
 
-When no certificate is presented, protected pages redirect to the branded `/login` page. The
+When no certificate is presented, protected pages redirect to the branded `/login` page. API
+calls (`/api/**`) that are not signed in get `401 Unauthorized` instead, so a script never takes
+the login page for an answer. The
 LDAP authentication provider searches `user-base-dn` (subtree) with
 `(|(uid={0})(cn={0})(mail={0}))` and then binds as the entry it found, with the password the user
 typed. Password binds never use the LDAP connection pool, so a changed password takes effect at
@@ -63,7 +70,8 @@ Windows sign-in is optional and **off by default**. It applies only to `POST /ap
   contacted, so `krb5.conf` is optional.
 - The account name from the ticket (for example `jdoe@EXAMPLE.COM`) must come from an **allowed
   realm**: `allowed-realms`, or by default the service principal's realm. Service and host
-  principals (anything containing `/`) are rejected.
+  principals (anything containing `/`) are rejected, and so are computer accounts (names ending in
+  `$`, such as `PC01$`, which is what a task running as SYSTEM presents).
 - The name, with the realm removed by default (`strip-realm`), must match **exactly one** directory
   user under `user-base-dn` that also matches `user-ldap-filter`, using `account-attribute`
   (default `sAMAccountName`). The check-in is then recorded under that user's DN, the same DN a
@@ -132,15 +140,34 @@ All settings are listed in [Configuration](configuration.md#windows-kerberos-sig
 
 - **Roles:** `USER`, `MANAGER` and `ADMIN`, granted as described in
   [Administration](admin-guide.md#roles). Method security (`@EnableMethodSecurity`) enforces
-  `@PreAuthorize` rules on controllers and REST services.
-- **Group access:** `PermissionEvaluator.groupCheck()` allows a group if the user is a member of it
-  in the directory. The `ADMIN` and `MANAGER` roles bypass the check.
-- **Per-person data:** `forCurrentUser()` (it is you) and `userManagerCheck()` (you are the
-  directory `owner` or an additional manager of one of the person's groups) guard the audit log.
+  `@PreAuthorize` rules on controllers and REST services. Roles open pages: Metrics, Settings and
+  group reports need `MANAGER` or `ADMIN`. Whose data a page shows is decided by `AccessPolicy`.
+- **A person's details:** their arrival, departure and status-change times, notes, average login
+  time, check-in history (**Audit Log**), calendar, and the additional managers they named. These
+  are visible to:
+    - the person themselves;
+    - `ADMIN`;
+    - the managers of a group the person is a member of: the group's directory `owner`, or an
+      additional manager set for the group in ReadyRoom;
+    - their manager in the directory (one level up only, not that manager's manager);
+    - people the person named as an additional manager on their profile.
+
+    These relationships apply whatever the viewer's role. The `MANAGER` role on its own does not
+    show anyone's details.
+
+- **Everyone else** sees a coworker, found by search, on a group page or in the org chart, with
+  their directory details (organization, employee type, location, branch, email, phone, manager,
+  groups) and whether they are in, never their times, notes or history. A status a manager recorded
+  in answer to an absence alert (*Unscheduled Leave*, *Absent*, *Absent Excused*,
+  *Absent Unexcused*) shows to them as *Out of Office*.
+- **Groups:** a group's page and its members are open to the group's members, its managers and
+  `ADMIN`. Changing its managers, its report and `POST /api/permissions/update` need `ADMIN`, or
+  the `MANAGER` role together with being a current manager of that group. A sub-group is a separate
+  group with its own managers.
 - **Direct reports:** `/api/users/reports` and **My Reports** always use the signed-in user as the
   manager, so they cannot be used to read someone else's team.
-- **Notification responses:** only a recipient of the alert can record a response. Anyone else gets
-  an access-denied error.
+- **Notifications:** an absence alert opens only for the manager it was sent to, and for `ADMIN`.
+  Only a recipient can record a response. Anyone else gets an access-denied error.
 - **Metrics** show aggregates only, never names.
 
 A refused page is logged at `info` as `Access denied for <METHOD> <URI>`, and the user sees the
@@ -150,47 +177,61 @@ A refused page is logged at `info` as `Access denied for <METHOD> <URI>`, and th
 
 | Path | Why it is open |
 |---|---|
-| `POST /api/check/out` | Runs at logoff, after the user's profile and certificate store are gone. The DN is taken from the `sessionId` that the login call returned. |
-| `/actuator/**` | Health and metrics. The packaged configuration exposes `health`, `info`, `metrics` and `env`. |
+| `POST /api/check/out` | Runs at logoff, after the user's profile and certificate store are gone. It accepts only the `sessionId` of a check-in that no logout has used yet and that is younger than 7 days (`application.logoff.session-max-age-hours`), and records the check-out under that check-in's DN. |
+| `/actuator/health` (and its groups, such as `/actuator/health/liveness`) | Health checks and probes. Status only, no details. It is the only Actuator endpoint exposed, and any other endpoint you expose needs an `ADMIN` sign-in. |
 | `/login`, `/error` | The sign-in and error pages. |
 | `/libs/**`, `/css/**`, `/js/**`, `/images/**` | Static assets, which bypass the security filters. |
 
-!!! warning "Consider these before going live"
-    - **Actuator.** `/actuator/env` and `/actuator/metrics` are reachable without sign-in. Limit
-      `management.endpoints.web.exposure.include` to `health`, or block `/actuator` at the network
-      edge.
-    - **Check-out by session id.** Anyone who knows a `sessionId` can post a check-out for that
-      user. Session ids are random UUIDs, cached on the workstation in
-      `%ProgramData%\InOutWorker\session.json` (readable by *Authenticated Users*) and returned in
-      the API's record JSON.
+A `sessionId` stands in for a sign-in on the logout, so ReadyRoom treats it as a credential. It
+appears only in the answer to the check-in that created it: no other API response, page or log shows
+it. On the workstation it is kept in a file that only that user, SYSTEM and Administrators can read
+(see [Windows client](windows-client.md#why-logout-is-different)).
+
+Only refused logouts are rate-limited, per client address. They are audited as a failed
+`auth.login` with the reason *unknown session*; repeats from one address within 60 seconds become one
+event with `details.count`. After `application.logoff.refused-per-minute` (30)
+in a minute, the next ones get `429` and are audited once for that address and minute, with the
+reason *too many unknown sessions* (method `session-id`). A logout with a usable `sessionId` is
+never limited.
 
 ## Other protections and notes
 
-- **CSRF protection is disabled** in both filter chains. The UI's forms and `fetch` calls post
-  without tokens. Rely on TLS, client certificates and same-site browser defaults, and do not embed
-  ReadyRoom pages in other sites.
+- **CSRF protection is on** for every `POST`, `PUT` and `DELETE` except the Windows client's
+  `/api/check/**`, which signs in with a certificate or a ticket, or not at all, and accepts only
+  JSON. Forms carry the token, and the pages add it to their `fetch` calls from the `_csrf` meta
+  tags. A missing or wrong token gets `403`, audited as `access.denied`.
+- **Session cookie:** `SameSite=Lax` and `HttpOnly`, and `Secure` when `SSL_ENABLED=true` or
+  `SESSION_COOKIE_SECURE=true`.
+- **Windows client files:** the installer makes the install folder and
+  `%ProgramData%\InOutWorker` writable by SYSTEM and Administrators only, and the SYSTEM logout task
+  reads a user's session file only after checking for links and for its owner. See
+  [Windows client](windows-client.md#installation).
 - **LDAP injection:** user-supplied search terms are escaped before they are put into LDAP filters.
 - **LDAP timeouts:** connect (5 s) and read (30 s) timeouts and a paged-search page limit stop a
   slow or misbehaving directory from holding requests open indefinitely.
 - **Notes field:** the profile form warns *Do not enter any classified or PII data!*. Notes are
-  shown to anyone who can see the person.
+  shown only to the people who can see the person's details (see [Authorization](#authorization)).
 - **Server TLS validation on the client** is on by default. `SkipCertificateCheck` is for labs only.
 - **SMTP:** the packaged configuration trusts any SMTP certificate (`mail.smtp.ssl.trust: "*"`).
   Name your mail host instead.
 
 ## Hardening checklist
 
-- [ ] Use your own keystore, truststore and CA. Treat the development keystores packaged in the
-      application as compromised.
+- [ ] Use your own keystore, truststore and CA. Put only the CAs that issue your users'
+      certificates in the truststore. Never trust the development CA in the source repository's
+      `test/step-ca-data/` ("WINLLC DEV CA"): its private keys are public.
 - [ ] Supply all passwords (keystore, truststore, database, LDAP bind, SMTP) in `.env` (mode 600)
       or in Kubernetes Secrets, never in a ConfigMap or the values file you commit.
 - [ ] Use `ldaps://` (or StartTLS) for the directory, with a least-privilege bind account that can
       only read.
-- [ ] Restrict Actuator exposure.
+- [ ] Keep Actuator exposure at `health` (the packaged setting).
+- [ ] Behind a proxy that terminates TLS for browsers, set `SESSION_COOKIE_SECURE=true`.
 - [ ] Set `super-user-dns` to the real administrators only.
 - [ ] Keep the Kerberos keytab in `kerberos/` (mounted read-only) or a Secret, and out of images
       and source control.
 - [ ] Install the Windows client under Program Files (as the installer does), so non-admins cannot
-      change a script that runs elevated or as SYSTEM.
+      change a script that runs as SYSTEM.
+- [ ] After upgrading the client, re-run `Install-InOutWorker.ps1` on every workstation, so it
+      corrects the folder permissions older clients left.
 - [ ] Leave `SkipCertificateCheck` off on workstations.
 - [ ] Set `spring.mail.properties.mail.smtp.ssl.trust` to your mail host.

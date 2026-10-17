@@ -16,13 +16,17 @@ the directory:
 | *Project administrator* | Granted per project, in the UI, by an administrator (see [Projects](#projects-and-project-administrators)) |
 | *Point of contact* | Derived from the directory's `serverPOC` and contacts added in CertAlert; grants rights over that server |
 
-`admin-identifiers` is matched against **any** value the directory knows a person by: any of
-their addresses, their `uid`, `cn`, `displayName` or `preferredName`.
+`admin-identifiers` is matched against any address the directory publishes for a person, their
+`uid`, or their entry's DN. Common, display and preferred names, and addresses added in CertAlert,
+never count. A DN contains commas, so give it its own YAML list item:
 
 ```yaml
 cert-alert:
   security:
-    admin-identifiers: [alice@intelink.ic.gov, bob]
+    admin-identifiers:
+      - alice@intelink.ic.gov
+      - bob
+      - "uid=carol,ou=people,dc=example,dc=gov"
 ```
 
 Changing administrators means changing configuration and restarting. On a fresh deployment, when
@@ -207,6 +211,11 @@ servers named after it.
 
 Editing addresses is governed by `contact-editors` (administrators by default), because an address
 binds a person to every server named after it.
+
+An added address never makes anyone an administrator: `admin-identifiers` is matched only against
+what the directory publishes. An address that `admin-identifiers` names cannot be added at all; the
+request is refused with a 400 that says so. An address added before it was named there stays: it
+still binds servers and grants nothing.
 
 ## Directory-writing jobs
 

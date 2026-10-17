@@ -174,8 +174,10 @@ BANNER_BACKGROUND="#007a33"
 | `X509_ENABLED` | `portal.x509.enabled` | `false` (`true` with the `mtls` profile) | Offer certificate sign-in |
 | `X509_SOURCE` | `portal.x509.source` | `servlet` | `servlet`: the API terminates mutual TLS. `header`: a trusted reverse proxy terminates it and forwards the certificate |
 | `X509_HEADER` | `portal.x509.header` | `X-SSL-Client-Cert` | Header with the client certificate in header mode. Accepts PEM, URL-encoded PEM (nginx `$ssl_client_escaped_cert`, AWS ALB), base64 DER and Envoy `x-forwarded-client-cert` |
-| `X509_TRUSTED_PROXIES` | `portal.x509.trusted-proxies` | `127.0.0.1/32;::1/128` | Addresses/CIDRs allowed to send the header. Checked against the actual TCP peer, never `X-Forwarded-For`. The header is ignored (with a warning) from any other peer |
-| `X509_TRUSTED_CA_FILE` | `portal.x509.trusted-ca-file` | *(empty)*; with `mtls`: `TLS_CLIENT_CA_FILE` | PEM bundle of CAs. When set, the API validates the chain itself (strongly recommended in header mode) |
+| `X509_TRUSTED_PROXIES` | `portal.x509.trusted-proxies` | `127.0.0.1/32;::1/128` | Addresses/CIDRs allowed to send the header. Checked against the actual TCP peer, never `X-Forwarded-For`. The header is refused from any other peer, and from these too unless the request carries the proxy secret. Refusals are logged and audited |
+| `X509_PROXY_SECRET_FILE` | `portal.x509.proxy-secret-file` | *(empty)* | File holding the proxy secret. When set, it is read instead of `X509_PROXY_SECRET` (preferred) |
+| `X509_PROXY_SECRET` | `portal.x509.proxy-secret` | *(empty)* | Header mode: the secret the portal's web tier sends in `X-DSP-Proxy-Secret` with every request. At least 32 characters (for example `openssl rand -hex 32`), the same value for the API and the web tier. The certificate header is refused without it |
+| `X509_TRUSTED_CA_FILE` | `portal.x509.trusted-ca-file` | *(empty)*; with `mtls`: `TLS_CLIENT_CA_FILE` | PEM bundle of CAs. When set, the API validates the chain itself. Required in header mode |
 | `X509_CHECK_REVOCATION` | `portal.x509.check-revocation` | `false` | Check OCSP / CRL distribution points during chain validation (needs `X509_TRUSTED_CA_FILE`) |
 | `X509_MAPPING` | `portal.x509.mapping` | `filter` | `filter`: search with `X509_USER_FILTER`. `subject-dn`: the certificate subject DN is the user's entry DN |
 | `X509_USER_FILTER` | `portal.x509.user-filter` | `(&(objectClass=inetOrgPerson)(uid={{cn}}))` | Placeholders `{{cn}}`, `{{uid}}`, `{{email}}` (rfc822 SAN, else the emailAddress attribute), `{{upn}}` (Microsoft UPN SAN), `{{subject}}`, `{{serial}}`. Values are filter-escaped. It must match exactly one user |
@@ -187,7 +189,8 @@ Before a certificate is mapped to a user, the API checks that:
 - the certificate is within its validity period
 - the certificate is allowed for TLS client authentication (extended key usage / key usage)
 - when `X509_TRUSTED_CA_FILE` is set, the certificate chains to one of those CAs, and is not revoked
-  when `X509_CHECK_REVOCATION=true`
+  when `X509_CHECK_REVOCATION=true`. In header mode this check is required: without
+  `X509_TRUSTED_CA_FILE` a forwarded certificate is refused
 
 Group membership, administrator status and permissions work exactly as they do for password sign-ins.
 
@@ -199,20 +202,31 @@ and API services. The bundled `templates-mtls` nginx configuration:
 - listens with HTTPS on 8443 and redirects plain HTTP on 8080 to it
 - requests a certificate with `ssl_verify_client optional` (depth 3, TLS 1.2/1.3), so password
   sign-in keeps working
-- forwards `$ssl_client_escaped_cert` **only** when verification succeeded and **only** to
-  `/api/auth/x509` and `/api/auth/me`. Every other request gets an empty header
-- always overwrites any client-supplied `X-SSL-Client-Cert`
+- forwards `$ssl_client_escaped_cert` in `X509_HEADER` **only** when verification succeeded and
+  **only** to `/api/auth/x509` and `/api/auth/me`. Every other request gets an empty header
+- always overwrites any client-supplied copy of that header, and removes `X-SSL-Client-Cert` when
+  it is not the header in use
+- sends `X-DSP-Proxy-Secret` with the proxy secret on every request to the API, replacing any value
+  a client sent
 
 ```ini
 X509_ENABLED=true
 X509_SOURCE=header
 X509_HEADER=X-SSL-Client-Cert
 X509_TRUSTED_PROXIES=10.0.0.0/8;172.16.0.0/12;192.168.0.0/16   # compose network
+X509_PROXY_SECRET_FILE=/run/secrets/dsp-proxy-secret            # or X509_PROXY_SECRET
 X509_TRUSTED_CA_FILE=/certs/ca.pem
 X509_USER_FILTER=(&(objectClass=inetOrgPerson)(uid={{cn}}))
 FORWARD_HEADERS_STRATEGY=framework
 COOKIE_SECURE=true
 ```
+
+The web tier must have the same proxy secret as the API (see [Web tier](#web-tier-nginx)). In
+header mode the API refuses to start without the proxy secret or `X509_TRUSTED_CA_FILE`, with an
+error that starts `Refusing to start: certificate sign-in through a proxy (X509_ENABLED=true,
+X509_SOURCE=header) is not secure as configured:` and names what is missing. A proxy other than the
+bundled nginx must send `X-DSP-Proxy-Secret` with every request to the API, and remove any copy of
+it and of the certificate header that a client sends.
 
 ### API terminates mutual TLS (servlet mode)
 
@@ -252,8 +266,9 @@ web tier passes TLS straight through to the API.
 ## Web tier (nginx)
 
 The `web` image renders `${NGINX_ENVSUBST_TEMPLATE_DIR}/*.template` into
-`/opt/app-root/etc/dsp.d/` at start. Only `${API_URL}`, `${HTTPS_PORT_SUFFIX}` and
-`${NGINX_LOCAL_RESOLVERS}` are substituted.
+`/opt/app-root/etc/dsp.d/` at start. Only `${API_URL}`, `${HTTPS_PORT_SUFFIX}`,
+`${NGINX_LOCAL_RESOLVERS}` and the proxy headers built from the X.509 settings below are
+substituted. The rendered files hold the proxy secret, so only their owner can read them.
 
 | Variable | Default | Description |
 |---|---|---|
@@ -261,6 +276,9 @@ The `web` image renders `${NGINX_ENVSUBST_TEMPLATE_DIR}/*.template` into
 | `NGINX_ENVSUBST_TEMPLATE_DIR` | `/etc/nginx/templates` | `/etc/nginx/templates-mtls` for HTTPS with X.509 client certificates |
 | `HTTPS_PORT_SUFFIX` | *(empty)* | Port in HTTP→HTTPS redirects, for example `:8443`; empty for 443 |
 | `NGINX_LOCAL_RESOLVERS` | First `nameserver` in `/etc/resolv.conf` | DNS server used to resolve `API_URL` (Docker `127.0.0.11`, Podman aardvark-dns). IPv6 addresses go in brackets. The container exits if none is found |
+| `X509_PROXY_SECRET_FILE` / `X509_PROXY_SECRET` | *(empty)* | The proxy secret, the same value as the API's; the file is preferred. Sent to the API in `X-DSP-Proxy-Secret`. Letters, digits and `. _ ~ + / = -` only. Empty: `X-DSP-Proxy-Secret` is removed |
+| `X509_HEADER` | `X-SSL-Client-Cert` | The header the API reads the client certificate from (letters, digits and `-`) |
+| `X509_EDGE_TERMINATION` | `false` | `true` when a TLS proxy in front of the web tier verifies client certificates and always sets `X509_HEADER` itself: plain HTTP then passes that header on. Nothing else may then reach the web tier |
 
 Behaviour of the bundled server configuration:
 
@@ -269,10 +287,14 @@ Behaviour of the bundled server configuration:
 | Listen | `8080` (HTTP); `8443 ssl` in the mTLS template |
 | Request body limit | `client_max_body_size 5m` (schema imports) |
 | Header buffers | `large_client_header_buffers 4 32k` (matches the API's 32 KB) |
-| `/api/` proxy | `proxy_read_timeout 120s`; overwrites `X-Forwarded-For` with `$remote_addr`, sets `X-Forwarded-Proto` and `X-Forwarded-Host` |
+| `/api/` proxy | `proxy_read_timeout 120s`; overwrites `X-Forwarded-For` with `$remote_addr`, sets `X-Forwarded-Proto` and `X-Forwarded-Host`; sets `X-DSP-Proxy-Secret`. On plain HTTP, removes `X-SSL-Client-Cert` and `X509_HEADER` from client requests, unless `X509_EDGE_TERMINATION=true`. In the mTLS template, sets `X509_HEADER` to the verified certificate |
 | Security headers | `X-Content-Type-Options nosniff`, `X-Frame-Options DENY`, `Referrer-Policy same-origin`; plus `Strict-Transport-Security max-age=31536000` in the mTLS template |
 | Caching | `/assets/` expires after 1 year; the app shell (`/` → `index.html`) is never cached |
 | Logs | Access log to stdout, error log to stderr |
+
+The container exits at start with a `dsp-entrypoint:` error when the proxy secret contains other
+characters, `X509_PROXY_SECRET_FILE` cannot be read, `X509_HEADER` is not a header name, or
+`X509_EDGE_TERMINATION` is neither `true` nor `false`.
 
 !!! tip "Kubernetes"
     nginx doesn't apply DNS search domains, so give `API_URL` a fully qualified service name
@@ -290,9 +312,12 @@ Behaviour of the bundled server configuration:
 | `HTTPS_PORT` | `8443` | HTTPS port (mTLS overlay) |
 | `HTTPS_PORT_SUFFIX` | `:<HTTPS_PORT>`, empty for 443 | Port shown in redirects |
 | `JAVA_TOOL_OPTIONS` | *(empty)* | Extra JVM options for the API |
+| `X509_PROXY_SECRET` | 64 hex characters, generated by `install.sh` | The X.509 proxy secret, given to both the API and the web container. To change it, set a new value (at least 32 characters) and run `./portal.sh up` |
 
 The packaged compose file fixes `DATA_DIR=/data`, `PORT=3001` and
-`FORWARD_HEADERS_STRATEGY=framework` for the API, and passes everything else from `.env`.
+`FORWARD_HEADERS_STRATEGY=framework` for the API, and passes everything else from `.env`. The web
+container gets `X509_PROXY_SECRET`, `X509_HEADER` and `X509_EDGE_TERMINATION` from `.env`; the mTLS
+overlay fixes the last two (`X-SSL-Client-Cert`, `false`).
 
 ## Configuration store
 
@@ -373,6 +398,8 @@ Other files in `DATA_DIR`:
     X509_SOURCE=servlet
     X509_HEADER=X-SSL-Client-Cert
     X509_TRUSTED_PROXIES=127.0.0.1/32;::1/128
+    X509_PROXY_SECRET_FILE=
+    X509_PROXY_SECRET=
     X509_TRUSTED_CA_FILE=
     X509_CHECK_REVOCATION=false
     X509_MAPPING=filter

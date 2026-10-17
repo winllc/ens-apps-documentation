@@ -324,7 +324,7 @@ who made a change. The portal records it instead.
 | Recorded | Activity names | Includes |
 |---|---|---|
 | Entries created, updated, renamed, deleted (through a directory or **My profile**) | `entry.create`, `entry.update`, `entry.self_update`, `entry.delete` | Each changed attribute's values before and after. A delete keeps everything the entry held |
-| Sign-ins and sign-outs (password or certificate) | `auth.login`, `auth.logout` | For failures: the name tried, or the certificate subject, serial and issuer, and the reason |
+| Sign-ins and sign-outs (password or certificate) | `auth.login`, `auth.logout` | For failures: the name tried, or the certificate subject, serial and issuer, and the reason. A certificate header that did not come from the portal's proxy is recorded with `reasonCode` `untrusted_certificate_header` and the connecting `peerAddress` |
 | Configuration changes | `grant.save`, `grant.revoke`, `definition.*`, `form.*`, `schema.import`, `schema.attribute_type.save/delete`, `schema.object_class.save/delete`, `dashboard.*`, `analysis.*` | The settings that changed, before and after |
 | Analysis CSV exports | `analysis.export` | Which analysis or run |
 

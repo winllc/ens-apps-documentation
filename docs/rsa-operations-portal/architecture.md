@@ -10,7 +10,7 @@ The root `pom.xml` (`com.winllc.rsaapp:rsaapp:1.0-SNAPSHOT`, packaging `pom`) bu
 | `rsaapp-connector` | `com.winllc.rsaapp.connector:rsaapp-connector` | war (deployed in Tomcat in the Connector image) | Implements `RSAAuthManagerServiceInterface` with the RSA AM SDK and exports it with Spring's `HessianServiceExporter` at `/connector`. |
 | `rsaapp-portal` | `rsaapp-portal` | Spring Boot jar | The web application. Its main class is `com.winllc.rsaapp.portal.configuration.AppConfig`. |
 
-The release package's `util/` folder holds operational scripts (`check-env.sh`, `backupdb.sh`); it is not a Maven module.
+The release package's `util/` folder holds operational scripts (`check-env.sh`, `split-env.sh`, `backupdb.sh`); it is not a Maven module.
 
 ## Runtime components
 
@@ -100,7 +100,7 @@ Hibernate manages the tables (`ddl-auto=update`, physical naming strategy `Physi
 | `Appointment` | User appointments with a Trusted Agent (type, date, time, requester, certificate DN, confirmed/cancelled, notes) |
 | `UserTokenEnrollment` | Token distribution and enrollment records (status `DISTRIBUTED` or `COMPLETED`, allowed-to-enroll date, certificate DN, last reminder sent) |
 | `PinSetTracker` | Tokens being watched by the PIN-check job, with a unique reset code used in emailed links |
-| `CertTokenMapping` | Associations between a client certificate DN and a user ID and token serial, used for self-service PIN reset |
+| `CertTokenMapping` | Associations between a client certificate DN and a user ID and token serial. Read only by the certificate-based PIN reset; nothing creates new ones, and the PIN-check reset link records none |
 | `UserExemptionRequest` | MFA exemption requests and their review outcome |
 | `SystemNotification` | Home-page banners (level `INFO`/`ALERT`/`CRITICAL`, expiry) |
 | `AuditEvent` | Audit trail (see the event types below) |
@@ -120,7 +120,7 @@ The jobs are registered in `applicationContext.xml` and run on the `cronTaskExec
 | `resyncta` | `ReSyncTrustedAgentsCron` | `0 30 0 ? * *` | Reconciles the local `TrustedAgent` table with the users who hold the mapped `TRUSTED_AGENT` admin role in RSA AM: adds missing agents, marks agents who lost the role inactive, refreshes name and email, and pushes the PMO role to AM for agents flagged as PMO locally. |
 | `lostTokenThresholdMonitor` | `LostTokenThresholdMonitorCron` | `0 35 0 ? * *` | Finds users who lost at least `tokens.lost` tokens within `window.inDays` days, records an audit event, and emails the list to `mfa.group.email`. **Debug is `true` by default**, so no email is sent until it is set to `false`. |
 | `sendDelayedTokenRegistrationEmails` | `SendDelayedTokenRegistrationEmailsCron` | `0 32 0 ? * *` | For distributed tokens whose allowed enrollment date has arrived, sends the registration email, and repeats every `daysBetweenReminderEmails` days. |
-| `tokenPinCheck` | `ResetTokenPinCheckCron` | `0 30 0 ? * *` | For assigned tokens that have not authenticated within `minutesSinceLastLoginThreshold` minutes, emails the user either a "set your initial PIN" link (token in new-PIN mode) or a "check your PIN" link with a one-time reset code (`/user/pinReset/start/{code}`). Throttled by `minutesSinceLastEmailSentThreshold`. |
+| `tokenPinCheck` | `ResetTokenPinCheckCron` | `0 30 0 ? * *` | For assigned tokens unused for `daysSinceLastLogin` (60) days, emails the user either a "set your initial PIN" reminder (token still waiting for its first PIN) or a "check your PIN" link with a reset code (`/user/pinReset/start/{code}`) that works for `resetLinkValidDays` (14) days. At most one email per token every `daysBetweenReminderEmails` (14) days; disabled and locked accounts are skipped. |
 
 The last-run details are held **in memory only**. The PMO can see them, and trigger any job, at **Admin → Manual Run Cron Jobs** (`/manualCron`). A job whose `enabled` flag is `false` does nothing, even when triggered by hand.
 

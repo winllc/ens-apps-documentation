@@ -18,7 +18,7 @@ referenced here, see [Configuration](configuration.md).
 |---|---|
 | **LDAP directory** | Publishing `icOrgPerson` / `icOrgServer` entries, or equivalents with the attribute names mapped in configuration. Use `ldaps://` for anything but a lab. |
 | **Service account** | A read-only account is enough: it reads people, servers and their certificates. It needs write access only if you enable certificate clean-up or editable attributes. |
-| **An administrator** | At least one person to name in the admin identifiers: an address, uid or common name the directory knows them by. |
+| **An administrator** | At least one person to name in the admin identifiers: an address the directory publishes for them, or their uid. Not a common name. |
 | **An ENS license** | An evaluation, or the license issued against your order, from the ENS licensing portal. See [Licensing](../licensing.md). |
 | **SMTP server** *(optional)* | For the email round-up and the email alert channel. |
 | **Keystores** *(optional)* | A PKCS#12 key store and trust store, if users will sign in with X.509 client certificates. |
@@ -133,6 +133,10 @@ docker compose down                    # stop (data kept)
     installation id, so the installation gets a new id and a bound license must be re-bound.
 
 ### 6. Upgrade with upgrade.sh
+
+Before upgrading, check that `CERT_ALERT_SECURITY_ADMIN_IDENTIFIERS` in the old `.env` names each
+administrator by an address the directory publishes for them or by their uid. A common name,
+display name or preferred name, or an address added in CertAlert, does not grant `ROLE_ADMIN`.
 
 Unpack the new release next to the old one and point it at the old directory:
 
@@ -322,8 +326,9 @@ helm upgrade cert-alert oci://ghcr.io/winllc/charts/cert-alert --version X.Y.Z \
   --namespace cert-alert -f cert-alert-values.yaml
 ```
 
-Back up the database first. The pod is replaced (only one replica runs), the schema is migrated
-on start, and the license PVC is kept with the installed license and the installation id.
+Back up the database first, and check that `security.adminIdentifiers` names each administrator
+by an address the directory publishes for them or by their uid, not by a common name. The pod is
+replaced (only one replica runs), the schema is migrated on start, and the license PVC is kept with the installed license and the installation id.
 Migrations are not undone by `helm rollback`: going back means restoring the backup.
 
 ### 7. Uninstall

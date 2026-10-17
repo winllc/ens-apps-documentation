@@ -18,8 +18,8 @@ property.
 | JVM options | `JAVA_OPTS="-Dapplication.timezone=America/Chicago"` | The image passes `$JAVA_OPTS` to `java`. Keep the default `-XX:MaxRAMPercentage=75.0` when you set it. |
 
 !!! warning "Override every secret"
-    The packaged `application.yml` contains development passwords for the keystores, the database,
-    the LDAP bind and SMTP. Override them all in production. See [Security](security.md).
+    The packaged `application.yml` contains development passwords for the database, the LDAP bind
+    and SMTP. Override them all in production. See [Security](security.md).
 
 In the tables below, **Packaged** is the value in the packaged `application.yml`, and **Built-in**
 is the value the code uses when the property is not set anywhere. A dash means there is none.
@@ -30,13 +30,20 @@ is the value the code uses when the property is not set anywhere. A dash means t
 |---|---|---|---|
 | `server.port` | `SERVER_PORT` | `8181` | Listener port, for HTTP or, with TLS on, HTTPS. Leave it at 8181: the release package and the Helm chart expect it. The package publishes it on the host as `READYROOM_PORT`. |
 | `server.ssl.enabled` | `SSL_ENABLED` | `false` | Serve HTTPS. Client-certificate sign-in, and so the Windows client, needs it. Helm: `tls.enabled`. |
-| `server.ssl.key-store` | `SERVER_SSL_KEYSTORE` | `classpath:winhal.p12` | Server keystore. Use `file:/path/server.p12` in production. |
-| `server.ssl.key-store-password` | `SERVER_SSL_KEYSTOREPASSWORD` | `capassword` | Keystore password. |
+| `server.ssl.key-store` | `SERVER_SSL_KEYSTORE` | – | Server keystore, for example `file:/path/server.p12`. Required with TLS on: none is packaged. The release package and the Helm chart set it for you. |
+| `server.ssl.key-store-password` | `SERVER_SSL_KEYSTOREPASSWORD` | – | Keystore password. |
 | `server.ssl.key-store-type` | `SERVER_SSL_KEYSTORETYPE` | `PKCS12` | |
-| `server.ssl.client-auth` | `SERVER_SSL_CLIENTAUTH` | `want` | `want` asks for a client certificate but allows form login without one. `need` would refuse every connection without a certificate, including the logoff call and browsers that use the login form. |
-| `server.ssl.trust-store` | `SERVER_SSL_TRUSTSTORE` | `classpath:truststore.p12` | CAs whose client certificates are accepted. |
-| `server.ssl.trust-store-password` | `SERVER_SSL_TRUSTSTOREPASSWORD` | `changeit` | |
+| `server.ssl.client-auth` | `SERVER_SSL_CLIENTAUTH` | `want` | `want` asks for a client certificate but allows form login without one. `need` would refuse every connection without a certificate, including the logoff call and browsers that use the login form. `none` turns certificate sign-in off, and with it the need for a truststore. |
+| `server.ssl.trust-store` | `SERVER_SSL_TRUSTSTORE` | – | CAs whose client certificates are accepted. Required with TLS on while `client-auth` is `want` or `need`: none is packaged, and ReadyRoom does not fall back to Java's default CAs. Put only the CAs that issue your users' certificates in it. |
+| `server.ssl.trust-store-password` | `SERVER_SSL_TRUSTSTOREPASSWORD` | – | |
 | `server.ssl.trust-store-type` | `SERVER_SSL_TRUSTSTORETYPE` | `PKCS12` | |
+| `server.servlet.session.cookie.same-site` | – | `lax` | The session cookie is not sent with another site's posts or scripted requests, but is sent when someone follows a link from elsewhere, such as an absence notification email. |
+| `server.servlet.session.cookie.http-only` | – | `true` | |
+| `server.servlet.session.cookie.secure` | `SESSION_COOKIE_SECURE` | the value of `SSL_ENABLED` | Mark the session cookie `Secure`. Set `SESSION_COOKIE_SECURE=true` when a reverse proxy terminates TLS for browsers and ReadyRoom itself serves HTTP. |
+
+With TLS on, ReadyRoom refuses to start if no keystore is set, or if no truststore is set while
+`client-auth` is `want` or `need`. The error names the settings to add (for example
+`server.ssl.enabled is true but no key store is configured.`).
 
 ## Database
 
@@ -139,6 +146,8 @@ Admins and managers can evict cached group trees from **Settings** (see
 | `application.refresh-user-records-cron.fixed-rate` | `3600000` | `3600000` | Milliseconds between refreshes (fixed delay). |
 | `application.refresh-user-records-cron.initial-delay` | `300000` | `300000` | Delay after startup before the first refresh, in ms. |
 | `spring.task.scheduling.pool.size` | `3` | – | One thread per job, so a slow run of one job does not delay the others. |
+| `application.logoff.session-max-age-hours` | `168` | `168` | Env var `APPLICATION_LOGOFF_SESSIONMAXAGEHOURS`. How long after a check-in its `sessionId` can identify the Windows client's logout (a week, so a workstation left logged on over a weekend still records its logout). A later logout, or a second one with the same id, is refused. |
+| `application.logoff.refused-per-minute` | `30` | `30` | Env var `APPLICATION_LOGOFF_REFUSEDPERMINUTE`. Refused logouts without a sign-in (unknown, used or expired `sessionId`) allowed from one client address per minute. Past it, the next ones get `429` and are no longer audited one by one. A logout with a usable `sessionId` is never counted. `0` turns the limit off. |
 
 What each job does is described in [Operations](operator-guide.md#scheduled-jobs).
 
@@ -193,7 +202,7 @@ For the setup procedure, see [Security](security.md#windows-kerberos-sign-in).
 |---|---|---|
 | `logging.level.root` | `info` | |
 | `logging.level.com.winllc.innoutwork` | `info` | At `info`: records written by jobs, permission grants and revocations, report generation, org-chart rebuilds and job summaries. Set it to `debug` for per-query detail, timings and authorization decisions. |
-| `management.endpoints.web.exposure.include` | `health,info,metrics,env` | Actuator endpoints exposed under `/actuator`. They need **no authentication**; see [Security](security.md#unauthenticated-endpoints). |
+| `management.endpoints.web.exposure.include` | `health` | Actuator endpoints exposed under `/actuator`. `health` needs no authentication and shows the status only. Any other endpoint you add needs an `ADMIN` sign-in; see [Security](security.md#unauthenticated-endpoints). |
 | `application.diagnostics.request-metrics` | `false` | When `true`, every request logs `GET /app/home -> 200: <n> SQL statement(s), <n> LDAP operation(s), <n>ms`. Use it for measuring, not for normal running. |
 
 ## Example: production settings
@@ -240,7 +249,6 @@ APPLICATION_INACTIVECRON_INITIALDELAY=60000
 APPLICATION_SENDABSENTNOTIFICATIONCRON_FIXEDRATE=900000
 APPLICATION_SENDABSENTNOTIFICATIONCRON_INITIALDELAY=60000
 APPLICATION_UPDATEPROFILEURL=https://helpdesk.example.com/
-MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE=health
 ```
 
 The attribute names `managerId` and `employeeNumber` above are examples. Use whichever attributes
@@ -248,8 +256,11 @@ hold reporting lines in your directory.
 
 ## Windows client parameters
 
-The workstation agent is configured by `inoutworker.config.json` and command-line parameters.
-Explicit parameters win over the file, and the file wins over the script's built-in defaults. The
+The workstation agent is configured by `inoutworker.config.json` and command-line parameters. The
+file is read from the path given with `-ConfigPath`, or else from the script's own folder, where the
+installer writes it. Explicit parameters win over the file, and the file wins over the script's
+built-in defaults. The Logout task also passes `-UserSid`, the SID of the user whose session ended,
+from event 4647. The
 full reference, including the installer's parameters, is on the [Windows client](windows-client.md#configuration)
 page. In summary:
 

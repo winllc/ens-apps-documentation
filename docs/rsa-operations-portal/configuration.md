@@ -1,13 +1,21 @@
 # Configuration
 
-With the release package, all runtime configuration lives in one file, **`.env`**, in the install folder. `install.sh` creates it from the package's `env.template` (mode 600), where every setting is commented. Both application containers and the MySQL container read it, and it is mounted into them in several ways (see [How .env is consumed](#how-env-is-consumed)). With the Helm chart, the same settings come from your values file: [Installation → Write your values](install.md#3-write-your-values) maps each value to its setting below, and any other Portal setting goes in `config`.
+With the release package, the runtime configuration lives in three files in the install folder, one per service. Each file is given only to its own service:
+
+| File | Created from | Service | Holds |
+|---|---|---|---|
+| **`.env`** | `env.template` | Portal, which also reads it as its `application.properties` | The Portal settings on this page |
+| **`connector.env`** | `connector.env.template` | Connector | `CONNECTOR_AUTH_PASSWORD`, and `JAVA_OPTS` with the [Connector settings](#connector-rsa-authentication-manager-settings) as `-D` options |
+| **`mysql.env`** | `mysql.env.template` | MySQL | `MYSQL_ROOT_PASSWORD`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD` |
+
+`install.sh` creates each file from its template (mode 600); the templates comment every setting. See [How the settings files are consumed](#how-the-settings-files-are-consumed). With the Helm chart, the same settings come from your values file: [Installation → Write your values](install.md#3-write-your-values) maps each value to its setting below, and any other Portal setting goes in `config`.
 
 This page lists every setting the code reads, grouped by component, with the default packaged in the images. Several of those defaults are development hostnames and credentials that **must** be overridden.
 
 !!! danger "Packaged sample credentials"
     The `application.properties` and `config.properties` packaged in the images contain sample passwords for the datasource, the AD bind account, the RSA admin user and the command client. Treat them as public and override every one of them.
 
-## How `.env` is consumed
+## How the settings files are consumed
 
 This applies to the release package. The Helm chart sets the same settings as environment variables and `-D` options.
 
@@ -15,33 +23,40 @@ This applies to the release package. The Helm chart sets the same settings as en
 |---|---|---|
 | **portal** | `env_file: .env` (and `global.env`, which holds the release version) | Every `key=value` becomes an environment variable. Spring Boot resolves property names from environment variables, and the image's entry point uses `$JAVA_OPTS`. |
 | **portal** | `./.env:/application.properties` | The container's working directory is `/`, so Spring Boot also loads `.env` as an external `application.properties`, which overrides the defaults packaged in the image. |
-| **connector** | `env_file: .env` | Environment variables. Tomcat's `catalina.sh` honours `JAVA_OPTS`. |
-| **connector** | `./.env:/properties/dev.env` | Readable as a properties file by the RSA SDK configuration once `config.properties.location` points at it (see [Connector settings](#connector-rsa-authentication-manager-settings)). |
-| **mysql** | `env_file: .env` | Standard `mysql` image variables: `MYSQL_ROOT_PASSWORD`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`. |
+| **connector** | `env_file: connector.env` | Environment variables. Tomcat's `catalina.sh` honours `JAVA_OPTS`, which carries the Connector settings as `-D` options. |
+| **mysql** | `env_file: mysql.env` | Standard `mysql` image variables: `MYSQL_ROOT_PASSWORD`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`. |
+
+The Portal, which users reach, never receives the AM credentials or the MySQL root password. `util/check-env.sh` refuses a `.env` that holds the Connector's `-D` options in `JAVA_OPTS` or any `MYSQL_*` setting.
 
 ```text
-# .env (excerpt; values are placeholders)
-JAVA_OPTS=-Djava.security.egd=file:/dev/./urandom -Dhttps.protocols=TLSv1.2 -Djdk.tls.client.protocols=TLSv1.2 -Dlogging.config=/log4j2.xml -Dconfig.properties.location=classpath:config.properties -Djava.naming.provider.url=t3s://am-primary.example.org:7002 ...
-MYSQL_ROOT_PASSWORD=<root password>
-MYSQL_PASSWORD=<app password>
-
-# --- Portal ---
+# .env (the Portal; excerpt, values are placeholders)
+CONNECTOR_AUTH_PASSWORD=<shared secret>
 spring.datasource.url=jdbc:mysql://mysql:3306/RSAAPP
 spring.datasource.username=appuser
 spring.datasource.password=<app password>
 spring.mail.host=smtp.example.org
 ...
+
+# connector.env (the Connector)
+CONNECTOR_AUTH_PASSWORD=<shared secret>
+JAVA_OPTS=-Djava.security.egd=file:/dev/./urandom -Dhttps.protocols=TLSv1.2 -Djdk.tls.client.protocols=TLSv1.2 -Dlogging.config=/log4j2.xml -Dconfig.properties.location=classpath:config.properties -Djava.naming.provider.url=t3s://am-primary.example.org:7002 ...
+
+# mysql.env (MySQL)
+MYSQL_ROOT_PASSWORD=<root password>
+MYSQL_DATABASE=RSAAPP
+MYSQL_USER=appuser
+MYSQL_PASSWORD=<app password>
 ```
 
-Keep `$` and ` #` out of the values: Docker Compose replaces `$name` with a variable, and ` #` starts a comment. `util/check-env.sh` reports both, and any `CHANGE_ME` left in the file.
+Keep `$` and ` #` out of the values: Docker Compose replaces `$name` with a variable, and ` #` starts a comment. `util/check-env.sh` reports both, and any `CHANGE_ME` left in the files.
 
 ## Container and JVM settings
 
 | Name | Default | Used by | Description |
 |---|---|---|---|
-| `JAVA_OPTS` | `-Djava.security.egd=file:/dev/./urandom -Dhttps.protocols=TLSv1.2 -Djdk.tls.client.protocols=TLSv1.2 -Dlogging.config=/log4j2.xml` (set in both images) | portal, connector | JVM options. Because `.env` is an `env_file` for both containers, its `JAVA_OPTS` line **replaces** the image default in both. Keep the default flags when you change it. In the release package, `JAVA_OPTS` also carries the RSA settings below, passed as `-D` system properties. The Helm chart builds them from `authManager.*`. The connector gives system properties precedence (`SYSTEM_PROPERTIES_MODE_OVERRIDE`). |
-| `MYSQL_ROOT_PASSWORD` | none | mysql, `util/backupdb.sh`, `upgrade.sh` | Root password of the MySQL container. Read once, when the data volume is first created. The backup scripts read it inside the `mysql` container, so it never appears on a command line. |
-| `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD` | `RSAAPP`, `appuser`, none | mysql | The database and application user MySQL creates on its first start. `MYSQL_PASSWORD` must equal `spring.datasource.password`. |
+| `JAVA_OPTS` | `-Djava.security.egd=file:/dev/./urandom -Dhttps.protocols=TLSv1.2 -Djdk.tls.client.protocols=TLSv1.2 -Dlogging.config=/log4j2.xml` (set in both images) | portal, connector | JVM options. A `JAVA_OPTS` line in a service's settings file **replaces** that image's default, so keep the default flags when you set it. The Portal's is optional, in `.env`; `env.template` leaves it commented out, so the image default applies. The Connector's is in `connector.env` and carries the RSA settings below, passed as `-D` system properties. The Helm chart builds them from `authManager.*`. The connector gives system properties precedence (`SYSTEM_PROPERTIES_MODE_OVERRIDE`). |
+| `MYSQL_ROOT_PASSWORD` | none | mysql, `util/backupdb.sh`, `upgrade.sh` | Root password of the MySQL container, in `mysql.env`. Read once, when the data volume is first created. The backup scripts read it inside the `mysql` container, so it never appears on a command line. |
+| `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD` | `RSAAPP`, `appuser`, none | mysql | In `mysql.env`. The database and application user MySQL creates on its first start. `MYSQL_PASSWORD` must equal `spring.datasource.password` in `.env`. |
 | `MFAAPP_PROPERTY_FILES_LOCATION` | unset | portal | If set to an existing directory, **every regular file** under it is loaded as a placeholder property source **instead of** `messages.file.location` and `email-description.location`. Startup fails with "No property files loaded from custom location" if the directory has no files. |
 
 ### Ports and volumes (release package `docker-compose.yml`)
@@ -49,7 +64,7 @@ Keep `$` and ` #` out of the values: Docker Compose replaces `$name` with a vari
 | Service | Published ports | Volumes (host → container) |
 |---|---|---|
 | `portal` | `8080:8080`, `8443:8443` | `./default_build/properties:/custom`, `./default_build/static:/static`, `./default_build/email-templates:/resources/email-templates`, `./default_build/ssl:/ssl`, `./default_build/portal/log4j2.xml:/log4j2.xml`, `./logs:/var/log`, `ens-license:/var/lib/ens/mfa-portal`, `./.env:/application.properties` |
-| `connector` | none (reached internally as `connector:8080`) | `./default_build:/custom`, `./.env:/properties/dev.env`, `./logs:/var/log` |
+| `connector` | none (reached internally as `connector:8080`) | `./default_build:/custom`, `./logs:/var/log` |
 | `mysql` | none | named volume `mysql_data:/var/lib/mysql` |
 
 The Portal's container health check is `curl -fs http://localhost:8080/login`. The Portal starts after the `connector` has started and once `mysql` passes `mysqladmin ping`.
@@ -166,8 +181,12 @@ For every job `<name>` in `expiring`, `appointmentupcoming`, `resyncta`, `lostTo
 | `cron.sendDelayedTokenRegistrationEmails.enabled` / `.debug` / `.cron` | `true` / `false` / `0 32 0 ? * *` |
 | `cron.sendDelayedTokenRegistrationEmails.daysBetweenReminderEmails` | `3` |
 | `cron.tokenPinCheck.enabled` / `.debug` / `.cron` | `true` / `false` / `0 30 0 ? * *` |
-| `cron.tokenPinCheck.minutesSinceLastLoginThreshold` | `15` |
-| `cron.tokenPinCheck.minutesSinceLastEmailSentThreshold` | `5` |
+| `cron.tokenPinCheck.daysSinceLastLogin` | `60` |
+| `cron.tokenPinCheck.daysBetweenReminderEmails` | `14` |
+| `cron.tokenPinCheck.resetLinkValidDays` | `14` |
+| `cron.tokenPinCheck.resetLinkMaxAttempts` | `5` |
+
+`resetLinkValidDays` is how long the reset link in a PIN-check email works, and `resetLinkMaxAttempts` how many tokencodes one link accepts before it refuses more.
 
 The descriptions default to: "Send Expiring Token Reminder Cron", "Send Upcoming Appointments Email Cron", "Re-sync Trusted Agents with Authentication Manager Cron", "Identify Users with multiple lost Tokens", "Send Delayed Token Registration Emails Cron" and "Reset Token Pin Checker". [Architecture](architecture.md#scheduled-jobs) describes what each job does.
 
@@ -227,7 +246,7 @@ The placeholder order is fixed by the code, so keep the same `{n}` meanings when
 
 ## Connector (RSA Authentication Manager) settings
 
-The connector resolves these through `CommandClientAppContextOverrides.xml` from the file named by **`config.properties.location`** (a JVM system property inside `JAVA_OPTS`: the release package keeps `-Dconfig.properties.location=classpath:config.properties` and passes the settings below as `-D` options; `file:/properties/dev.env` would read them from `.env` instead), with system properties taking precedence. The packaged `WEB-INF/config.properties` contains development values. Override all of them.
+The connector resolves these through `CommandClientAppContextOverrides.xml` from the file named by **`config.properties.location`** (a JVM system property inside the Connector's `JAVA_OPTS` in `connector.env`: the release package keeps `-Dconfig.properties.location=classpath:config.properties` and passes the settings below as `-D` options), with system properties taking precedence. The packaged `WEB-INF/config.properties` contains development values. Override all of them.
 
 | Name | Default (packaged `config.properties`) | Description |
 |---|---|---|
@@ -256,11 +275,13 @@ The connector resolves these through `CommandClientAppContextOverrides.xml` from
 
 ## Example: minimal values to change for a new install
 
-The settings that must change for a new install, as they appear in the release package's `.env` (the RSA AM settings as `-D` options in `JAVA_OPTS`). With Helm, use the values listed in [Installation → Write your values](install.md#3-write-your-values).
+The settings that must change for a new install, by the release package file they go in. The RSA AM settings are `-D` options in `JAVA_OPTS` in `connector.env`. `CONNECTOR_AUTH_PASSWORD` goes in both `.env` and `connector.env`, with the same value. With Helm, use the values listed in [Installation → Write your values](install.md#3-write-your-values).
 
-=== "RSA AM (connector)"
+=== "connector.env (RSA AM)"
 
     ```properties
+    CONNECTOR_AUTH_PASSWORD=<long random value, the same as in .env>
+    # -D options inside JAVA_OPTS:
     java.naming.provider.url=t3s://am1.example.org:7002
     com.rsa.cmdclient.user=CmdClient_xxxxxxxx
     com.rsa.cmdclient.user.password=xxxxxxxxxx
@@ -275,9 +296,10 @@ The settings that must change for a new install, as they appear in the release p
     rsa.authmanager.securityDomain.name=SystemDomain
     ```
 
-=== "Portal"
+=== ".env (Portal)"
 
     ```properties
+    CONNECTOR_AUTH_PASSWORD=<long random value, the same as in connector.env>
     spring.datasource.url=jdbc:mysql://mysql:3306/RSAAPP
     spring.datasource.username=appuser
     spring.datasource.password=********
@@ -290,7 +312,7 @@ The settings that must change for a new install, as they appear in the release p
     role.mapped.3.rsaSecurityGuid=ims.<help desk role guid>
     ```
 
-=== "MySQL"
+=== "mysql.env (MySQL)"
 
     ```properties
     MYSQL_ROOT_PASSWORD=********

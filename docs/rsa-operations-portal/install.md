@@ -63,7 +63,7 @@ You also need, from RSA AM:
 |---|---|---|
 | Runs on | One Linux server with Docker | Kubernetes or OpenShift |
 | Database | MySQL container in the package | External MySQL 8.0 (embedded MySQL for evaluations only) |
-| Settings | `.env`, created from `env.template` | Helm values; secrets in Kubernetes Secrets |
+| Settings | `.env`, `connector.env` and `mysql.env`, created from their templates | Helm values; secrets in Kubernetes Secrets |
 | Offline install | Yes, the images are in the package | Yes, with the chart from the release download and mirrored images |
 | Upgrade | `upgrade.sh` | `helm upgrade` |
 | Backups | `upgrade.sh` backs up the database; `util/backupdb.sh` | Your database's own backups |
@@ -102,10 +102,12 @@ The package holds:
 | `install.sh` | First install |
 | `upgrade.sh` | Upgrade an existing installation to this version |
 | `docker-compose.yml` | The Portal, Connector and MySQL services, pinned to this version's images |
-| `env.template` | Every setting, commented. `install.sh` copies it to `.env`. |
+| `env.template` | The Portal's settings, commented. `install.sh` copies it to `.env`. |
+| `connector.env.template` | The Connector's settings: the AM connection and credentials. `install.sh` copies it to `connector.env`. |
+| `mysql.env.template` | MySQL's settings: the root and application user passwords. `install.sh` copies it to `mysql.env`. |
 | `license/` | Where you can put `license.lic` for `install.sh` and `upgrade.sh` to copy into the Portal |
 | `default_build/` | Branding, page text and e-mail templates the Portal mounts. `ssl/` holds the trust store. |
-| `util/` | `check-env.sh` (checks `.env`) and `backupdb.sh` (database backup) |
+| `util/` | `check-env.sh` (checks `.env`, `connector.env` and `mysql.env`), `split-env.sh` (splits a `.env` from an older release) and `backupdb.sh` (database backup) |
 | `images/` | The Portal, Connector and MySQL images (`docker save` archive) |
 | `README.md`, `GUIDE.md` | The package's quick start and the full administration guide |
 
@@ -115,19 +117,30 @@ The package holds:
 ./install.sh /opt/rsa-operations-portal
 ```
 
-`install.sh` copies the package to the install folder, loads the images and creates `.env` from `env.template` (mode 600). Then it stops and tells you what to fill in. Run `./install.sh` without a folder to install in the unpacked folder instead.
+`install.sh` copies the package to the install folder, loads the images and creates `.env`, `connector.env` and `mysql.env` from their templates (each mode 600). Then it stops and tells you what to fill in. Run `./install.sh` without a folder to install in the unpacked folder instead.
 
-### 4. Fill in .env
+### 4. Fill in the settings
 
-Edit `/opt/rsa-operations-portal/.env` and replace every `CHANGE_ME`. [Configuration](configuration.md) describes every setting. At a minimum:
+In `/opt/rsa-operations-portal`, replace every `CHANGE_ME` in the three settings files. Each service receives only its own file. [Configuration](configuration.md) describes every setting. At a minimum:
+
+`mysql.env` (MySQL):
 
 - [ ] `MYSQL_ROOT_PASSWORD`, `MYSQL_PASSWORD` (`MYSQL_DATABASE` is `RSAAPP` and `MYSQL_USER` is `appuser`)
-- [ ] `spring.datasource.password`, the same as `MYSQL_PASSWORD`
+
+`.env` (the Portal):
+
+- [ ] `spring.datasource.password`, the same as `MYSQL_PASSWORD` in `mysql.env`
 - [ ] `CONNECTOR_AUTH_PASSWORD`, any long random value: the Portal uses it to authenticate to the Connector
-- [ ] In `JAVA_OPTS`, the AM settings ([RSA Authentication Manager settings](#rsa-authentication-manager-settings)). Keep `-Dconfig.properties.location=classpath:config.properties` as it is.
 - [ ] `role.mapped.1.rsaSecurityGuid` (TRUSTED_AGENT), `role.mapped.2.rsaSecurityGuid` (PMO), `role.mapped.3.rsaSecurityGuid` (HELP_DESK)
 - [ ] `spring.mail.host`, `mail.smtp.host`, `mail.default.from`, `mfa.group.email`
 - [ ] `application.dns.name`: the URL users will reach
+
+`connector.env` (the Connector):
+
+- [ ] `CONNECTOR_AUTH_PASSWORD`, the same value as in `.env`
+- [ ] In `JAVA_OPTS`, the AM settings ([RSA Authentication Manager settings](#rsa-authentication-manager-settings)). Keep `-Dconfig.properties.location=classpath:config.properties` as it is.
+
+Never put the AM settings or the MySQL root password in `.env`: the Portal is the service users reach. `check-env.sh` refuses a `.env` that holds them.
 
 Keep `$` and ` #` out of the values. Docker Compose replaces `$name` with a variable, so a password `$ecret` arrives empty, and ` #` starts a comment. `check-env.sh` reports both.
 
@@ -141,7 +154,7 @@ Optional at this point. Save the license as `/opt/rsa-operations-portal/license/
 
 ### 6. Database
 
-Nothing to do. On its first start, the MySQL container creates the database `MYSQL_DATABASE` and the user `MYSQL_USER` with `MYSQL_PASSWORD`. The Portal then creates its tables itself (Hibernate `ddl-auto=update`).
+Nothing to do. On its first start, the MySQL container creates the database `MYSQL_DATABASE` and the user `MYSQL_USER` with `MYSQL_PASSWORD`, from `mysql.env`. The Portal then creates its tables itself (Hibernate `ddl-auto=update`).
 
 MySQL reads the `MYSQL_*` settings only when its data volume is new. Without `MYSQL_ROOT_PASSWORD` a new volume never initialises, and MySQL restarts with `Database is uninitialized and password option is not specified`. `check-env.sh` reports a missing setting.
 
@@ -152,7 +165,7 @@ cd /opt/rsa-operations-portal
 ./install.sh
 ```
 
-The second run checks `.env` with `util/check-env.sh`, starts the services with `docker compose up -d` and waits up to 300 seconds (`WAIT_SECONDS`) for the Portal to report healthy. It then copies `license/license.lic` into the Portal if there is one. Open `http://<server>:8080`.
+The second run checks `.env`, `connector.env` and `mysql.env` with `util/check-env.sh`, starts the services with `docker compose up -d` and waits up to 300 seconds (`WAIT_SECONDS`) for the Portal to report healthy. It then copies `license/license.lic` into the Portal if there is one. Open `http://<server>:8080`.
 
 Startup order: `mysql` must pass its `mysqladmin ping` health check, and `connector` must have started, before `portal` starts. On start, the Connector signs in to AM with `rsa.admin.user.id` and looks up the configured realm and security domain. If either lookup fails, the Connector's AM session check fails (see [Troubleshooting](troubleshooting.md)).
 
@@ -180,13 +193,25 @@ cd rsa-operations-portal-<new version>
 
 1. loads the new images; nothing changes if they do not load;
 2. backs up the database to `backups/RSAAPP-before-<version>-<time>.sql.gz` in the install folder (skip with `--no-backup`);
-3. updates the release files: `docker-compose.yml`, `env.template`, the scripts, `util/`, `default_build/portal/` and `default_build/log4j.xml`;
-4. lists the settings that are new in `env.template` and missing from `.env`, and checks `.env`;
-5. restarts on the new version and waits for the Portal to report healthy.
+3. updates the release files: `docker-compose.yml`, `env.template`, `connector.env.template`, `mysql.env.template`, the scripts, `util/`, `default_build/portal/` and `default_build/log4j.xml`;
+4. splits a `.env` from a release that kept every setting in that one file (see below);
+5. lists, for `.env`, `connector.env` and `mysql.env`, the settings that are new in the file's template and missing from it, and checks the three files;
+6. restarts on the new version and waits for the Portal to report healthy.
 
-It keeps `.env`, `license/`, your branding in `default_build/` (`properties`, `static`, `email-templates`, `ssl`), the logs, the database and the installed license (the `ens-license` volume). An installation from before the `ens-license` volume kept its license in `license/license.lic`; `upgrade.sh` copies it into the volume.
+It keeps `.env`, `connector.env`, `mysql.env`, `license/`, your branding in `default_build/` (`properties`, `static`, `email-templates`, `ssl`), the logs, the database and the installed license (the `ens-license` volume). An installation from before the `ens-license` volume kept its license in `license/license.lic`; `upgrade.sh` copies it into the volume.
 
 The Portal updates its database tables itself on the first start of the new version. To roll back, restore the backup `upgrade.sh` made and run the previous release's `upgrade.sh`. See [Operator Guide](operator-guide.md).
+
+**From a release with a single `.env`.** Older releases kept every setting in `.env` and gave it to every container, so the Portal received the AM credentials and the MySQL root password. `upgrade.sh` splits it with `util/split-env.sh`, and nothing needs editing:
+
+* `JAVA_OPTS`, with the AM settings, and a copy of `CONNECTOR_AUTH_PASSWORD` move to `connector.env`. JVM options of your own in the old `JAVA_OPTS` (`-Xmx…`) are kept for the Portal too, in `.env`.
+* The `MYSQL_*` settings move to `mysql.env`.
+* The original is kept as `.env.before-split.<time>` (mode 600), and the script prints what it moved. Running it again changes nothing.
+
+After such an upgrade:
+
+1. Once the Portal runs, delete `.env.before-split.*`: it still holds every secret.
+2. The Portal held the Command Client and SuperAdmin passwords before the upgrade. If it may have been compromised, change them in AM, then in `connector.env`, and run `docker compose up -d`.
 
 ## Install with Helm
 
@@ -196,7 +221,7 @@ The chart is `oci://ghcr.io/winllc/charts/rsa-operations-portal`, with the same 
 * the Connector as a second Deployment, with its own settings and the AM trust store;
 * optionally, an embedded MySQL StatefulSet for evaluations.
 
-The chart's `README.md` lists every value. Each `env.template` setting has a value.
+The chart's `README.md` lists every value. Each setting in the three templates (`env.template`, `connector.env.template`, `mysql.env.template`) has a value.
 
 ### 1. Create the Secrets
 
@@ -222,7 +247,7 @@ kubectl -n rsa-portal create secret generic rsa-portal-db --from-literal=passwor
 
 The Portal-to-Connector password needs no Secret: the chart generates one and keeps it across upgrades. To set your own, use `connector.auth.existingSecret`.
 
-The Connector receives its AM settings as `-D` options in `JAVA_OPTS`, as in the release package. Tomcat's start script splits and evaluates `JAVA_OPTS`, so keep spaces, quotes, `` ` `` and `$` out of the AM passwords.
+The Connector receives its AM settings as `-D` options in `JAVA_OPTS`, as in the release package's `connector.env`. Tomcat's start script splits and evaluates `JAVA_OPTS`, so keep spaces, quotes, `` ` `` and `$` out of the AM passwords.
 
 ### 2. Prepare the database
 
@@ -266,7 +291,7 @@ roles:
 
 The key values:
 
-| Value | `env.template` setting |
+| Value | Release package setting |
 |---|---|
 | `database.host`, `.port`, `.name`, `.username`, `.existingSecret` | `spring.datasource.url`, `.username`, `.password` |
 | `authManager.host`, `.port`, `.readOnlyHost` | `java.naming.provider.url`, `ims.soap.client.provider.url`, `ims.httpinvoker.client.provider.url`, `ims.httpinvoker.client.provider.readonly.url` |
@@ -455,7 +480,7 @@ Set them as `role.mapped.1.rsaSecurityGuid` (TRUSTED_AGENT), `role.mapped.2.rsaS
 
 ### RSA Authentication Manager settings
 
-In the release package these are `-D` options inside `JAVA_OPTS` in `.env`. The Helm chart builds them from `authManager.*`.
+In the release package these are `-D` options inside `JAVA_OPTS` in `connector.env`. The Helm chart builds them from `authManager.*`.
 
 | Setting | Value |
 |---|---|
@@ -494,7 +519,7 @@ The Portal needs an ENS Solutions license. Download an evaluation or your organi
 - [ ] The SMTP relay is reachable from the Portal.
 - [ ] `application.dns.name` (Helm: `publicUrl`) is the address users reach.
 - [ ] The license is installed, and you noted the installation id.
-- [ ] Release package: `.env` is mode 600. Helm: the license PVC is bound and you know its name.
+- [ ] Release package: `.env`, `connector.env` and `mysql.env` are mode 600. Helm: the license PVC is bound and you know its name.
 
 ## Verification
 

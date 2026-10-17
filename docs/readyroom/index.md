@@ -41,9 +41,9 @@ know where they are when they are not at a workstation.
 ```mermaid
 flowchart LR
     subgraph WS["Windows workstation"]
-        TS["Task Scheduler<br/>logon / lock / unlock / logoff"]
+        TS["Task Scheduler<br/>logon / lock / unlock / logoff / disconnect"]
         PS["Update-WorkStatus.ps1"]
-        SF[("%ProgramData%\\InOutWorker<br/>session.json, logs")]
+        SF[("%ProgramData%\\InOutWorker<br/>sessions (one file per user), logs")]
         TS --> PS
         PS <--> SF
     end
@@ -96,8 +96,8 @@ sequenceDiagram
     W->>C: Logon (30 s delay)
     C->>S: POST /api/check/in (client certificate or Kerberos)
     S->>DB: CHECK_IN record (DN from the certificate)
-    S-->>C: Record JSON including sessionId
-    C->>C: Cache sessionId in session.json
+    S-->>C: Record JSON including sessionId (only for check-in)
+    C->>C: Cache sessionId in the user's session file
     W->>C: Screen lock
     C->>S: POST /api/check/lock
     S->>DB: LOCK record (status AWAY)
@@ -106,12 +106,14 @@ sequenceDiagram
     S->>DB: UNLOCK record (or CHECK_IN if it is the first event today)
     W->>C: Logoff (runs as SYSTEM, profile gone)
     C->>S: POST /api/check/out {sessionId} (no authentication)
-    S->>DB: Look up the DN by sessionId and write a CHECK_OUT record
+    S->>DB: Find the check-in with that sessionId and write a CHECK_OUT under its DN
 ```
 
 Logoff cannot authenticate: by the time it runs, the user's profile and certificate store have been
 unloaded. So `/api/check/out` is the one unauthenticated check-in endpoint. The agent caches the
-`sessionId` returned at login, and the server uses it to find who is logging off.
+`sessionId` returned at login, and the server uses it to find who is logging off. It accepts a
+`sessionId` once, and only within 7 days of the check-in. Refused logouts are rate-limited per client
+address; a logout with a usable `sessionId` never is.
 
 ## Components
 
@@ -119,16 +121,16 @@ unloaded. So `/api/check/out` is the one unauthenticated check-in endpoint. The 
 |---|---|---|
 | Server | Container image `ghcr.io/winllc/in-n-out-work` (in the release package's `images/`, and run by the Helm chart) | Spring Boot 4 application: web UI, REST API, scheduled jobs, LDAP and database access. |
 | Web UI | Inside the server | Thymeleaf pages using the Tabler UI kit, Tabulator tables, FullCalendar, ApexCharts and flatpickr. |
-| Windows client | The release package's `windows-client/` folder | `Update-WorkStatus.ps1`, the `Install-InOutWorker.ps1` installer, a sample configuration file and four Task Scheduler XML definitions. See [Windows client](windows-client.md). |
-| Database scripts | The release package's `migrations/` folder; the Helm chart runs them in a Job | SQL run with `psql`. Hibernate creates the tables; these scripts add indexes and constraints. |
+| Windows client | The release package's `windows-client/` folder | `Update-WorkStatus.ps1`, the `Install-InOutWorker.ps1` installer, a sample configuration file and five Task Scheduler XML definitions. See [Windows client](windows-client.md). |
+| Database scripts | The release package's `migrations/` folder; the Helm chart runs them in a Job | SQL run with `psql`. Hibernate creates the tables; these scripts add the indexes and constraints. |
 
 ## Technology stack
 
 | Layer | Technology |
 |---|---|
 | Language and runtime | Java 21 |
-| Framework | Spring Boot 4.0.1 (Web MVC, Security, Data JPA, Data LDAP, Mail, Actuator, Cache) |
-| Security | Spring Security X.509, `spring-security-ldap` 7.0.2, `spring-security-kerberos-core` 7.0.2 |
+| Framework | Spring Boot 4.1.1 (Web MVC, Security, Data JPA, Data LDAP, Mail, Actuator, Cache) |
+| Security | Spring Security 7.1.1: X.509, `spring-security-ldap`, `spring-security-kerberos-core` |
 | Views | Thymeleaf with the layout dialect and Spring Security extras |
 | Database | PostgreSQL (Hibernate with `ddl-auto: update`) |
 | Directory | Any LDAP v3 server. People are `inetOrgPerson` by default; groups are `groupOfUniqueNames`. |

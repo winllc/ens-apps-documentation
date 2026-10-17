@@ -73,7 +73,8 @@ Before a certificate is accepted, the API checks that:
 1. it is within its validity period
 2. it is allowed for TLS client authentication (extended key usage / key usage)
 3. when `X509_TRUSTED_CA_FILE` is set, it chains to a trusted CA, and revocation is checked through
-   OCSP or CRL distribution points when `X509_CHECK_REVOCATION=true`
+   OCSP or CRL distribution points when `X509_CHECK_REVOCATION=true`. In header mode this check is
+   mandatory: a forwarded certificate is refused without `X509_TRUSTED_CA_FILE`
 
 The API then maps the certificate to **exactly one** directory user, with `X509_USER_FILTER` or the
 subject DN. With `X509_REQUIRE_CERTIFICATE_MATCH=true`, the certificate must also be published in
@@ -81,11 +82,23 @@ the user's `userCertificate` attribute.
 
 In header mode:
 
-- the certificate header is honoured **only** when the TCP peer is in `X509_TRUSTED_PROXIES`. The check uses the actual connection, never
-  `X-Forwarded-For`, so use `FORWARD_HEADERS_STRATEGY=framework` or `none`, not `native`
-- the bundled nginx always overwrites `X-SSL-Client-Cert`, forwards only certificates it verified,
-  and sends them only to `/api/auth/x509` and `/api/auth/me`
-- set `X509_TRUSTED_CA_FILE` so the API validates the chain again (defence in depth)
+- the certificate header is honoured **only** when the TCP peer is in `X509_TRUSTED_PROXIES`
+  **and** the request carries the proxy secret in `X-DSP-Proxy-Secret`, compared in constant time.
+  An address alone is not enough: other pods or local processes can share it, and users'
+  certificates are public, so whoever can send the header could sign in as anyone. The address
+  check uses the actual connection, never `X-Forwarded-For`, so use
+  `FORWARD_HEADERS_STRATEGY=framework` or `none`, not `native`
+- the API does not start without the proxy secret (`X509_PROXY_SECRET_FILE` or
+  `X509_PROXY_SECRET`, at least 32 characters) or `X509_TRUSTED_CA_FILE`
+- the bundled nginx always overwrites `X-DSP-Proxy-Secret`, removes or overwrites certificate
+  headers sent by clients, forwards only certificates it verified, and sends them only to
+  `/api/auth/x509` and `/api/auth/me`. With `X509_EDGE_TERMINATION=true` it passes on the header
+  that the TLS proxy in front of it sets
+- with the Helm chart's edge termination, only the ingress controller may reach the web pods: the
+  chart requires `networkPolicy.enabled` and `networkPolicy.webIngressFrom` (or
+  `x509.allowUnrestrictedWebIngress`)
+- a refused header is logged and audited as a failed `auth.login` with
+  `details.reasonCode` `untrusted_certificate_header` and the connecting `details.peerAddress`
 
 Certificate sign-ins and rejections are logged and audited with the certificate subject, serial and
 issuer.
@@ -98,7 +111,9 @@ issuer.
   their address.
 - The native package binds the API to `127.0.0.1` and runs it as the unprivileged `dsp` user under a
   hardened systemd unit (`NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`,
-  and write access only to the data directory).
+  and write access only to the data directory). Any local process can reach `127.0.0.1`, which is
+  why forwarded certificates also need the proxy secret. Its file is readable only by root and
+  `dsp`; nginx gets it through an include that only root can read.
 - The container images run as unprivileged users (uid 185 / 1001, group 0) on unprivileged ports,
   and are compatible with the OpenShift `restricted` SCC.
 
@@ -110,6 +125,8 @@ issuer.
 - [ ] `FORWARD_HEADERS_STRATEGY=framework` only when the API is reachable solely through your proxy
 - [ ] `ADMIN_GROUPS` set to a small, controlled group
 - [ ] `SEED_DEMO_CONFIG=false` in production
-- [ ] For X.509 in header mode: tight `X509_TRUSTED_PROXIES` and `X509_TRUSTED_CA_FILE`
+- [ ] For X.509 in header mode: the proxy secret kept private (`.env` mode `600`, or the secret
+      file), `X509_TRUSTED_CA_FILE`, and tight `X509_TRUSTED_PROXIES`
+- [ ] With Helm edge termination: `networkPolicy.webIngressFrom` limited to the ingress controller
 - [ ] Audit files protected, archived and forwarded (`audit` logger → SIEM)
 - [ ] Images rebuilt regularly to pick up UBI security updates

@@ -110,7 +110,9 @@ Useful API log messages:
 | `Seeded demo forms, directories, permissions, dashboards and analyses` | Demo config was written into an empty store |
 | `Certificate sign-in: <subject> (serial <n>) -> <dn>` | Successful X.509 sign-in |
 | `Certificate sign-in rejected for <subject> (issuer <issuer>): <reason>` | Rejected certificate |
-| `Ignoring X-SSL-Client-Cert header from untrusted address <ip>` | Certificate header from a peer not in `X509_TRUSTED_PROXIES` |
+| `Ignoring X-SSL-Client-Cert header from untrusted address <ip>` | Certificate header from a peer not in `X509_TRUSTED_PROXIES`; refused and audited |
+| `Ignoring <header> header from <ip>: X-DSP-Proxy-Secret is missing or wrong (X509_PROXY_SECRET)` | Certificate header from a trusted address without the right proxy secret; refused and audited |
+| `Cannot read X509_PROXY_SECRET_FILE <path>: <error>` | The API cannot read the proxy secret file, so it refuses every forwarded certificate |
 | `Group lookup failed: ...` | `LDAP_GROUP_FILTER` search failed; the user signs in with `memberOf` groups only |
 
 Forward the `audit` logger to your SIEM with your usual log shipper.
@@ -186,16 +188,17 @@ There is no metrics or actuator endpoint. Monitor the portal with:
     2. Unpack the new package next to the old one.
     3. In the new directory: `./upgrade.sh ../directory-services-portal-<old-version>`.
 
-    `upgrade.sh` copies `.env`, `license/` and `certs/` across, loads the new images, backs up the
-    data to `backups/` and restarts. The data and license volumes are reused, because the compose
-    project name stays `directory-services-portal`. See
+    `upgrade.sh` copies `.env`, `license/` and `certs/` across, loads the new images, generates
+    `X509_PROXY_SECRET` if `.env` has none, backs up the data to `backups/` and restarts. The data
+    and license volumes are reused, because the compose project name stays
+    `directory-services-portal`. See
     [Installation → Upgrade](install.md#upgrade).
 
 === "Native"
 
     Run the new package's `sudo ./install.sh`, then `systemctl restart directory-services-portal`.
-    `portal.env` and `/var/lib/directory-services-portal` are kept. The web client directory is
-    replaced.
+    `portal.env`, `proxy-secret` and `/var/lib/directory-services-portal` are kept; the proxy secret
+    is generated if there is none. The web client directory is replaced.
 
 === "Helm"
 
@@ -205,7 +208,9 @@ There is no metrics or actuator endpoint. Monitor the portal with:
     helm upgrade dsp oci://ghcr.io/winllc/charts/directory-services-portal --version X.Y.Z \
       -n dsp -f my-values.yaml
     ```
-    The old API pod stops before the new one starts. The PVCs are kept.
+    The old API pod stops before the new one starts. The PVCs are kept. With `x509.enabled`, see
+    [Installation → Upgrade](install.md#upgrade_1) for the proxy secret and what edge termination
+    needs.
 
 Each release ships images rebuilt on the latest Red Hat UBI security updates, so stay on a
 current release.
@@ -225,6 +230,10 @@ load.
 | API exits with `Could not read .../portal-config.json` | Corrupt or hand-edited config store | Restore from backup, or fix the JSON |
 | API exits with `Invalid LDAP connection settings for <url>` | Malformed `LDAP_URL` | Use `ldap://host:port` or `ldaps://host:port` |
 | API exits with `Cannot read trusted CA file ...` / `No certificates found in ...` | `X509_TRUSTED_CA_FILE` path or content wrong | Mount a PEM bundle and check the path |
+| API exits with `Refusing to start: certificate sign-in through a proxy (X509_ENABLED=true, X509_SOURCE=header) is not secure as configured: ...` | Header mode without the proxy secret, with one under 32 characters or an unreadable secret file, or without a readable `X509_TRUSTED_CA_FILE` | Set what the message names (the packages and the chart generate the secret), or turn certificate sign-in off with `X509_ENABLED=false` |
+| Web container exits with `dsp-entrypoint: the proxy secret may contain only ...`, `cannot read X509_PROXY_SECRET_FILE`, `X509_HEADER must be a header name` or `X509_EDGE_TERMINATION must be true or false` | Invalid web-tier X.509 setting | Use letters, digits and `. _ ~ + / = -` for the secret (for example `openssl rand -hex 32`), mount the file readable by uid 1001 or group 0, and fix the named setting |
+| `helm install` / `helm upgrade` fails with `x509.enabled needs x509.trustedCa ...` | Certificate sign-in without the CA that issues user certificates | Set `x509.trustedCa`, or use `tls.enabled` with `ca.pem` |
+| `helm install` / `helm upgrade` fails with `x509.enabled without tls.enabled (edge termination) trusts the certificate header ...` | Edge termination with nothing keeping other pods away from the web pods | Set `networkPolicy.enabled: true` and `networkPolicy.webIngressFrom` to the ingress controller's pods, or `x509.allowUnrestrictedWebIngress: true` if other controls ensure this |
 | Login page shows **Directory unreachable** / `/api/info` has `connected:false` | LDAP server down, firewall, wrong URL, TLS failure, bad service account | Read `error` from `/api/info`. Test with `ldapsearch` from the API host. Check `LDAP_BIND_DN`/`LDAP_BIND_PASSWORD` |
 | LDAPS fails with a certificate error | Private CA not in the JVM trust store, or host name mismatch | Add a trust store (see [LDAPS with a private CA](configuration.md#ldaps-with-a-private-ca); with Helm, `ldap.truststore`). Use `LDAP_TLS_REJECT_UNAUTHORIZED=false` only for testing |
 | "Invalid username or password" for valid users | `LDAP_USER_FILTER`/`LDAP_USER_SEARCH_BASE` finds zero or more than one entry, or the login name contains disallowed characters | Check the audit log: `Unknown user` versus `Wrong password`. Test the filter with `ldapsearch` |
@@ -235,7 +244,8 @@ load.
 | Web container exits with `no nameserver in /etc/resolv.conf; set NGINX_LOCAL_RESOLVERS` | Unusual DNS setup | Set `NGINX_LOCAL_RESOLVERS` |
 | nginx can't read `server.key` (mTLS) | nginx runs as uid 1001 / group 0 | `chgrp 0 server.key && chmod 0640 server.key` (or `0644` for tests) |
 | "Certificate not accepted" on the login page | The certificate is expired, not for client auth, has an untrusted chain, matches no user, matches more than one user, or isn't registered on the account | Read the reason in the API log (`Certificate sign-in rejected ...`) and the audit log. Adjust `X509_USER_FILTER`/`X509_MAPPING` |
-| Certificate header ignored | Proxy address not in `X509_TRUSTED_PROXIES`, or `FORWARD_HEADERS_STRATEGY=native` | Add the proxy CIDR; use `framework` or `none` |
+| Certificate header ignored | Proxy address not in `X509_TRUSTED_PROXIES`, `FORWARD_HEADERS_STRATEGY=native`, or the request lacks the proxy secret | Add the proxy CIDR; use `framework` or `none`; give the proxy the API's secret |
+| Certificate sign-in fails with *The client certificate was not forwarded by the portal's proxy* | The API and the web tier have different proxy secrets; the web tier was not restarted after the secret changed; in the native package, the HTTPS server's `/api` location lacks the `nginx-proxy-secret.conf` include; or the proxy's address is not in `X509_TRUSTED_PROXIES` | Give both the same secret and restart both (`./portal.sh up`; native: `install.sh`, then restart the API). The audit log's failed `auth.login` has `reasonCode` `untrusted_certificate_header` and the connecting `peerAddress` |
 | 431 or 400 errors with large cookies or certificates | Headers over 32 KB | Raise `MAX_HTTP_REQUEST_HEADER_SIZE`, and `large_client_header_buffers` in nginx |
 | Schema import fails with 413 | Body over nginx `client_max_body_size 5m` | Split the import, or raise the limit in your proxy |
 | A chart or analysis is marked partial (truncated) | Directory larger than `METRICS_MAX_ENTRIES` | Narrow with a filter, or raise the limit (watch heap) |
