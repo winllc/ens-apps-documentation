@@ -83,6 +83,58 @@ the license screen, which may be a newer one, is never replaced by `install.sh`,
 `helm upgrade`. To replace an installed license, upload the new one on the license screen (or, with the Directory
 Services Portal's Docker package, run `./portal.sh license <file>`).
 
+### In an environment variable
+
+Each application also reads the license from the `ENS_LICENSE` environment variable. It takes:
+- the **token**: the text between the file's `-----BEGIN ENS LICENSE-----` and `-----END ENS LICENSE-----`
+  lines, line breaks allowed;
+- the whole **file**;
+- the file **base64-encoded**, on one line: `base64 -w0 license.lic`.
+
+When the application starts, it installs that license into `ENS_LICENSE_FILE`, but only if:
+- no usable license is installed yet; or
+- the variable holds a **newer revision** of the installed license.
+
+Anything else is left alone, so a different license uploaded on the license screen is never replaced by
+the variable. A license for another product or another installation, or text that isn't a valid license,
+is refused, and the installed license is untouched. The application logs one line saying what it did with
+`ENS_LICENSE`. That line is the place to look if a license from the variable didn't take effect.
+
+=== "Release package"
+
+    Set it in the bundle's `.env`. The base64 form keeps it on one line:
+
+    ```bash
+    echo "ENS_LICENSE=$(base64 -w0 license.lic)" >> .env
+    docker compose up -d
+    ```
+
+=== "Helm"
+
+    Put the license in a Secret, and pass it to the application with `extraEnv`. For the Directory
+    Services Portal the setting is `api.extraEnv`:
+
+    ```bash
+    kubectl -n <namespace> create secret generic <product>-license-env --from-file=ENS_LICENSE=./license.lic
+    ```
+
+    ```yaml
+    extraEnv:
+      - name: ENS_LICENSE
+        valueFrom:
+          secretKeyRef:
+            name: <product>-license-env
+            key: ENS_LICENSE
+    ```
+
+    To roll out a renewed license, replace the Secret and restart the pod
+    (`kubectl rollout restart deployment/<release>-<chart>`). A newer revision of the same license is
+    installed when the pod starts.
+
+The license file isn't secret: it is signed, can be bound to one installation, and holds only the
+licensee and what is licensed. It is still visible to anyone who can read the container's environment
+(`docker inspect`, the pod spec), the same as the file on disk.
+
 ## What the license controls
 
 | License state | What the application does |
