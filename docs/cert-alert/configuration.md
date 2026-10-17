@@ -1,8 +1,12 @@
 # Configuration
 
-CertAlert is a Spring Boot application. All settings live in `application.yml` (packaged in the
-jar) and can be overridden in any of the usual Spring Boot ways: an external `application.yml`,
-`--property=value` command-line arguments, or environment variables.
+CertAlert is a Spring Boot application. Its defaults live in the `application.yml` packaged in
+the image. You override them with environment variables:
+
+| Install method | Where you set them |
+|---|---|
+| Release package | `.env` in the release directory (made from `env.template` by `install.sh`). Any setting below can be added as its environment variable. Run `docker compose up -d` after a change. |
+| Helm chart | Your values file. Most settings have a named value (see the chart's `README.md`); any other goes in `extraEnv` as its environment variable. Run `helm upgrade` after a change. |
 
 !!! tip "Environment variables"
     Some settings name an explicit environment variable in `application.yml` (shown in the
@@ -10,7 +14,7 @@ jar) and can be overridden in any of the usual Spring Boot ways: an external `ap
     Spring Boot's relaxed binding: upper-case it and replace `.` and `-` with `_`. For example
     `cert-alert.ldap.changelog.enabled` → `CERT_ALERT_LDAP_CHANGELOG_ENABLED`, and
     `cert-alert.security.admin-identifiers` → `CERT_ALERT_SECURITY_ADMIN_IDENTIFIERS`
-    (comma-separated for a list). The Docker Compose file uses exactly these forms.
+    (comma-separated for a list). The release package's `.env` uses exactly these forms.
 
 Durations accept Spring Boot's formats (`10s`, `5m`, `6h`, `30d`). Cron expressions are Spring's
 six-field form (`second minute hour day-of-month month day-of-week`) and are **evaluated in UTC**.
@@ -19,11 +23,10 @@ six-field form (`second minute hour day-of-month month day-of-week`) and are **e
 
 | Profile | File | What it does |
 |---|---|---|
-| *(none)* | `application.yml` | H2 file database at `./data/cert-alert`, LDAP at `ldap://localhost:389`. For trying the jar or image out. |
-| `postgres` | `application-postgres.yml` | PostgreSQL datasource from `CERT_ALERT_DB_*`. **Use this for any real deployment.** |
-| `dev` | `application-dev.yml` | In-memory H2, embedded sample LDAP on port 18389, H2 console, no scheduled jobs, all actuator endpoints, DEBUG logging. Only works from source (`./gradlew bootRun`). |
+| *(none)* | `application.yml` | H2 file database at `./data/cert-alert`, LDAP at `ldap://localhost:389`. Not used by the release package or the Helm chart. |
+| `postgres` | `application-postgres.yml` | PostgreSQL datasource from `CERT_ALERT_DB_*`. The release package and the Helm chart both run this profile. |
 
-Activate with `SPRING_PROFILES_ACTIVE=postgres` or `--spring.profiles.active=postgres`.
+The release package and the chart set `SPRING_PROFILES_ACTIVE=postgres` for you. Do not change it.
 
 ## Database
 

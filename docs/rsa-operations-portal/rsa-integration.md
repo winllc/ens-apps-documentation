@@ -19,7 +19,7 @@ flowchart LR
 | Connector → AM (write) | RSA `HttpInvokerCommandTarget`, basic auth with the command client credentials, TLS | `ims.httpinvoker.client.provider.url` | Yes |
 | Connector → AM (read) | Same, on a separate target | `ims.httpinvoker.client.provider.readonly.url` | Yes (can point at a replica) |
 
-The connector's `springapp.xml` aliases `CommandAPIConnection` to the SDK's `CacheableCommandTargetBasicAuth`. A commit in the repository history notes a switch from RMI to HttpInvoker ("use http invoker instead of deprecated rmi"). The old RMI exporter on port 1199 is still in `springapp.xml` as a commented-out block, and `docker-compose.build.yaml` still publishes `1199:1199`.
+The connector's `springapp.xml` aliases `CommandAPIConnection` to the SDK's `CacheableCommandTargetBasicAuth`. A commit in the repository history notes a switch from RMI to HttpInvoker ("use http invoker instead of deprecated rmi"). The old RMI exporter on port 1199 is still in `springapp.xml` as a commented-out block. Neither the release package nor the Helm chart publishes port 1199.
 
 ## Sessions
 
@@ -84,7 +84,7 @@ Granting a role in the portal (**Admin → Manage User Roles**, Trusted Agent re
 
 ## AM-side prerequisites checklist
 
-- [ ] Root CA exported and imported into `trust.jks` with alias `rsa_am_ca` ([Installation](install.md#1-export-the-am-root-certificate-and-build-trustjks))
+- [ ] Root CA exported and imported into `trust.jks` with alias `rsa_am_ca` ([Installation](install.md#export-the-am-root-certificate-and-build-trustjks))
 - [ ] Command client user and password from `rsautil manage-secrets --action list`
 - [ ] Internal Super Admin user for `rsa.admin.user.id`
 - [ ] Realm and security domain names (`rsa.authmanager.realm.name`, `rsa.authmanager.securityDomain.name`), both `SystemDomain` by default

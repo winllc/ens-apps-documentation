@@ -133,7 +133,7 @@ The **Manual Run Cron Jobs** page lists each job's name, description, enabled an
 | `sendDelayedTokenRegistrationEmails` | Send or re-send enrollment links for staged roll-outs |
 | `tokenPinCheck` | Initial-PIN and check-PIN emails for tokens that have not been used |
 
-Enabling or disabling a job, debug mode and schedules are set in `dev.env` ([Configuration → Scheduled jobs](configuration.md#scheduled-jobs)). A disabled job does not run, even when triggered from this page. Last-run details are lost when the portal restarts.
+Enabling or disabling a job, debug mode and schedules are set in `.env` (Helm: `config`) ([Configuration → Scheduled jobs](configuration.md#scheduled-jobs)). A disabled job does not run, even when triggered from this page. Last-run details are lost when the portal restarts.
 
 ## Reports
 

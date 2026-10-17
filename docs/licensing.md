@@ -36,24 +36,52 @@ sign in. Everyone else sees a page asking them to contact their administrator.
 
 The applications keep the license, the installation id and their license history in one directory:
 
-| Setting | In the container images | Outside a container (default) |
-|---|---|---|
-| `ENS_LICENSE_FILE` | `/var/lib/ens/<product>/license.lic` | `/etc/ens/<product>.lic` |
-| `ENS_LICENSE_STATE_DIR` | `/var/lib/ens/<product>` | `/var/lib/ens/<product>` |
+| Setting | Value |
+|---|---|
+| `ENS_LICENSE_FILE` | `/var/lib/ens/<product>/license.lic` |
+| `ENS_LICENSE_STATE_DIR` | `/var/lib/ens/<product>` |
 
-`<product>` is `certalert`, `directory-portal`, `readyroom` or `mfa-portal`.
+`<product>` is `certalert`, `directory-portal`, `readyroom` or `mfa-portal`. The container images,
+the Helm charts and the Directory Services Portal's native package all use these paths.
 
-The images declare `/var/lib/ens` as a volume, and the release bundles' compose files keep it on a
-named volume, `ens-license`. **Keep that volume.** The installation id lives there: if it is lost,
-the installation gets a new id and any license bound to the old one must be re-bound on the portal.
+Where that directory is kept depends on how you installed:
 
-You can also skip the upload screen. Put the file at `license/license.lic` next to the bundle's
-`docker-compose.yml` before running `install.sh` or `upgrade.sh`, and they copy it in. Or copy it in
-yourself:
+| Install method | Kept in |
+|---|---|
+| Release package | The named Docker volume `ens-license` |
+| Helm chart | A PersistentVolumeClaim the chart creates (named in each install guide), or one you give it in `persistence.license.existingClaim` |
+| Native package (Directory Services Portal) | `/var/lib/ens/directory-portal` on the host |
 
-```bash
-docker compose cp license.lic <service>:/var/lib/ens/<product>/license.lic
-```
+**Keep that volume.** The installation id lives there: if it is lost, the installation gets a new id
+and any license bound to the old one must be re-bound on the portal. `helm upgrade` keeps the PVC;
+`helm uninstall` deletes a PVC the chart created.
+
+You can also skip the upload screen and give the license to the installer:
+
+=== "Release package"
+
+    Put the file at `license/license.lic` next to the bundle's `docker-compose.yml` before running
+    `install.sh` or `upgrade.sh`, and they copy it in. Or copy it in yourself:
+
+    ```bash
+    docker compose cp license.lic <service>:/var/lib/ens/<product>/license.lic
+    ```
+
+=== "Helm"
+
+    Pass the file with `--set-file license.file=./license.lic`, or put it in a Secret under the key
+    `license.lic` and name it in `license.existingSecret`:
+
+    ```bash
+    kubectl -n <namespace> create secret generic <product>-license --from-file=license.lic=./license.lic
+    helm upgrade --install <release> oci://ghcr.io/winllc/charts/<chart> --version <version> \
+      -n <namespace> -f my-values.yaml --set license.existingSecret=<product>-license
+    ```
+
+Either way, the license is copied in **only if none is installed yet**. A license uploaded later on
+the license screen, which may be a newer one, is never replaced by `install.sh`, `upgrade.sh` or
+`helm upgrade`. To replace an installed license, upload the new one on the license screen (or, with the Directory
+Services Portal's Docker package, run `./portal.sh license <file>`).
 
 ## What the license controls
 

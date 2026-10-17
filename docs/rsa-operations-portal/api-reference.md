@@ -168,4 +168,4 @@ The `/data/**` endpoints use `spring-data-jpa-datatables` and accept the standar
 |---|---|---|---|
 | POST | `http://connector:8080/app/connector` | No authentication; internal network only | Hessian endpoint for `RSAAuthManagerServiceInterface` (see [RSA AM Integration](rsa-integration.md)) |
 
-The connector port is not published in `docker-compose.yaml`. Keep it that way: the endpoint has no authentication of its own and performs RSA AM administration with the configured Super Admin account.
+The connector port is not published by the release package's `docker-compose.yml`, and the Helm chart gives the Connector only a cluster-internal Service. Keep it that way: the endpoint has no authentication of its own and performs RSA AM administration with the configured Super Admin account.

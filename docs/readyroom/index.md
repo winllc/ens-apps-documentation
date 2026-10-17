@@ -2,7 +2,7 @@
 
 ![ReadyRoom](img/logo.svg){ width="240" }
 
-**ReadyRoom** (repository and Gradle project `in-n-out-work`, Java package `com.winllc.innoutwork`)
+**ReadyRoom** (image and project name `in-n-out-work`, Java package `com.winllc.innoutwork`)
 tracks attendance and presence for an organization whose people and structure live in an LDAP
 directory. Windows workstations report **logon, logoff, screen lock and screen unlock** events to a
 Spring Boot server. The server turns those events into each person's working day, rolls them up by
@@ -16,7 +16,7 @@ know where they are when they are not at a workstation.
 
 !!! info "Naming"
     The product is called **ReadyRoom** in the UI and on the product page. Older names still show up
-    in the code and scripts: the repository is `in-n-out-work`, the Windows client is installed as
+    in the code and scripts: the container image is `in-n-out-work`, the Windows client is installed as
     `InOutWorker`, and the scheduled tasks are registered under `\InOutWork\`. All of these names
     refer to the same application.
 
@@ -48,7 +48,7 @@ flowchart LR
         PS <--> SF
     end
 
-    subgraph SRV["ReadyRoom server (Spring Boot, :8444 HTTPS)"]
+    subgraph SRV["ReadyRoom server (Spring Boot, :8181)"]
         API["/api/check/*<br/>REST check-in API"]
         UI["/app/*<br/>Thymeleaf web UI"]
         REST["/api/* JSON<br/>(used by the UI)"]
@@ -115,14 +115,12 @@ unloaded. So `/api/check/out` is the one unauthenticated check-in endpoint. The 
 
 ## Components
 
-| Component | Location in the source | Description |
+| Component | Where it ships | Description |
 |---|---|---|
-| Server | `src/main/java/com/winllc/innoutwork/` | Spring Boot 4 application: web UI, REST API, scheduled jobs, LDAP and database access. |
-| Web UI | `src/main/resources/templates/` | Thymeleaf pages using the Tabler UI kit, Tabulator tables, FullCalendar, ApexCharts and flatpickr. |
-| Windows client | `powershell/` | `Update-WorkStatus.ps1`, the `Install-InOutWorker.ps1` installer and four Task Scheduler XML definitions. See [Windows client](windows-client.md). |
-| Database migrations | `db/migrations/` | SQL run by hand with `psql`. Hibernate creates the tables; these scripts add indexes and constraints. |
-| Product page | `product-site/` | Optional static introduction page served by unprivileged nginx, with a `/launch` link that redirects to the app. |
-| Test stack | `test/` | Docker Compose stack (PostgreSQL, OpenLDAP, phpLDAPadmin, Adminer, step-ca), a mock-data seeding script and a local CA. For development only. |
+| Server | Container image `ghcr.io/winllc/in-n-out-work` (in the release package's `images/`, and run by the Helm chart) | Spring Boot 4 application: web UI, REST API, scheduled jobs, LDAP and database access. |
+| Web UI | Inside the server | Thymeleaf pages using the Tabler UI kit, Tabulator tables, FullCalendar, ApexCharts and flatpickr. |
+| Windows client | The release package's `windows-client/` folder | `Update-WorkStatus.ps1`, the `Install-InOutWorker.ps1` installer, a sample configuration file and four Task Scheduler XML definitions. See [Windows client](windows-client.md). |
+| Database scripts | The release package's `migrations/` folder; the Helm chart runs them in a Job | SQL run with `psql`. Hibernate creates the tables; these scripts add indexes and constraints. |
 
 ## Technology stack
 
@@ -135,7 +133,7 @@ unloaded. So `/api/check/out` is the one unauthenticated check-in endpoint. The 
 | Database | PostgreSQL (Hibernate with `ddl-auto: update`) |
 | Directory | Any LDAP v3 server. People are `inetOrgPerson` by default; groups are `groupOfUniqueNames`. |
 | Caching | Caffeine |
-| Build | Gradle wrapper, `bootJar` |
+| Delivery | Signed release package (Docker Compose) and Helm chart |
 | Container | Red Hat UBI 9 `openjdk-21-runtime` with `krb5-workstation` |
 | Client | Windows PowerShell 5.1 and Windows Task Scheduler |
 
@@ -143,7 +141,7 @@ unloaded. So `/api/check/out` is the one unauthenticated check-in endpoint. The 
 
 | If you want to... | Read |
 |---|---|
-| Build, deploy and connect ReadyRoom to PostgreSQL, LDAP and certificates | [Installation](install.md) |
+| Install ReadyRoom and connect it to PostgreSQL, LDAP and certificates | [Installation](install.md) |
 | Look up a property, environment variable or client parameter | [Configuration](configuration.md) |
 | Roll out and troubleshoot the workstation agent | [Windows client](windows-client.md) |
 | Use the web application day to day | [User guide](user-guide.md) |

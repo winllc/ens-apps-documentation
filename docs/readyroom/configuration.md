@@ -1,18 +1,21 @@
 # Configuration
 
-ReadyRoom is a Spring Boot application, so every setting can come from the packaged
-`src/main/resources/application.yml`, an external YAML file, environment variables or `-D` system
-properties. The application's own settings live under the `application.` prefix and are bound to
+ReadyRoom is a Spring Boot application. Its defaults are in the `application.yml` packaged in the
+image, and you override them with environment variables or JVM options. The application's own settings live under the `application.` prefix and are bound to
 `ApplicationProperties` and a few related classes. Everything else is a standard Spring Boot
 property.
 
 ## How to supply configuration
 
-| Method | Example | Notes |
+| Install method | Where | Notes |
 |---|---|---|
-| External file | `SPRING_CONFIG_ADDITIONAL_LOCATION=file:/etc/readyroom/application.yml` | Values in this file override the packaged `application.yml`. `test/docker-compose.app.yml` uses this method. |
+| Release package | `.env` in the release directory | Made from `env.template` by `install.sh`. Add any setting below as its environment variable, then run `docker compose up -d`. |
+| Helm chart | Your values file | Most settings have a named value (see [Installation](install.md#2-write-your-values) and the chart's `README.md`). Any other setting goes in `extraEnv` as its environment variable. Apply with `helm upgrade`. |
+
+| Form | Example | Notes |
+|---|---|---|
 | Environment variables | `APPLICATION_USERBASEDN=ou=Users,dc=example,dc=com` | Spring's relaxed binding: upper-case the name, replace `.` with `_`, drop `-`. List items use an index: `APPLICATION_SUPERUSERDNS_0_`, `APPLICATION_GROUPS_0_GROUPSBASEDN`. |
-| JVM options | `JAVA_OPTS="-Dapplication.timezone=America/Chicago"` | Both container images pass `$JAVA_OPTS` to `java`. |
+| JVM options | `JAVA_OPTS="-Dapplication.timezone=America/Chicago"` | The image passes `$JAVA_OPTS` to `java`. Keep the default `-XX:MaxRAMPercentage=75.0` when you set it. |
 
 !!! warning "Override every secret"
     The packaged `application.yml` contains development passwords for the keystores, the database,
@@ -25,8 +28,8 @@ is the value the code uses when the property is not set anywhere. A dash means t
 
 | Property | Env var | Packaged | Description |
 |---|---|---|---|
-| `server.port` | `SERVER_PORT` | `8444` | HTTPS listener port. |
-| `server.ssl.enabled` | `SERVER_SSL_ENABLED` | `true` | Serve HTTPS. Client-certificate sign-in needs it. |
+| `server.port` | `SERVER_PORT` | `8181` | Listener port, for HTTP or, with TLS on, HTTPS. Leave it at 8181: the release package and the Helm chart expect it. The package publishes it on the host as `READYROOM_PORT`. |
+| `server.ssl.enabled` | `SSL_ENABLED` | `false` | Serve HTTPS. Client-certificate sign-in, and so the Windows client, needs it. Helm: `tls.enabled`. |
 | `server.ssl.key-store` | `SERVER_SSL_KEYSTORE` | `classpath:winhal.p12` | Server keystore. Use `file:/path/server.p12` in production. |
 | `server.ssl.key-store-password` | `SERVER_SSL_KEYSTOREPASSWORD` | `capassword` | Keystore password. |
 | `server.ssl.key-store-type` | `SERVER_SSL_KEYSTORETYPE` | `PKCS12` | |
@@ -43,7 +46,7 @@ is the value the code uses when the property is not set anywhere. A dash means t
 | `spring.datasource.username` | `appuser` | |
 | `spring.datasource.password` | `secret123` | |
 | `spring.datasource.driver-class-name` | `org.postgresql.Driver` | |
-| `spring.jpa.hibernate.ddl-auto` | `update` | Hibernate creates and alters tables. Indexes and constraints come from `db/migrations/` (see [Installation](install.md#2-prepare-postgresql)). |
+| `spring.jpa.hibernate.ddl-auto` | `update` | Hibernate creates and alters tables. Indexes and constraints come from `db/migrations/` (see [Installation](install.md#prepare-postgresql)). |
 | `spring.jpa.open-in-view` | `false` | Keep it off. Otherwise a request holds its database connection while it waits on LDAP, and a slow directory can exhaust the pool. |
 | `spring.jpa.show-sql` | `false` | |
 | `spring.jpa.properties.hibernate.dialect` | `org.hibernate.dialect.PostgreSQLDialect` | |
@@ -150,7 +153,7 @@ What each job does is described in [Operations](operator-guide.md#scheduled-jobs
 | `spring.mail.properties.mail.smtp.starttls.enable` | `true` | – | |
 | `spring.mail.properties.mail.smtp.ssl.trust` | `"*"` | – | Trusts any SMTP server certificate. Set it to your mail host's name in production. |
 | `application.notification-sender-email` | `user1@winllc-dev.com` | `noreply@test.com` | From address of absence emails. |
-| `application.application-base-url` | `https://localhost:8444` | `https://localhost` | Base of the link in absence emails (`<base>/app/notifications/id/<id>`). Set it to the URL users really use. |
+| `application.application-base-url` | `http://localhost:8181` | `https://localhost` | Base of the link in absence emails (`<base>/app/notifications/id/<id>`). Set it to the URL users really use. |
 
 ## User interface
 
@@ -193,65 +196,51 @@ For the setup procedure, see [Security](security.md#windows-kerberos-sign-in).
 | `management.endpoints.web.exposure.include` | `health,info,metrics,env` | Actuator endpoints exposed under `/actuator`. They need **no authentication**; see [Security](security.md#unauthenticated-endpoints). |
 | `application.diagnostics.request-metrics` | `false` | When `true`, every request logs `GET /app/home -> 200: <n> SQL statement(s), <n> LDAP operation(s), <n>ms`. Use it for measuring, not for normal running. |
 
-## Example: production overrides
+## Example: production settings
 
-```yaml
-# /etc/readyroom/application.yml  (SPRING_CONFIG_ADDITIONAL_LOCATION=file:/etc/readyroom/application.yml)
-server:
-  ssl:
-    key-store: file:/etc/readyroom/server.p12
-    key-store-password: ${SERVER_KEYSTORE_PASSWORD}
-    trust-store: file:/etc/readyroom/truststore.p12
-    trust-store-password: ${SERVER_TRUSTSTORE_PASSWORD}
+A release package `.env` for a site with LDAPS, TLS and its own job timings. The settings
+`install.sh` writes (database, ports) are left out. With Helm, the same settings go in your values
+file (named values where the chart has them, `extraEnv` for the rest).
 
-spring:
-  datasource:
-    url: jdbc:postgresql://db.example.com:5432/readyroom
-    username: readyroom
-    password: ${DB_PASSWORD}
-  ldap:
-    urls: ldaps://ldap.example.com:636
-    username: cn=readyroom-svc,ou=Service,dc=example,dc=com
-    password: ${LDAP_BIND_PASSWORD}
-  jackson:
-    time-zone: America/Chicago
-  mail:
-    host: smtp.example.com
-    port: 587
-    username: readyroom@example.com
-    password: ${SMTP_PASSWORD}
-    properties:
-      mail.smtp.ssl.trust: smtp.example.com
+```bash
+# .env in the release directory
+COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml
+APPLICATION_BASE_URL=https://readyroom.example.com:8181
 
-application:
-  timezone: America/Chicago
-  banner-text: UNCLASSIFIED
-  banner-color: green
-  user-base-dn: ou=People,dc=example,dc=com
-  groups:
-    - groups-base-dn: ou=Teams,dc=example,dc=com
-  super-user-dns:
-    - cn=Jane Admin,ou=People,dc=example,dc=com
-  user-ldap-manager-id-attribute: managerId
-  manager-ldap-id-attribute: employeeNumber
-  user-ldap-duty-sub-organization-attribute: departmentNumber
-  duty-sub-org-filter: (departmentNumber=*)
-  check-out-after-minutes: 240
-  inactive-cron:
-    fixed-rate: 300000
-    initial-delay: 60000
-  send-absent-notification-cron:
-    fixed-rate: 900000
-    initial-delay: 60000
-  notification-sender-email: readyroom@example.com
-  application-base-url: https://readyroom.example.com:8444
-  update-profile-url: https://helpdesk.example.com/
+# TLS: tls/keystore.p12 and tls/truststore.p12
+SSL_ENABLED=true
+SERVER_SSL_KEYSTOREPASSWORD=...
+SERVER_SSL_TRUSTSTOREPASSWORD=...
 
-management:
-  endpoints:
-    web:
-      exposure:
-        include: health
+SPRING_LDAP_URLS=ldaps://ldap.example.com:636
+LDAP_USERNAME=cn=readyroom-svc,ou=Service,dc=example,dc=com
+LDAP_PASSWORD=...
+
+SPRING_MAIL_HOST=smtp.example.com
+SPRING_MAIL_PORT=587
+SPRING_MAIL_USERNAME=readyroom@example.com
+SPRING_MAIL_PASSWORD=...
+SPRING_MAIL_PROPERTIES_MAIL_SMTP_SSL_TRUST=smtp.example.com
+APPLICATION_NOTIFICATIONSENDEREMAIL=readyroom@example.com
+
+APPLICATION_TIMEZONE=America/Chicago
+SPRING_JACKSON_TIMEZONE=America/Chicago
+APPLICATION_BANNERTEXT=UNCLASSIFIED
+APPLICATION_BANNERCOLOR=green
+APPLICATION_USERBASEDN=ou=People,dc=example,dc=com
+APPLICATION_GROUPS_0_GROUPSBASEDN=ou=Teams,dc=example,dc=com
+APPLICATION_SUPERUSERDNS_0=cn=Jane Admin,ou=People,dc=example,dc=com
+APPLICATION_USERLDAPMANAGERIDATTRIBUTE=managerId
+APPLICATION_MANAGERLDAPIDATTRIBUTE=employeeNumber
+APPLICATION_USERLDAPDUTYSUBORGANIZATIONATTRIBUTE=departmentNumber
+APPLICATION_DUTYSUBORGFILTER=(departmentNumber=*)
+APPLICATION_CHECKOUTAFTERMINUTES=240
+APPLICATION_INACTIVECRON_FIXEDRATE=300000
+APPLICATION_INACTIVECRON_INITIALDELAY=60000
+APPLICATION_SENDABSENTNOTIFICATIONCRON_FIXEDRATE=900000
+APPLICATION_SENDABSENTNOTIFICATIONCRON_INITIALDELAY=60000
+APPLICATION_UPDATEPROFILEURL=https://helpdesk.example.com/
+MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE=health
 ```
 
 The attribute names `managerId` and `employeeNumber` above are examples. Use whichever attributes
@@ -266,7 +255,7 @@ page. In summary:
 
 | Setting | Built-in default | Description |
 |---|---|---|
-| `BaseUrl` | `https://192.168.1.29:8444/api/check` | Server check-in API. Always set it. |
+| `BaseUrl` | `https://192.168.1.29:8444/api/check` (a lab address) | Server check-in API, for example `https://readyroom.example.com:8181/api/check`. Always set it. |
 | `Authentication` | `Certificate` | `Certificate`, `Windows` or `Auto`. |
 | `CertificateThumbprint` | blank | Use this client certificate. |
 | `CertificateSubjectContains` | blank | Otherwise, use the first certificate whose subject contains this text. |

@@ -1,33 +1,29 @@
 # Configuration
 
-All runtime configuration for a deployment lives in one file, **`dev.env`**, in the deployment directory. Both application containers and the MySQL container read it, and it is mounted into them in several ways (see [How dev.env is consumed](#how-devenv-is-consumed)). This page lists every setting the code reads, grouped by component, with the default that ships in the source.
+With the release package, all runtime configuration lives in one file, **`.env`**, in the install folder. `install.sh` creates it from the package's `env.template` (mode 600), where every setting is commented. Both application containers and the MySQL container read it, and it is mounted into them in several ways (see [How .env is consumed](#how-env-is-consumed)). With the Helm chart, the same settings come from your values file: [Installation → Write your values](install.md#3-write-your-values) maps each value to its setting below, and any other Portal setting goes in `config`.
 
-!!! warning "`dev.env` is not in the repository"
-    `docker-compose*.yaml`, `install.sh` and `prepare_deployment_package.sh` all expect a `dev.env` file, but none is committed to the repository. Build it from the tables below. The defaults shown here are the values in `rsaapp-portal/src/main/resources/application.properties` and `rsaapp-connector/src/main/resources/config.properties`. Several of those defaults are development hostnames and credentials that **must** be overridden.
+This page lists every setting the code reads, grouped by component, with the default packaged in the images. Several of those defaults are development hostnames and credentials that **must** be overridden.
 
-!!! danger "Committed sample credentials"
-    The committed `application.properties`, `config.properties` and `mysql/01-databases.sql` contain sample passwords for the datasource, the AD bind account, the RSA admin user, the command client and the MySQL application user. Treat them as public and never reuse them in a deployment.
+!!! danger "Packaged sample credentials"
+    The `application.properties` and `config.properties` packaged in the images contain sample passwords for the datasource, the AD bind account, the RSA admin user and the command client. Treat them as public and override every one of them.
 
-## How `dev.env` is consumed
+## How `.env` is consumed
 
-| Consumer | Mechanism (from `docker-compose.yaml` and the Dockerfiles) | Effect |
+This applies to the release package. The Helm chart sets the same settings as environment variables and `-D` options.
+
+| Consumer | Mechanism (from the package's `docker-compose.yml`) | Effect |
 |---|---|---|
-| **portal** | `env_file: dev.env` | Every `key=value` becomes an environment variable. Spring Boot resolves property names from environment variables, and the image's `ENTRYPOINT` uses `$JAVA_OPTS`. |
-| **portal** | `./dev.env:/application.properties` | The container's working directory is `/`, so Spring Boot also loads `dev.env` as an external `application.properties`, which overrides the defaults packaged in the jar. |
-| **connector** | `env_file: dev.env` | Environment variables. Tomcat's `catalina.sh` honours `JAVA_OPTS`. |
-| **connector** | `./dev.env:/properties/dev.env` | Readable as a properties file by the RSA SDK configuration once `config.properties.location` points at it (see [Connector settings](#connector-rsa-authentication-manager-settings)). |
-| **mysql** | `env_file: dev.env` | Standard `mysql` image variables such as `MYSQL_ROOT_PASSWORD`. |
+| **portal** | `env_file: .env` (and `global.env`, which holds the release version) | Every `key=value` becomes an environment variable. Spring Boot resolves property names from environment variables, and the image's entry point uses `$JAVA_OPTS`. |
+| **portal** | `./.env:/application.properties` | The container's working directory is `/`, so Spring Boot also loads `.env` as an external `application.properties`, which overrides the defaults packaged in the image. |
+| **connector** | `env_file: .env` | Environment variables. Tomcat's `catalina.sh` honours `JAVA_OPTS`. |
+| **connector** | `./.env:/properties/dev.env` | Readable as a properties file by the RSA SDK configuration once `config.properties.location` points at it (see [Connector settings](#connector-rsa-authentication-manager-settings)). |
+| **mysql** | `env_file: .env` | Standard `mysql` image variables: `MYSQL_ROOT_PASSWORD`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`. |
 
 ```text
-# dev.env skeleton (illustrative — values are placeholders)
-JAVA_OPTS=-Djava.security.egd=file:/dev/./urandom -Dhttps.protocols=TLSv1.2 -Djdk.tls.client.protocols=TLSv1.2 -Dlogging.config=/log4j2.xml -Dconfig.properties.location=file:/properties/dev.env ...
+# .env (excerpt; values are placeholders)
+JAVA_OPTS=-Djava.security.egd=file:/dev/./urandom -Dhttps.protocols=TLSv1.2 -Djdk.tls.client.protocols=TLSv1.2 -Dlogging.config=/log4j2.xml -Dconfig.properties.location=classpath:config.properties -Djava.naming.provider.url=t3s://am-primary.example.org:7002 ...
 MYSQL_ROOT_PASSWORD=<root password>
-
-# --- RSA AM (connector) ---
-java.naming.provider.url=t3s://am-primary.example.org:7002
-com.rsa.cmdclient.user=CmdClient_xxxxxxxx
-com.rsa.cmdclient.user.password=<from rsautil manage-secrets>
-...
+MYSQL_PASSWORD=<app password>
 
 # --- Portal ---
 spring.datasource.url=jdbc:mysql://mysql:3306/RSAAPP
@@ -37,24 +33,28 @@ spring.mail.host=smtp.example.org
 ...
 ```
 
+Keep `$` and ` #` out of the values: Docker Compose replaces `$name` with a variable, and ` #` starts a comment. `util/check-env.sh` reports both, and any `CHANGE_ME` left in the file.
+
 ## Container and JVM settings
 
 | Name | Default | Used by | Description |
 |---|---|---|---|
-| `JAVA_OPTS` | `-Djava.security.egd=file:/dev/./urandom -Dhttps.protocols=TLSv1.2 -Djdk.tls.client.protocols=TLSv1.2 -Dlogging.config=/log4j2.xml` (set in both Dockerfiles) | portal, connector | JVM options. Because `dev.env` is an `env_file` for both containers, a `JAVA_OPTS` line there **replaces** the Dockerfile default in both. Keep the default flags when you override it. The README says the deployment's `JAVA_OPTS` "contains multiple duplicates" of the RSA variables below, passed as `-D` system properties. The connector gives system properties precedence (`SYSTEM_PROPERTIES_MODE_OVERRIDE`). |
-| `MYSQL_ROOT_PASSWORD` | none | mysql, `restore.sh`, `docker-compose.local.yaml` health check | Root password of the MySQL container. **Note:** `install.sh`, `add_node.sh` and the nightly backup cron line use the hard-coded credentials `root`/`root`. See [Operator Guide](operator-guide.md#database-backups). |
-| `MYSQL_COMMAND` | none | `add_node.sh` (written to `remote.env`) | Intended to carry a `mysqld` command line for group replication. The shipped `docker-compose.yaml` does not reference it. |
+| `JAVA_OPTS` | `-Djava.security.egd=file:/dev/./urandom -Dhttps.protocols=TLSv1.2 -Djdk.tls.client.protocols=TLSv1.2 -Dlogging.config=/log4j2.xml` (set in both images) | portal, connector | JVM options. Because `.env` is an `env_file` for both containers, its `JAVA_OPTS` line **replaces** the image default in both. Keep the default flags when you change it. In the release package, `JAVA_OPTS` also carries the RSA settings below, passed as `-D` system properties. The Helm chart builds them from `authManager.*`. The connector gives system properties precedence (`SYSTEM_PROPERTIES_MODE_OVERRIDE`). |
+| `MYSQL_ROOT_PASSWORD` | none | mysql, `util/backupdb.sh`, `upgrade.sh` | Root password of the MySQL container. Read once, when the data volume is first created. The backup scripts read it inside the `mysql` container, so it never appears on a command line. |
+| `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD` | `RSAAPP`, `appuser`, none | mysql | The database and application user MySQL creates on its first start. `MYSQL_PASSWORD` must equal `spring.datasource.password`. |
 | `MFAAPP_PROPERTY_FILES_LOCATION` | unset | portal | If set to an existing directory, **every regular file** under it is loaded as a placeholder property source **instead of** `messages.file.location` and `email-description.location`. Startup fails with "No property files loaded from custom location" if the directory has no files. |
 
-### Ports and volumes (`docker-compose.yaml`)
+### Ports and volumes (release package `docker-compose.yml`)
 
 | Service | Published ports | Volumes (host → container) |
 |---|---|---|
-| `portal` | `8080:8080`, `8443:8443` | `./default_build/properties:/custom`, `./default_build/static:/static`, `./default_build/email-templates:/resources/email-templates`, `./default_build/ssl:/ssl`, `./default_build/portal/log4j2.xml:/log4j2.xml`, `./logs:/var/log`, `./dev.env:/application.properties` |
-| `connector` | none (reached internally as `connector:8080`) | `./default_build:/custom`, `./dev.env:/properties/dev.env`, `./logs:/var/log` |
-| `mysql` | none | named volume `mysql_data:/var/lib/mysql`; `./mysql:/docker-entrypoint-initdb.d` is present but **commented out** |
+| `portal` | `8080:8080`, `8443:8443` | `./default_build/properties:/custom`, `./default_build/static:/static`, `./default_build/email-templates:/resources/email-templates`, `./default_build/ssl:/ssl`, `./default_build/portal/log4j2.xml:/log4j2.xml`, `./logs:/var/log`, `ens-license:/var/lib/ens/mfa-portal`, `./.env:/application.properties` |
+| `connector` | none (reached internally as `connector:8080`) | `./default_build:/custom`, `./.env:/properties/dev.env`, `./logs:/var/log` |
+| `mysql` | none | named volume `mysql_data:/var/lib/mysql` |
 
-The portal's container health check is `curl -f http://localhost:8080`. The portal starts after the `connector` has started and once `mysql` passes `mysqladmin ping`.
+The Portal's container health check is `curl -fs http://localhost:8080/login`. The Portal starts after the `connector` has started and once `mysql` passes `mysqladmin ping`.
+
+With Helm, the Portal and the Connector are two Deployments, the license is on a PVC, and branding files come from ConfigMaps (`branding.*`). See [Installation → Install with Helm](install.md#install-with-helm).
 
 ## Portal settings
 
@@ -66,15 +66,15 @@ The portal's container health check is `curl -f http://localhost:8080`. The port
 | `server.servlet.session.timeout` | `480` | Session timeout. With no unit suffix Spring Boot reads this as seconds (8 minutes). |
 | `spring.servlet.multipart.max-file-size` | `5MB` | Largest file accepted (Trusted Agent CSV upload, group-email attachment). |
 | `spring.servlet.multipart.max-request-size` | `5MB` | Largest multipart request. |
-| `server.ssl.*` | not set | Port `8443` is published but the repository configures no TLS. Several features read the browser's **client certificate**, so HTTPS with client-certificate negotiation must be configured with the standard Spring Boot `server.ssl.*` properties. The `./default_build/ssl` directory is mounted at `/ssl` for keystores. See [Security](security.md#tls-and-client-certificates). |
+| `server.ssl.*` | not set | Port `8443` is published, but the release package configures no TLS by default. Several features read the browser's **client certificate**, so HTTPS with client-certificate negotiation must be configured with the standard Spring Boot `server.ssl.*` properties. In the release package, the `./default_build/ssl` directory is mounted at `/ssl` for keystores. With Helm, set `tls.*` instead. See [Security](security.md#tls-and-client-certificates). |
 | `application.dns.name` | `http://localhost:8080` | External base URL of the portal. It prefixes every link in outgoing emails (registration, PIN reset, appointment and shipment details, Trusted Agent directory). |
 
 ### Database
 
 | Name | Default | Description |
 |---|---|---|
-| `spring.datasource.url` | `jdbc:mysql://database.winllc-dev.com/RSAAPP` | JDBC URL. In the compose deployment the MySQL host name is `mysql`, for example `jdbc:mysql://mysql:3306/RSAAPP`. |
-| `spring.datasource.username` | `appuser` | Database user (`mysql/01-databases.sql` creates `appuser`). |
+| `spring.datasource.url` | `jdbc:mysql://database.winllc-dev.com/RSAAPP` | JDBC URL. In the release package the MySQL host name is `mysql`: `jdbc:mysql://mysql:3306/RSAAPP`. The Helm chart builds it from `database.*`. |
+| `spring.datasource.username` | `appuser` | Database user. The release package's MySQL creates `appuser` (`MYSQL_USER`). |
 | `spring.datasource.password` | sample value | Database password. |
 | `spring.datasource.driver-class-name` | `com.mysql.cj.jdbc.Driver` | JDBC driver. |
 | `spring.jpa.hibernate.ddl-auto` | `update` | Hibernate creates and updates tables automatically. |
@@ -90,7 +90,7 @@ The portal's container health check is `curl -f http://localhost:8080`. The port
 | `spring.mail.test-connection` | `true` | Spring Boot checks the SMTP connection at startup. |
 | `mail.default.from` | `noreply@winllc-dev.com` | The From address on every email the portal sends. |
 | `mail.smtp.host` / `mail.smtp.port` | `email.winllc-dev.com` / `25` | Present in `application.properties`. The portal code does not read them; `spring.mail.*` controls delivery. |
-| `mfa.group.email` | `postmaster@winllc-dev.com` | MFA/PMO team mailbox. It receives the lost-token-threshold report and appears in user emails as the contact address. (The README calls it "the from address", but the From header comes from `mail.default.from`.) |
+| `mfa.group.email` | `postmaster@winllc-dev.com` | MFA/PMO team mailbox. It receives the lost-token-threshold report and appears in user emails as the contact address. (`GUIDE.md` calls it "the from address", but the From header comes from `mail.default.from`.) |
 | `group.email` | empty | Present in `application.properties`. Not read by the code. |
 
 ### RSA AM settings used by the portal
@@ -181,7 +181,7 @@ The descriptions default to: "Send Expiring Token Reminder Cron", "Send Upcoming
 | `email-description.location` | `classpath:email-templates/*.properties` | Email template files (placeholder source for `email-templates.xml`). |
 | `custom-resource.location` | `classpath:/static/custom/` | Location served at `/static/custom/**` (`banner.png`, `header-logo.png`). |
 
-`docker-compose.yaml` mounts the editable copies from `default_build/` at `/custom` (messages and page descriptions), `/static` (images) and `/resources/email-templates` (templates). Those paths are not on the application classpath, so to use the mounted copies, point the properties above at them with `file:` URLs. For example (paths taken from the mounts):
+The release package's `docker-compose.yml` mounts the editable copies from `default_build/` at `/custom` (messages and page descriptions), `/static` (images) and `/resources/email-templates` (templates). Those paths are not on the application classpath, so to use the mounted copies, point the properties above at them with `file:` URLs. For example (paths taken from the mounts):
 
 ```properties
 messages.location=file:/custom/messages
@@ -227,7 +227,7 @@ The placeholder order is fixed by the code, so keep the same `{n}` meanings when
 
 ## Connector (RSA Authentication Manager) settings
 
-The connector resolves these through `CommandClientAppContextOverrides.xml` from the file named by **`config.properties.location`** (a JVM system property, for example `-Dconfig.properties.location=file:/properties/dev.env` inside `JAVA_OPTS`), with system properties taking precedence. The packaged `WEB-INF/config.properties` contains development values. Override all of them.
+The connector resolves these through `CommandClientAppContextOverrides.xml` from the file named by **`config.properties.location`** (a JVM system property inside `JAVA_OPTS`: the release package keeps `-Dconfig.properties.location=classpath:config.properties` and passes the settings below as `-D` options; `file:/properties/dev.env` would read them from `.env` instead), with system properties taking precedence. The packaged `WEB-INF/config.properties` contains development values. Override all of them.
 
 | Name | Default (packaged `config.properties`) | Description |
 |---|---|---|
@@ -235,13 +235,13 @@ The connector resolves these through `CommandClientAppContextOverrides.xml` from
 | `java.naming.factory.initial` | `weblogic.jndi.WLInitialContextFactory` | JNDI factory for the RSA SDK. |
 | `java.naming.provider.url` | dev host | `t3s://<AM primary FQDN>:7002` |
 | `com.rsa.cmdclient.user` | sample | Command client user name (from `rsautil manage-secrets --action list`). |
-| `com.rsa.cmdclient.user.password` | sample | Command client password. The README writes this key as `com.rsa.cmdclient.password`, but the packaged file uses `com.rsa.cmdclient.user.password`. |
-| `ims.httpinvoker.client.provider.url` | dev host | `https://<AM primary FQDN>:7002/ims-ws/httpinvoker/CommandServer`, used for admin (write) commands. (The README spells it `ims.httpinvokder…`, but the code uses `httpinvoker`.) |
+| `com.rsa.cmdclient.user.password` | sample | Command client password. The package's `GUIDE.md` writes this key as `com.rsa.cmdclient.password`, but the packaged file uses `com.rsa.cmdclient.user.password`. |
+| `ims.httpinvoker.client.provider.url` | dev host | `https://<AM primary FQDN>:7002/ims-ws/httpinvoker/CommandServer`, used for admin (write) commands. (`GUIDE.md` spells it `ims.httpinvokder…`, but the code uses `httpinvoker`.) |
 | `ims.httpinvoker.client.provider.readonly.url` | dev host | `https://<AM primary or replica FQDN>:7002/ims-ws/httpinvoker/CommandServer`, used for read-only searches. |
 | `ims.soap.client.provider.url` | dev host | `https://<AM primary FQDN>:7002/ims-ws/services/CommandServer` (SOAP target in the SDK context). |
 | `ims.ssl.client.trust.keystore.filename` | developer workstation path | Path to the trust store holding the AM root CA. With the compose mounts, `default_build/ssl/trust.jks` is visible to the connector as `/custom/ssl/trust.jks`. |
-| `ims.ssl.client.trust.keystore.password` | none in file (listed in README) | Trust store password. |
-| `com.rsa.ssl.trust.store.password` | `changeit` | Trust store password used by the SDK. (The README writes `com.rsa.ssltrust.store.password`.) |
+| `ims.ssl.client.trust.keystore.password` | none in file (listed in `GUIDE.md`) | Trust store password. |
+| `com.rsa.ssl.trust.store.password` | `changeit` | Trust store password used by the SDK. (The package's `GUIDE.md` writes `com.rsa.ssltrust.store.password`.) |
 | `com.rsa.ssl.client.id.store.password` | `password` | Two-way SSL identity keystore password (only for client-certificate command targets, which the connector does not use by default). |
 | `com.rsa.ssl.client.id.key.password` | `password` | Two-way SSL private key password. |
 | `ims.ssl.client.provider.url` | `t3s://local1:7022` | Two-way SSL provider URL. |
@@ -256,7 +256,7 @@ The connector resolves these through `CommandClientAppContextOverrides.xml` from
 
 ## Example: minimal values to change for a new install
 
-The README lists the settings that must change for a new install:
+The settings that must change for a new install, as they appear in the release package's `.env` (the RSA AM settings as `-D` options in `JAVA_OPTS`). With Helm, use the values listed in [Installation → Write your values](install.md#3-write-your-values).
 
 === "RSA AM (connector)"
 
@@ -294,6 +294,7 @@ The README lists the settings that must change for a new install:
 
     ```properties
     MYSQL_ROOT_PASSWORD=********
+    MYSQL_PASSWORD=********
     ```
 
 The host names, file paths and the trust-store path above are examples. Use the values for your environment.

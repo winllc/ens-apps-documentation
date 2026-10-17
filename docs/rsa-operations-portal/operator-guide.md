@@ -1,144 +1,174 @@
 # Operator Guide
 
-Day-to-day operation of a docker-compose deployment. The examples assume the install directory is `/opt/deployment`. `add_node.sh` uses that path as its default, and `install.sh` accepts any path.
+Day-to-day operation of the RSA Operations Portal, installed from the release package or with the Helm chart. Release package examples assume the install folder is `/opt/rsa-operations-portal` and run from it. Helm examples assume a release named `rsa-portal` in the namespace `rsa-portal`, as in [Installation](install.md).
 
 ## Service overview
 
-| Container | Image (`docker-compose.yaml`) | Restart policy | Health check |
+| Component | Release package (`docker-compose.yml`) | Helm chart | Health check |
 |---|---|---|---|
-| `portal` | `docker.artifactory.code.dicelab.net/cio2d/dodiispki/mfa/rsa-operations-portal:latest` | `unless-stopped` | `curl -f http://localhost:8080` |
-| `connector` | `…/mfa/rsa-operations-connector:latest` | `unless-stopped` | none |
-| `mysql` | `mysql:8.0.25` | `unless-stopped` | `mysqladmin ping -h localhost` (timeout 20s, 10 retries) |
+| Portal | Service and container `portal`, image `ghcr.io/winllc/rsa-operations-portal:<version>`, `restart: unless-stopped` | Deployment `rsa-portal-rsa-operations-portal`, one replica, `Recreate` strategy | Package: `curl -f http://localhost:8080/login`. Helm: startup, liveness and readiness probes on the actuator endpoints. |
+| Connector | Service and container `connector`, image `ghcr.io/winllc/rsa-operations-portal-connector:<version>` | Deployment `rsa-portal-rsa-operations-portal-connector` (stateless) | `/app/connector` answers `401` once the webapp is deployed |
+| MySQL | Service and container `mysql`, the MySQL 8.0 image in the package | Your own MySQL server (an embedded StatefulSet for evaluations only) | `mysqladmin ping` |
 
 ## Start, stop and status
 
-Run all commands from the install directory.
+=== "Release package"
 
-| Task | Command |
-|---|---|
-| View running services | `docker ps` |
-| Start (existing containers) | `docker-compose start` |
-| Start and wait for the portal to become healthy | `./start-portal.sh` (runs `docker-compose start`, then polls `docker inspect -f {{.State.Health.Status}} portal`) |
-| Stop | `docker-compose stop` or `./stop-portal.sh` |
-| Create or recreate containers after changing `dev.env` or `docker-compose.yaml` | `docker-compose up -d` |
-| Tear down containers (the data volume is kept) | `docker-compose down` |
-| Restart one service | `docker-compose restart portal` (or `connector`, `mysql`) |
-| Load images from an offline package | `./init_deployment.sh` (`docker load < services.img`) |
+    Run these in the install folder:
 
-!!! note "`start-portal.sh` loop"
-    The wait loop in `start-portal.sh` never increments its counter, so if the portal does not become healthy, the script keeps polling until you interrupt it.
+    | Task | Command |
+    |---|---|
+    | View the services and their health | `docker compose ps` |
+    | Start (existing containers) | `docker compose start` |
+    | Stop | `docker compose stop` |
+    | Create or recreate containers after changing `.env` | `docker compose up -d` |
+    | Remove the containers (the volumes are kept) | `docker compose down` |
+    | Restart one service | `docker compose restart portal` (or `connector`, `mysql`) |
 
-!!! warning "Changing configuration"
-    `dev.env` is read when a container is **created**, through `env_file`. After you edit it, run `docker-compose up -d`, which recreates the affected containers. A plain `restart` re-reads the mounted `/application.properties` copy in the portal, but **not** the environment variables (including `JAVA_OPTS`).
+    !!! warning "Changing configuration"
+        `.env` is read when a container is **created**, through `env_file`. After you edit it, run `docker compose up -d`, which recreates the affected containers. A plain `restart` re-reads the mounted `/application.properties` copy in the Portal, but **not** the environment variables (including `JAVA_OPTS`). Run `util/check-env.sh` after editing `.env`.
+
+    !!! danger "`docker compose down -v` deletes your data"
+        It removes the `mysql_data` and `ens-license` volumes: the database, the license and the installation id.
+
+=== "Helm"
+
+    | Task | Command |
+    |---|---|
+    | View the pods | `kubectl -n rsa-portal get pods` |
+    | Restart the Portal | `kubectl -n rsa-portal rollout restart deploy/rsa-portal-rsa-operations-portal` |
+    | Restart the Connector | `kubectl -n rsa-portal rollout restart deploy/rsa-portal-rsa-operations-portal-connector` |
+    | Stop the Portal (data is kept) | `kubectl -n rsa-portal scale deploy/rsa-portal-rsa-operations-portal --replicas=0` |
+    | Change settings | Edit your values file and run `helm upgrade` (see [Upgrades](#upgrades)) |
+
+    Keep `replicaCount: 1` for the Portal. Its license volume is single-writer, and sign-in sessions are held in memory.
 
 ## Health and monitoring
 
 | Signal | How to check | Meaning |
 |---|---|---|
-| Container health | `docker inspect -f '{{.State.Health.Status}}' portal` | `healthy` means the portal answers HTTP on 8080 |
-| Spring health | `curl -s http://localhost:8080/actuator/health` | The `/actuator/**` routes are open without sign-in. The portal's RSA health indicator calls the connector's `testConnection()`, which validates or reopens the admin AM session, so `DOWN` usually means the connector cannot reach or authenticate to AM. |
+| Container or pod health | `docker compose ps`, or `kubectl -n rsa-portal get pods` | `healthy` (or ready) means the Portal answers HTTP on 8080 |
+| Spring health | `curl -s http://localhost:8080/actuator/health` (Helm: through `kubectl port-forward`) | The `/actuator/**` routes are open without sign-in. The Portal's RSA health indicator calls the Connector's `testConnection()`, which validates or reopens the admin AM session, so `DOWN` usually means the Connector cannot reach or authenticate to AM. |
 | Scheduled jobs | Sign in as PMO, then **Admin → Manual Run Cron Jobs** | Shows each job's enabled and debug flags and its last-run message (in memory, cleared on restart) |
-| Email | Look for `Could not send email` or `Email not sent to:` in the portal log | SMTP failures. Sending is asynchronous, so the UI may still report success. |
+| Email | Look for `Could not send email` or `Email not sent to:` in the Portal log | SMTP failures. Sending is asynchronous, so the UI may still report success. |
 
 ## Logs
 
-| Source | Location | Notes |
-|---|---|---|
-| Portal (Log4j2) | `./logs/rsaapp-portal.log` on the host (container `/var/log`) | Rolled daily or at 10 MB into `./logs/rsaapp-portal-YYYY-MM/app-MM-dd-yyyy-N.log.gz`. Configured by `default_build/portal/log4j2.xml`. |
-| Portal console | `docker-compose logs -f portal` | Same events, pattern `HH:mm:ss.SSS [thread] LEVEL logger - msg` |
-| Connector | `docker-compose logs -f connector` | Packaged Log4j 1.x configuration logs to stderr at `DEBUG`. `default_build/log4j.xml` (rolling `/var/log/connector.log`, so `./logs/connector.log` on the host) applies only if you select it through `JAVA_OPTS`. |
-| MySQL | `docker-compose logs mysql` | |
-| All services | `docker-compose logs -f` | Ctrl+C to exit |
+=== "Release package"
 
-To change portal log levels, edit `default_build/portal/log4j2.xml` (for example the `com.winllc.rsaapp.portal` logger) and restart the portal.
+    | Source | Location | Notes |
+    |---|---|---|
+    | Portal (Log4j2) | `./logs/rsaapp-portal.log` in the install folder (container `/var/log`) | Rolled daily or at 10 MB into `./logs/rsaapp-portal-YYYY-MM/app-MM-dd-yyyy-N.log.gz`. Configured by `default_build/portal/log4j2.xml`. |
+    | Portal console | `docker compose logs -f portal` | Same events, pattern `HH:mm:ss.SSS [thread] LEVEL logger - msg` |
+    | Connector | `docker compose logs -f connector` | Packaged Log4j 1.x configuration logs to stderr at `DEBUG`. `default_build/log4j.xml` (rolling `/var/log/connector.log`, so `./logs/connector.log` on the host) applies only if you select it through `JAVA_OPTS`. |
+    | MySQL | `docker compose logs mysql` | |
+    | All services | `docker compose logs -f` | Ctrl+C to exit |
+
+    To change Portal log levels, edit `default_build/portal/log4j2.xml` (for example the `com.winllc.rsaapp.portal` logger) and run `docker compose restart portal`.
+
+=== "Helm"
+
+    ```bash
+    kubectl -n rsa-portal logs -f deploy/rsa-portal-rsa-operations-portal
+    kubectl -n rsa-portal logs -f deploy/rsa-portal-rsa-operations-portal-connector
+    ```
+
+    Both components log to standard output. Collect the logs with your cluster's log shipper.
 
 ## Database backups
 
-### Nightly backup (installed by `install.sh -b`)
+=== "Release package"
 
-`install.sh -b <backup dir>` adds this line to the invoking user's crontab:
+    `upgrade.sh` backs up the database before every upgrade, to `backups/RSAAPP-before-<version>-<time>.sql.gz` in the install folder.
 
-```cron
-0 1 * * * <install dir>/util/backupdb.sh -u root -p root -d <backup dir>
-```
+    For regular backups, run `util/backupdb.sh` from the install folder:
 
-`util/backupdb.sh`:
+    ```bash
+    util/backupdb.sh -d /opt/backup
+    ```
 
-* runs `docker exec mysql /usr/bin/mysqldump -u <user> --password=<pw> RSAAPP | gzip > <backup>/db/db_backup_<dd_Mon_YYYY_HHMM>.sql.gz`;
-* deletes files older than 7 days under `<backup>/db/` (`sudo find … -mtime +7 -exec rm {} \;`).
+    It runs `mysqldump` of `RSAAPP` in the `mysql` container, with the root password the container was started with, and writes `/opt/backup/db/db_backup_<dd_Mon_YYYY_HHMM>.sql.gz`. It then deletes files older than 7 days under `/opt/backup/db/` (with `sudo find`, so the user needs password-less `sudo` for it). To run it nightly, add a crontab line of your own:
 
-!!! warning "Check these before relying on the nightly backup"
-    * **Credentials are hard-coded as `root`/`root`** in `install.sh`. If `MYSQL_ROOT_PASSWORD` is different, fix the crontab line (`crontab -e`).
-    * **Create `<backup>/db/` first.** The script does not create it, and the redirect fails without it.
-    * The `find` cleanup runs under `sudo`, so the cron user needs password-less `sudo` for it.
+    ```cron
+    0 1 * * * cd /opt/rsa-operations-portal && util/backupdb.sh -d /opt/backup
+    ```
 
-### Manual backup
+    Also keep copies of `.env`, `license/` and `default_build/` (including `ssl/trust.jks`).
 
-```bash
-mkdir -p /opt/backup/db
-/opt/deployment/util/backupdb.sh -u root -p "$MYSQL_ROOT_PASSWORD" -d /opt/backup
-# or directly:
-docker exec mysql /usr/bin/mysqldump -u root --password="$MYSQL_ROOT_PASSWORD" RSAAPP | gzip > rsaapp_$(date +%F).sql.gz
-```
+=== "Helm"
 
-Also keep copies of `dev.env`, `default_build/` (including `ssl/trust.jks`) and `docker-compose.yaml`. `install.sh -b` archives the whole install directory to `<backup>/rsaapp-backup.tar`.
+    The database is your own MySQL server. Back it up with its usual tools, for example:
+
+    ```bash
+    mysqldump -h mysql.example.com -u appuser -p --single-transaction --routines RSAAPP | gzip > rsaapp_$(date +%F).sql.gz
+    ```
+
+    Also keep your values file, the Secrets it names, and the license PVC `rsa-portal-rsa-operations-portal-license`, which holds the installation id.
+
+    The embedded MySQL (`database.embedded.enabled`) has no backups. Use it for evaluations only.
 
 ## Restore
 
-`restore.sh -b <backup dir>` restores the newest database dump and the archived install directory:
+=== "Release package"
 
-1. `docker-compose stop`
-2. finds the newest `<backup>/db/*.gz` and decompresses it to `rsaapp_backup.sql` with `gzcat`
-3. starts `mysql`, waits for `mysqladmin ping`, and pipes the dump into `mysql -u root --password=<MYSQL_ROOT_PASSWORD> RSAAPP`
-4. `docker-compose stop mysql`, then `docker-compose down`
-5. `tar xvf --overwrite <backup>/rsaapp-backup.tar -C .`
-6. `docker load < services.img`, then `docker-compose up -d`
+    ```bash
+    cd /opt/rsa-operations-portal
+    docker compose stop portal connector
+    gunzip -c /opt/backup/db/db_backup_<stamp>.sql.gz | \
+      docker compose exec -T mysql sh -c 'exec mysql -uroot --password="$MYSQL_ROOT_PASSWORD" RSAAPP'
+    docker compose start
+    ```
 
-!!! warning "Known script issues: review before use"
-    * `gzcat` is not normally present on RHEL/CentOS. Replace it with `zcat` (or `gunzip -c`).
-    * The root password is read from `../${1:-dev}.env`, a file in the **parent** of the current directory named after the first argument. When the script is run as documented (`restore.sh -b <dir>`), the first argument is `-b`, so it looks for `../-b.env` and the password comes out empty. Set `DBPASSWORD` in the script by hand before running it.
-    * `tar -cvf … "$install_directory"/*` stored absolute-style paths without the leading `/` (for example `opt/deployment/...`), so extracting with `-C .` recreates that tree under the current directory. Check the archive layout (`tar tvf`) and extract with the right `-C`.
-    * `install.sh` does not copy `restore.sh` into the install directory during an upgrade. Use the copy from the package.
+=== "Helm"
 
-A manual restore that avoids these issues:
-
-```bash
-cd /opt/deployment
-docker-compose stop portal connector
-gunzip -c /opt/backup/db/db_backup_<stamp>.sql.gz | docker exec -i mysql mysql -u root --password="$MYSQL_ROOT_PASSWORD" RSAAPP
-docker-compose start
-```
+    Scale the Portal to 0, restore the dump into your MySQL server with its usual tools, then scale the Portal back to 1.
 
 ## Upgrades
 
-Use `install.sh -d <install dir> -b <backup dir>` from the new package. [Installation → Upgrade](install.md#upgrade) lists exactly what is copied, preserved and checked. After the upgrade:
+Back up the database first.
 
-1. Add any properties reported as missing to `dev.env`, then run `docker-compose up -d`.
-2. Re-apply local `docker-compose.yaml` edits, because the file is overwritten.
-3. Verify with the [checks in the install guide](install.md#verification).
+=== "Release package"
 
-For registry-based deployments (the Jenkins zip), run `docker-compose pull && docker-compose up -d` instead of loading `services.img`. Images are tagged with the Git tag and `latest` (see [Build & Release](build-and-release.md)).
+    Verify and unpack the new release, then run its `upgrade.sh` against the install folder:
+
+    ```bash
+    tar -xzf rsa-operations-portal-<new version>.tar.gz
+    cd rsa-operations-portal-<new version>
+    ./upgrade.sh /opt/rsa-operations-portal
+    ```
+
+    [Installation → Upgrade with upgrade.sh](install.md#upgrade-with-upgradesh) lists exactly what is replaced, kept and checked. After the upgrade:
+
+    1. Add any settings that `upgrade.sh` reported as new to `.env`, then run `docker compose up -d`.
+    2. Verify with the [checks in the install guide](install.md#verification).
+
+=== "Helm"
+
+    ```bash
+    helm upgrade rsa-portal oci://ghcr.io/winllc/charts/rsa-operations-portal --version <new version> \
+      -n rsa-portal -f my-values.yaml
+    ```
+
+    The chart's version is the release version. The license PVC is kept. See [Installation → Upgrade](install.md#7-upgrade).
+
+The Portal updates its database tables itself on the first start of the new version. Going back to an older release means restoring the backup as well.
 
 ## Certificate renewal
 
 | Certificate | Where it lives | Renewal steps |
 |---|---|---|
-| **RSA AM root CA** (connector trust) | `default_build/ssl/trust.jks` (connector sees it as `/custom/ssl/trust.jks`, portal as `/ssl/trust.jks`) | Export the new root as in [Installation step 1](install.md#1-export-the-am-root-certificate-and-build-trustjks), import it into `trust.jks` (`keytool -import … -alias rsa_am_ca`, using a new alias if you keep the old CA during overlap), and run `docker-compose restart connector`. If the password changed, update `ims.ssl.client.trust.keystore.password` and `com.rsa.ssl.trust.store.password` and run `docker-compose up -d`. |
-| **Portal HTTPS (8443)** | Keystore under `default_build/ssl/` (mounted at `/ssl`), referenced by your `server.ssl.*` settings | Replace the keystore (same path and alias, or update `server.ssl.*`), then `docker-compose restart portal`. The repository ships no TLS settings. See [Security](security.md#tls-and-client-certificates). |
-| **Client-certificate trust (8443)** | The trust store referenced by `server.ssl.trust-store` (if configured) | Add the new issuing CAs for user PKI certificates and restart the portal. |
-| **Command client password** | `com.rsa.cmdclient.user.password` | If AM regenerates it, read it again with `rsautil manage-secrets --action list`, update `dev.env`, and run `docker-compose up -d`. |
-
-## Scaling the database (experimental)
-
-`scripts/add_node.sh -u <ssh user> -n <node1,node2> [-f <dump file>]` tries to build a MySQL **group replication** cluster across hosts. It dumps `RSAAPP`, writes a `MYSQL_COMMAND` with `mysqld` replication flags to `remote.env`, recreates MySQL on each node over SSH, loads the dump, and bootstraps the group. The shipped `docker-compose.yaml` does **not** pass `MYSQL_COMMAND` to the `mysql` service, and the script uses `root`/`root`. Treat it as unfinished and test it before use.
+| **RSA AM root CA** (Connector trust) | Release package: `default_build/ssl/trust.jks` (the Connector sees it as `/custom/ssl/trust.jks`). Helm: the Secret in `authManager.trustStore.existingSecret`. | Export the new root as in [Installation](install.md#export-the-am-root-certificate-and-build-trustjks) and import it into `trust.jks` (`keytool -import … -alias rsa_am_ca`, using a new alias if you keep the old CA during overlap). Release package: `docker compose restart connector`. Helm: replace the Secret, then restart the Connector Deployment. If the password changed, update `ims.ssl.client.trust.keystore.password` and `com.rsa.ssl.trust.store.password` (Helm: `authManager.trustStore.password` or its Secret) and run `docker compose up -d` or `helm upgrade`. |
+| **Portal HTTPS (8443)** | Release package: a keystore under `default_build/ssl/` (mounted at `/ssl`), referenced by your `server.ssl.*` settings in `.env`. Helm: the Secret in `tls.keystore.existingSecret`. | Replace the keystore (same path and alias, or update the settings), then restart the Portal. See [Security](security.md#tls-and-client-certificates). With Helm and edge termination, renew the ingress or route certificate instead. |
+| **Client-certificate trust (8443)** | The trust store referenced by `server.ssl.trust-store` (Helm: `tls.truststore.existingSecret`) | Add the new issuing CAs for user PKI certificates and restart the Portal. |
+| **Command client password** | `com.rsa.cmdclient.user.password` (Helm: `authManager.commandClient`) | If AM regenerates it, read it again with `rsautil manage-secrets --action list`, update `.env` and run `docker compose up -d`, or update the Secret and restart the Connector. |
 
 ## Routine checklist
 
 | Frequency | Task |
 |---|---|
-| Daily | Confirm a new `db_backup_*.sql.gz` appeared in `<backup>/db/`. Check `docker ps` health. |
+| Daily | Confirm a new database backup exists. Check `docker compose ps` or the pods' health. |
 | Daily | Check **Admin → Manual Run Cron Jobs** for failed last-run messages. |
-| Weekly | Review `logs/rsaapp-portal.log` for `ERROR` (AM session failures, email failures). |
+| Weekly | Review the Portal log for `ERROR` (AM session failures, email failures). |
 | Before AM upgrades or certificate changes | Plan the `trust.jks` update and test sign-in afterwards. |
 | Quarterly | Test a restore into a scratch environment. |
 

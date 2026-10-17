@@ -21,7 +21,7 @@ src/main/resources/
 ├── db/migration/   Flyway migrations V1–V17
 ├── static/         css, js (table wiring), img (logo, favicons)
 ├── templates/      Thymeleaf pages, email templates, layout fragments, icon sprite
-└── dev-directory.ldif   sample directory for the dev profile
+└── dev-directory.ldif   sample directory used by the developers' tests (not shipped)
 ```
 
 ## Component view

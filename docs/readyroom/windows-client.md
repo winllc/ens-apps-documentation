@@ -4,7 +4,7 @@ The ReadyRoom workstation agent is a single PowerShell script, `Update-WorkStatu
 Windows Task Scheduler tasks. Each task reports one session event to the server. There is no
 service, tray application or user interface, so people have nothing to open or click.
 
-All client files live in the repository's `powershell/` folder:
+All client files are in the release package's `windows-client/` folder:
 
 | File | Purpose |
 |---|---|
@@ -12,7 +12,8 @@ All client files live in the repository's `powershell/` folder:
 | `Install-InOutWorker.ps1` | Installer and uninstaller. Copies the script, prepares the data folder and registers the tasks. |
 | `inoutworker.config.sample.json` | Sample configuration file. |
 | `tasks/InOutWork-Login.xml`, `-Lock.xml`, `-Unlock.xml`, `-Logout.xml` | Task Scheduler definitions (UTF-16 XML). |
-| `login.ps1`, `logout.ps1`, `updatestatus.ps1`, `Loginout LogOFF.xml`, `logout post.xml` | **Superseded.** Kept for reference only. Do not deploy them: `updatestatus.ps1` never worked, and the old scripts trusted every server certificate. |
+>>>
+
 
 ## How it works
 
@@ -76,10 +77,10 @@ only if their last event was a screen lock.
 
 ## Installation
 
-Run from an **elevated** PowerShell prompt, inside the `powershell\` folder:
+Run from an **elevated** PowerShell prompt, inside the `windows-client\` folder:
 
 ```powershell
-.\Install-InOutWorker.ps1 -BaseUrl "https://readyroom.example.com:8444/api/check"
+.\Install-InOutWorker.ps1 -BaseUrl "https://readyroom.example.com:8181/api/check"
 ```
 
 What the installer does:
@@ -110,7 +111,7 @@ What the installer does:
 
 !!! note "Mass deployment"
     The installer needs the `tasks\` folder next to it and must run elevated. To deploy with a
-    software distribution tool, copy the whole `powershell\` folder to the target and run
+    software distribution tool, copy the whole `windows-client\` folder to the target and run
     `powershell.exe -ExecutionPolicy Bypass -File Install-InOutWorker.ps1 -BaseUrl ...` as an
     administrator or SYSTEM. `CertificateSubjectContains` cannot be set through the installer, so
     to use it, ship your own `inoutworker.config.json` in the install folder instead.
@@ -151,7 +152,7 @@ Explicit parameters override the file. The script itself never needs to be edite
 
 ```json title="inoutworker.config.json"
 {
-  "BaseUrl": "https://readyroom.example.com:8444/api/check",
+  "BaseUrl": "https://readyroom.example.com:8181/api/check",
   "Authentication": "Certificate",
   "CertificateThumbprint": "",
   "CertificateSubjectContains": "",
@@ -161,7 +162,7 @@ Explicit parameters override the file. The script itself never needs to be edite
 
 | Key / parameter | Default | Description |
 |---|---|---|
-| `BaseUrl` / `-BaseUrl` | `https://192.168.1.29:8444/api/check` | Base URL of the check-in API, without a trailing slash (one is trimmed). It must start with `http://` or `https://`. The built-in value is a lab address, so always set it. |
+| `BaseUrl` / `-BaseUrl` | `https://192.168.1.29:8444/api/check` | Base URL of the check-in API, without a trailing slash (one is trimmed). It must start with `http://` or `https://`. The built-in value is a lab address, so always set it, for example to `https://readyroom.example.com:8181/api/check`. |
 | `Authentication` / `-Authentication` | `Certificate` | How `login`, `lock` and `unlock` sign in. `Certificate`: client certificate only. `Windows`: Kerberos only. `Auto`: Kerberos, then the certificate. |
 | `CertificateThumbprint` / `-CertificateThumbprint` | blank | Use the certificate with this thumbprint (non-hex characters are ignored). |
 | `CertificateSubjectContains` / `-CertificateSubjectContains` | blank | If no thumbprint matches, use the first certificate whose subject contains this text. |
