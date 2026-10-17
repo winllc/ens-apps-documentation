@@ -30,6 +30,7 @@ When you save:
 * **Adding** a role links the user to the mapped AM administrative role (`LinkAdminRolesPrincipalsCommand`). Adding **TRUSTED_AGENT** also creates a Trusted Agent profile with the user's name and email from AM (registered by `SYSTEM`), or re-activates an existing one.
 * **Removing** a role unlinks it in AM. Removing **TRUSTED_AGENT** also marks the Trusted Agent profile inactive.
 * The user must sign in again for the change to take effect.
+* The link and unlink run in **your own** AM session, so AM applies your permissions and its audit log names you. Your PMO administrative role in AM must be allowed to assign and unassign the mapped administrative roles ([Least-privilege AM roles](rsa-integration.md#least-privilege-am-roles)).
 
 The `role.count` and `role.mapped.N.*` properties define which AM roles back each portal role ([Configuration](configuration.md#rsa-am-settings-used-by-the-portal)).
 

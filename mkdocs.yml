@@ -120,5 +120,7 @@ nav:
           - Architecture: rsa-operations-portal/architecture.md
           - RSA AM integration: rsa-operations-portal/rsa-integration.md
           - Security: rsa-operations-portal/security.md
+          - FIPS 140-3 and DISA STIG: rsa-operations-portal/fips-and-stig.md
+          - Sizing, availability and recovery: rsa-operations-portal/availability-and-sizing.md
           - HTTP route reference: rsa-operations-portal/api-reference.md
           - Troubleshooting: rsa-operations-portal/troubleshooting.md
