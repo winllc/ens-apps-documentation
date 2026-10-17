@@ -46,7 +46,9 @@ flowchart TD
 
 ### LDAP username and password
 
-When no certificate is presented, protected pages redirect to the branded `/login` page. The
+When no certificate is presented, protected pages redirect to the branded `/login` page. API
+calls (`/api/**`) that are not signed in get `401 Unauthorized` instead, so a script never takes
+the login page for an answer. The
 LDAP authentication provider searches `user-base-dn` (subtree) with
 `(|(uid={0})(cn={0})(mail={0}))` and then binds as the entry it found, with the password the user
 typed. Password binds never use the LDAP connection pool, so a changed password takes effect at
