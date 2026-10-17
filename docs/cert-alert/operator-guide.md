@@ -88,9 +88,15 @@ Log lines worth knowing:
 | `Skipping the scheduled <JOB> job: the previous run has not finished` | Overlap guard: a run outlasted its interval |
 | `Scheduled <JOB> job failed` | A job threw; the scheduler stays alive for the next firing |
 | `The expiry digest failed` | The round-up threw |
+| `Expiry digest: more than N certificate(s) expire in the next D day(s); ...` | The read of certificates about to expire stopped at `digest.scan-limit`; the rest wait for a later run |
+| `Expiry digest: more than N expired certificate(s) are still published by entries holding nothing current; ...` | The read of expired certificates stopped at `digest.scan-limit`; older ones are left out |
+| `Expiry digest: round-ups that no longer apply were left in place, ...` | A run stopped at `digest.scan-limit`, so it did not clear earlier round-ups |
 | `... has N 'serverPOC' value(s) that are not email addresses, ignoring them` | `require-email-poc` dropped values; fix at source or set it `false` |
 | `Email alerts are enabled but no recipients are configured` | `cert-alert.alerts.email.to` is empty |
 | `Rejecting client certificate ...: the directory publishes no such certificate` | X.509 sign-in failed the fingerprint match |
+| `Refusing client certificate '...' published by '...': its authority revoked it` (or `it expired on ...`, `it is not valid until ...`) | X.509 sign-in refused a published certificate that is revoked or outside its validity dates |
+| `[...] name N different directory entries; matching none of them` | With `require-known-certificate: false`, a certificate's `uid` and addresses name more than one person, so it signs in nobody |
+| `Refused to add <address> to <dn> for <user>: it is named in cert-alert.security.admin-identifiers` | Someone tried to add an administrator's identifier as a person's address |
 | `Email templates will be read from <dir> before the packaged ones` | Template override directory in use |
 | `Removed N read notification(s)` | Notification retention ran |
 | Alert summaries at `WARN` / `ERROR` | The logging alert channel (`ERROR` = critical severity) |

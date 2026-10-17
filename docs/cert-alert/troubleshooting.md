@@ -38,9 +38,14 @@ Symptoms, likely causes and fixes. Start with the application log (stdout) and
 ## Signing in
 
 ??? failure "Nobody can trigger the first sync / no Admin menu"
-    `cert-alert.security.admin-identifiers` is empty (the default) or does not match any identifier
-    the directory holds for you. Add your address, uid or cn and restart. See
-    [Security → Roles](security.md#roles).
+    `cert-alert.security.admin-identifiers` is empty (the default) or does not match an identifier
+    the directory publishes for you. Add your address or uid (or your entry's DN, as a YAML list
+    item) and restart. A `cn` does not count. See [Security → Roles](security.md#roles).
+
+??? failure "I lost the Admin menu after upgrading"
+    `admin-identifiers` named you by something that no longer grants the role: a `cn`, display
+    name or preferred name, or an address added in CertAlert. Replace it with an address the
+    directory publishes for you, your `uid` or your entry's DN, and restart.
 
 ??? failure "Client certificate is ignored; I always get the password form"
     - TLS must be enabled with a trust store containing the issuing CA and `client-auth: want`.
@@ -49,6 +54,14 @@ Symptoms, likely causes and fixes. Start with the application log (stdout) and
     - The log shows `Rejecting client certificate '...': the directory publishes no such certificate`
       when the fingerprint is unknown.
     - Server certificates never authenticate.
+
+??? failure "Client certificate refused although the directory publishes it"
+    The certificate is revoked or outside its validity dates. The log shows
+    `Refusing client certificate '...' published by '...': its authority revoked it`,
+    `...: it expired on ...` or `...: it is not valid until ...`, and the audit trail has a failed
+    `auth.login` with the reason `certificate revoked`, `certificate expired` or
+    `certificate not yet valid`. Sign in with a current certificate or the password form, and have a
+    revoked or expired certificate removed from the directory. See [Security → Client certificate](security.md#client-certificate-x509).
 
 ??? failure "Browsers without a certificate cannot reach the site at all"
     `server.ssl.client-auth` is `need`. Set it to `want`.
@@ -140,6 +153,15 @@ Symptoms, likely causes and fixes. Start with the application log (stdout) and
     The window is set on the Notifications page (stored in the database) and overrides
     `cert-alert.notifications.digest.window`. It is independent of `warning-threshold-days`, which
     controls the *Expiring soon* status.
+
+??? warning "Log says `Expiry digest: more than N ...`"
+    One of the round-up's reads stopped at `cert-alert.notifications.digest.scan-limit` (10,000 by
+    default). If the message is about certificates that `expire in the next D day(s)`, the round-up
+    reports the soonest N and the rest wait for a later run. If it is about `expired certificate(s)`,
+    it reports the most recently expired and leaves out older ones. Raise
+    `cert-alert.notifications.digest.scan-limit`, or remove expired certificates that are no longer
+    needed from the directory. Until a run completes within the limit, round-ups that no longer apply
+    are left in place.
 
 ??? info "A renewed certificate still appears"
     It drops out once the entry publishes a newer, unexpired certificate with the **same subject

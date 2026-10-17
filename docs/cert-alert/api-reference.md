@@ -109,7 +109,7 @@ Response fields: `host`, `port`, `reachable`, `error`, `protocol`, `cipherSuite`
 | `POST` | `/api/v1/servers/{id}/contacts` | server | Add `{"userId": 42}` **or** `{"email": "team@example.gov"}` (exactly one) |
 | `DELETE` | `/api/v1/servers/{id}/contacts/{contactId}` | server | Remove an added contact |
 | `GET` | `/api/v1/users/{id}/addresses` | user | Directory addresses and addresses added here |
-| `POST` | `/api/v1/users/{id}/addresses` | editors | Add `{"address": "...", "kind": "PERSONAL"|"GROUP", "label": "..."}` (`kind` defaults to `PERSONAL`) |
+| `POST` | `/api/v1/users/{id}/addresses` | editors | Add `{"address": "...", "kind": "PERSONAL"|"GROUP", "label": "..."}` (`kind` defaults to `PERSONAL`). `400` when the address is named in `cert-alert.security.admin-identifiers` |
 | `DELETE` | `/api/v1/users/{id}/addresses/{aliasId}` | editors | Remove one |
 
 ## Projects

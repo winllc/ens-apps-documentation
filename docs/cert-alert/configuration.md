@@ -252,7 +252,8 @@ Per-person notifications and the daily expiry round-up email.
 | `digest.enabled` | | `true` | Whether the scheduled round-up runs |
 | `digest.cron` | | `0 0 7 * * *` | Round-up schedule |
 | `digest.window` | | `30d` | Initial lead time. **Overridden** once an administrator sets it on the Notifications page (stored in `notification_setting`); clamped to 1–365 days |
-| `digest.include-expired` | | `true` | Include already-expired certificates in the round-up |
+| `digest.include-expired` | | `true` | Include already-expired certificates in the round-up. They are read separately from the ones about to expire, so they cannot crowd those out. An expired certificate on an entry that holds a current one is left out |
+| `digest.scan-limit` | | `10000` | The most certificates one run reads of each kind: those about to expire (read first) and, with `include-expired`, expired ones still relied on. A run that reaches it logs a `WARN` naming which read it was, and leaves earlier round-ups in place rather than clearing them |
 | `email.enabled` | | `false` | Send the round-up by email. Requires `spring.mail.*` |
 | `email.from` | | `cert-alert@localhost` | Sender address |
 | `email.subject-prefix` | | `"[cert-alert] "` | Subject prefix |
@@ -308,10 +309,10 @@ See [Security](security.md) for how these interact.
 | Property | Default | Description |
 |---|---|---|
 | `enabled` | `true` | `false` removes the application's security configuration. Local development only |
-| `admin-identifiers` | `[]` | Values granting `ROLE_ADMIN`, matched against any identifier the directory holds for a person (address, uid, cn, …) |
+| `admin-identifiers` | `[]` | Values granting `ROLE_ADMIN`, matched against a person's entry DN, `uid`, or an address the directory publishes for them. Never matched against `cn`, `displayName`, `preferredName` or addresses added in CertAlert. A DN contains commas: name it as a YAML list item, or as `CERT_ALERT_SECURITY_ADMIN_IDENTIFIERS_0`, `_1`, … with `CERT_ALERT_SECURITY_ADMIN_IDENTIFIERS` itself unset |
 | `contact-editors` | `ADMIN` | `ADMIN` or `AUTHENTICATED`. Who may edit a person's added addresses and create/edit projects; also lets anyone signed in manage any server's contacts when `AUTHENTICATED` |
 | `x509.enabled` | `true` | Accept client certificates |
-| `x509.require-known-certificate` | `true` | Match the client certificate by SHA-256 fingerprint against the cache. `false` falls back to matching subject / `rfc822Name` SANs against directory entries |
+| `x509.require-known-certificate` | `true` | Match the client certificate by SHA-256 fingerprint against the cache. A published certificate is still refused when revoked or outside its validity dates. `false` falls back to matching the subject's `uid` and email address and its `rfc822Name` SANs against a person's `uid` and published addresses (never the CN) |
 | `ldap.enabled` | `true` | Offer the directory-password sign-in |
 | `ldap.user-search-base` | `""` | Where to search for the username |
 | `ldap.user-search-filter` | `(uid={0})` | How to search for it |

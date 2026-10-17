@@ -17,14 +17,23 @@ accepted.
 1. The browser presents a certificate during the TLS handshake.
 2. CertAlert computes the **SHA-256 fingerprint of its DER** and looks it up in
    `cached_certificate`.
-3. If it belongs to an **IC Person**, that person is signed in. Certificates belonging to servers
-   never authenticate.
-4. If no cached certificate matches and `x509.require-known-certificate` is `true` (default), the
+3. If it belongs to an **IC Person**, that person is signed in, unless step 4 refuses it.
+   Certificates belonging to servers never authenticate.
+4. A published certificate that the [revocation check](configuration.md#revocation-cert-alertrevocation)
+   has found **revoked**, or whose validity dates do not cover the present moment, is refused even
+   though the directory still publishes it.
+5. If no cached certificate matches and `x509.require-known-certificate` is `true` (default), the
    certificate is rejected and the browser is sent to the password form.
 
 This binds sign-in to the exact certificate the directory publishes for the person, not to a name.
 Revoking access is a matter of removing the certificate from the directory (and the next sweep or
-changelog update).
+changelog update), or of its CA revoking it (and the next revocation check).
+
+A refusal in step 4 is recorded as a failed `auth.login` whose reason is `certificate revoked`,
+`certificate expired` or `certificate not yet valid`, with the certificate's fingerprint in
+`details.fingerprint`. A revoked certificate's refusal has `alert` severity. A certificate whose
+revocation status is *Not checked* or *Unknown* still signs in: step 4 uses the status the last
+revocation check cached, and no OCSP or CRL query is made during the handshake.
 
 !!! warning "`client-auth: want`, never `need`"
     With `need`, a browser without a certificate fails the TLS handshake and never reaches the
@@ -34,9 +43,11 @@ changelog update).
     Fingerprints are matched against the cache, so certificate sign-in works only after the first
     sweep has cached people's certificates.
 
-With `x509.require-known-certificate: false`, an unknown certificate falls back to matching its
-subject and `rfc822Name` SANs against directory identifiers. That trusts a name rather than a key
-and is off by default.
+With `x509.require-known-certificate: false`, an unknown certificate falls back to matching the
+`uid` and email address in its subject, and its `rfc822Name` SANs, against each person's `uid` and
+the addresses the directory publishes for them. The subject's common name is never matched, nor are
+addresses added in CertAlert. A certificate whose values name more than one person signs in nobody.
+This trusts a name rather than a key and is off by default.
 
 ### Directory password (LDAP bind)
 
@@ -44,6 +55,10 @@ For browsers presenting no accepted certificate, the `/login` form binds to the 
 person signing in, either by searching (`ldap.user-search-base` + `ldap.user-search-filter`,
 default `(uid={0})`) or by binding to `ldap.user-dn-patterns` directly when anonymous search is not
 permitted. Set `cert-alert.security.ldap.enabled: false` to remove the password path entirely.
+
+The sign-in is resolved to the cached person at the DN the bind used, and to nobody else. An entry
+the cache does not hold yet (not swept yet, or one the sweep does not reach) signs in under the
+username typed, without a cached person, and is never matched to someone else by name.
 
 ### Sessions and API calls
 
@@ -59,9 +74,15 @@ permitted. Set `cert-alert.security.ldap.enabled: false` to remove the password 
 | `ROLE_USER` | Everyone who authenticates | Read tables, details, metrics, notifications; contextual rights below |
 | `ROLE_ADMIN` | People matching `cert-alert.security.admin-identifiers` | Everything |
 
-`admin-identifiers` is matched against any identifier the directory holds for the person (any
-address, `uid`, `cn`, `displayName`, `preferredName`). On an empty cache, roles for a password
-sign-in are resolved from the directory entry just bound against, so an administrator can run the
+`admin-identifiers` is matched against the person's entry DN, their `uid`, and the addresses the
+directory publishes for them: the five schema addresses (`mail`, `icEmail`, `internetEmail`,
+`niprnetEmail`, `siprnetEmail`) and any in `cert-alert.ldap.user.additional-email-attributes`. It is
+never matched against `cn`, `displayName` or `preferredName`, which two people can share, nor
+against addresses added in CertAlert. A DN contains commas, so name one as a YAML list item rather
+than in the comma-separated `CERT_ALERT_SECURITY_ADMIN_IDENTIFIERS`.
+
+On an empty cache, roles for a password sign-in are resolved from the username typed and the
+directory entry just bound against (its DN, `uid` and addresses), so an administrator can run the
 first sync.
 
 Two further, **per-server** rights derive from data rather than configuration:
