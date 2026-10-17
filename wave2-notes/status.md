@@ -85,3 +85,4 @@ branch into docs master (#8), and many Dependabot PRs (incl. majors). Main state
 - WIP branches are named claude/wip-do-not-merge-* so they are not mistaken for finished work.
 Resume order: (1) DSP#27 CI, (2) CertAlert main fix, (3) RSA LoggingConfigTest + rest, (4) RR wrap-up
 PR, (5) docs, (6) round 2 (RR-07/RR-12, RSA-05/06/07). Disk ~6 GB free: prune Docker after builds.
+UPDATE 21:11 UTC: directory-services-portal#27 (Vite lockfile fix) MERGED; DSP main should be green - confirm at resume.
