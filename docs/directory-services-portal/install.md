@@ -1,218 +1,86 @@
 # Installation
 
-You can run the Directory Services Portal in several ways:
+You install the Directory Services Portal from a release, in one of two ways:
 
-| Option | Use it for | Needs |
-|---|---|---|
-| [Demo quick start](#demo-quick-start) | Trying the portal, development | Java 21, Node.js 20+ |
-| [Build from source and run](#building-from-source) | A simple non-container install | Java 21, Node.js 20+, a web server |
-| [Docker Compose from the source tree](#docker-compose-from-the-source-tree) | Container deployment, demo with OpenLDAP | Docker / Podman with Compose |
-| [Docker deployment package](#docker-deployment-package) | Production hosts without the source tree or internet access | Docker Engine 20.10+, Compose v2 |
-| [Native deployment package](#native-deployment-package) | Production hosts without containers | Linux with systemd, Java 21+, optionally nginx |
+- **The release package.** A signed download for a single host: the Docker package (images,
+  compose files, settings template and scripts), or the native package for a Linux host without
+  containers.
+- **The Helm chart.** For Kubernetes and OpenShift, published with every release.
+
+Both run the same two components: the **API** (Spring Boot, port 3001) and the **web tier**
+(nginx serving the web client and forwarding `/api` to the API). Browsers only talk to the web
+tier.
 
 ## Prerequisites
 
+### For every installation
+
 | Component | Requirement |
 |---|---|
-| Java | 21 or later (the backend ships the Maven wrapper `backend/mvnw`, so Maven is not needed) |
-| Node.js | 20 or later, with npm (to build the web client) |
-| LDAP server | Any LDAPv3 server reachable over `ldap://` or `ldaps://` (optional StartTLS). Not needed for the demo |
+| LDAP server | Any LDAPv3 server reachable over `ldap://` or `ldaps://` (optional StartTLS) |
 | Service account | An LDAP account that can read the schema (root DSE `subschemaSubentry`) and the namespaces you expose, and write wherever portal users should be able to edit |
-| Container runtime | Docker or Podman with Compose v2, for the container options |
-| Disk | About 2 GB for the Docker deployment package |
+| Administrators | The users (`ADMIN_USERS`) or groups (`ADMIN_GROUPS`) who will administer the portal |
+| License | An ENS license file (`.lic`). For a trial, download an evaluation license from the ENS licensing portal. See [Licensing](../licensing.md) |
+| Release | The release download from ENS Solutions, verified as described in [Releases](../releases.md) |
 
-!!! note "Network access for image builds"
-    Building the `web` and `api` images applies the latest Red Hat updates (`yum update` /
-    `microdnf update`), so the build needs access to the UBI repositories
-    (`cdn-ubi.redhat.com`) and `registry.access.redhat.com`.
+### For the release package
 
-## Demo quick start
-
-The demo needs no LDAP server. In `memory` mode (the default, `DIRECTORY_MODE=memory`), the API
-starts an **embedded LDAP server** (UnboundID in-memory directory) on a loopback port. The portal
-talks to it over the LDAP protocol, exactly as it would to a production server.
-
-```bash
-git clone <repository-url> directory-services-portal
-cd directory-services-portal
-npm install
-npm run dev            # API on :3001, web client on http://localhost:5173 (proxies /api)
-```
-
-Open <http://localhost:5173>. The demo directory loads:
-
-- the standard schema and a non-standard `acme*` schema (`acmePerson`, `acmeDevice`,
-  `acmePartner`)
-- about ten people, plus groups and devices
-- example forms, directory definitions, permissions, two dashboards (*Workforce*, *IT assets and
-  groups*) and two analyses (*Staff vs. white pages*, *People data quality*)
-
-Every demo password is `password`:
-
-| User | What they see |
+| Package | Requirement |
 |---|---|
-| `admin` | Administrator: everything, including the admin pages |
-| `erin` | HR group: can edit Staff Directory |
-| `dave` | Helpdesk group: can edit Devices |
-| `alice` | Engineering: can view Staff, has a user grant to view Devices, self-service |
-| `bob` | Can view Partners; otherwise only White Pages and Groups |
-| `frank` | External partner (`ou=partners`) |
+| Docker | Linux with Docker Engine 20.10+ and Docker Compose v2 (or Podman with Compose v2), and about 2 GB of disk |
+| Native | Linux with systemd and Java 21 or later; nginx is optional (the installer configures it if it is installed) |
 
-!!! warning
-    The embedded directory is held in memory, so changes to directory entries are lost when the
-    API stops. Portal configuration (forms, definitions and so on) is still written to
-    `DATA_DIR` (default `./data`).
+### For Helm
 
-## Building from source
-
-```bash
-npm install
-npm run build          # builds web/dist and backend/target/directory-services-portal.jar
-npm start              # API on :3001, web client on http://localhost:8080 via "vite preview"
-```
-
-`npm start` is a convenience. In a real deployment, serve `web/dist` from any web server that:
-
-1. routes `/api/` on the **same origin** to the API (default `http://localhost:3001`), and
-2. falls back to `index.html` for every other path that is not a static file (client-side routes
-   such as `/d/staff` or `/admin/forms`).
-
-`web/nginx/templates/default.conf.template` in the source tree is a ready-made nginx example. See
-[Configuration → Web tier](configuration.md#web-tier-nginx).
-
-Run the API on its own:
-
-```bash
-cd backend && ./mvnw spring-boot:run                     # development
-java -jar backend/target/directory-services-portal.jar   # built jar
-```
-
-Other useful scripts from the root `package.json`:
-
-| Script | Does |
+| Component | Requirement |
 |---|---|
-| `npm run dev` | API (`./mvnw spring-boot:run`) and Vite dev server together |
-| `npm run build` | Web bundle and Spring Boot jar (tests skipped) |
-| `npm run build:api` | Spring Boot jar only |
-| `npm start` | Built jar plus `vite preview` |
-| `npm test` | Backend JUnit tests, then web Vitest tests |
-| `npm run typecheck` | TypeScript checks for `shared` and `web` |
-| `npm run package` | Deployment packages (`scripts/package.sh`) |
+| Cluster | Kubernetes 1.25 or later, or OpenShift 4 |
+| Helm | Helm 3.8 or later (OCI registries) |
+| Storage | A StorageClass for two small ReadWriteOnce volumes (license: 100 Mi, data: 2 Gi by default) |
+| Images | Access to `ghcr.io/winllc`, or a registry mirror for an air-gapped cluster |
 
-## Docker Compose from the source tree
+## Choosing a method
 
-`docker-compose.yml` in the repository root starts three services:
-
-| Service | Image | Port | Published on host |
-|---|---|---|---|
-| `web` | `web/Dockerfile`: nginx (UBI 9 `nginx-126`) serving the React client and proxying `/api` to `API_URL` | 8080 | No (commented-out mapping `8181:8080`) |
-| `api` | `backend/Dockerfile`: the Spring Boot API (UBI 9 `openjdk-21-runtime`) | 3001 | No (commented-out `3001:3001`) |
-| `openldap` | `deploy/openldap`: Ubuntu 24.04 `slapd` with the demo organisation and ACME schema, built locally for amd64 and arm64 | 389 | No (commented-out `1389:389`) |
-
-```bash
-docker compose up --build
-```
-
-**No service publishes a port on the host.** To open the portal, either attach your reverse
-proxy to the compose network and route to `web:8080`, or uncomment the `ports` entry of the `web`
-service and open <http://localhost:8181>.
-
-The compose stack uses the same demo credentials as the built-in demo (`admin` / `password`, and
-so on) and seeds the example configuration (`SEED_DEMO_CONFIG=true`). It also sets
-`COOKIE_SECURE=false` (plain HTTP) and `FORWARD_HEADERS_STRATEGY=framework`.
-
-Named volumes:
-
-| Volume | Mounted at | Holds |
+| Method | Use it for | You run |
 |---|---|---|
-| `portal-data` | `/data` in `api` | `portal-config.json`, `audit/`, `analysis-results/` |
-| `ldap-data` | `/var/lib/ldap` in `openldap` | the OpenLDAP database |
+| [Docker package](#install-from-the-release-package) | One host with Docker, including sites without internet access | `install.sh`, `portal.sh`, `upgrade.sh` |
+| [Native package](#native-package) | One Linux host without containers | `install.sh`, `systemctl` |
+| [Helm chart](#install-with-helm) | Kubernetes and OpenShift | `helm install`, `helm upgrade` |
 
-!!! note "Reloading the demo LDIF"
-    `deploy/openldap/ldif` is loaded only into an empty directory. After changing it, or if you
-    started the stack from an older version, run `docker compose down -v` to start over.
+## Install from the release package
 
-### HTTPS with X.509 client certificates (mTLS overlay)
+### Download and verify
 
-`docker-compose.mtls.yml` switches the web tier to HTTPS with optional client-certificate
-verification. nginx verifies the certificate against `certs/ca.pem` and forwards verified
-certificates to the API in `X-SSL-Client-Cert`. Password sign-in keeps working for browsers that
-have no certificate.
+Each release comes as these files (see [Releases](../releases.md)):
 
-```bash
-scripts/generate-dev-certs.sh certs        # throw-away CA, server cert, admin/alice/bob .p12
-docker compose -f docker-compose.yml -f docker-compose.mtls.yml up --build
-# open https://localhost:8443, import certs/alice.p12 (password "password") into the browser,
-# then choose "Sign in with certificate"
-```
-
-The overlay:
-
-- sets `NGINX_ENVSUBST_TEMPLATE_DIR=/etc/nginx/templates-mtls` and `HTTPS_PORT_SUFFIX=:8443` on
-  `web`, mounts `certs/server.pem`, `certs/server.key` and `certs/ca.pem` into `/etc/nginx/tls/`,
-  and publishes `8443:8443`
-- sets `COOKIE_SECURE=true`, `X509_ENABLED=true`, `X509_SOURCE=header`,
-  `X509_HEADER=X-SSL-Client-Cert`, `X509_TRUSTED_PROXIES=10.0.0.0/8;172.16.0.0/12;192.168.0.0/16`,
-  `X509_TRUSTED_CA_FILE=/certs/ca.pem` and `X509_USER_FILTER=(&(objectClass=inetOrgPerson)(uid={{cn}}))`
-  on `api`
-
-!!! warning "Key file permissions"
-    nginx runs unprivileged (uid 1001, group 0), so the mounted `server.key` must be readable by
-    that user or group. For example, run `chgrp 0 server.key && chmod 0640 server.key`. The dev
-    script makes `server.key` world-readable (`0644`).
-
-`generate-dev-certs.sh [out-dir] [users...]` creates `ca.pem`/`ca.key`, a `server.pem`/`server.key`
-for `localhost`/`127.0.0.1`, and for each user (default `admin alice bob`) a client certificate
-with `CN=<user>`, `email:<user>@example.com` and a `.p12` with password `password`. It is for
-development only.
-
-For the alternative where the API terminates mutual TLS itself, see
-[Configuration → X.509](configuration.md#x509-client-certificate-sign-in).
-
-## Deployment packages
-
-`scripts/package.sh` (or `npm run package`) builds a standalone archive with everything a host
-needs to run the portal, without the source tree, build tools or internet access.
-
-```bash
-scripts/package.sh                          # dist/directory-services-portal-<version>-docker.tar.gz
-scripts/package.sh --with-openldap          # ... including the demo OpenLDAP image
-scripts/package.sh --target native          # jar + web client + systemd unit + nginx site
-scripts/package.sh --target all             # both
-scripts/package.sh --registry reg.example.com/dsp --push --no-images   # images in your registry
-```
-
-| Option | Meaning |
+| File | What it is |
 |---|---|
-| `--target docker|native|all` | What to package (default `docker`) |
-| `--version VERSION` | Package and image version (default: `package.json` version plus the git revision, with `-dirty` for uncommitted changes) |
-| `--output DIR` | Where to write the archives (default `dist/`) |
-| `--with-openldap` | Also include the demo OpenLDAP image (docker) |
-| `--registry PREFIX` | Name images `PREFIX/directory-services-portal-{api,web,openldap}:VERSION` |
-| `--no-images` | Don't embed images; the host pulls them from `--registry` (requires `--registry`) |
-| `--push` | Push the images to `--registry` after building |
-| `--skip-build` | Package images / build output that already exist |
-| `--platform PLATFORM` | Build images for another platform, for example `linux/arm64` (needs buildx) |
-| `--keep` | Keep the unpacked staging directory next to the archive |
+| `directory-services-portal-<version>.tar.gz` | The Docker package, with the images |
+| `directory-services-portal-<version>-native.tar.gz` | The native (systemd) package |
+| `directory-services-portal-<version>.tgz` | The Helm chart |
+| `sbom-*.spdx.json` | SBOMs of the two images |
+| `SHA256SUMS`, `SHA256SUMS.asc` | Checksums, and ENS Solutions' signature over them |
 
-Environment variables: `DOCKER_BUILD_ARGS` (extra `docker build` arguments, such as proxy build
-args), and `API_DOCKERFILE` / `WEB_DOCKERFILE` (alternative Dockerfiles, for example ones that add a
-corporate CA).
-
-Each package contains its own README, a `VERSION` file and `SHA256SUMS`, which the installers
-verify. The archive also gets a `.sha256` file.
-
-### Docker deployment package
-
-Requirements: Linux with Docker Engine 20.10+ and Docker Compose v2, and about 2 GB of disk.
+Verify the download before you unpack it:
 
 ```bash
-tar xzf directory-services-portal-<version>-docker.tar.gz
+gpg --verify SHA256SUMS.asc SHA256SUMS
+sha256sum -c --ignore-missing SHA256SUMS
+```
+
+### Docker package
+
+Unpack the package and run the installer:
+
+```bash
+tar xzf directory-services-portal-<version>.tar.gz
 cd directory-services-portal-<version>
 ./install.sh --http 8080          # plain HTTP on port 8080, e.g. behind your TLS proxy
 vi .env                           # LDAP connection and administrators
 ./portal.sh up
 ```
+
+Choose how the portal is published:
 
 === "Plain HTTP"
 
@@ -220,7 +88,7 @@ vi .env                           # LDAP connection and administrators
     ./install.sh --http 8080
     ```
     Adds `docker-compose.publish.yml`, which publishes the web tier on `WEB_BIND:WEB_PORT`. Put a
-    TLS-terminating proxy in front of it.
+    TLS-terminating proxy in front of it, and set `COOKIE_SECURE=true` in `.env`.
 
 === "HTTPS + X.509"
 
@@ -243,8 +111,10 @@ vi .env                           # LDAP connection and administrators
 
     ```bash
     ./install.sh --demo --http            # built-in in-memory demo directory
-    ./install.sh --demo-openldap --http   # bundled OpenLDAP (package built with --with-openldap)
     ```
+    The demo directory needs no LDAP server. It has demo users (`admin`, `alice`, `bob`, `erin`,
+    `dave`, `frank`, password `password`) and example forms, directories and dashboards. Entries
+    are lost when the API stops. The demo needs a license too.
 
 `install.sh` options:
 
@@ -253,14 +123,13 @@ vi .env                           # LDAP connection and administrators
 | `--http [PORT]` | Publish plain HTTP on PORT (default 8080) |
 | `--https [PORT]` | Publish HTTPS on PORT (default 8443), X.509 sign-in available; needs `./certs` |
 | `--demo` | Built-in demo directory (no LDAP server), demo users and dashboards |
-| `--demo-openldap` | Demo with the bundled OpenLDAP container (if the package includes it) |
 | `--force-env` | Rewrite `.env` (the old one is kept as `.env.bak-<time>`) |
 | `--start` | Run `./portal.sh up` afterwards |
 | `--skip-verify` | Don't check `SHA256SUMS` |
 
-The installer checks for Docker and Compose v2, verifies checksums, and loads the images from
-`images/` (or reports that they will be pulled). It writes `.env` with mode `600` and validates
-the result with `docker compose config`. It **never overwrites an existing `.env`** unless you pass
+The installer checks for Docker and Compose v2, verifies the checksums, and loads the images
+from `images/`. It writes `.env` with mode `600` and validates the result with
+`docker compose config`. It **never overwrites an existing `.env`** unless you pass
 `--force-env`.
 
 !!! tip "Certificate files for `--https`"
@@ -270,9 +139,65 @@ the result with `docker compose config`. It **never overwrites an existing `.env
     | `certs/server.key` | Its private key, readable by uid 1001 (`chmod 644`, or `chgrp 0` + `chmod 640`) |
     | `certs/ca.pem` | CA(s) that issue user certificates |
 
-    For a test, run `scripts/generate-dev-certs.sh certs`.
+    For a test, run `scripts/generate-dev-certs.sh certs` from the package. It creates a
+    throw-away CA, a server certificate for `localhost`, and user certificates (`certs/alice.p12`,
+    password `password`).
 
-### Native deployment package
+#### Fill in `.env`
+
+Every setting is in `.env`, with comments. After a change, run `./portal.sh up`. The first
+section chooses the compose files (`COMPOSE_FILE`) and ports. Set at least the directory
+connection and the administrators (see [Connecting to your directory](#connecting-to-your-directory)).
+All settings are described in [Configuration](configuration.md).
+
+#### License
+
+Install the license in either of these ways:
+
+- **License screen.** Start the portal and sign in as an administrator. You land on
+  *Administration > License* (`/admin/license`). Upload the file there.
+- **Command line.** Put the file at `license/license.lic` before you run `./install.sh`. The
+  installer copies it into the license volume if that has no license yet. To install or replace
+  a license later, run `./portal.sh license /path/to/license.lic`.
+
+The license is kept in the `ens-license` volume, together with this installation's id. **Keep
+that volume.** `docker compose down -v` deletes it, and a new installation id means re-binding
+the license on the ENS licensing portal.
+
+#### First start
+
+```bash
+./portal.sh up
+./portal.sh status                # containers, health, URL
+```
+
+Other commands:
+
+```bash
+./portal.sh logs api              # follow the API log
+./portal.sh backup                # portal-backup-<date>.tar.gz: configuration, audit log, analysis results
+./portal.sh restore <file>
+./portal.sh down                  # stop (data is kept in the portal-data volume)
+```
+
+#### Upgrade
+
+Unpack the new package next to the running one and run its `upgrade.sh` with the old
+directory:
+
+```bash
+tar xzf directory-services-portal-<new-version>.tar.gz
+cd directory-services-portal-<new-version>
+./upgrade.sh ../directory-services-portal-<old-version>
+```
+
+`upgrade.sh` copies `.env`, `license/` and `certs/` across (it never overwrites), verifies the
+package and loads its images, and backs up the portal data to `backups/`. It then points `.env`
+at the new images (keeping a `.env.bak-<time>`) and restarts with `./portal.sh up`. The data
+volume and the license volume are reused. To go back, run `./portal.sh up` in the old directory
+and, if needed, `./portal.sh restore` the backup.
+
+### Native package
 
 For a Linux host with systemd, Java 21+ and, optionally, nginx:
 
@@ -284,64 +209,356 @@ sudo vi /etc/directory-services-portal/portal.env
 sudo systemctl restart directory-services-portal
 ```
 
+The installer verifies `SHA256SUMS`, creates the system user `dsp` and installs:
+
 | Installed to | Purpose |
 |---|---|
-| `/opt/directory-services-portal/api/directory-services-portal.jar` | The API, run by systemd as system user `dsp` on `127.0.0.1:3001` |
+| `/opt/directory-services-portal/api/directory-services-portal.jar` | The API, run by systemd as user `dsp` on `127.0.0.1:3001` |
 | `/opt/directory-services-portal/web` | The web client (static files) |
 | `/etc/directory-services-portal/portal.env` | Settings (mode `640`, `root:dsp`); kept on upgrades |
 | `/var/lib/directory-services-portal` | Data: configuration, audit log, analysis results (back this up) |
-| `/etc/systemd/system/directory-services-portal.service` | The systemd unit (hardened: `ProtectSystem=strict`, `ReadWritePaths` limited to the data directory) |
+| `/var/lib/ens/directory-portal` | The ENS license and this installation's id; keep it |
+| `/etc/systemd/system/directory-services-portal.service` | The systemd unit (hardened: `ProtectSystem=strict`, `ReadWritePaths` limited to the data and license directories) |
 | `/etc/nginx/conf.d/directory-services-portal.conf` (or `sites-enabled/`) | Serves the client on port 8080 and proxies `/api` to `127.0.0.1:3001` (only when nginx is installed) |
 
-- For HTTPS, terminate TLS in nginx (add a `listen 443 ssl` server, or put a proxy in front) and
+- **License:** sign in as an administrator and upload it under *Administration > License*, or
+  copy it in with
+  `sudo install -m 640 -o dsp -g dsp license.lic /var/lib/ens/directory-portal/license.lic`.
+- **Logs:** `journalctl -u directory-services-portal -f`.
+- **HTTPS:** terminate TLS in nginx (add a `listen 443 ssl` server, or put a proxy in front) and
   set `COOKIE_SECURE=true`.
-- With SELinux enforcing, run `setsebool -P httpd_can_network_connect 1` so that nginx can reach
-  the API.
-- For X.509 sign-in through nginx, use `X509_SOURCE=header` with
-  `X509_TRUSTED_PROXIES=127.0.0.1/32`. See [Configuration](configuration.md#x509-client-certificate-sign-in).
+- **SELinux:** with SELinux enforcing, run `setsebool -P httpd_can_network_connect 1` so that
+  nginx can reach the API.
+- **X.509 sign-in through nginx:** use `X509_SOURCE=header` with
+  `X509_TRUSTED_PROXIES=127.0.0.1/32`. See
+  [Configuration](configuration.md#x509-client-certificate-sign-in).
+- **Upgrade:** run the new package's `install.sh`. Settings and data are kept.
+
+## Install with Helm
+
+The chart installs two Deployments: the API (one replica, `Recreate` strategy) and the web tier.
+The web tier's Service, `<release>-directory-services-portal`, is what users reach. The API keeps
+two PersistentVolumeClaims: the **license volume** (`/var/lib/ens`) and the **data volume**
+(`/data`: forms, definitions, grants, dashboards, analyses and the audit store). There is no
+database.
+
+### Install
+
+Write a values file with your directory connection:
+
+```yaml
+# my-values.yaml
+ldap:
+  url: ldaps://ldap.corp.example:636
+  bindDn: cn=portal,ou=system,dc=corp,dc=example
+  bindPassword:
+    existingSecret: dsp-secrets
+    existingSecretKey: ldap-bind-password
+  baseDn: dc=corp,dc=example
+  userSearchBase: ou=people,dc=corp,dc=example
+  groupSearchBase: ou=groups,dc=corp,dc=example
+admin:
+  users: [jdoe]
+  groups: [cn=directory-admins,ou=groups,dc=corp,dc=example]
+```
+
+Then install the chart of your release:
+
+```bash
+kubectl create namespace dsp
+kubectl create secret generic dsp-secrets -n dsp --from-literal=ldap-bind-password='...'
+helm install dsp oci://ghcr.io/winllc/charts/directory-services-portal --version X.Y.Z \
+  -n dsp -f my-values.yaml
+helm test dsp -n dsp
+```
+
+The chart version is the release version, and by default the chart runs the images of that
+same version. The chart's README lists every value. Run
+`helm show readme oci://ghcr.io/winllc/charts/directory-services-portal --version X.Y.Z`.
+
+### Key values
+
+| Value | Purpose |
+|---|---|
+| `ldap.*`, `admin.*` | Directory connection, users and groups, administrators (the `LDAP_*` and `ADMIN_*` settings) |
+| `directory.mode` | `ldap`, or `memory` for the built-in demo directory (evaluation only) |
+| `server.*` | Session lifetime, secure cookies (`auto` by default), login hint, banner |
+| `metrics.*`, `analysis.*`, `jobs.*` | Metrics, analysis and background-task limits |
+| `audit.*` | Audit outputs: stdout, a rolling file, Splunk HEC, syslog, retention (see [Audit logging](../audit-logging.md)) |
+| `x509.*`, `tls.*` | Certificate sign-in, and HTTPS in the web pod |
+| `persistence.license`, `persistence.data` | The two volumes: `size`, `storageClass`, `accessModes`, `existingClaim` |
+| `ingress.*`, `route.*`, `service.*` | How users reach the portal |
+| `networkPolicy.*` | Optional NetworkPolicies for both workloads |
+| `api.*`, `web.*` | Images, resources, probes, scheduling, `extraEnv`, `extraEnvFrom` |
+| `global.imageRegistry`, `imagePullSecrets` | Registry mirror and pull secrets |
+
+Every setting from the Docker package's `env.template` has a value; the
+[Configuration](configuration.md) page describes what each one does. Anything else goes in
+`api.extraEnv`.
+
+!!! note "One API replica"
+    The API is the single writer of its configuration, audit store and license state, and keeps
+    sessions in memory. Run one replica (`api.replicaCount` accepts only 0 or 1). The web tier is
+    stateless and can run more replicas.
+
+### Secrets
+
+Secrets are never put in a ConfigMap. Each one is either inline in your values (the chart
+stores it in its own Secret) or taken from a Secret you create:
+
+| Secret | Inline value | Existing Secret |
+|---|---|---|
+| LDAP bind password | `ldap.bindPassword.value` | `ldap.bindPassword.existingSecret`, `.existingSecretKey` |
+| Splunk HEC token | `audit.splunk.token.value` | `audit.splunk.token.existingSecret`, `.existingSecretKey` |
+| LDAPS trust store password | `ldap.truststore.password.value` | `ldap.truststore.password.existingSecret`, `.existingSecretKey` |
+| ENS license | `license.file` (`--set-file`) | `license.existingSecret` (key `license.lic`) |
+| Web server certificate | `tls.certificate`, `tls.key`, `tls.clientCa` | `tls.existingSecret` (keys `server.pem`, `server.key`, `ca.pem`) |
+
+For LDAPS with a private CA, put a PKCS12 trust store in a Secret and set
+`ldap.truststore.existingSecret`. It replaces the JVM's default trust store, so include every CA
+the API must trust:
+
+```bash
+keytool -importcert -noprompt -alias corp-ca -file corp-ca.pem -keystore truststore.p12 \
+  -storetype PKCS12 -storepass 'store-pass'
+kubectl create secret generic dsp-truststore -n dsp --from-file=truststore.p12 \
+  --from-literal=truststore-password='store-pass'
+```
+
+```yaml
+ldap:
+  truststore:
+    existingSecret: dsp-truststore
+    password:
+      existingSecret: dsp-truststore
+      existingSecretKey: truststore-password
+```
+
+### License
+
+Without a license, only sign-in and the license screen work. You can:
+
+- **Upload it on the license screen.** Sign in as an administrator. You land on
+  *Administration > License* (`/admin/license`).
+- **Give it to the chart.** Use `--set-file license.file=./license.lic`, or a Secret with the key
+  `license.lic` in `license.existingSecret`. An init container copies it into the license volume
+  **only if no license is installed there yet**. A later `helm upgrade` therefore never
+  overwrites a newer license uploaded on the license screen.
+
+The license screen shows the **installation id**, which you enter on the ENS licensing portal to
+bind a license to this installation. It is also in the API's startup log:
+
+```bash
+kubectl logs -n dsp deploy/dsp-directory-services-portal-api -c api | grep License:
+```
+
+!!! warning "Keep the license volume"
+    The license PVC (`<release>-directory-services-portal-license`) holds the installation id.
+    `helm upgrade` keeps it. If it is lost, the installation gets a new id and bound licenses
+    must be re-bound. For installations you might reinstall, create the PVCs yourself and set
+    `persistence.license.existingClaim` and `persistence.data.existingClaim`.
+
+### Ingress, OpenShift and HTTPS
+
+=== "Ingress"
+
+    ```yaml
+    ingress:
+      enabled: true
+      className: nginx
+      hosts:
+        - host: portal.corp.example
+          paths: [{path: /, pathType: Prefix}]
+      tls:
+        - secretName: portal-tls
+          hosts: [portal.corp.example]
+    ```
+    Secure session cookies switch on automatically when `ingress.tls` is set. Schema imports
+    can be up to 5 MB, so raise the controller's body size limit if it is lower
+    (ingress-nginx: `nginx.ingress.kubernetes.io/proxy-body-size: 5m`).
+
+=== "OpenShift"
+
+    ```yaml
+    openshift:
+      enabled: true        # the restricted SCC assigns the user, group and fsGroup
+    route:
+      enabled: true
+      host: portal.apps.ocp.corp.example
+      tls:
+        termination: edge
+    ```
+    Both images run under an arbitrary UID in group 0.
+
+=== "LoadBalancer"
+
+    ```yaml
+    service:
+      type: LoadBalancer
+      externalTrafficPolicy: Local    # keeps client addresses
+    ```
+
+### X.509 smart-card sign-in
+
+The API takes the user's certificate from a header set by a trusted proxy. The license must
+include `smart-card-sign-in`. Two setups are supported.
+
+**TLS passthrough to the web pod (recommended).** The web pod serves HTTPS on port 8443 and asks
+browsers for a certificate. The request is optional, so password sign-in keeps working. nginx
+verifies the certificate against `ca.pem` and forwards it to the API, which checks the chain
+again.
+
+```bash
+kubectl create secret generic dsp-web-tls -n dsp \
+  --from-file=server.pem --from-file=server.key --from-file=ca.pem
+```
+
+```yaml
+tls:
+  enabled: true
+  existingSecret: dsp-web-tls
+x509:
+  enabled: true
+  userFilter: (&(objectClass=inetOrgPerson)(userPrincipalName={{upn}}))
+```
+
+Then bring TLS to the pod unchanged, in one of these ways:
+
+- ingress-nginx with `--enable-ssl-passthrough` and the annotation
+  `nginx.ingress.kubernetes.io/ssl-passthrough: "true"`;
+- an OpenShift Route with `route.tls.termination: passthrough`;
+- `service.type: LoadBalancer`, with `service.httpsPort: 443`.
+
+Set `tls.httpsPortSuffix` (for example `":8443"`) if browsers reach HTTPS on a port other
+than 443.
+
+**Edge termination at the ingress.** The ingress controller verifies the certificate and
+forwards it in its own header. Set `x509.header` to that header name, and give the API the CA
+with `x509.trustedCa`. With ingress-nginx:
+
+```yaml
+x509:
+  enabled: true
+  header: ssl-client-cert
+  trustedCa:
+    existingSecret: dsp-client-ca
+    existingSecretKey: ca.crt
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/auth-tls-secret: dsp/dsp-client-ca
+    nginx.ingress.kubernetes.io/auth-tls-verify-client: "optional"
+    nginx.ingress.kubernetes.io/auth-tls-pass-certificate-to-upstream: "true"
+networkPolicy:
+  enabled: true
+  webIngressFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-nginx
+```
+
+!!! warning
+    With edge termination, anything that reaches the web Service directly could send the
+    header. Restrict the web tier to the ingress controller, as above. Use `optional`, never
+    `optional_no_ca`. An OpenShift Route can't forward client certificates, so use passthrough
+    there.
+
+### Air-gapped clusters
+
+1. Get the chart: the release download includes `directory-services-portal-<version>.tgz`, or
+   run `helm pull oci://ghcr.io/winllc/charts/directory-services-portal --version X.Y.Z` on a
+   connected host.
+2. Mirror the two images, with the same tags, into your registry:
+   `ghcr.io/winllc/directory-services-portal-api:X.Y.Z` and
+   `ghcr.io/winllc/directory-services-portal-web:X.Y.Z`. You can also load them from the Docker
+   package's `images/` directory.
+3. Point the chart at the mirror:
+
+    ```yaml
+    global:
+      imageRegistry: registry.corp.example:5000   # registry.corp.example:5000/winllc/directory-services-portal-api
+    imagePullSecrets:
+      - name: corp-registry
+    ```
+
+4. Install from the file: `helm install dsp ./directory-services-portal-X.Y.Z.tgz -n dsp -f my-values.yaml`.
+
+The license init container and the `helm test` pod use the same two images, so nothing else
+needs to be mirrored.
+
+### Upgrade
+
+```bash
+helm upgrade dsp oci://ghcr.io/winllc/charts/directory-services-portal --version X.Y.Z -n dsp -f my-values.yaml
+```
+
+The old API pod stops before the new one starts. The PVCs, and with them the license, the
+installation id and the data, are kept. Back up the data volume before you upgrade.
+
+### Uninstall
+
+```bash
+helm uninstall dsp -n dsp
+```
+
+This deletes the PVCs the chart created: the license (with the installation id), the data and
+the optional audit file volume. Back them up first if you may reinstall. PVCs given with
+`existingClaim` are never touched.
 
 ## Connecting to your directory
 
-For any non-demo installation, set at least these values (in `.env`, `portal.env` or the
-environment):
+For any installation that isn't a demo, set at least these values: in `.env` (Docker package),
+`portal.env` (native package), or the chart values shown next to them.
 
-```ini
-DIRECTORY_MODE=ldap
-LDAP_URL=ldaps://ldap.example.com:636
-LDAP_BIND_DN=cn=portal,ou=system,dc=example,dc=com
-LDAP_BIND_PASSWORD=change-me
-LDAP_BASE_DN=dc=example,dc=com
-LDAP_USER_SEARCH_BASE=ou=people,dc=example,dc=com
-LDAP_GROUP_SEARCH_BASE=ou=groups,dc=example,dc=com
-ADMIN_USERS=jdoe
-ADMIN_GROUPS=cn=directory-admins,ou=groups,dc=example,dc=com
-COOKIE_SECURE=true
-```
+| Setting | Helm value | Example |
+|---|---|---|
+| `DIRECTORY_MODE` | `directory.mode` | `ldap` |
+| `LDAP_URL` | `ldap.url` | `ldaps://ldap.example.com:636` |
+| `LDAP_BIND_DN` | `ldap.bindDn` | `cn=portal,ou=system,dc=example,dc=com` |
+| `LDAP_BIND_PASSWORD` | `ldap.bindPassword` | (a Secret) |
+| `LDAP_BASE_DN` | `ldap.baseDn` | `dc=example,dc=com` |
+| `LDAP_USER_SEARCH_BASE` | `ldap.userSearchBase` | `ou=people,dc=example,dc=com` |
+| `LDAP_GROUP_SEARCH_BASE` | `ldap.groupSearchBase` | `ou=groups,dc=example,dc=com` |
+| `ADMIN_USERS` | `admin.users` | `jdoe` |
+| `ADMIN_GROUPS` | `admin.groups` | `cn=directory-admins,ou=groups,dc=example,dc=com` |
+| `COOKIE_SECURE` | `server.cookieSecure` | `true` whenever browsers use HTTPS |
 
-All settings are described in [Configuration](configuration.md).
+Separate several administrators with `;` (DNs contain commas); in Helm, use a list. For
+`ldaps://` with a private CA, see
+[Configuration → LDAPS with a private CA](configuration.md#ldaps-with-a-private-ca), or
+`ldap.truststore` in Helm. All settings are described in [Configuration](configuration.md).
 
-## First start
+The portal has no database and sends no email. Audit events can also go to Splunk or syslog;
+see [Audit logging](../audit-logging.md).
 
-1. Start the stack (`./portal.sh up`, `systemctl start directory-services-portal`, or
-   `docker compose up`).
+## First start checklist
+
+1. Start the portal (`./portal.sh up`, `systemctl start directory-services-portal`, or
+   `helm install`).
 2. Open the portal and sign in as a user listed in `ADMIN_USERS` or a member of `ADMIN_GROUPS`.
-3. The configuration store starts empty (unless `SEED_DEMO_CONFIG=true`, or the API is in memory
+3. Install the license on *Administration > License*, if you didn't give one to the installer
+   or the chart. Note the installation id if your license is to be bound.
+4. The configuration store starts empty (unless `SEED_DEMO_CONFIG=true`, or the API is in memory
    mode). Continue with the [Administrator guide](admin-guide.md#getting-started):
     1. **Admin → Schema → Pull from directory**
     2. **Admin → Forms**: create a form for an object class
     3. **Admin → Directory definitions**: publish the form in a namespace
     4. **Admin → Permissions**: grant users or groups access
+5. Back up the data and the license volumes.
 
 ## Verification
 
 | Check | Command / action | Expected |
 |---|---|---|
-| API is up | `curl -s http://localhost:3001/api/health` (inside the API container or host) | `{"ok":true}` |
+| API is up | `curl -s http://<portal>/api/health` | `{"ok":true}` |
 | Directory reachable | `curl -s http://<portal>/api/info` | JSON with `"connected":true`, `mode`, `baseDn`, `version` |
 | Proxy works | Open `http://<portal>/` | The login page, with any configured banner and login hint |
 | Sign-in | Sign in as an administrator | The **Admin** section appears in the sidebar |
-| Package stack | `./portal.sh status` | `api` healthy, plus the URL to open |
-| Native | `systemctl status directory-services-portal` and `journalctl -u directory-services-portal -f` | Active (running) |
+| License | *Administration > License* | The license state, licensee and features; the installation id |
+| Docker package | `./portal.sh status` | `api` healthy, plus the URL to open |
+| Native package | `systemctl status directory-services-portal` and `journalctl -u directory-services-portal -f` | Active (running) |
+| Helm | `kubectl get pods -n dsp` and `helm test dsp -n dsp` | Both pods `Running` and ready; the test pod succeeds |
 
 If `/api/info` shows `"connected": false`, its `error` field contains the LDAP error. See the
 [troubleshooting runbook](operator-guide.md#troubleshooting-runbook).
