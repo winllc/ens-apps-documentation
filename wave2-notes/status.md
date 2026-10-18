@@ -113,3 +113,4 @@ User decisions open: RSA Actions billing; dismiss RR JNDI false positive (and DS
 ens-license 1.1.0 into apps (add ARMOR size cap first). Branches safe to delete: in-n-out-work
 claude/wip-do-not-merge-wave2-followup (merged via #25); rsa claude/wip-do-not-merge-wave2-followup (in #14).
 UPDATE 01:18 UTC: rsa-operations-portal#14 MERGED (RSA follow-up). RSA round-2 branch (claude/wip-do-not-merge-rsa-helpdesk) is stacked on it, so at resume its PR diff vs main is only the round-2 commits; merge origin/main first. RSA main CI still can't run (billing).
+UPDATE 02:17 UTC 10-18: Actions billing on rsa-operations-portal is working again. Re-ran CI on main c5ca5f6 (run 39085999642 attempt 2): build (mvn install) green, helm green, image green (demo stack up, Trivy: Portal gated pass, Connector report-only), images published. RSA main is green.
