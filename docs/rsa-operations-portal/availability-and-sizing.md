@@ -21,6 +21,7 @@ Backups themselves are in the [Operator Guide](operator-guide.md#database-backup
 | Email | Sent asynchronously on a pool of 50 to 500 threads | The relay's own limits |
 | Database growth | Small tables, except `AuditEvent`, which grows with every sign-in and change until `ENS_AUDIT_RETENTION_DAYS` removes old events | `ENS_AUDIT_RETENTION_DAYS` |
 | AM searches | Free-text user searches return at most 25 results per identity source | `search.useridonly` |
+| Failed anonymous steps | Each answers no sooner than the uniform response time (1 s), and holds its request thread that long. Each limited attempt also reads and writes a row in the rate-limit tables | `rsa.rate-limit.uniform-response-time`, `rsa.rate-limit.*` |
 
 ### Starting figures
 
@@ -49,14 +50,16 @@ How to adjust:
 
 | State | Where it lives | With a second Portal |
 |---|---|---|
-| Sign-in sessions | The Portal's memory | A user whose requests reach the other Portal is signed out |
-| Attempt limits (Test My Token, PIN reset links) | The Portal's memory | Each Portal counts on its own, so the limits double |
+| Sign-in sessions, and an emergency access code waiting to be revealed | The Portal's memory | A user whose requests reach the other Portal is signed out, and an operator loses a code not yet revealed |
+| Rate limits, backoff and the feature caps (Test My Token, PIN reset links, token swap) | The `RateLimitWindow` and `RateLimitBackoff` tables | Safe: every node counts together |
+| Help-desk requests | The `HelpDeskRequest` table; every node expires overdue ones | Safe: a request claimed for running is not run twice |
 | License state and installation id | Files on a ReadWriteOnce volume | The second pod can't mount the volume on another node |
 | Scheduled jobs | Claimed per occurrence in the `CronLock` table | Safe: one node runs each occurrence |
 | Audit trail | The database, under a row lock on `AuditChainHead` | Safe: the chain stays consistent |
 
-The jobs and the audit trail were built to be safe with several Portal nodes, but the sessions,
-the attempt limits and the license volume are not, so more than one Portal is not supported.
+The jobs, the audit trail, the rate limits and the help-desk requests were built to be safe with
+several Portal nodes, but the sessions and the license volume are not, so more than one Portal is
+not supported.
 
 **The Connector** is stateless in the sense that it stores nothing, and the chart allows more than
 one (`connector.replicaCount`). Each replica keeps its own AM sessions. A multi-step sign-in (next

@@ -141,7 +141,8 @@ These are the ENS platform settings: every ENS application has them, with the sa
 
 | Name | Default | Description |
 |---|---|---|
-| `SERVER_FORWARD_HEADERS_STRATEGY` | unset | `framework`: take the original scheme, host and client address from a TLS-terminating proxy's `X-Forwarded-*` headers. Without it the Portal sees plain HTTP: no HSTS, redirects to `http://`, and the audit trail records the proxy's address. Set it only when every request comes through that proxy and the proxy replaces those headers. The Helm chart sets it when its ingress (with `tls`) or route (`edge` or `reencrypt`) terminates TLS |
+| `SERVER_FORWARD_HEADERS_STRATEGY` | unset | `native` behind a TLS-terminating proxy: Tomcat takes the original scheme, host, port and client address from `X-Forwarded-*`, but only on requests from an internal proxy (below), reading `X-Forwarded-For` from right to left; it ignores `Forwarded`. Without it the Portal sees plain HTTP: no HSTS, redirects to `http://`, the audit trail records the proxy's address, and every visitor shares the proxy's per-address rate limit. **Never `framework`**: it believes what a client writes in `Forwarded` or at the front of `X-Forwarded-For`. The Helm chart sets `native` when its ingress (with `tls`) or route (`edge` or `reencrypt`) terminates TLS. See [Security → Behind a proxy](security.md#behind-a-proxy) |
+| `SERVER_TOMCAT_REMOTEIP_INTERNAL_PROXIES` | the private ranges: `10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16, 127.0.0.0/8, ::1/128, fc00::/7, fe80::/10` | The proxies whose `X-Forwarded-*` headers count, as comma-separated CIDR ranges, **each with its prefix length** (`/32` for one IPv4 address). A value without a `/` is read as a regular expression and matches no proxy. Narrow it to your proxies' own addresses when a proxy appends to `X-Forwarded-For`. Helm: `forwardedHeaders.internalProxies` |
 | `ENS_COOKIE_SECURE` | `false` | `true`: the session cookie is always `Secure`. Without it, it is `Secure` only on requests the Portal itself received over TLS. The Helm chart sets it with the ingress or route as above |
 | `ENS_CSP_REPORT_ONLY` | `false` | `true` sends `Content-Security-Policy-Report-Only` instead of enforcing the policy: a stopgap for a page the policy breaks |
 | `ENS_CONSENT_BANNER_ENABLED` | `false` | Show the DoD notice-and-consent banner first in every browser session, and allow nothing else until the user clicks **I agree** |
@@ -153,7 +154,7 @@ These are the ENS platform settings: every ENS application has them, with the sa
 | `ENS_SESSION_ABSOLUTE_TIMEOUT` | `12h` | A session ends this long after sign-in, whatever its activity |
 | `ENS_SESSION_MAX_PER_USER` | `0` (no limit) | Sessions one user may have at once; a sign-in over the limit ends that user's oldest session. DISA STIG suggests `3` |
 | `security-banner.text`, `security-banner.background-color`, `security-banner.text-color` | `UNCLASSIFIED // FOR OFFICIAL USE ONLY`, `#007A33`, `#FFFFFF` | Classification banner at the top and bottom of every page. Empty text turns it off; the read-only demo never shows it. Helm: `securityBanner.*` |
-| `user.token.test.maxAttempts`, `user.token.test.windowMinutes` | `5`, `15` | *Test My Token* attempts allowed per user ID in the window. Counted in memory |
+| `user.token.test.maxAttempts`, `user.token.test.windowMinutes` | `5`, `15` | *Test My Token* attempts allowed per user ID in the window. Counted in the database, and held even with `rsa.rate-limit.enabled=false` |
 
 !!! warning "Session timeout change from release 1.5"
     Release 1.5 shipped `server.servlet.session.timeout=480`, which Spring reads as 480 seconds: its sessions ended after 8 minutes idle. They now last 30 minutes unless you set `ENS_SESSION_IDLE_TIMEOUT`.
@@ -250,6 +251,36 @@ For every job `<name>` in `expiring`, `appointmentupcoming`, `resyncta`, `lostTo
 `resetLinkValidDays` is how long the reset link in a PIN-check email works, and `resetLinkMaxAttempts` how many tokencodes one link accepts before it refuses more.
 
 The descriptions default to: "Send Expiring Token Reminder Cron", "Send Upcoming Appointments Email Cron", "Re-sync Trusted Agents with Authentication Manager Cron", "Identify Users with multiple lost Tokens", "Send Delayed Token Registration Emails Cron" and "Reset Token Pin Checker". [Architecture](architecture.md#scheduled-jobs) describes what each job does.
+
+### Help-desk controls
+
+The `rsa.helpdesk.*` settings (Helm: `helpDesk.*`, the rest under `config`) decide how operators
+verify a user, whose changes need a second operator, and how long requests and emergency codes
+wait. They are listed, with their defaults, in
+[Help-desk requests → Settings](help-desk.md#settings).
+
+### Rate limits
+
+Limits are written as `attempts/duration`, for example `30/10m`, and counted in fixed windows. The
+Portal checks these settings at startup and stops with the name of any setting that makes no
+sense. In `.env` use the property names or their environment forms (`RSA_RATELIMIT_ENABLED`,
+`RSA_RATELIMIT_SIGNIN_PERUSER`, `RSA_RATELIMIT_BACKOFF_BASE` and so on). What they do is in
+[Security → Rate limits and uniform answers](security.md#rate-limits-and-uniform-answers).
+
+| Name | Default | Helm | Description |
+|---|---|---|---|
+| `rsa.rate-limit.enabled` | `true` | `rateLimit.enabled` | Apply the limits, backoff and uniform time. `false` is logged as a warning at every start. The feature caps of Test My Token, the PIN reset link and the token swap hold either way |
+| `rsa.rate-limit.sign-in.per-ip`, `.per-user` | `120/10m`, `10/10m` | `rateLimit.signIn.perIp`, `.perUser` | Sign-in attempts per client address and per user ID |
+| `rsa.rate-limit.self-service.per-ip`, `.per-user` | `60/10m`, `10/10m` | `rateLimit.selfService.perIp`, `.perUser` | Test My Token, the PIN resets, registration and exemption requests: per client address, and per user ID or token serial |
+| `rsa.rate-limit.appointment.per-ip`, `.per-user` | `20/1h`, `3/24h` | `rateLimit.appointment.perIp`, `.perUser` | Appointment bookings and cancellations: per client address, and per requester user ID |
+| `rsa.rate-limit.appointment.max-open-per-user` | `2` | `rateLimit.appointment.maxOpenPerUser` | Open appointments (not cancelled, today or later) one user ID may have. More are not booked |
+| `rsa.rate-limit.helpdesk-code.per-operator`, `.per-user` | `30/1h`, `10/1h` | `rateLimit.helpdeskCode.perOperator`, `.perUser` | The help desk's code sends and code or tokencode checks |
+| `rsa.rate-limit.backoff.free-failures` | `3` | `rateLimit.backoff.freeFailures` | Failures for a user ID or serial before the waiting starts |
+| `rsa.rate-limit.backoff.base`, `.max` | `30s`, `15m` | `rateLimit.backoff.base`, `.max` | The first wait, which doubles with each further failure, and the longest |
+| `rsa.rate-limit.backoff.forget-after` | `1h` | `rateLimit.backoff.forgetAfter` | After this long without a failure, the count starts again |
+| `rsa.rate-limit.uniform-response-time` | `1s` | `rateLimit.uniformResponseTime` | How long a failed anonymous step takes at least, whatever the cause. `0` (off) to `10s` |
+
+With Helm, an empty value keeps the default.
 
 ### Branding, text and email templates
 

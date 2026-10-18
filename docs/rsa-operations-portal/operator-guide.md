@@ -95,6 +95,8 @@ Suggested alerts: readiness failing; `ens_rsa_am_call_seconds_count{outcome="err
 
     Both components log to standard output. The Portal's lines are JSON (Elastic Common Schema) unless `logFormat: text`. Collect the logs with your cluster's log shipper.
 
+At startup the Portal logs the help-desk and rate-limit settings in effect (`Help desk: ...`, `Rate limits (per client address / per user ID or token serial): ...`). It stops with `Help-desk settings: ...` or `Rate-limit settings: ...` naming any setting that makes no sense, and warns while `rsa.helpdesk.verification.required=false`, `rsa.helpdesk.dual-control.privileged-roles` is empty or `rsa.rate-limit.enabled=false`. User IDs and token serials that people type are escaped before they are logged.
+
 The request id in each Portal log line is the caller's `X-Request-Id` (from a proxy or load balancer, if it is a plain token) or a new one. It is returned in the response's `X-Request-Id` and recorded in the request's audit events, so a log line, a user's report and an audit event can be matched.
 
 ## Database backups
@@ -206,6 +208,8 @@ Back up the database first.
     The chart's version is the release version. The license PVC is kept. See [Installation → Upgrade](install.md#7-upgrade).
 
 The Portal updates its database schema itself on the first start of the new version (Flyway). Going back to an older release means restoring the backup as well: see [Rolling back an upgrade](availability-and-sizing.md#rolling-back-an-upgrade).
+
+What changes for operators and users with the release that brought help-desk requests and rate limits is listed in [Installation → Upgrade with upgrade.sh](install.md#upgrade-with-upgradesh), under *To the release with help-desk requests and rate limits*.
 
 ## Certificate renewal
 

@@ -78,7 +78,7 @@ it is on by default; these settings need a decision for a STIG deployment. Each 
 | Administrator idle timeout | `ENS_SESSION_ADMIN_IDLE_TIMEOUT` | the idle timeout | `15m` is the suggested value |
 | Absolute session lifetime | `ENS_SESSION_ABSOLUTE_TIMEOUT` | `12h` | Your policy's value |
 | Concurrent sessions per user | `ENS_SESSION_MAX_PER_USER` | `0` (no limit) | `3` is the suggested value |
-| Failed sign-ins | Authentication Manager's lockout policy | | The Portal adds no lockout of its own for sign-in; AM enforces it on every passcode |
+| Failed sign-ins | Authentication Manager's lockout policy, and `rsa.rate-limit.*` | AM's policy; rate limits and backoff on | AM enforces its lockout on every passcode. In front of it the Portal [rate-limits sign-in](security.md#rate-limits-and-uniform-answers) per client address and per user ID, and after 3 failures for a user ID makes it wait (30 seconds, doubling to 15 minutes). It does not lock the account itself. Keep `rsa.rate-limit.enabled=true` |
 | Secure session cookie | `ENS_COOKIE_SECURE` | `false` | `true` whenever TLS ends at a proxy |
 | Security headers, CSRF, method security | always on | | `ENS_CSP_REPORT_ONLY` must stay `false` |
 | Audit trail | `ENS_AUDIT_*` | stored in the database, stdout | Forward to your SIEM, and set `ENS_AUDIT_RETENTION_DAYS` to your retention policy ([Audit logging](../audit-logging.md)) |

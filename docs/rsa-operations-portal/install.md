@@ -213,6 +213,15 @@ The Portal updates its database schema itself on the first start of the new vers
 
 **HTTPS to the Connector and the AM passwords.** Nothing needs editing: `upgrade.sh` makes the certificates and moves the passwords. Once the Connector runs, delete `connector.env.before-secrets.*`: it holds the old passwords. The Portal and the Connector must be upgraded together; the release package always does that.
 
+**To the release with help-desk requests and rate limits.**
+
+* **Help-desk requests.** Resetting a PIN, issuing an emergency access code, marking a token lost, deprovisioning an assigned token and clearing a cached Windows password are now [help-desk requests](help-desk.md): a ticket and reason, a verified user, a second operator for privileged users, and an e-mail to the user. Unlocking an account stays one click. Tell your Trusted Agents and Help Desk staff before the upgrade. The settings are `rsa.helpdesk.*`.
+* **E-mails.** The help-desk notice replaces the PIN-reset and lost-token e-mails. Their templates, `user-token-pin-reset-notification.properties` and `user-token-lost-notification.properties`, are no longer used; a customized copy in `default_build/email-templates` can be removed. Customize the notice through the `helpdesk.notice.*` keys in `messages.properties` instead.
+* **Generic self-service messages.** Sign-in, Test My Token, the Windows-password PIN reset, registration and exemption requests now give one answer whatever the cause (see [Security](security.md#rate-limits-and-uniform-answers)). In `messages.properties`, the keys `user.exemption.request.confirmationSent` and `user.exemption.request.noEmail` are replaced by `user.exemption.request.received`: move a customized text to the new key.
+* **Rate limits** apply from the first start (`rsa.rate-limit.*`), counted in the database. The in-memory attempt limiter is gone: Test My Token's and the PIN reset link's limits, and the token swap's, are counted in the database too.
+* **Behind a proxy**, use `SERVER_FORWARD_HEADERS_STRATEGY=native`, never `framework`, and check `SERVER_TOMCAT_REMOTEIP_INTERNAL_PROXIES` ([Security → Behind a proxy](security.md#behind-a-proxy)). Without the right setting every visitor shares the proxy's per-address limit.
+* **Database.** Flyway runs `V2__helpdesk_requests`, `V3__rate_limits` and `V4__helpdesk_run_started` on the first start, adding `HelpDeskRequest`, `RateLimitWindow` and `RateLimitBackoff`.
+
 **AM permissions.** Operators' role grants and revokes, clearing cached Windows passwords and emergency access codes now run in the operator's own AM session. Before the upgrade, give the mapped AM roles the [additional permissions](rsa-integration.md#least-privilege-am-roles), or those actions fail for operators whose roles lack them.
 
 **From a release with a single `.env`.** Older releases kept every setting in `.env` and gave it to every container, so the Portal received the AM credentials and the MySQL root password. `upgrade.sh` splits it with `util/split-env.sh`, and nothing needs editing:
@@ -326,6 +335,9 @@ The key values:
 | `activeDirectory.*` | `active-directory.*` |
 | `cronTimezone`, `securityBanner.*` | `cron.timezone`, `security-banner.*` |
 | `consentBanner.*`, `session.*` | `ENS_CONSENT_BANNER_*`, `ENS_SESSION_*` (see [Configuration](configuration.md#security-headers-banner-and-sessions)) |
+| `helpDesk.verificationRequired`, `.verificationMethods`, `.privilegedRoles`, `.approverRoles`, `.requestTtl` | `rsa.helpdesk.*` (see [Help-desk requests](help-desk.md#settings)); the other `rsa.helpdesk.*` settings go in `config` |
+| `rateLimit.*` | `rsa.rate-limit.*` (see [Configuration → Rate limits](configuration.md#rate-limits)). An empty value keeps the default |
+| `forwardedHeaders.internalProxies` | `SERVER_TOMCAT_REMOTEIP_INTERNAL_PROXIES`: CIDR ranges, each with its prefix length; the chart's schema refuses others. Empty: the private ranges |
 | `metrics.enabled` (`true`), `metrics.port` (`9090`), `metrics.serviceMonitor.*`, `metrics.allowFrom` | `MANAGEMENT_SERVER_PORT`: Prometheus and the probes on a port of their own, the `metrics` port of the Service |
 | `logFormat` (`json`) | `LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs`; `text` for plain lines |
 | `backup.*` | A database backup CronJob (off by default; see [Operator Guide](operator-guide.md#database-backups)) |
@@ -376,7 +388,9 @@ ingress:
       hosts: [rsa-portal.example.com]
 ```
 
-**OpenShift**: set `openshift.enabled: true`, so the restricted SCC assigns the user and group ids, and use a Route instead of an Ingress:
+When the ingress or Route terminates TLS, the chart sets `SERVER_FORWARD_HEADERS_STRATEGY=native` and `ENS_COOKIE_SECURE=true`, so the Portal sees each client's own address, for its audit trail and its rate limits. If the ingress controller runs with `use-forwarded-headers` or `compute-full-forwarded-for`, set `forwardedHeaders.internalProxies` to the controller's and the load balancer's ranges. See [Security → Behind a proxy](security.md#behind-a-proxy).
+
+**OpenShift**: set `openshift.enabled: true`, so the restricted SCC assigns the user and group ids, and use a Route instead of an Ingress. The chart annotates the Route with `haproxy.router.openshift.io/set-forwarded-headers: replace` (in `route.annotations`), so the router replaces `X-Forwarded-For` instead of appending to it: keep that annotation.
 
 ```yaml
 openshift:
@@ -413,6 +427,8 @@ ingress:
 
 On OpenShift use `route.tls.termination: passthrough`. Without an ingress controller, use `service.type: LoadBalancer`.
 
+With TLS passed through, the ingress controller or router hides the client's address, so all clients share its per-address rate limit; the per-user limits and backoff still apply. Raise `rateLimit.*.perIp`, or use a `LoadBalancer` Service with `externalTrafficPolicy: Local`, which keeps client addresses.
+
 ### 7. Upgrade
 
 ```bash
@@ -421,6 +437,8 @@ helm upgrade rsa-portal oci://ghcr.io/winllc/charts/rsa-operations-portal --vers
 ```
 
 Back up the database first. The Portal updates its schema on the first start of the new version, and `helm rollback` restores the previous images and settings, not the previous database. The license PVC, and with it the installation id and an uploaded license, is kept.
+
+An upgrade to the release with help-desk requests and rate limits brings the values `helpDesk.*`, `rateLimit.*` and `forwardedHeaders.internalProxies`, sets `SERVER_FORWARD_HEADERS_STRATEGY=native` (it was `framework`) behind a TLS-terminating ingress or route, and adds the `set-forwarded-headers: replace` annotation to the Route. Read the [release notes for the release package](#upgrade-with-upgradesh): they apply to Helm too.
 
 An upgrade to the release with HTTPS between the Portal and the Connector creates the TLS Secret, switches the Portal's Connector address to `https://...:8443`, mounts the AM passwords as files and adds the Connector NetworkPolicy. Both pods roll once. On a cluster without NetworkPolicy support, set `networkPolicy.connector.enabled=false`. With `metrics.enabled` (the default), the probes move to the management port, and the Portal's log lines become JSON unless `logFormat: text`.
 

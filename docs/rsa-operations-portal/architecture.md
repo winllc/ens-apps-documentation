@@ -111,6 +111,8 @@ Flyway owns the schema: at every start the Portal applies the migrations in `db/
 | `AuditOutputState` | How far each audit output (Splunk HEC, syslog) has delivered |
 | `AuditApiToken` | Tokens for the audit pull API, stored as hashes |
 | `CronLock` | Which node has claimed each scheduled job's current occurrence |
+| `HelpDeskRequest` | [Help-desk requests](help-desk.md): the change, the user and token, ticket, reason, verification, approval, state, when it was opened, decided and run (`runStartedAt`). An e-mailed code is kept only as its SHA-256 hash; an emergency access code never |
+| `RateLimitWindow`, `RateLimitBackoff` | Rate-limit counts per fixed window, and backoff per user ID or serial, keyed by SHA-256 hashes of the address, user ID or serial (see [Security](security.md#rate-limits-and-uniform-answers)) |
 
 The Portal's earlier audit event types (`TRUSTED_AGENT_REGISTERED`, `USER_TOKEN_LOST` and so on) were moved into the chain on the first start of the release that introduced `ens-audit/1`; each keeps its original type in `details.legacyType`.
 
@@ -132,6 +134,8 @@ User and token data itself (principals, tokens, PINs, admin roles) lives in RSA 
 | `lostTokenThresholdMonitor` | `LostTokenThresholdMonitorCron` | `0 35 0 ? * *` | Finds users who lost at least `tokens.lost` tokens within `window.inDays` days, records an audit event, and emails the list to `mfa.group.email`. **Debug is `true` by default**, so no email is sent until it is set to `false`. |
 | `sendDelayedTokenRegistrationEmails` | `SendDelayedTokenRegistrationEmailsCron` | `0 32 0 ? * *` | For distributed tokens whose allowed enrollment date has arrived, sends the registration email, and repeats every `daysBetweenReminderEmails` days. |
 | `tokenPinCheck` | `ResetTokenPinCheckCron` | `0 30 0 ? * *` | For assigned tokens unused for `daysSinceLastLogin` (60) days, emails the user either a "set your initial PIN" reminder (token still waiting for its first PIN) or a "check your PIN" link with a reset code (`/user/pinReset/start/{code}`) that works for `resetLinkValidDays` (14) days. At most one email per token every `daysBetweenReminderEmails` (14) days; disabled and locked accounts are skipped. |
+
+Two housekeeping tasks run on every node, outside the job table: overdue help-desk requests are expired every 5 minutes, and expired rate-limit rows are deleted every 10 minutes, in batches.
 
 The last-run details are held **in memory only**. The PMO can see them, and trigger any job, at **Admin → Manual Run Cron Jobs** (`/manualCron`). A job whose `enabled` flag is `false` does nothing, even when triggered by hand.
 
