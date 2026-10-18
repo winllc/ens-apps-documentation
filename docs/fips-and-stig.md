@@ -4,11 +4,10 @@ This page gives the suite-wide picture: where the applications get their cryptog
 changes in FIPS mode, the state of the license check, and which DISA STIG controls each
 application implements. Each product's own page has its settings in full:
 
+- [CertAlert](cert-alert/fips-and-stig.md)
 - [Directory Services Portal](directory-services-portal/fips-and-stig.md)
 - [ReadyRoom](readyroom/fips-and-stig.md)
 - [RSA Operations Portal](rsa-operations-portal/fips-and-stig.md)
-- CertAlert: the FIPS notes are in [FIPS 140-3](#fips-140-3) below; its STIG settings will be
-  documented with its next update.
 
 !!! note "No ENS validation"
     ENS Solutions does not supply or claim a FIPS 140-3 validated cryptographic module, and none of
@@ -78,7 +77,7 @@ protocols, so the JDK's defaults apply.
 |---|---|
 | Browsers | TLS at the application (its key store) or at your proxy or ingress |
 | Directory | `ldaps://` in the CertAlert, Directory Services Portal and ReadyRoom templates (CertAlert's chart has no default URL). The RSA Operations Portal's optional Active Directory connection takes the URL you give |
-| Mail | ReadyRoom requires STARTTLS by default. The RSA Operations Portal's templates configure no TLS for SMTP |
+| Mail | ReadyRoom requires STARTTLS by default. CertAlert uses STARTTLS when you set `SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_ENABLE=true`. The RSA Operations Portal's templates configure no TLS for SMTP |
 | Database | RSA Operations Portal: `sslMode=REQUIRED`. CertAlert and ReadyRoom: the PostgreSQL JDBC driver's default unless you add `sslmode` to the URL (CertAlert's chart: `database.params`, for example `sslmode=verify-full`) |
 | Splunk HEC and syslog | The certificate is checked against the JVM trust store. Syslog defaults to `tcp`, which is plain text; use `tls` |
 | Portal to Connector (RSA) | HTTPS on 8443, with optional mutual TLS |
@@ -96,7 +95,9 @@ Use these in test setups only.
 | `cert-alert.revocation.allow-unverified-crl` | CertAlert (**`true` by default**) | Believes a CRL whose signature could not be checked. Set `false` and configure `issuer-directory` |
 | `SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_ENABLE=false`, or `SPRING_MAIL_PROPERTIES_MAIL_SMTP_SSL_TRUST` | ReadyRoom | Mail in plain text, or a mail server certificate that isn't checked |
 | `CONNECTOR_HTTP_ADDRESS=0.0.0.0` with an `http://` `CONNECTOR_URL` | RSA Operations Portal | Plain HTTP between the Portal and the Connector (demo stack only) |
-| `ENS_X509_REVOCATION=off`, `ENS_X509_REVOCATION_FAIL=open` | Directory Services Portal, ReadyRoom | Revoked or unchecked certificates sign in |
+| `ENS_X509_REVOCATION=off`, `ENS_X509_REVOCATION_FAIL=open` | CertAlert, Directory Services Portal, ReadyRoom | Revoked or unchecked certificates sign in |
+| A PostgreSQL URL without `sslmode=verify-full` | CertAlert, ReadyRoom | Unencrypted, or encrypted without checking the server |
+| `ENS_X509_SOURCE=header` (CertAlert, ReadyRoom), or TLS ended at an ingress or edge Route in front of any product | See the setting | The browser's TLS ends at the proxy, so the proxy's cryptographic module is the one that has to be validated |
 
 CertAlert's server-endpoint probe trusts every certificate chain on purpose: it reads and reports
 the certificates a server presents, and relies on none of them.
@@ -112,6 +113,7 @@ the license library's own (below). In particular:
 - **ReadyRoom:** Windows (Kerberos) sign-in, and the Windows client on workstations with Windows'
   FIPS policy;
 - **Directory Services Portal:** the native package on a FIPS-enabled host's own Java;
+- **CertAlert:** the UnboundID LDAP SDK in its jar, used only by the demo mode;
 - **every product:** the whole application, end to end, on a FIPS-enabled host.
 
 ### The license check
@@ -134,23 +136,23 @@ results of the library's FIPS tests, are in [Licensing → FIPS 140-3](licensing
 
 ## DISA STIG
 
-The Directory Services Portal, ReadyRoom and the RSA Operations Portal implement the same ENS
-platform baseline: a notice-and-consent banner, session limits, security headers, an audit trail,
-and (where certificates sign in) revocation checking. Most of it is on by default. The settings
-that need a decision are below; each product's page has the full table.
+All four applications implement the same ENS platform baseline: a notice-and-consent banner,
+session limits, security headers, an audit trail, and (where certificates sign in) revocation
+checking. Most of it is on by default. The settings that need a decision are below; each
+product's page has the full table.
 
-| Control | Directory Services Portal | ReadyRoom | RSA Operations Portal |
-|---|---|---|---|
-| Notice and consent banner (`ENS_CONSENT_BANNER_ENABLED`, off by default) | Yes | Yes | Yes |
-| Idle, administrator idle and absolute timeouts, sessions per user (`ENS_SESSION_*`: `30m`, the idle value, `12h`, no limit) | Yes | Yes | Yes |
-| Failed sign-in lockout | `LOGIN_MAX_FAILURES` (8) in `LOGIN_LOCKOUT_WINDOW` (15m), plus the directory's own | The directory's password policy | Authentication Manager's lockout policy |
-| Client-certificate revocation checking (`ENS_X509_REVOCATION`, off by default) | Yes | Yes | Not applicable: SecurID sign-in |
-| Allowed certificate issuers (`ENS_X509_ALLOWED_ISSUERS`) | Yes | Yes | Not applicable |
-| Security headers, CSRF protection (`ENS_CSP_REPORT_ONLY` must stay `false`) | Yes | Yes | Yes |
-| Secure session cookie behind a TLS proxy (`ENS_COOKIE_SECURE`) | Yes | Yes | Yes |
-| Hash-chained audit trail, forwarded to a SIEM ([Audit logging](audit-logging.md)) | Yes | Yes | Yes |
-| Prometheus metrics on a separate management port (`MANAGEMENT_SERVER_PORT`) | Yes | Yes | Yes |
-| Helm chart: non-root, read-only root file system, no capabilities | Yes | Yes | Yes |
+| Control | CertAlert | Directory Services Portal | ReadyRoom | RSA Operations Portal |
+|---|---|---|---|---|
+| Notice and consent banner (`ENS_CONSENT_BANNER_ENABLED`, off by default) | Yes | Yes | Yes | Yes |
+| Idle, administrator idle and absolute timeouts, sessions per user (`ENS_SESSION_*`: `30m`, the idle value, `12h`, no limit) | Yes | Yes | Yes | Yes |
+| Failed sign-in lockout | The directory's password policy | `LOGIN_MAX_FAILURES` (8) in `LOGIN_LOCKOUT_WINDOW` (15m), plus the directory's own | The directory's password policy | Authentication Manager's lockout policy |
+| Client-certificate revocation checking (`ENS_X509_REVOCATION`, off by default) | Yes | Yes | Yes | Not applicable: SecurID sign-in |
+| Allowed certificate issuers (`ENS_X509_ALLOWED_ISSUERS`) | Yes | Yes | Yes | Not applicable |
+| Security headers, CSRF protection (`ENS_CSP_REPORT_ONLY` must stay `false`) | Yes | Yes | Yes | Yes |
+| Secure session cookie behind a TLS proxy (`ENS_COOKIE_SECURE`) | Yes | Yes | Yes | Yes |
+| Hash-chained audit trail, forwarded to a SIEM ([Audit logging](audit-logging.md)) | Yes | Yes | Yes | Yes |
+| Prometheus metrics on a separate management port (`MANAGEMENT_SERVER_PORT`) | Yes | Yes | Yes | Yes |
+| Helm chart: non-root, read-only root file system, no capabilities | Yes | Yes | Yes | Yes |
 
 Settings worth fixing for every STIG deployment:
 
@@ -161,9 +163,6 @@ Settings worth fixing for every STIG deployment:
 - `ENS_COOKIE_SECURE=true` whenever TLS ends at a proxy;
 - the audit trail forwarded to your SIEM, and `ENS_AUDIT_RETENTION_DAYS` set to your policy;
 - the management port kept off every ingress, route and published port.
-
-**CertAlert** carries the same baseline in its code; its settings will be documented here and in
-its own pages with its next documentation update.
 
 ### Supply chain
 

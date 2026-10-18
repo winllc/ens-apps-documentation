@@ -26,7 +26,10 @@ marked; they are described fully in the [Admin guide](admin-guide.md).
 
 ## Signing in
 
-CertAlert offers two ways in:
+Some deployments first show a **notice and consent** page (the DoD banner). Read it and press
+**I agree**; nothing signs you in until you do, and it is shown again for every new session.
+
+CertAlert then offers two ways in:
 
 1. **Client certificate**: if your browser presents a certificate that the directory publishes for
    you, you are signed in without a form.
@@ -40,6 +43,7 @@ Messages on the sign-in page:
 | *No client certificate was accepted…* | Always shown on the form: no usable certificate was presented |
 | *That username and password were not accepted by the directory.* | Bind failed |
 | *You have been signed out.* | After **Sign out** |
+| *Your session has ended. Sign in again to carry on.* | Your session timed out after a period of inactivity, reached its maximum length, or was ended because you signed in elsewhere |
 
 Your name, role (**Administrator** or **Reader**) and method (**via X509** / **via LDAP**) appear
 in the account menu at the top right, together with your directory DN and **Sign out**.

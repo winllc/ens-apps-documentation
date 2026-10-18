@@ -82,8 +82,7 @@ for sizing, what to back up, disaster recovery and rollback across the suite.
 | **User guide** | use the application day to day |
 
 Most sections also include **Architecture**, **Security**, **API reference** and
-**Troubleshooting** pages. Every section has a **Sizing, availability and recovery** page, and the
-Directory Services Portal, ReadyRoom and the RSA Operations Portal have a **FIPS 140-3 and DISA
+**Troubleshooting** pages. Every section has a **Sizing, availability and recovery** page and a **FIPS 140-3 and DISA
 STIG** page. The RSA Operations Portal adds an **RSA AM integration** page. ReadyRoom adds a
 **Windows client** page.
 

@@ -43,6 +43,9 @@ How to check and adjust:
   limit.
 - **Database.** Watch its disk use and the audit table's growth; set `ENS_AUDIT_RETENTION_DAYS`
   once a SIEM keeps the events.
+- **With Prometheus** (on the management port): `jvm_memory_used_bytes{area="heap"}` for the
+  heap, `ens_certalert_job_last_success_seconds{job}` for jobs that have stopped finishing, and
+  `hikaricp_connections_pending` for requests waiting on the database pool.
 
 ## High availability
 

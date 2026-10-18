@@ -248,3 +248,7 @@ daily job then removes older events, with three safeguards:
 
 Keep the application's audit trail at least as long as your policy requires if Splunk is not your
 system of record.
+
+CertAlert also keeps its own `cert-alert.audit.retention.*` settings, which apply while
+`ENS_AUDIT_RETENTION_DAYS` is `0`; its retention job runs daily at 03:30 UTC. See
+[CertAlert configuration](cert-alert/configuration.md#audit-trail).

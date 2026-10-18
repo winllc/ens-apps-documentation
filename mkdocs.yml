@@ -84,6 +84,7 @@ nav:
       - Additional guidance:
           - Architecture: cert-alert/architecture.md
           - Security: cert-alert/security.md
+          - FIPS 140-3 and DISA STIG: cert-alert/fips-and-stig.md
           - Sizing, availability and recovery: cert-alert/availability-and-sizing.md
           - API reference: cert-alert/api-reference.md
           - Troubleshooting: cert-alert/troubleshooting.md

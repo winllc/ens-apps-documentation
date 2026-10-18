@@ -67,6 +67,9 @@ gpg --verify SHA256SUMS.asc SHA256SUMS
 sha256sum -c SHA256SUMS --ignore-missing
 ```
 
+Release images and the Helm chart are also signed with cosign; see
+[Releases → Verifying the images and the chart](../releases.md#verifying-the-images-and-the-chart).
+
 ### 2. Unpack and run install.sh
 
 ```bash
@@ -89,10 +92,23 @@ Edit `.env`. Set at least:
 | `CERT_ALERT_LDAP_USER` / `CERT_ALERT_LDAP_PASSWORD` | the service account it binds as |
 | `CERT_ALERT_SECURITY_ADMIN_IDENTIFIERS` | `pki-admin@example.gov,jdoe` |
 
-Then, if you use them: SMTP (`SPRING_MAIL_*`), TLS (`CERT_ALERT_TLS_*`, with the keystores in
-`tls/`), the classification banner and the expiry thresholds. Every setting is described in
-`.env`. Any setting from [Configuration](configuration.md) can be added as its environment
-variable: `cert-alert.ldap.page-size` is `CERT_ALERT_LDAP_PAGE_SIZE`.
+Then, if you use them:
+
+- SMTP (`SPRING_MAIL_*`) and its timeouts (`CERT_ALERT_MAIL_*_TIMEOUT_MS`);
+- TLS (`CERT_ALERT_TLS_*`, with the keystores in `tls/`);
+- where the UI is published (`CERT_ALERT_BIND_ADDRESS`, `CERT_ALERT_PORT`), and behind a reverse
+  proxy `SERVER_FORWARD_HEADERS_STRATEGY=framework` and `ENS_COOKIE_SECURE`;
+- sessions (`ENS_SESSION_*`) and the notice-and-consent banner (`ENS_CONSENT_BANNER_*`);
+- client certificates (`ENS_X509_*`): revocation at sign-in, allowed issuers, mapping, and
+  header mode;
+- the directory timeouts (`CERT_ALERT_LDAP_*_TIMEOUT_MS`) and the revocation hosts
+  (`CERT_ALERT_REVOCATION_ALLOWED_HOSTS`);
+- JSON logs (`LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs`) and a metrics port
+  (`MANAGEMENT_SERVER_PORT`);
+- the classification banner, the expiry thresholds and the audit outputs (`ENS_AUDIT_*`).
+
+Every setting is described in `.env`. Any setting from [Configuration](configuration.md) can be
+added as its environment variable: `cert-alert.ldap.page-size` is `CERT_ALERT_LDAP_PAGE_SIZE`.
 
 !!! note "Keep .env private"
     `.env` holds passwords. `install.sh` makes it readable by its owner only (`0600`). Values that
@@ -118,6 +134,13 @@ waits for CertAlert to report healthy. It prints the URL and the license screen'
 The UI is on port 8080 of the host. `CERT_ALERT_PORT` moves it, and
 `CERT_ALERT_BIND_ADDRESS=127.0.0.1` keeps it to the host, behind a reverse proxy of your own.
 With `CERT_ALERT_TLS_ENABLED=true` it is `https://` on the same port.
+
+!!! warning "Plain HTTP on every interface"
+    With TLS off and the UI published on every interface (the default bind address, `0.0.0.0`),
+    `install.sh` and `upgrade.sh` print a warning: directory passwords and session cookies would
+    cross the network in clear text. Either put a TLS-terminating reverse proxy in front and set
+    `CERT_ALERT_BIND_ADDRESS=127.0.0.1`, `SERVER_FORWARD_HEADERS_STRATEGY=framework` and
+    `ENS_COOKIE_SECURE=true`, or turn TLS on in CertAlert.
 
 Day to day:
 
@@ -198,7 +221,13 @@ one is missing.
 | `notifications.email.*`, `alerts.email.*` | The round-up and the operator alerts |
 | `tls.*` | TLS in the pod, for client-certificate sign-in |
 | `caTruststore.*` | A private CA for the directory, SMTP or Splunk |
-| `banner.*`, `thresholds.*`, `revocation.*` | Look, expiry windows, default OCSP and CRL |
+| `x509.*` | Client certificates: `source` (`servlet` or `header`), `header`, `trustedProxies`, `proxySecret.*`, `trustedCa.*`, `revocation`, `ocspResponderUrl`, `revocationFail`, `revocationCache`, `allowedIssuers`, `userFilter` |
+| `session.*` | `idleTimeout`, `adminIdleTimeout`, `absoluteTimeout`, `maxPerUser`. Empty keeps the defaults |
+| `consentBanner.*` | `enabled`, `title`, `text`. For `ENS_CONSENT_BANNER_FILE`, mount the file with `extraVolumes` and pass it in `extraEnv` |
+| `banner.*`, `thresholds.*` | Look, expiry windows |
+| `revocation.*` | `defaultOcspUrl`, `defaultCrlUrl`, `allowedHosts` (the only hosts CRLs and OCSP answers are fetched from) |
+| `metrics.*` | `enabled` (default `true`) gives the actuator its own port, `port` (`9090`), plain HTTP, with health and Prometheus open there and the probes moved to it. `serviceMonitor.*` renders a Prometheus Operator ServiceMonitor; `allowFrom` admits your Prometheus through the NetworkPolicy |
+| `logFormat` | `json` (default): ECS JSON logs. `text`: Spring Boot's ordinary lines |
 | `audit.*` | Audit logging to stdout, a file, Splunk or syslog. See [Audit logging](../audit-logging.md). |
 | `extraEnv`, `extraEnvFrom` | Any other setting, as its environment variable |
 
@@ -219,6 +248,8 @@ chart writes to its own Secret, or an `existingSecret` and `existingSecretKey`:
 | Trust store password | `tls.truststore.password` | `truststore-password` |
 | Private CA trust store password | `caTruststore.password` | `ca-truststore-password` |
 | Splunk HEC token | `audit.splunk.token` | `splunk-hec-token` |
+| Header-mode proxy secret | `x509.proxySecret.value` | `proxy-secret` |
+| Header-mode CA certificates | `x509.trustedCa.value` | `ca.pem` |
 
 The key store and trust store files themselves always come from Secrets you create
 (`tls.keystore.existingSecret`, `tls.truststore.existingSecret`).
@@ -287,9 +318,9 @@ kubectl -n cert-alert port-forward svc/cert-alert 8080:8080    # then http://loc
 
 === "X.509 client certificates (passthrough)"
 
-    CertAlert reads the client certificate from its own TLS handshake. It does not accept a
-    certificate forwarded in a header, so **TLS must pass through to the pod**. Edge termination
-    at an Ingress or Route works only for password sign-in.
+    With `x509.source: servlet` (the default), CertAlert reads the client certificate from its
+    own TLS handshake, so **TLS must pass through to the pod**. For TLS at the ingress, use header
+    mode (next tab).
 
     ```bash
     kubectl -n cert-alert create secret generic cert-alert-tls-stores \
@@ -319,6 +350,45 @@ kubectl -n cert-alert port-forward svc/cert-alert 8080:8080    # then http://loc
 
     The key store's certificate must be issued for the name users browse to.
 
+=== "X.509 client certificates (header mode)"
+
+    The ingress controller terminates TLS, verifies the client certificate and forwards it in a
+    header with a shared secret. CertAlert believes it only from `x509.trustedProxies`, with the
+    secret, and when it chains to `x509.trustedCa`.
+
+    ```bash
+    kubectl -n cert-alert create secret generic cert-alert-x509-proxy \
+      --from-literal=proxy-secret="$(openssl rand -hex 32)"
+    kubectl -n cert-alert create secret generic dod-cas --from-file=ca.pem=dod-cas.pem
+    ```
+
+    ```yaml
+    x509:
+      source: header
+      header: ssl-client-cert
+      trustedProxies: "10.42.0.0/16"          # the ingress controller's pods
+      proxySecret: {existingSecret: cert-alert-x509-proxy}
+      trustedCa: {existingSecret: dod-cas}
+      revocation: ocsp-then-crl
+    ingress:
+      enabled: true
+      className: nginx
+      annotations:
+        nginx.ingress.kubernetes.io/auth-tls-secret: ingress-nginx/dod-cas
+        nginx.ingress.kubernetes.io/auth-tls-verify-client: "optional"
+        nginx.ingress.kubernetes.io/auth-tls-pass-certificate-to-upstream: "true"
+    ```
+
+    The controller must also send `X-ENS-Proxy-Secret` with the secret's value: with
+    ingress-nginx, `proxy_set_header X-ENS-Proxy-Secret "<secret>";` in a configuration snippet
+    (where your controller allows snippets) or in the controller's `proxy-set-headers` ConfigMap.
+    Use `networkPolicy` so only the controller reaches the pod. The chart refuses to render header
+    mode without the proxy secret and the CA, and sets `SERVER_FORWARD_HEADERS_STRATEGY=framework`
+    whenever its ingress or an edge or reencrypt Route terminates TLS.
+
+    If the controller reaches pods over IPv6, add its IPv6 range to `trustedProxies`: IPv4 ranges
+    never match IPv6 addresses.
+
 ### 6. Upgrade
 
 ```bash
@@ -330,6 +400,14 @@ Back up the database first, and check that `security.adminIdentifiers` names eac
 by an address the directory publishes for them or by their uid, not by a common name. The pod is
 replaced (only one replica runs), the schema is migrated on start, and the license PVC is kept with the installed license and the installation id.
 Migrations are not undone by `helm rollback`: going back means restoring the backup.
+
+!!! note "Upgrading to the platform-baseline release"
+    - `metrics.enabled` is `true` by default: the actuator moves to port `9090` (plain HTTP), the
+      probes move with it, and the Service gets a `metrics` port. Set `metrics.enabled: false` to
+      keep the actuator on the application's port.
+    - `logFormat` is `json` by default.
+    - `x509.revocation` is `off` by default, so revocation at sign-in stays off until you turn it
+      on; startup logs a warning while certificate sign-in is on without it.
 
 ### 7. Uninstall
 
@@ -434,20 +512,22 @@ nothing else needs mirroring.
 - The JVM is PID 1, receives `SIGTERM` directly and shuts down gracefully.
 - The license lives in `/var/lib/ens/certalert` (`ENS_LICENSE_STATE_DIR`, `ENS_LICENSE_FILE`),
   which must be persistent and writable.
-- Probe `/actuator/health/liveness` and `/actuator/health/readiness`, not the aggregate
-  `/actuator/health`, which turns `DOWN` when the directory is unreachable. See
+- Probe `/actuator/health/liveness` and `/actuator/health/readiness` (or `/livez` and `/readyz`
+  on the application's port), not the aggregate `/actuator/health`, which turns `DOWN` when the
+  directory is unreachable. The image's own `HEALTHCHECK` calls `/livez`. See
   [Health checks](operator-guide.md#health-checks).
+- The image's license label (`org.opencontainers.image.licenses`) is `LicenseRef-ENS-Commercial`.
 - `.dockerignore` excludes `*.p12`, `*.jks`, `*.pem`, `*.key` and `*.lic`, so key material and
   licenses cannot be baked in. Mount keystores as a volume or Secret.
 
 ## First start checklist
 
-1. **Database**: the log shows Flyway applying migrations `V1` … `V19` on an empty database.
-2. **Liveness**: `curl -fsS http://<host>:8080/actuator/health/liveness` returns
-   `{"status":"UP"}`. With Helm, `helm test cert-alert -n cert-alert` checks it through the
-   Service.
+1. **Database**: the log shows Flyway applying migrations `V1` … `V20` on an empty database.
+2. **Liveness**: `curl -fsS http://<host>:8080/livez` returns `{"status":"UP"}`. With Helm,
+   `helm test cert-alert -n cert-alert` checks it through the Service.
 3. **Directory**: `/actuator/health` includes the LDAP indicator. It reports `DOWN` if the
-   directory is unreachable (details are shown only to administrators).
+   directory is unreachable (details are shown only to administrators). Readiness does not
+   include the directory.
 4. **Sign in** with a directory password as one of the admin identifiers. The account menu should
    read *Administrator*.
 
@@ -467,5 +547,9 @@ nothing else needs mirroring.
    `COMPLETED` runs.
 8. **X.509 sign-in** works only after the first sync, because client certificates are matched
    against certificates already cached from the directory.
+9. **For DoD systems**: the consent banner appears before sign-in
+   (`ENS_CONSENT_BANNER_ENABLED=true`), and the log has no warning about `ENS_X509_REVOCATION`
+   being off.
+10. **Backups** are scheduled: see [Operator guide → Backups](operator-guide.md#backups).
 
 Next: [Configuration](configuration.md) and the [Operator guide](operator-guide.md).

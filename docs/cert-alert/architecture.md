@@ -7,18 +7,24 @@ certificates into a relational database and serves a server-rendered UI and a JS
 
 ```text
 src/main/java/com/winllc/certalert/
-├── alert/       AlertNotifier SPI, AlertDispatcher, log / email / notification channels
-├── config/      properties classes, clock, DataTables repository factory, email templates
-├── domain/      JPA entities and enums
-├── ldap/        attribute mapping, paged streaming directory client, changelog client
-├── repository/  Spring Data / DataTables repositories and filter specifications
-├── revocation/  CRL store, OCSP/CRL checker, issuer certificates
-├── scheduling/  DirectoryJobScheduler (all cron jobs)
-├── security/    X.509 and LDAP-bind authentication, roles, ServerAccessPolicy
-├── service/     parsing, status evaluation, sync, notifications, probe, projects, audit…
-└── web/         page controllers, REST API, DataTables endpoints, error handling
+├── alert/          AlertNotifier SPI, AlertDispatcher, log / email / notification channels
+├── audit/          the ens-audit/1 trail: store, outputs (stdout, file, Splunk, syslog), pull API, audit page
+├── config/         properties classes, clock, DataTables repository factory, email templates
+├── demo/           the read-only demo mode
+├── domain/         JPA entities and enums
+├── ldap/           attribute mapping, paged streaming directory client, changelog client
+├── license/        the ENS license check and the license screen's wiring
+├── net/            address ranges matched within their own family
+├── observability/  ens_* Prometheus metrics, management-port endpoints
+├── repository/     Spring Data / DataTables repositories and filter specifications
+├── revocation/     CRL store, OCSP/CRL checker, issuer certificates, fetch policy, revocation at sign-in
+├── scheduling/     DirectoryJobScheduler (all cron jobs)
+├── security/       X.509 (servlet and header mode) and LDAP-bind authentication, consent banner,
+│                   session limits, security headers, roles, ServerAccessPolicy
+├── service/        parsing, status evaluation, sync, notifications, mail outbox, probe, projects…
+└── web/            page controllers, REST API, DataTables endpoints, error handling
 src/main/resources/
-├── db/migration/   Flyway migrations V1–V19
+├── db/migration/   Flyway migrations V1–V20
 ├── static/         css, js (table wiring), img (logo, favicons)
 ├── templates/      Thymeleaf pages, email templates, layout fragments, icon sprite
 └── dev-directory.ldif   sample directory used by the developers' tests (not shipped)
@@ -252,15 +258,21 @@ erDiagram
 | `sync_run` | Job run log |
 
 The schema is created and evolved by Flyway (`V1__create_directory_tables` …
-`V19__create_outbound_email`); Hibernate only validates it. `V18` moved the audit trail to the `ens-audit/1` format and added `audit_chain_head`, `audit_delivery` and `audit_api_token`; `V19` added the email outbox, `outbound_email`.
+`V20__check_attribute_type_without_an_in_list`); Hibernate only validates it. `V18` moved the
+audit trail to the `ens-audit/1` format and added `audit_chain_head`, `audit_delivery` and
+`audit_api_token`; `V19` added the email outbox, `outbound_email`; `V20` rewrote the check on
+`server_attribute_definition.type` so the embedded H2 database keeps enforcing it.
 
 ## Front end
 
-Server-rendered Thymeleaf pages on the Tabler admin template. Tables are DataTables driven by
-`POST /api/v1/datatables/*`, mapped to JPA queries by spring-data-jpa-datatables; the app's own
-filters ride along as query parameters and become an additional JPA `Specification`. All assets
-(Tabler, Bootstrap, DataTables, jQuery, a sprite of the icons used) are served from the jar via
-webjars, so the UI works on networks with no CDN access. The Metrics chart is inline SVG.
+Server-rendered Thymeleaf pages on the Tabler 1.6.1 admin template. Tables are DataTables 3
+driven by `POST /api/v1/datatables/*`, mapped to JPA queries by spring-data-jpa-datatables; the
+app's own filters ride along as query parameters and become an additional JPA `Specification`.
+DataTables 3 makes its requests without jQuery, so the tables send the CSRF header with their own
+requests (`static/js/directory-table.js`). All assets (Tabler, Bootstrap, DataTables, jQuery 4, a
+sprite of the icons used) are served from the jar via webjars, so the UI works on networks with no
+CDN access. No page has an inline script, which the Content-Security-Policy requires. The Metrics
+chart is inline SVG.
 
 ## Error handling
 
