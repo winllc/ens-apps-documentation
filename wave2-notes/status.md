@@ -86,3 +86,29 @@ branch into docs master (#8), and many Dependabot PRs (incl. majors). Main state
 Resume order: (1) DSP#27 CI, (2) CertAlert main fix, (3) RSA LoggingConfigTest + rest, (4) RR wrap-up
 PR, (5) docs, (6) round 2 (RR-07/RR-12, RSA-05/06/07). Disk ~6 GB free: prune Docker after builds.
 UPDATE 21:11 UTC: directory-services-portal#27 (Vite lockfile fix) MERGED; DSP main should be green - confirm at resume.
+
+## Fourth pause 2026-10-18 ~01:20 UTC — how to resume
+Merged since the third pause: dsp#27 (lockfile), cert-alert#19 (main fix), in-n-out-work#25 (RR follow-up),
+in-n-out-work#26 (RR-07/RR-12; CodeQL red only for a pre-existing JNDI false positive at LdapService:374,
+analysis comment on #26; user to dismiss), ens-apps-documentation#9 (docs pass 1 + item 23 guides).
+Open: rsa-operations-portal#14 (claude/wave2-followup @0c49f27): RSA follow-up incl. LoggingConfigTest fix,
+Portal TLS1.3, readiness, SpotBugs, Trivy (Portal gated; Connector report-only pending user decision),
+cosign, non-root file ownership (util/file-owners.sh, Connector uid 998 + group 0). Verified locally only;
+Actions jobs get no runner (billing). Subscribed.
+Paused agents:
+- RSA round 2 ab2d4eefef3715f0e, worktree /home/user/wt/w2-rsa2, local branch now
+  claude/wip-do-not-merge-rsa-helpdesk @0440124 (pushed). Stacked on #14. Done: RSA-07 audit choke point
+  (345abc9), RSA-05 help-desk verification/dual control/notice (17caf7a). WIP: RSA-06 DB-backed rate limits
+  (V3__rate_limits.sql, ratelimit/ pkg, replaces AttemptLimiter), uniform responses; last step "help-desk
+  one-time-code limits". Remaining: finish RSA-06, full mvn install + helm, report. When done rename branch
+  back to claude/wave2-helpdesk-controls (remote copy of that name = #14 head; proxy refused deleting it).
+- Docs pass 2 a9f51fa95b0736665, worktree /home/user/wt/w2-docs, branch claude/wip-do-not-merge-docs-2
+  @ffdbf0e (pushed): CertAlert Wave 2 pages + ReadyRoom round 2 + new readyroom/privacy.md + cert-alert
+  fips-and-stig.md; last step "update the ReadyRoom operator guide". Remaining: finish, mkdocs --strict,
+  report, then rename to claude/wave2-docs-2 and open PR. RSA follow-up/round-2 docs after those merge.
+Reports: scratchpad/wave2/reports/*.md (certalert, readyroom, readyroom-round2, rsa-portal, rsa-connector,
+dsp, fips, docs).
+User decisions open: RSA Actions billing; dismiss RR JNDI false positive (and DSP ones); Connector Trivy
+(upgrade commons-beanutils/compress vs accept Spring 3.2 in .trivyignore); production P-256 key; copy
+ens-license 1.1.0 into apps (add ARMOR size cap first). Branches safe to delete: in-n-out-work
+claude/wip-do-not-merge-wave2-followup (merged via #25); rsa claude/wip-do-not-merge-wave2-followup (in #14).
