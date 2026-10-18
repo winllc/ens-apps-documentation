@@ -145,7 +145,7 @@ product's page has the full table.
 |---|---|---|---|---|
 | Notice and consent banner (`ENS_CONSENT_BANNER_ENABLED`, off by default) | Yes | Yes | Yes | Yes |
 | Idle, administrator idle and absolute timeouts, sessions per user (`ENS_SESSION_*`: `30m`, the idle value, `12h`, no limit) | Yes | Yes | Yes | Yes |
-| Failed sign-in lockout | The directory's password policy | `LOGIN_MAX_FAILURES` (8) in `LOGIN_LOCKOUT_WINDOW` (15m), plus the directory's own | The directory's password policy | Authentication Manager's lockout policy |
+| Failed sign-in lockout | The directory's password policy | `LOGIN_MAX_FAILURES` (8) in `LOGIN_LOCKOUT_WINDOW` (15m), plus the directory's own | The directory's password policy | Authentication Manager's lockout policy, plus the Portal's rate limits and backoff (`rsa.rate-limit.*`) |
 | Client-certificate revocation checking (`ENS_X509_REVOCATION`, off by default) | Yes | Yes | Yes | Not applicable: SecurID sign-in |
 | Allowed certificate issuers (`ENS_X509_ALLOWED_ISSUERS`) | Yes | Yes | Yes | Not applicable |
 | Security headers, CSRF protection (`ENS_CSP_REPORT_ONLY` must stay `false`) | Yes | Yes | Yes | Yes |

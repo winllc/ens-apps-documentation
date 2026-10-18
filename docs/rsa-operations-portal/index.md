@@ -10,7 +10,8 @@ The **RSA Operations Portal** is a web application that simplifies the day-to-da
 | Area | What the portal does |
 |---|---|
 | **Token self-service** | Users test their token, complete token enrollment by setting a PIN, and reset a PIN themselves (with a PKI client certificate, a Windows username and password, or an emailed reset link). |
-| **Token administration** | Trusted Agents assign (distribute) tokens to users. Trusted Agents and Help Desk staff mark tokens lost, reset PINs, deprovision tokens, issue emergency access codes, unlock accounts and clear cached Windows passwords. |
+| **Token administration** | Trusted Agents assign (distribute) tokens to users. Trusted Agents and Help Desk staff unlock accounts, and through **help-desk requests** (a ticket, a verified user, a second operator for privileged users, and a notice to the user) mark tokens lost, reset PINs, deprovision tokens, issue emergency access codes and clear cached Windows passwords. |
+| **Abuse controls** | The steps anyone can reach without signing in are rate-limited per client address and per user ID, back off after repeated failures, and give one answer whatever the cause. |
 | **Trusted Agent directory and appointments** | A public directory of Trusted Agents. Users can book an appointment with a Trusted Agent to pick up, replace or return a token. |
 | **Logistics** | Trusted Agents request token shipments for their **sites**. PMO staff work the shipments and send token serial ranges, and the receiving site confirms receipt. |
 | **Exemptions** | Users request an exemption from the MFA requirement, and the PMO approves or denies it. |
@@ -78,7 +79,8 @@ flowchart LR
 | [Operator Guide](operator-guide.md) | Operators | Start/stop, health, logs, backup/restore, upgrades, certificates, runbook |
 | [Admin Guide](admin-guide.md) | PMO administrators | Roles, Trusted Agent management, notifications, group email, scheduled jobs, exemptions |
 | [User Guide](user-guide.md) | End users, Trusted Agents, Help Desk | Every screen and workflow |
-| [Security](security.md) | Security reviewers | Authentication, sessions, authorization, CSRF and headers, the Connector hop, secrets |
+| [Help-desk requests](help-desk.md) | Trusted Agents, Help Desk, security reviewers | How operators' changes to a user's authenticator are verified, approved, recorded and notified |
+| [Security](security.md) | Security reviewers | Authentication, sessions, rate limits, authorization, CSRF and headers, running behind a proxy, the Connector hop, secrets |
 | [FIPS 140-3 and DISA STIG](fips-and-stig.md) | Security reviewers | What the Portal relies on for FIPS, and the settings a STIG deployment needs |
 | [Sizing, availability and recovery](availability-and-sizing.md) | Operators | Sizing, high availability, disaster recovery, rolling back |
 | [HTTP Route Reference](api-reference.md) | Engineers | Every controller route, its HTTP method and the role it requires |

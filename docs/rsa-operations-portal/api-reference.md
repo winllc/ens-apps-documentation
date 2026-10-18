@@ -10,6 +10,8 @@ Method security is on, so the server enforces every role below. Every POST, PUT 
 
 Most routes return HTML (Thymeleaf views). Several POST handlers redirect to `/message?messages=<key>&errors=<key>`, which renders the message keys from `messages.properties`.
 
+The POSTs anyone can reach without signing in (sign-in, Test My Token, the PIN resets, registration, exemption requests, appointment booking and cancelling) are rate-limited: over a limit they answer `429 Too Many Requests` with `Retry-After`, a short page for browsers or `{"error":"rate_limited","retryAfter":N}` for clients that ask for JSON. See [Security → Rate limits and uniform answers](security.md#rate-limits-and-uniform-answers).
+
 ## Authentication and common pages
 
 | Method | Path | Access | Purpose |
@@ -69,11 +71,11 @@ Most routes return HTML (Thymeleaf views). Several POST handlers redirect to `/m
 | POST | `/token/distribute/complete` | TRUSTED_AGENT | Assign the token |
 | GET, POST | `/token/lost/search` | TRUSTED_AGENT, HELP_DESK | Find a user with a token |
 | GET | `/token/lost/user/{userId}` | TRUSTED_AGENT, HELP_DESK | User's tokens |
-| POST | `/token/lost/complete` | TRUSTED_AGENT, HELP_DESK | Mark a token lost (`rsaId`, `tokenSerial`) |
-| POST | `/token/pinReset` | TRUSTED_AGENT, HELP_DESK | Reset a user's token PIN |
+| POST | `/token/lost/complete` | TRUSTED_AGENT, HELP_DESK | Redirects to a new help-desk request to mark the token lost (`rsaId`, `tokenSerial`) |
+| POST | `/token/pinReset` | TRUSTED_AGENT, HELP_DESK | Redirects to a new help-desk request to reset the PIN |
 | GET | `/token/deprovision/search` | TRUSTED_AGENT, HELP_DESK | Deprovision page |
 | GET | `/token/deprovision/serial?serial=` | TRUSTED_AGENT, HELP_DESK | Look up a token |
-| POST | `/token/deprovision/serial` | TRUSTED_AGENT, HELP_DESK | Deprovision (`tokenSerialNumber`) |
+| POST | `/token/deprovision/serial` | TRUSTED_AGENT, HELP_DESK | Deprovision a token assigned to nobody (`tokenSerialNumber`); for an assigned token, redirects to a new help-desk request |
 
 ## User search
 
@@ -83,9 +85,27 @@ Most routes return HTML (Thymeleaf views). Several POST handlers redirect to `/m
 | POST | `/user/search/idOnly` | TRUSTED_AGENT, HELP_DESK | Exact User ID or last-name search |
 | GET | `/user/search/details/{userId}` | TRUSTED_AGENT, HELP_DESK | User details |
 | POST | `/user/search/mfaEnabledGroupToggle/{userId}` | TRUSTED_AGENT, HELP_DESK | Add to or remove from the AD RSA-enabled group (`enabled=true/false`) |
-| POST | `/user/search/unlock/{userId}` | TRUSTED_AGENT, HELP_DESK | Clear the AM lockout |
-| POST | `/user/search/emergencyTokenCode` | TRUSTED_AGENT, HELP_DESK | Generate an emergency access code |
-| POST | `/user/search/clearCachedWindowsPassword` | TRUSTED_AGENT, HELP_DESK | Clear the cached Windows password in AM |
+| POST | `/user/search/unlock/{userId}` | TRUSTED_AGENT, HELP_DESK | Clear the AM lockout (one click, not a help-desk request) |
+| POST | `/user/search/emergencyTokenCode` | TRUSTED_AGENT, HELP_DESK | Redirects to a new help-desk request for an emergency access code |
+| POST | `/user/search/clearCachedWindowsPassword` | TRUSTED_AGENT, HELP_DESK | Redirects to a new help-desk request to clear the cached Windows password |
+
+## Help-desk requests
+
+See [Help-desk requests](help-desk.md). Every step is checked on the server; `{id}` is the request's public id.
+
+| Method | Path | Access | Purpose |
+|---|---|---|---|
+| GET | `/helpdesk/new?action=&userId=&serial=` | TRUSTED_AGENT, HELP_DESK | Start a request. `action` is `pin-reset`, `emergency-access`, `token-lost`, `token-deprovision` or `clear-windows-password` |
+| POST | `/helpdesk/new` | TRUSTED_AGENT, HELP_DESK | Open it, with a ticket and a reason |
+| GET | `/helpdesk/request/{id}` | TRUSTED_AGENT, HELP_DESK, PMO | The request's page |
+| POST | `/helpdesk/request/{id}/verify/{method}/start` | TRUSTED_AGENT, HELP_DESK | Start a verification's first step, such as sending the e-mail code |
+| POST | `/helpdesk/request/{id}/verify/{method}` | TRUSTED_AGENT, HELP_DESK | Check a code or tokencode, or record an in-person check |
+| POST | `/helpdesk/request/{id}/submit` | TRUSTED_AGENT, HELP_DESK | Run the change, or send it for approval. The operator who opened it |
+| POST | `/helpdesk/request/{id}/run` | TRUSTED_AGENT, HELP_DESK | Run an approved request. The operator who opened it |
+| POST | `/helpdesk/request/{id}/reveal` | TRUSTED_AGENT, HELP_DESK | Show an emergency access code, once |
+| POST | `/helpdesk/request/{id}/cancel` | TRUSTED_AGENT, HELP_DESK, PMO | Cancel a request that has not run. The operator who opened it |
+| GET | `/helpdesk/requests` | TRUSTED_AGENT, HELP_DESK, PMO | Requests waiting for your approval, and your own |
+| POST | `/helpdesk/request/{id}/approve`, `/reject` | TRUSTED_AGENT, HELP_DESK, PMO | Decide a request: an approver role from `rsa.helpdesk.dual-control.approver-roles`, not the operator who asked and not the user. A rejection needs a comment |
 
 ## Sites, shipments and reports
 

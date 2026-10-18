@@ -68,8 +68,34 @@ Start with `docker compose ps`, `docker compose logs -f` and `logs/rsaapp-portal
 ??? failure "A user signs in but sees no admin menus"
     Roles come from AM administrative roles mapped by `role.mapped.N.rsaSecurityGuid`. Check that the GUIDs are correct ([how to find them](install.md#find-the-administrative-role-guids)) and that the user holds the AM admin role. The user must sign in again after any change.
 
-??? failure "Login redirects to `/login?error=locked` or `/login?error=disabled`"
-    The AM account is locked out or disabled. A Trusted Agent or Help Desk user can **Unlock** it from **User Search → User Details**. Re-enable a disabled account in AM.
+??? failure "*Sign-in failed. Check your user ID and passcode*, and the user is sure the passcode is right"
+    The page gives one message whatever the cause. The audit log has the cause: open **Audit Log**, filter on `auth.login` with outcome `failure` and the user ID, and read the `reason`. A locked AM account is recorded as an alert; a Trusted Agent or Help Desk user can **Unlock** it from **User Search → User Details**. Re-enable a disabled account in AM. After three failures for one user ID, the next attempts must also wait (30 seconds, doubling up to 15 minutes).
+
+??? failure "*Too many attempts. Wait ... and try again* (HTTP 429)"
+    A rate limit or the backoff refused the request. The first refusal is audited as `auth.rate-limited`, with `details.flow`, `details.limit` and `details.retryAfterSeconds`. If many users are refused at once, check that the Portal sees each client's own address: behind a TLS-terminating proxy it needs `SERVER_FORWARD_HEADERS_STRATEGY=native` and the right `SERVER_TOMCAT_REMOTEIP_INTERNAL_PROXIES` (see [Security → Behind a proxy](security.md#behind-a-proxy)), and with TLS passthrough all clients share one address. Raise `rsa.rate-limit.*.per-ip` if your users really share an address.
+
+??? failure "Every user's audit events show the same client address"
+    The Portal sees the proxy's address. Set `SERVER_FORWARD_HEADERS_STRATEGY=native` (not `framework`) and `ENS_COOKIE_SECURE=true`, make the proxy replace `X-Forwarded-For`, and check that `SERVER_TOMCAT_REMOTEIP_INTERNAL_PROXIES` covers the proxy, as CIDR ranges with a prefix length (`10.0.0.5/32`, not `10.0.0.5`).
+
+??? failure "Self-service says *Your request has been received*, but no e-mail arrives"
+    Appointment booking and exemption requests answer the same whatever the outcome. The audit trail says what happened: `appointment.request-refused` (`unknown_user`, `user_has_token`, `too_many_open`, `authmanager_error`) or `auth.self-service-failed` with `details.flow` and the reason (for example `unknown_user` or `no_email`).
+
+## Help-desk requests
+
+??? failure "*None of the verification methods set for this Portal can verify the user for this change*"
+    For a PIN reset, an emergency access code or a lost token, a tokencode does not count, and the e-mail code is offered only while the Portal can send mail and the user has an address. Add `in-person` or `email-code` to `rsa.helpdesk.verification.methods`, or verify the user in person.
+
+??? failure "The request asks to verify the user again"
+    More than `rsa.helpdesk.verification.valid-for` (15 minutes) passed between the verification and running the request or sending it for approval.
+
+??? failure "A request is waiting for approval and nobody can approve it"
+    The approver must hold one of `rsa.helpdesk.dual-control.approver-roles` (Trusted Agent or Help Desk by default), and may not be the operator who asked or the user. The license must include the change's feature (`help-desk`, or `trusted-agents` for lost and deprovisioned tokens). A request not approved and run within `rsa.helpdesk.dual-control.request-ttl` (24 hours) expires.
+
+??? failure "A request shows *failed* although nobody saw an error"
+    It was still running one hour after its change began, for example because the Portal stopped during the change. Look up `am.change-outcome` for the request in the audit trail to see whether the change was made in AM.
+
+??? failure "The Portal does not start: `Help-desk settings: ...` or `Rate-limit settings: ...`"
+    A setting makes no sense; the message names it. For example `tokencode` alone in `rsa.helpdesk.verification.methods`, `entra-verified-id` (not available), or a limit not written as `attempts/duration`.
 
 ## Features that need a client certificate
 
@@ -119,6 +145,12 @@ Start with `docker compose ps`, `docker compose logs -f` and `logs/rsaapp-portal
 
 ??? failure "Upgrade finished but the portal is not running"
     If `util/check-env.sh` found a problem in the settings, `upgrade.sh` stopped **before restarting**. Fix the settings it names, then run `./upgrade.sh` again. `upgrade.sh` also lists the settings that are new in each template; add the ones you need to the file it names. If the Portal did not become healthy in time, check `docker compose logs portal connector`.
+
+??? failure "PIN-reset or lost-token e-mails stopped after the upgrade"
+    The help-desk notice replaces them; their templates are no longer used. Customize the notice with the `helpdesk.notice.*` keys in `messages.properties`.
+
+??? failure "A customized exemption-request message is no longer shown"
+    `user.exemption.request.confirmationSent` and `user.exemption.request.noEmail` were replaced by `user.exemption.request.received`. Move your text to the new key.
 
 ??? failure "Local changes to `docker-compose.yml` disappeared"
     `upgrade.sh` replaces `docker-compose.yml` with the new release's copy. Keep your settings in `.env`, `connector.env` and `mysql.env`, not in `docker-compose.yml`.

@@ -5,13 +5,13 @@ release implements them, and the settings that change them.
 
 ## Authentication
 
-* **Form login** at `/login`, which posts to `/perform_login`. On success the user goes to `/home`. On failure the user is redirected to `/login?error=true`, `/login?error=locked` (`RsaAccountLockedException`) or `/login?error=disabled` (`RsaAccountDisabledException`).
+* **Form login** at `/login`, which posts to `/perform_login`. On success the user goes to `/home`. On any failure the user is redirected to `/login?error=true`, which shows one message whatever the cause: *Sign-in failed. Check your user ID and passcode (PIN + tokencode).* The page no longer says that an account is locked or disabled; the cause is in the audit trail.
 * Credentials are the user's **RSA AM User ID and SecurID passcode**. `CustomAuthenticationProvider` sends them to AM through the Connector. If AM asks for more input (next tokencode, new PIN, new PIN confirmation, passcode, principal ID, new static passcode), the user is redirected to `/additionalParameterLoginHandler` to answer each prompt.
-* The Portal keeps no passwords. Failed sign-ins and account lockout are AM's: its own lockout policy applies. Each sign-in is audited as `auth.login`, and a locked account is recorded as an alert.
+* The Portal keeps no passwords. AM's own lockout policy applies to every passcode. In front of it, the Portal [rate-limits sign-in and backs off](#rate-limits-and-uniform-answers) per client address and per user ID. Each sign-in is audited as `auth.login` with its reason, and a locked account is recorded as an alert.
 * The authenticated principal is an `RSAAuthenticationToken` that carries the AM **session ID** and **principal GUID**. The Connector uses them to run the operator's changes in the operator's own AM session, so AM enforces that user's permissions and its audit log names them (see [RSA AM integration](rsa-integration.md#who-runs-each-command)).
 * **Logout** is `/perform_logout`. It deletes `JSESSIONID` and also logs the AM session out (`CustomLogoutSuccessHandler`).
 * If AM reports the user's session has ended during an operation, `GlobalControllerExceptionHandler` logs the user out and redirects to `/login`.
-* **Attempt limits on public self-service.** *Test My Token* allows `user.token.test.maxAttempts` (5) attempts per user ID in `user.token.test.windowMinutes` (15). One PIN reset link accepts at most `cron.tokenPinCheck.resetLinkMaxAttempts` (5) tokencodes. Reaching either limit is audited as `auth.lockout`. The counters are held in memory, per Portal process.
+* **Rate limits on public self-service**, and the feature caps of Test My Token, the PIN reset link and the token swap: see [Rate limits and uniform answers](#rate-limits-and-uniform-answers).
 
 ### Notice and consent banner
 
@@ -57,8 +57,10 @@ From the `@PreAuthorize` annotations on the controllers. "Public" means the URL 
 | Home, Trusted Agent directory and details, schedule an appointment, appointment details and cancel | ✔ | ✔ | ✔ | ✔ | ✔ |
 | Test My Token, Reset My PIN, token registration, exemption request and confirmation | ✔ | ✔ | ✔ | ✔ | ✔ |
 | Swap to a replacement token | | ✔ | ✔ | ✔ | ✔ |
-| User Search and User Details (unlock, emergency code, clear cached Windows password, AD group toggle) | | | ✔ | ✔ | |
-| Mark a token lost, reset a user's PIN, deprovision a token | | | ✔ | ✔ | |
+| User Search and User Details (unlock, AD group toggle) | | | ✔ | ✔ | |
+| Open and run [help-desk requests](help-desk.md): reset a user's PIN, emergency access code, mark a token lost, deprovision an assigned token, clear the cached Windows password | | | ✔ | ✔ | |
+| Deprovision a token assigned to nobody | | | ✔ | ✔ | |
+| See **Help-Desk Requests**; approve or reject a request (an approver role from `rsa.helpdesk.dual-control.approver-roles`, never one's own request or account) | | | ✔ | ✔ | ✔¹ |
 | Assign (distribute) a token | | | | ✔ | |
 | Site list and add; shipments (list, details, request, receive, cancel, not received, print label, modify); site report; My TA Profile; confirm appointments and edit their notes | | | | ✔ | |
 | Edit a site, change its status, delete it, add or remove serial ranges | | | | | ✔ |
@@ -66,6 +68,8 @@ From the `@PreAuthorize` annotations on the controllers. "Public" means the URL 
 | Register, edit, (de)activate and delete Trusted Agents; bulk CSV upload; TA report; overview report | | | | | ✔ |
 | Admin page: system notifications, group email, run scheduled jobs, role management, license, audit log | | | | | ✔ |
 | Review, approve, deny and delete exemption requests | | | | | ✔ |
+
+¹ PMO users can open the list and decide a request only once `PMO` is added to `rsa.helpdesk.dual-control.approver-roles`; the menu entry is shown to Trusted Agents and Help Desk users.
 
 !!! note
     `PMO` does not include `TRUSTED_AGENT`. A PMO user who also needs the Trusted Agent pages must also hold the Trusted Agent role.
@@ -78,7 +82,120 @@ The license also gates features (`self-service`, `trusted-agents`, `help-desk`, 
 * Every response carries `Content-Security-Policy` (scripts, styles, images, fonts and connections from the Portal itself only; no framing; forms post only to the Portal), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin` and `Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=()`. Requests over HTTPS also get `Strict-Transport-Security: max-age=31536000; includeSubDomains`. The pages run no inline script: each page's script is a file under `static/js/pages`.
 * `ENS_CSP_REPORT_ONLY=true` sends the policy as `Content-Security-Policy-Report-Only`: a stopgap for a page the policy breaks.
 * The session cookie is `HttpOnly` and `SameSite=Lax`. It is `Secure` on requests the Portal itself received over TLS, or always with `ENS_COOKIE_SECURE=true`.
-* Behind a proxy, load balancer, ingress or route that terminates TLS, set `SERVER_FORWARD_HEADERS_STRATEGY=framework` so the Portal sees the original scheme, host and client address, and `ENS_COOKIE_SECURE=true`. The Helm chart sets both when its ingress (with `tls`) or route (`edge` or `reencrypt`) terminates TLS. Set it only when every request comes through that proxy and the proxy replaces the `X-Forwarded-*` headers.
+* Behind a proxy, load balancer, ingress or route that terminates TLS, set `SERVER_FORWARD_HEADERS_STRATEGY=native` and `ENS_COOKIE_SECURE=true`, never `framework`. See [Behind a proxy](#behind-a-proxy).
+
+## Rate limits and uniform answers
+
+The steps anyone can reach without signing in are rate-limited, back off after repeated failures,
+and give one answer whatever went wrong. The server enforces all of it.
+
+**What is limited.** POSTs to sign-in (`/perform_login` and the follow-up prompts), Test My Token,
+the three PIN resets (Windows password, certificate, and the e-mailed link's tokencode check and
+reset), registration (both steps), exemption requests, and appointment booking and cancelling. The
+help desk's e-mailed codes and tokencode checks are limited per operator and per user.
+
+**How it is counted.** Each attempt counts against two limits: one for the client address, and one
+for each user ID or token serial it names. The counts are kept in fixed windows in the Portal
+database (`RateLimitWindow`, `RateLimitBackoff`), so every Portal node counts together. User IDs,
+serials and addresses are stored only as SHA-256 hashes, and expired rows are deleted every 10
+minutes. Paths are matched as Spring Security and Spring MVC match them, so a percent-encoded path
+counts the same. Once a client's address is refused, the user IDs and serials it sends stop being
+counted, which keeps the tables bounded.
+
+**Over a limit** the answer is `429 Too Many Requests` with `Retry-After` (in seconds) and
+`Cache-Control: no-store`, and Authentication Manager is not asked. Browsers get a short page;
+clients that ask for JSON get `{"error":"rate_limited","retryAfter":N}`. The first refusal in each
+window is audited as `auth.rate-limited` with `details.flow`, `details.limit` and
+`details.retryAfterSeconds`.
+
+**Backoff**, per user ID and per token serial, in every flow: the first three failures are free.
+After that, each failure makes the next attempt wait 30 seconds, then twice as long each time, up to
+15 minutes. A success clears it, and the count starts again after an hour without a failure.
+Authentication Manager's own lockout policy still applies.
+
+**Feature caps.** Three limits that belong to their features are counted in the database too, and
+hold even with `rsa.rate-limit.enabled=false`:
+
+- Test My Token: `user.token.test.maxAttempts` (5) attempts per user ID per
+  `user.token.test.windowMinutes` (15);
+- the PIN reset link: `cron.tokenPinCheck.resetLinkMaxAttempts` (5) tokencodes per link, over the
+  link's whole life from its issue;
+- the token swap: 5 tokencodes per user per 15 minutes, each counted before the code is checked;
+  the right code clears the count.
+
+Reaching the first two is audited as `auth.lockout`. In the read-only demo, whose database takes no
+writes, these caps are counted in each node's memory and the other limits are off.
+
+**One answer whatever the cause:**
+
+| Step | What everyone gets |
+|---|---|
+| Sign-in | *Sign-in failed. Check your user ID and passcode (PIN + tokencode).* |
+| Test My Token | One message for a wrong passcode, an unknown user, or a locked or disabled account |
+| Windows-password PIN reset | One message for an unknown user, a wrong password, a serial that is not the user's, and a user with no tokens |
+| Registration | One message for an unknown user, no token waiting for a PIN, a PIN already set, a wrong code, and a locked or disabled account. PIN rules and directory messages are still shown once the code has been accepted. The second step looks up nothing unless that browser proved the user ID with a tokencode in the first |
+| Exemption request | *Your request has been received*, whether the request was saved and its confirmation e-mail sent, the user ID is unknown, or the account has no e-mail address. A certificate whose request was already reviewed is still told so |
+| Appointment booking | *Your request has been received* in every case. The details and the link to change or cancel go by e-mail to the address Authentication Manager has for the user, so only that user learns whether a booking was made |
+
+The cause is recorded only in the audit trail: `auth.login` with its `reason`;
+`auth.self-service-failed` with `details.flow` and the reason (for example `bad_password`,
+`no_tokens`, `serial_not_users`, `wrong_tokencode`, `no_token_waiting`, `pin_already_set`,
+`account_locked`, `unknown_user` or `no_email`); and `appointment.request-refused` with
+`unknown_user`, `user_has_token`, `too_many_open` or `authmanager_error`.
+
+A failed step answers no sooner than `rsa.rate-limit.uniform-response-time` (1 second) after it
+began, plus up to a tenth of that at random, so an unknown user and a wrong value take as long as
+each other. Appointment booking and exemption requests always take this long.
+
+**No CAPTCHA.** Portal deployments are often air-gapped, and CAPTCHA services need the internet and
+send visitors' data to a third party. The limits above take their place.
+
+**Known limits:**
+
+- A **successful** sign-in or self-service step is not padded to the uniform time.
+- Backoff belongs to the user ID, so someone who fails on purpose can make a user wait, up to 15
+  minutes at a time.
+- Every client must have its own address: behind a proxy, see [Behind a proxy](#behind-a-proxy).
+
+The settings, with their defaults, are in
+[Configuration → Rate limits](configuration.md#rate-limits).
+
+## Behind a proxy
+
+When TLS ends at a proxy, load balancer, ingress or route in front of the Portal, set
+`SERVER_FORWARD_HEADERS_STRATEGY=native` and `ENS_COOKIE_SECURE=true`. With `native`, Tomcat takes
+the original scheme, host, port and client address from `X-Forwarded-Proto`, `-Host`, `-Port` and
+`-For`, but only on requests from an internal proxy (`SERVER_TOMCAT_REMOTEIP_INTERNAL_PROXIES`, by
+default the private ranges). It reads `X-Forwarded-For` from right to left: the first address that
+is not an internal proxy is the client. It ignores `Forwarded`.
+
+Without it, the Portal sees plain http (no HSTS, redirects to `http://`), the audit trail records
+the proxy's address, and every visitor shares the proxy's per-address rate limit.
+
+!!! danger "Never `framework`"
+    `SERVER_FORWARD_HEADERS_STRATEGY=framework` believes a `Forwarded` header and the left-most
+    `X-Forwarded-For` entry, both of which the client writes. A client could then choose the address
+    the audit trail records, and get a fresh rate limit with every request.
+
+`SERVER_TOMCAT_REMOTEIP_INTERNAL_PROXIES` (Helm: `forwardedHeaders.internalProxies`) takes
+comma-separated CIDR ranges, **each with its prefix length** (`/32` for one IPv4 address, `/128` for
+one IPv6 address). Tomcat reads a value without a `/` as a regular expression, so
+`10.0.0.5, 10.0.0.6` would match no proxy at all; the Helm chart's schema refuses such a value.
+
+**A proxy that appends.** Entries a client writes at the front of `X-Forwarded-For` count only when
+every entry after them is an internal proxy. That matters when a proxy **appends** to the header the
+client sent, rather than replacing it, and clients' own addresses are in the private ranges: the
+client's real address is then skipped as an "internal proxy", and the one it wrote counts. Narrow
+`SERVER_TOMCAT_REMOTEIP_INTERNAL_PROXIES` to the proxies' own addresses, or make the proxy replace
+the header.
+
+| Topology | What it needs |
+|---|---|
+| No proxy: clients reach the Portal directly | Nothing. Leave `SERVER_FORWARD_HEADERS_STRATEGY` unset, so nobody's `X-Forwarded-*` headers count |
+| Helm, ingress-nginx terminating TLS (`ingress.tls`) | The chart sets `native` and `ENS_COOKIE_SECURE=true`. ingress-nginx replaces `X-Forwarded-For` with the client's address by default. If the controller runs with `use-forwarded-headers` or `compute-full-forwarded-for` (for example behind a cloud load balancer), set `forwardedHeaders.internalProxies` to the controller's and the load balancer's ranges. If the pod network is not in the private ranges, add it |
+| Helm, OpenShift Route `edge` or `reencrypt` | The chart sets `native` and `ENS_COOKIE_SECURE=true`, and annotates the Route with `haproxy.router.openshift.io/set-forwarded-headers: replace`, so the router replaces `X-Forwarded-For` instead of appending (its default). Keep that annotation |
+| Release package or a server, behind nginx, Apache httpd, HAProxy, an F5 or another reverse proxy | Set `SERVER_FORWARD_HEADERS_STRATEGY=native` and `ENS_COOKIE_SECURE=true` in `.env`. Make the proxy replace `X-Forwarded-For` with the client's address (nginx: `proxy_set_header X-Forwarded-For $remote_addr;`; HAProxy: `http-request set-header X-Forwarded-For %[src]`) and set `X-Forwarded-Proto`. If it appends instead (nginx `$proxy_add_x_forwarded_for`, httpd `mod_proxy`), set `SERVER_TOMCAT_REMOTEIP_INTERNAL_PROXIES` to the proxy's own address as a CIDR range (`/32`). Only the proxy may reach the Portal's port |
+| TLS passed through to the Portal (Helm `tls.enabled`, for client certificates) | Neither setting. Whatever forwards the connection (ingress-nginx's ssl-passthrough, an OpenShift passthrough route) hides the client's address, so all clients share its per-address limit; the per-user limits and backoff still apply. Raise `rsa.rate-limit.*.per-ip`, or expose the Service so that client addresses are kept (a load balancer with `externalTrafficPolicy: Local`) |
 
 ## Actuator and monitoring
 
@@ -135,7 +252,10 @@ The Connector's service account no longer needs Super Admin. Give it, and the op
 ## Other controls
 
 * **Active Directory over LDAPS** verifies the domain controller's certificate against the trust store in `active-directory.properties[n].trust-store`, or the JVM's default, and JNDI checks the host name. Earlier releases trusted any certificate.
-* **Audit trail.** Every sign-in, denial, change and export is recorded in the `ens-audit/1` format in the database, hash-chained. A sign-in, role, settings or license change that cannot be audited does not happen. See [Audit logging](../audit-logging.md).
+* **Audit trail.** Every sign-in, denial, change and export is recorded in the `ens-audit/1` format in the database, hash-chained. A sign-in, role, settings or license change that cannot be audited does not happen.
+* **Every Authentication Manager change is recorded before it is made.** One service wraps the Connector client: it commits `am.change-attempt` before each change, and if that write fails the change is not made (fail closed). After the change it writes `am.change-outcome`. Both carry the actor (the operator; the user, for their own token; or the system and service account for jobs), the target user, the token serial, the operation, which AM account made it, the help-desk ticket, reason and verification, the client address, and an attempt id linking the two. Tests keep this the only path: every method of the Connector client must be classified as a read, a sign-in or a change, and no other class may call the client. See [Audit logging](../audit-logging.md).
+* **Help-desk changes** need a ticket, a verified user, a second operator for privileged users, and notify the user. See [Help-desk requests](help-desk.md).
+* **Logging.** User IDs and token serials that people type are escaped before they are logged.
 * **Containers.** The Helm chart runs the Portal, the Connector and the embedded MySQL with all capabilities dropped, no privilege escalation, a read-only root file system and the `RuntimeDefault` seccomp profile.
 * Email bodies include absolute links built from `application.dns.name`. Set it to the HTTPS URL.
 

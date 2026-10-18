@@ -84,10 +84,12 @@ To use certificates from your own PKI, set `CONNECTOR_TLS_CERTIFICATE` and `CONN
 
 | Runs as | Commands |
 |---|---|
-| **The signed-in operator** (Trusted Agent, Help Desk, PMO), in the operator's own AM session (`executeCommandAs`) | Assigning and unassigning tokens (assign, lost token, deprovision), PIN resets by an agent, emergency access codes, enabling and unlocking accounts, granting and revoking administrative roles, clearing cached Windows passwords. AM applies the operator's own permissions and scope, and its audit log names the operator |
-| **The service account** (admin session) | Users acting on their own token: setting the PIN of a new token, a PIN reset with a certificate, a Windows password or a reset code, swapping to a replacement token, checking a tokencode. The scheduled jobs: unassigning expired tokens and re-syncing Trusted Agents' roles |
+| **The signed-in operator** (Trusted Agent, Help Desk, PMO), in the operator's own AM session (`executeCommandAs`) | Assigning and unassigning tokens (assign, lost token, deprovision), taking back a user's expired tokens before assigning a new one, PIN resets by an agent, emergency access codes, enabling and unlocking accounts, granting and revoking administrative roles, clearing cached Windows passwords. AM applies the operator's own permissions and scope, and its audit log names the operator. PIN resets, emergency codes, lost and deprovisioned assigned tokens and cached-password clearing run only through a [help-desk request](help-desk.md) |
+| **The service account** (admin session) | Users acting on their own token: setting the PIN of a new token, a PIN reset with a certificate, a Windows password or a reset code, swapping to a replacement token, checking a tokencode (including the help desk's tokencode verification). The scheduled jobs, such as re-syncing Trusted Agents' roles |
 | **The read-only account** (read-only session) | Searches and lookups: principals, tokens, identity sources, administrative-role membership |
 | No session | Sign-in (`LoginCommand`) and the tokencode checks of a sign-in |
+
+Every command that changes AM, whoever runs it, is recorded as `am.change-attempt` before it is sent and `am.change-outcome` after, with `details.amAccount` saying which session made it (`operator` or `service-account`). If the attempt can't be recorded, the command is not sent. See [Security → Other controls](security.md#other-controls).
 
 The Portal passes the operator's AM session ID and principal GUID (`AppAuthenticationToken`) with each operator command. If that AM session has ended, the Connector throws `RsaUserSessionEndedException`, and the Portal signs the user out and redirects to `/login`.
 

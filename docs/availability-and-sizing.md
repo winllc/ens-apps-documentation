@@ -39,7 +39,7 @@ runs two at once.
 | CertAlert | Its scheduled jobs and changelog connector run in the process with no lock shared between instances; the license volume is single-writer | Nothing |
 | Directory Services Portal | The API is the single writer of its configuration file and its hash-chained audit files; sessions, lockout counters and background tasks are in memory | The web tier (`web.replicaCount`), which is stateless |
 | ReadyRoom | Its scheduled jobs (auto check-out, absence alerts, the directory refresh) run in every instance; sessions are in memory; the license volume is single-writer | Nothing |
-| RSA Operations Portal | Sessions and attempt limits are in the Portal's memory, and the license volume is single-writer. Its jobs and audit trail are safe across nodes, but that is not enough | The Connector (`connector.replicaCount`), with a caveat: a multi-step sign-in is held in one Connector's memory. More than one has not been tested |
+| RSA Operations Portal | Sessions are in the Portal's memory, and the license volume is single-writer. Its jobs, audit trail, rate limits and help-desk requests are safe across nodes, but that is not enough | The Connector (`connector.replicaCount`), with a caveat: a multi-step sign-in is held in one Connector's memory. More than one has not been tested |
 
 What every product supports instead:
 

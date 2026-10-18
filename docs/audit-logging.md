@@ -46,14 +46,38 @@ be reviewed and exported.
 
 | Category | Examples |
 |---|---|
-| `authentication` | `auth.login` (success and failure, with the method: password, LDAP, smart card, API token; a refused client certificate gives its reason, such as `certificate revoked` or `revocation unknown`), `auth.logout`, `auth.lockout`, `auth.consent-acknowledged` (the notice-and-consent banner, when it is on), `auth.session-expired` (with the reason `idle`, `absolute` or `concurrent`), password changes and resets |
+| `authentication` | `auth.login` (success and failure, with the method: password, LDAP, smart card, API token; a refused client certificate gives its reason, such as `certificate revoked` or `revocation unknown`), `auth.logout`, `auth.lockout`, `auth.consent-acknowledged` (the notice-and-consent banner, when it is on), `auth.session-expired` (with the reason `idle`, `absolute` or `concurrent`), `auth.rate-limited` (the first refusal in a rate-limit window or backoff, RSA Operations Portal), `auth.self-service-failed` (a failed anonymous self-service step with the cause the visitor is not told, RSA Operations Portal), password changes and resets |
 | `authorization` | `access.denied`: every refused request, with the reason (role, not licensed, read-only, feature not licensed, CSRF). Repeats within a minute are counted in one event. |
-| `account` | Users and accounts created, changed, disabled or deleted; roles and permissions granted or revoked; a person's data erased (`person.erased`, ReadyRoom) |
+| `account` | Users and accounts created, changed, disabled or deleted; roles and permissions granted or revoked; a person's data erased (`person.erased`, ReadyRoom); help-desk requests (`helpdesk.*`, RSA Operations Portal) |
 | `configuration` | `settings.changed` with each changed setting's old and new value; branding, templates, schedules, connectors |
 | `license` | `license.installed`, `license.rejected`, `license.mode-changed`, `license.limit-exceeded` |
-| `data` | The product's own objects created, changed or deleted; `data.exported` for every report or download, a person's data export included; bulk uploads; `data.purged` for each retention run (ReadyRoom); status requests (`calendar.request-created`, `-approved`, `-rejected`, `-cancelled`, ReadyRoom). Free-text notes are never recorded: a profile note change is recorded as `notesChanged` |
+| `data` | The product's own objects created, changed or deleted; `data.exported` for every report or download, a person's data export included; bulk uploads; `data.purged` for each retention run (ReadyRoom); status requests (`calendar.request-created`, `-approved`, `-rejected`, `-cancelled`, ReadyRoom); every Authentication Manager change before and after it is made (`am.change-attempt`, `am.change-outcome`), `token.expired-unassigned` and `appointment.request-refused` (RSA Operations Portal). Free-text notes are never recorded: a profile note change is recorded as `notesChanged` |
 | `system` | `system.started`, `system.stopped`, and `job.completed` / `job.failed` / `job.skipped` for each scheduled job run |
 | `audit` | The trail itself: `audit.exported`, `audit.verified`, `audit.token-created`, `audit.token-revoked`, `audit.pruned`, `audit.delivery-failed`, `audit.delivery-recovered` |
+
+**RSA Operations Portal: Authentication Manager changes and help-desk requests.**
+
+- `am.change-attempt` is stored and committed **before** every change the Portal makes in RSA
+  Authentication Manager. If it can't be stored, the change is not made (fail closed).
+  `am.change-outcome` follows with `success`, or `failure` and the reason. Both carry the actor (the
+  operator; the user, for their own token; or `system` for scheduled jobs), the target user,
+  `details.tokenSerial`, `details.operation`, `details.amAccount` (`operator` or
+  `service-account`), the help-desk `details.ticket` and `details.reason`,
+  `details.verificationMethod` and `details.verificationResult`, the client address, and
+  `details.attemptId`, which links the two.
+- Help-desk requests: `helpdesk.request-opened`, `helpdesk.verification-code-sent`,
+  `helpdesk.verification-succeeded`, `helpdesk.verification-failed` (an alert when it closes the
+  request), `helpdesk.approval-requested`, `helpdesk.request-approved`, `helpdesk.request-rejected`,
+  `helpdesk.request-cancelled`, `helpdesk.request-expired`, `helpdesk.request-completed`,
+  `helpdesk.request-failed` and `helpdesk.emergency-code-revealed`, each with
+  `details.helpDeskRequest`. See [Help-desk requests](rsa-operations-portal/help-desk.md).
+- `token.expired-unassigned`: an expired token taken back from a user, in the Trusted Agent's own AM
+  session, before the agent assigns a new one.
+- `auth.rate-limited` (with `details.flow`, `details.limit` and `details.retryAfterSeconds`),
+  `auth.self-service-failed` (with `details.flow` and the reason) and
+  `appointment.request-refused` (`unknown_user`, `user_has_token`, `too_many_open` or
+  `authmanager_error`) hold the causes the visitor is not told. See
+  [Rate limits and uniform answers](rsa-operations-portal/security.md#rate-limits-and-uniform-answers).
 
 **Secrets are never recorded.** That covers passwords, tokens, keys, license file contents, session ids,
 one-time and emergency codes, PINs and SecurID tokencodes. Where one would appear, the event says
