@@ -56,8 +56,8 @@ switches to its FIPS providers.
 !!! warning "Current state: the license can't be verified on a Java runtime in FIPS mode"
     The Portal checks its license file with the ENS license library 1.0.0, which verifies an
     Ed25519 signature. Red Hat's OpenJDK in FIPS mode does not offer Ed25519 signatures, so every
-    license is refused and the Portal stays **unlicensed**: only sign-in and the license screen
-    work.
+    license is refused and the Portal stays **unlicensed**: only sign-in, the license screen and
+    the audit log work.
 
     Don't work around it with `-Dcom.redhat.fips=false`: that takes the whole JVM out of FIPS mode.
 

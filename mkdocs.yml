@@ -84,6 +84,7 @@ nav:
       - Additional guidance:
           - Architecture: cert-alert/architecture.md
           - Security: cert-alert/security.md
+          - FIPS 140-3 and DISA STIG: cert-alert/fips-and-stig.md
           - Sizing, availability and recovery: cert-alert/availability-and-sizing.md
           - API reference: cert-alert/api-reference.md
           - Troubleshooting: cert-alert/troubleshooting.md
@@ -112,6 +113,7 @@ nav:
           - Security: readyroom/security.md
           - FIPS 140-3 and DISA STIG: readyroom/fips-and-stig.md
           - Sizing, availability and recovery: readyroom/availability-and-sizing.md
+          - Privacy, DPIA and works council: readyroom/privacy.md
           - API reference: readyroom/api-reference.md
           - Troubleshooting: readyroom/troubleshooting.md
   - RSA Operations Portal:

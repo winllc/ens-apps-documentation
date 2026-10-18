@@ -48,11 +48,21 @@ PID 1 and receives `SIGTERM` directly.
 
 | Endpoint | Access | Use |
 |---|---|---|
-| `/actuator/health/liveness` | public | **Liveness probe**. Is the process alive? |
-| `/actuator/health/readiness` | public | **Readiness probe**. Can it take traffic? |
+| `/actuator/health/liveness`, or `/livez` | public | **Liveness probe**: the process alone (`livenessState`) |
+| `/actuator/health/readiness`, or `/readyz` | public | **Readiness probe**: the database (`db`) and a writable audit log (`auditLog`, the `ENS_AUDIT_FILE` output when it is set). Not the directory |
 | `/actuator/health` | public (details for admins only) | Aggregate, **includes the LDAP indicator**: `DOWN` when the directory is unreachable |
 | `/actuator/info` | public | Application info |
 | `/actuator/metrics`, `/actuator/loggers` | `ROLE_ADMIN` | JVM / HTTP metrics; runtime log levels |
+| `/actuator/prometheus` | public, **management port only** | Prometheus metrics; see [Monitoring](#monitoring) |
+
+`/livez` and `/readyz` are always on the application's port. With `MANAGEMENT_SERVER_PORT` set
+(the Helm chart's default, `9090`), the `/actuator/**` endpoints move to that port, plain HTTP,
+where health and Prometheus are open without signing in. Never publish it beyond your monitoring
+network.
+
+The directory is left out of readiness on purpose: everything is served from the cache, and
+certificates sign in from it. To make a directory outage take CertAlert out of service, set
+`MANAGEMENT_ENDPOINT_HEALTH_GROUP_READINESS_INCLUDE=readinessState,db,auditLog,ldap`.
 
 !!! warning "Probe liveness/readiness, not the aggregate"
     The aggregate `/actuator/health` turns `DOWN` whenever the directory is unreachable. That is
@@ -61,25 +71,34 @@ PID 1 and receives `SIGTERM` directly.
 
     Both install methods already do this:
 
-    - The release package's `docker-compose.yml` checks `/actuator/health/liveness`, over HTTP
-      and then HTTPS, so it keeps working once TLS is on. `docker compose ps` shows the result.
+    - The release package's `docker-compose.yml` checks `/livez` on port 8080, over HTTP and
+      then HTTPS, so it keeps working once TLS is on. `docker compose ps` shows the result. The
+      image's own `HEALTHCHECK` calls `/livez` too.
     - The Helm chart sets liveness, readiness and startup probes on the liveness and readiness
-      endpoints. Tune them with `livenessProbe.*`, `readinessProbe.*` and `startupProbe.*` in
-      your values. The startup probe allows 10 minutes, for first-start migrations.
+      endpoints, on the metrics port when `metrics.enabled` (the default) and otherwise on the
+      application's port. Tune them with `livenessProbe.*`, `readinessProbe.*` and
+      `startupProbe.*` in your values. The startup probe allows 10 minutes, for first-start
+      migrations.
 
 ## Logs
 
-CertAlert logs to standard output (Spring Boot defaults; no file appender is configured). The
-application logger `com.winllc.certalert` is at `INFO`. Change it with
-`logging.level.com.winllc.certalert` and a restart, or at runtime through the standard Spring
-Boot `/actuator/loggers` endpoint (`POST /actuator/loggers/com.winllc.certalert` with
-`{"configuredLevel":"DEBUG"}`), which requires an administrator's session.
+CertAlert logs to standard output (no file appender is configured). The application logger
+`com.winllc.certalert` is at `INFO`. Change it with `logging.level.com.winllc.certalert` and a
+restart, or at runtime through the standard Spring Boot `/actuator/loggers` endpoint
+(`POST /actuator/loggers/com.winllc.certalert` with `{"configuredLevel":"DEBUG"}`), which requires
+an administrator's session.
+
+`LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs` writes the log as one ECS JSON object per line, for a log
+collector; the Helm chart does so by default (`logFormat: json`). The audit trail's own stdout
+lines (logger `ens.audit`) are raw `ens-audit/1` JSON either way; filter on
+`"schema":"ens-audit/1"` to separate them.
 
 !!! note "Calling the API from scripts"
-    CertAlert has no HTTP Basic or token authentication: callers sign in with a client
-    certificate or through the `/login` form, and `POST`/`PUT`/`DELETE` requests carry Spring
-    Security's CSRF token (the pages read it from the `_csrf` meta tags), so a script fetches a
-    page in the same session first to obtain it. `GET` requests need only the session. See [API reference](api-reference.md#conventions).
+    Apart from the SIEM pull API's bearer tokens (`/api/audit/events`), CertAlert has no HTTP
+    Basic or token authentication: callers sign in with a client certificate or through the
+    `/login` form, and `POST`/`PUT`/`DELETE` requests carry Spring Security's CSRF token (the pages
+    read it from the `_csrf` meta tags), so a script fetches a page in the same session first to
+    obtain it. `GET` requests need only the session. See [API reference](api-reference.md#conventions).
 
 Log lines worth knowing:
 
@@ -98,6 +117,12 @@ Log lines worth knowing:
 | `[...] name N different directory entries; matching none of them` | With `require-known-certificate: false`, a certificate's `uid` and addresses name more than one person, so it signs in nobody |
 | `Refused to add <address> to <dn> for <user>: it is named in cert-alert.security.admin-identifiers` | Someone tried to add an administrator's identifier as a person's address |
 | `Email templates will be read from <dir> before the packaged ones` | Template override directory in use |
+| `X.509 sign-in is on and ENS_X509_REVOCATION is off: ...` | Startup: certificates sign in without a live revocation check. DISA STIG requires one |
+| `ENS_X509_REVOCATION_FAIL=open: ...` | Startup: a certificate whose revocation status cannot be found signs in anyway |
+| `Refusing client certificate '...': revoked (...)`, `...: its revocation status is unknown: ...`, `...: its issuer '...' is not in ENS_X509_ALLOWED_ISSUERS` | A certificate refused at sign-in |
+| `Could not send the <kind> email "..." to ... (attempt N); trying again at ...` | The mail server refused or did not answer; the message stays in the outbox |
+| `Gave up on the <kind> email "..." to ... after N attempt(s) over 3d: ...` | A message reached `give-up-after` and will not be sent |
+| `Email is queued but no mail server is configured (spring.mail.host); it waits until one is` | Email is enabled without `SPRING_MAIL_HOST` |
 | `Removed N read notification(s)` | Notification retention ran |
 | Alert summaries at `WARN` / `ERROR` | The logging alert channel (`ERROR` = critical severity) |
 
@@ -116,8 +141,9 @@ themselves. Directory jobs are recorded in the `sync_run` table and readable at
 | **expiry round-up** | `0 0 7 * * *` | `cert-alert.notifications.digest.cron` | on | Per-person round-up (+ email if enabled), then notification retention |
 | **certificate clean-up** | `0 0 3 * * SAT` | `cert-alert.ldap.certificate-cleanup.cron` | **off** | Delete expired/revoked certificates from the directory |
 | **prune** | `0 0 6 * * SUN` | `cert-alert.ldap.prune.cron` | **off** | Delete cached entries unseen for `prune.after` |
-| **audit retention** | `0 30 3 * * SUN` | `cert-alert.audit.retention.cron` | **off** | Delete audit records older than `retention.after` |
+| **audit retention** | `0 30 3 * * *` (daily) | `cert-alert.audit.retention.cron` | **off** | Prune audit events older than `ENS_AUDIT_RETENTION_DAYS`, or, while that is `0`, older than `cert-alert.audit.retention.after` with `retention.enabled`. Only events every output has delivered |
 | **changelog connector** | continuous | `cert-alert.ldap.changelog.*` | **off** | Follow `cn=changelog` |
+| **mail outbox** | every 30 s | `cert-alert.mail.outbox.*` | on | Send queued email and retry failures; see [When the mail server is down](#when-the-mail-server-is-down) |
 
 !!! danger "`cert-alert.ldap.sync.enabled: false` stops everything"
     The single scheduler bean is conditional on `cert-alert.ldap.sync.enabled`. Setting it to
@@ -270,7 +296,49 @@ never the other way round).
 After a restore, run **Sync directory** to bring the cached directory data up to date, and read
 [Disaster recovery](availability-and-sizing.md#disaster-recovery) about the audit trail.
 
+## When the mail server is down
+
+Nothing is sent from inside a database transaction. A round-up's messages and the alert
+channel's are written to the `outbound_email` table with the work that produced them, and sent
+once that has committed. When the mail server is down:
+
+- a message stays queued and is tried again a minute later, then two, four and so on up to an
+  hour apart, each failure logged as a warning with the mail server's reason;
+- a newer round-up to the same address replaces one still waiting;
+- after three days a message is given up on, with an error in the log;
+- the Notifications page says the round-up's messages "could not be sent and are queued to try
+  again", with the reason, rather than reporting them as sent;
+- a notification is marked emailed only when its message actually goes.
+
+Watch `ens_certalert_mail_outbox{state="pending"}` and `{state="failed"}`. The settings are in
+[Configuration → Mail outbox](configuration.md#mail-outbox-cert-alertmailoutbox).
+
 ## Monitoring
+
+### Prometheus metrics
+
+With `MANAGEMENT_SERVER_PORT` set (Helm: `metrics.enabled`, the default), Prometheus scrapes
+`/actuator/prometheus` on that port. With Helm, `metrics.serviceMonitor.enabled` renders a
+ServiceMonitor, and `metrics.allowFrom` admits your Prometheus through the NetworkPolicy. Without
+a management port, Prometheus is not served at all. Besides Spring Boot's JVM, HTTP, database pool
+and Tomcat metrics:
+
+| Metric | Type | Meaning |
+|---|---|---|
+| `ens_license_mode{mode}` | gauge | 1 for the current mode (`FULL`, `READ_ONLY`, `UNLICENSED`), 0 for the others |
+| `ens_license_days_remaining` | gauge | Days until the license expires or its grace ends; NaN for a perpetual license |
+| `ens_audit_events_total{category,outcome}` | counter | Events written to the audit trail |
+| `ens_audit_forward_failures_total{output}` | counter | Failed attempts to forward them (`splunk`, `syslog`) |
+| `ens_auth_attempts_total{method,outcome}` | counter | Sign-ins and refusals: `x509` (once per session) or `ldap`; `success` or `failure` |
+| `ens_certalert_certificates{status}` | gauge | Cached certificates by state: `none`, `valid`, `expiring_soon`, `expired` |
+| `ens_certalert_job_last_success_seconds{job}` | gauge | When each job last finished without failing (Unix time), since startup |
+| `ens_certalert_digest_truncated_total` | counter | Round-ups that stopped at `digest.scan-limit` |
+| `ens_certalert_revocation_unknown` | gauge | Cached certificates whose authority gave no revocation answer |
+| `ens_certalert_mail_outbox{state}` | gauge | Email `pending` in the outbox, and `failed` (given up on) |
+
+The counts are read from the database at most once a minute.
+
+### Other checks
 
 - **Liveness/readiness** probes as above; **aggregate health** for directory reachability.
 - **Job runs**: alert if the most recent `USERS`/`SERVERS` run in `GET /api/v1/sync/runs` is not
@@ -282,7 +350,7 @@ After a restore, run **Sync directory** to bring the cached directory data up to
 - **Directory health and certificate posture**: `GET /api/v1/metrics` (what the Metrics page shows).
 - **Operator alerts**: enable `cert-alert.alerts.email` with a team list, or scrape the log for
   alert lines.
-- **JVM**: `/actuator/metrics` (admin only).
+- **JVM**: `/actuator/metrics` (admin only), or Prometheus.
 
 ## Upgrades
 
@@ -312,13 +380,25 @@ After a restore, run **Sync directory** to bring the cached directory data up to
    person's credentials), revocation endpoints, and risky-name flags (the migration backfills
    these from stored names). Run **Sync directory** after an upgrade to refresh them.
 
-Migrations shipped: `V1` (directory tables) through `V19`:
+Migrations shipped: `V1` (directory tables) through `V20`:
 
 | Migration | What it does |
 |---|---|
 | `V17__create_user_additional_email` | People's additional addresses read from the directory (`directory_user_email`) |
 | `V18__ens_audit_format` | Moves the audit trail to the shared `ens-audit/1` format in the same `audit_event` table, and adds `audit_chain_head`, `audit_delivery` and `audit_api_token`. Rows written before it are numbered and chained by the application at its first start, oldest first, before it writes anything new; on a large audit table that first start takes longer |
 | `V19__create_outbound_email` | The email outbox: a message is stored in the same transaction as whatever decided to send it, and sent after that commits, retried until it goes or is old enough to give up on |
+| `V20__check_attribute_type_without_an_in_list` | Recreates the check on `server_attribute_definition.type` in a form the embedded H2 database keeps enforcing. No data changes; on PostgreSQL it changes nothing in effect |
+
+### Upgrading to the platform-baseline release
+
+| Change | What to do |
+|---|---|
+| Revocation at sign-in (`ENS_X509_REVOCATION`) stays `off` | Turn it on; startup logs a warning while certificate sign-in is on without it |
+| Address ranges match within their own family | IPv4 ranges in `ENS_X509_TRUSTED_PROXIES` and `CERT_ALERT_REVOCATION_ALLOWED_HOSTS` no longer match IPv6 addresses. If a header-mode proxy connects over IPv6, add its IPv6 range, for example `fd00::/8` |
+| Helm: `metrics.enabled` is `true` and `logFormat` is `json` by default | The probes move to port `9090`, plain HTTP; logs become ECS JSON. Set `metrics.enabled: false` or `logFormat: text` to keep the old behaviour |
+| The release package warns about plain HTTP on every interface | Set `CERT_ALERT_BIND_ADDRESS=127.0.0.1` behind a proxy, or turn TLS on |
+| Email goes through the outbox | Mail that cannot be sent is retried for three days instead of being lost |
+| The audit retention job runs daily | It ran on Sundays before the `ens-audit/1` trail (`V18`); it still does nothing unless retention is configured |
 
 Migrations are not undone. Going back to an older release means restoring the backup taken before
 the upgrade; see [Rolling back an upgrade](availability-and-sizing.md#rolling-back-an-upgrade).
@@ -343,6 +423,6 @@ the upgrade; see [Rolling back an upgrade](availability-and-sizing.md#rolling-ba
 | Frequency | Task |
 |---|---|
 | Daily | Check last sweep runs succeeded; glance at the Notifications round-up status |
-| Weekly | Review Admin → System audit log for unexpected activity; check revocation *Unknown* counts |
+| Weekly | Review the audit log (`/admin/audit`) for unexpected activity, and **Verify integrity**; check revocation *Unknown* counts and the mail outbox |
 | Monthly | Review `serverPOC` warnings in logs; confirm the round-up lead days are still right |
 | Per release | Back up, run `upgrade.sh` or `helm upgrade`, run Sync directory |

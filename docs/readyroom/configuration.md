@@ -160,6 +160,19 @@ Admins and managers can evict cached group trees from **Settings** (see
 
 What each job does is described in [Operations](operator-guide.md#scheduled-jobs).
 
+## Statuses, requests and privacy
+
+| Property | Env var | Built-in | Helm | Description |
+|---|---|---|---|---|
+| `application.events.request-statuses` | `APPLICATION_EVENTS_REQUESTSTATUSES` | `OUT_OF_OFFICE,WORK_FROM_HOME,TDY,SCHEDULED_LEAVE,ABSENT_EXCUSED` | `events.requestStatuses` (empty list: the default) | The statuses people **request** and their manager, a delegate or an administrator approves before they count. Comma-separated. `STANDARD` is refused at startup. Leaving an excusing status out lets people set it themselves; startup then warns that it excuses absences without approval. See [Statuses and approvals](user-guide.md#statuses-and-approvals) |
+| `application.events.max-range-days` | `APPLICATION_EVENTS_MAXRANGEDAYS` | `366` | `events.maxRangeDays` | The most days one call may set a status, a request or an organization calendar event on, 1 to 3660. Longer ranges are refused with `range_too_long` |
+| `application.privacy.coworker-visibility` | `APPLICATION_PRIVACY_COWORKERVISIBILITY` | `full` | `privacy.coworkerVisibility` | What people see of coworkers whose details they may not see: `full` (in, away or out, and the day's status), `status` (`IN` or `OUT` only) or `none` (no status; the org chart shows headcounts without how many are present, except to the `ADMIN` and `MANAGER` roles). Any other value stops startup. See [Security → Authorization](security.md#authorization) |
+| `application.retention.events-days` | `APPLICATION_RETENTION_EVENTSDAYS` | `0` (keep forever) | `retention.eventsDays` | Days to keep check-in records, calendar statuses, status requests and absence alerts. `0`, or at least `31`: the home page, My Reports and the average login time read the last 30 days. Older check-ins and statuses are summarised by month, then deleted. Audit events are not affected. See [Operations → Retention](operator-guide.md#retention) |
+| `application.retention.cron` | `APPLICATION_RETENTION_CRON` | `0 17 2 * * *` (02:17 daily) | `retention.schedule` | When the purge runs: a six-field Spring cron, in ReadyRoom's time zone (`application.timezone`). Checked at startup |
+| `application.calendar-requested-event-color` | – | `gray` | – | Calendar colour of the days of a pending request |
+
+A bad value in any of these stops startup with a message naming the setting.
+
 ## Email and notifications
 
 | Property | Packaged | Built-in | Description |
@@ -269,6 +282,10 @@ ENS_SESSION_ADMIN_IDLE_TIMEOUT=15m
 ENS_SESSION_MAX_PER_USER=3
 ENS_X509_REVOCATION=ocsp-then-crl
 LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs
+MANAGEMENT_SERVER_PORT=9090
+
+APPLICATION_PRIVACY_COWORKERVISIBILITY=status
+APPLICATION_RETENTION_EVENTSDAYS=400
 
 APPLICATION_TIMEZONE=America/Chicago
 SPRING_JACKSON_TIMEZONE=America/Chicago

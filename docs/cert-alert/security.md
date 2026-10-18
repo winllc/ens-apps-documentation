@@ -10,30 +10,58 @@ user database.
 
 ### Client certificate (X.509)
 
-Requires TLS (`server.ssl.enabled: true`, or `CERT_ALERT_TLS_ENABLED=true`) with
-`server.ssl.client-auth: want` and a trust store holding the CAs whose client certificates are
-accepted.
+The certificate reaches CertAlert in one of two ways (`ENS_X509_SOURCE`):
 
-1. The browser presents a certificate during the TLS handshake.
-2. CertAlert computes the **SHA-256 fingerprint of its DER** and looks it up in
-   `cached_certificate`.
-3. If it belongs to an **IC Person**, that person is signed in, unless step 4 refuses it.
-   Certificates belonging to servers never authenticate.
-4. A published certificate that the [revocation check](configuration.md#revocation-cert-alertrevocation)
-   has found **revoked**, or whose validity dates do not cover the present moment, is refused even
-   though the directory still publishes it.
-5. If no cached certificate matches and `x509.require-known-certificate` is `true` (default), the
-   certificate is rejected and the browser is sent to the password form.
+- **`servlet`** (the default): CertAlert terminates TLS itself (`CERT_ALERT_TLS_ENABLED=true`) with
+  `server.ssl.client-auth: want` and a trust store holding the CAs whose client certificates are
+  accepted at the handshake.
+- **`header`**: a proxy in front terminates TLS, verifies the client certificate and forwards it
+  in a header. See [Behind a TLS-terminating proxy](#behind-a-tls-terminating-proxy-header-mode).
+
+Then, on every request that presents a certificate (a certificate is not remembered by the
+session):
+
+1. **Issuer.** With `ENS_X509_ALLOWED_ISSUERS` set, a certificate from any other issuer is refused
+   (`issuer not allowed`).
+2. **Live revocation.** With `ENS_X509_REVOCATION` on (`ocsp`, `crl` or `ocsp-then-crl`), the
+   certificate's status is checked before it is matched to anybody. A revoked certificate is
+   refused (`certificate revoked`); one whose status cannot be found is refused
+   (`revocation unknown`) unless `ENS_X509_REVOCATION_FAIL=open`. Good and revoked answers are
+   reused for `ENS_X509_REVOCATION_CACHE` (10 minutes), no answer for 30 seconds.
+3. **Fingerprint.** CertAlert computes the **SHA-256 fingerprint of its DER** and looks it up in
+   `cached_certificate`. If it belongs to an **IC Person**, that person is signed in, unless
+   step 4 refuses it. Certificates belonging to servers never authenticate.
+4. **Cached state.** A published certificate that the nightly
+   [revocation check](configuration.md#revocation-cert-alertrevocation) has found **revoked**, or
+   whose validity dates do not cover the present moment, is refused even though the directory
+   still publishes it (`certificate revoked`, `certificate expired`, `certificate not yet valid`).
+5. **No match.** If no cached certificate matches and `x509.require-known-certificate` is `true`
+   (default), the certificate is rejected and the browser is sent to the password form. With it
+   `false`, see [Certificates the directory does not publish](#certificates-the-directory-does-not-publish).
 
 This binds sign-in to the exact certificate the directory publishes for the person, not to a name.
 Revoking access is a matter of removing the certificate from the directory (and the next sweep or
-changelog update), or of its CA revoking it (and the next revocation check).
+changelog update), or of its CA revoking it.
 
-A refusal in step 4 is recorded as a failed `auth.login` whose reason is `certificate revoked`,
-`certificate expired` or `certificate not yet valid`, with the certificate's fingerprint in
-`details.fingerprint`. A revoked certificate's refusal has `alert` severity. A certificate whose
-revocation status is *Not checked* or *Unknown* still signs in: step 4 uses the status the last
-revocation check cached, and no OCSP or CRL query is made during the handshake.
+Each refusal is recorded as a failed `auth.login` (`details.method` `x509`) with its reason and
+the certificate's fingerprint in `details.fingerprint`; a revoked certificate's refusal has
+`alert` severity. A successful certificate sign-in is recorded once per session.
+
+!!! warning "Revocation at sign-in is off by default"
+    With `ENS_X509_REVOCATION=off` (the default, so an upgrade changes nothing), step 2 is skipped
+    and step 4 uses the status the last nightly check cached: a certificate whose status is *Not
+    checked* or *Unknown* still signs in, and a newly revoked one signs in until the next check.
+    Startup logs a warning while certificate sign-in is on and revocation is off. DISA STIG
+    requires it on.
+
+**The revocation check at sign-in** needs the certificate's issuer. It is taken from the chain
+the browser presented, `ENS_X509_TRUSTED_CA_FILE`, `cert-alert.revocation.issuer-directory` or
+the TLS trust store, whichever holds a certificate whose key verifies it. OCSP answers are checked
+by the JDK's path validator; a CRL counts only if it is signed by the issuer and not past its next
+update. Fetches have 5 s to connect, 10 s to answer and 20 s in all, are subject to the same
+[fetch policy](configuration.md#revocation-cert-alertrevocation) as the nightly check, and share
+its CRL cache. `ENS_X509_OCSP_RESPONDER_URL` sends every OCSP request to one responder;
+`ENS_X509_CRL_DIR` reads CRLs from files and fetches nothing.
 
 !!! warning "`client-auth: want`, never `need`"
     With `need`, a browser without a certificate fails the TLS handshake and never reaches the
@@ -43,11 +71,50 @@ revocation check cached, and no OCSP or CRL query is made during the handshake.
     Fingerprints are matched against the cache, so certificate sign-in works only after the first
     sweep has cached people's certificates.
 
+#### Certificates the directory does not publish
+
 With `x509.require-known-certificate: false`, an unknown certificate falls back to matching the
 `uid` and email address in its subject, and its `rfc822Name` SANs, against each person's `uid` and
 the addresses the directory publishes for them. The subject's common name is never matched, nor are
 addresses added in CertAlert. A certificate whose values name more than one person signs in nobody.
 This trusts a name rather than a key and is off by default.
+
+`ENS_X509_USER_FILTER` replaces that matching with an LDAP filter, for example `(uid={edipi})`
+for a directory keyed on the DoD EDIPI. The placeholders are in
+[Configuration → Client certificates](configuration.md#client-certificates-ensx509). The search
+must find exactly one entry that CertAlert has synced, or nobody signs in. Fingerprint matching
+stays the first and preferred way.
+
+#### Behind a TLS-terminating proxy (header mode)
+
+With `ENS_X509_SOURCE=header`, a proxy (an ingress or load balancer) terminates TLS, verifies the
+client certificate and forwards it as URL-encoded PEM in `ENS_X509_HEADER`
+(`X-SSL-Client-Cert`), with a shared secret in `X-ENS-Proxy-Secret`. CertAlert believes the
+header only when:
+
+- the connection itself comes from an address in `ENS_X509_TRUSTED_PROXIES` (never an address a
+  forwarded-for header claims);
+- it carries the secret, compared in constant time;
+- the certificate chains to a CA in `ENS_X509_TRUSTED_CA_FILE`, is in date, and is not restricted
+  to a use other than client authentication.
+
+Anything else is refused and audited as a failed `auth.login` (`certificate header not from a
+trusted proxy`, `certificate not trusted`). In header mode a certificate from CertAlert's own TLS
+handshake is ignored. Let nothing but the proxy reach CertAlert's port, and have the proxy set
+both headers itself and drop any copy a client sends. With nginx:
+
+```nginx
+ssl_verify_client optional;
+ssl_client_certificate /etc/nginx/dod-cas.pem;
+proxy_set_header X-SSL-Client-Cert  $ssl_client_escaped_cert;
+proxy_set_header X-ENS-Proxy-Secret "<the secret>";
+proxy_set_header X-Forwarded-Proto  $scheme;
+```
+
+!!! warning "Trusted proxies over IPv6"
+    IPv4 ranges match only IPv4 addresses. The Helm chart's default `x509.trustedProxies`
+    (`10.0.0.0/8,172.16.0.0/12,192.168.0.0/16`) is IPv4 only: if your ingress controller reaches
+    pods over IPv6, add its IPv6 range, for example `fd00::/8`.
 
 ### Directory password (LDAP bind)
 
@@ -60,12 +127,49 @@ The sign-in is resolved to the cached person at the DN the bind used, and to nob
 the cache does not hold yet (not swept yet, or one the sweep does not reach) signs in under the
 username typed, without a cached person, and is never matched to someone else by name.
 
+### Notice and consent banner
+
+With `ENS_CONSENT_BANNER_ENABLED=true`, every request from a browser session that has not pressed
+**I agree** is sent to `/consent` before any sign-in filter runs, so no sign-in of any kind, form
+or certificate, succeeds first. An API call gets a 401 instead. The agreement is kept in the
+session, so signing out shows the banner again. It is audited as `auth.consent-acknowledged`.
+
+Exempt: `/consent` itself, the static files, `/favicon.ico`, `/error`, the health endpoints
+(`/actuator/health/**`, `/livez`, `/readyz`), `/actuator/prometheus` on the management port, and
+the SIEM pull API (`/api/audit/**`, bearer tokens).
+
 ### Sessions and API calls
 
-- Sign-in creates a normal session; **Sign out** (account menu) logs out to `/login?logout`.
+- Sign-in creates a session; **Sign out** (account menu) logs out to `/login?logout`. The first
+  signed-in request of every session gives it a new id.
+- Sessions end after `ENS_SESSION_IDLE_TIMEOUT` (`30m`) idle, or `ENS_SESSION_ADMIN_IDLE_TIMEOUT`
+  for administrators, and `ENS_SESSION_ABSOLUTE_TIMEOUT` (`12h`) after sign-in. With
+  `ENS_SESSION_MAX_PER_USER` set, signing in beyond it ends the person's oldest session. An ended
+  session goes to `/login?expired`; an API call in one gets a 401. Each is audited as
+  `auth.session-expired` with its reason, `idle`, `absolute` or `concurrent`.
+- For someone signing in with a certificate, an ended session means a new one on the next request
+  (and, with the consent banner on, agreeing to it again).
+- Sessions, and the register of who holds which, are in memory: one instance only.
 - Unauthenticated calls under `/api/**` get **401** (not a redirect); pages redirect to `/login`.
-- CSRF protection is on (Spring Security default); the pages send the token from `_csrf` meta tags.
-- There is no API token or HTTP Basic mechanism.
+- CSRF protection is on; the pages send the token from the `_csrf` meta tags, and the tables send
+  it with their own requests.
+- The only token authentication is the SIEM pull API's bearer tokens (`/api/audit/**`), which
+  read the audit trail and nothing else. There is no HTTP Basic.
+
+### Security headers and cookies
+
+- **Content-Security-Policy** on every response: `default-src 'self'; script-src 'self';
+  style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:;
+  connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self';
+  object-src 'none'`. No page has an inline script. `ENS_CSP_REPORT_ONLY=true` sends it as
+  report-only, an escape hatch only.
+- `Strict-Transport-Security: max-age=31536000; includeSubDomains` on secure requests,
+  `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
+  `Referrer-Policy: strict-origin-when-cross-origin`, and
+  `Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=()`.
+- The session cookie is `HttpOnly` and `SameSite=Lax`, and `Secure` on any request that arrived
+  over TLS; `ENS_COOKIE_SECURE=true` makes it `Secure` always.
+- CertAlert's own HTTPS allows TLS 1.2 and 1.3 only.
 
 ## Roles
 
@@ -97,7 +201,7 @@ Two further, **per-server** rights derive from data rather than configuration:
 |---|:-:|:-:|:-:|:-:|
 | View People, Servers, details, Metrics, own Notifications | ✓ | ✓ | ✓ | ✓ |
 | View an entry's audit history | ✓ | ✓ | ✓ | ✓ |
-| View the system audit log (`/admin`) | | | | ✓ |
+| View the system audit log (`/admin`, `/admin/audit`) | | | | ✓ |
 | Manage a server's contacts | `AUTHENTICATED`¹ | ✓ | ✓ | ✓ |
 | Run the endpoint probe | `AUTHENTICATED`¹ | ✓ | ✓ | ✓ |
 | Add/remove a person's addresses | `AUTHENTICATED`¹ | `AUTHENTICATED`¹ | `AUTHENTICATED`¹ | ✓ |
@@ -109,8 +213,9 @@ Two further, **per-server** rights derive from data rather than configuration:
 | Run revocation check | | | | ✓ |
 | Run / dry-run the round-up | | | | ✓ |
 | Change round-up lead days | | | | ✓ |
-| `/actuator/health`, `/health/**`, `/info` | public | public | public | public |
-| Other actuator endpoints (`metrics`, `loggers`) | | | | ✓ |
+| `/actuator/health`, `/health/**`, `/info`, `/livez`, `/readyz` | public | public | public | public |
+| Other actuator endpoints (`metrics`, `loggers`) on the application's port | | | | ✓ |
+| The audit log page (`/admin/audit`), the license screen (`/admin/license`) | | | | ✓ |
 
 ¹ Only when `cert-alert.security.contact-editors: AUTHENTICATED` (default `ADMIN`).
 
@@ -119,9 +224,11 @@ use (it asks the API whether the current user may edit a given server).
 
 ## Public paths
 
-`/login`, `/css/**`, `/js/**`, `/img/**`, `/webjars/**`, `/favicon.ico`, `/error`,
-`/actuator/health`, `/actuator/health/**`, `/actuator/info`. Everything else requires
-authentication.
+`/login`, `/consent`, `/css/**`, `/js/**`, `/img/**`, `/webjars/**`, `/favicon.ico`, `/error`,
+`/actuator/health`, `/actuator/health/**`, `/actuator/info`, `/livez` and `/readyz`. On the
+management port (`MANAGEMENT_SERVER_PORT`), health and `/actuator/prometheus` are open; never
+publish that port beyond your monitoring network. `/api/audit/**` takes a bearer token instead of
+a session. Everything else requires signing in.
 
 ## Outbound connections
 
@@ -129,8 +236,15 @@ authentication.
 |---|---|---|
 | LDAP directory | Sweeps, changelog, password bind, attribute writes, clean-up | `spring.ldap.*` |
 | SMTP | Round-up and alert email | `cert-alert.notifications.email.enabled`, `cert-alert.alerts.email.enabled` |
-| CRL distribution points / OCSP responders (HTTP or `ldap://`) | Revocation | `cert-alert.revocation.enabled` |
+| CRL distribution points / OCSP responders (HTTP or `ldap://`) | The nightly revocation check, and the check at sign-in | `cert-alert.revocation.enabled`, `ENS_X509_REVOCATION`, and the fetch policy (`cert-alert.revocation.allowed-hosts`) |
 | Server TLS endpoints | Endpoint probe (user-initiated) | `cert-alert.probe.enabled` |
+| Splunk HEC, syslog | Audit outputs | `ENS_AUDIT_SPLUNK_*`, `ENS_AUDIT_SYSLOG_*` |
+
+Every distribution point and responder address comes out of a certificate, so fetches never go to
+link-local or cloud metadata addresses, go to loopback only when it is named in `allowed-hosts`,
+follow at most three redirects (http and https only), and are limited in size and time. With
+`allowed-hosts` set, nothing else is fetched from. See
+[Configuration → Revocation](configuration.md#revocation-cert-alertrevocation).
 
 The endpoint probe connects only to the host named by the entry (`serverURL`, then
 `icServerAddress`); a caller chooses only the port. The handshake deliberately accepts any chain
@@ -147,12 +261,28 @@ acceptable.
 | Editable attributes | Write exactly the attributes defined on the Admin page |
 | Certificate clean-up | Write the certificate attribute (and nothing else) |
 
+## FIPS 140-3 and DISA STIG
+
+See [FIPS 140-3 and DISA STIG](fips-and-stig.md).
+
 ## Hardening checklist
 
-- Use the `postgres` profile with credentials from the environment or a secret.
+- Use the `postgres` profile with credentials from the environment or a secret, and
+  `sslmode=verify-full` to a PostgreSQL outside the release package.
 - Use `ldaps://` for the directory.
 - Enable TLS; keep `client-auth: want`; prefer certificate sign-in. Consider
   `ldap.enabled: false` for certificate-only deployments.
+- With certificates in use: `ENS_X509_REVOCATION` other than `off`, `ENS_X509_REVOCATION_FAIL`
+  left `closed`, and `ENS_X509_ALLOWED_ISSUERS` if only some trusted CAs issue user certificates.
+- For DoD systems: `ENS_CONSENT_BANNER_ENABLED=true`, and session limits as your policy requires
+  (DISA STIG suggests `ENS_SESSION_ADMIN_IDLE_TIMEOUT=15m` and `ENS_SESSION_MAX_PER_USER=3`).
+- Behind a TLS-terminating proxy: `SERVER_FORWARD_HEADERS_STRATEGY=framework`, and
+  `ENS_COOKIE_SECURE=true` if the proxy does not send `X-Forwarded-Proto`. In the release package,
+  `CERT_ALERT_BIND_ADDRESS=127.0.0.1`.
+- In header mode, let only the proxy reach CertAlert, and keep the proxy secret in a file or
+  Secret.
+- Keep the management port off every ingress, route and published port.
+- Set `cert-alert.revocation.allowed-hosts` to your PKI's hosts where you can.
 - Keep `x509.require-known-certificate: true`.
 - Keep `admin-identifiers` short; keep `contact-editors: ADMIN` unless servers' owners are expected
   to curate projects and addresses themselves.

@@ -40,10 +40,11 @@ certificate crosses into expiry.
 | **Projects** | Group people and servers into projects; project administrators manage contacts for the project's servers. |
 | **Editable attributes** | Administrators can make selected server-entry attributes editable; edits are written back to the directory. |
 | **Certificate clean-up** | An optional, off-by-default job that deletes expired and revoked certificates from the directory. |
-| **Audit trail** | Every change to an entry is recorded with the actor; administrators get a system-wide audit log. |
+| **Audit trail** | Every sign-in, refusal, setting, job run and change to an entry is recorded in the hash-chained `ens-audit/1` trail, searchable and verifiable at `/admin/audit` and sent on to a SIEM. See [Audit logging](../audit-logging.md). |
 | **Metrics** | Directory-wide reporting: states, falling-due counts, algorithms, issuance, revocation, organization breakdowns. |
 | **Classification banner** | Optional fixed top/bottom banners for accredited networks. |
-| **Sign-in** | X.509 client certificate (matched by fingerprint against the directory) or directory password (LDAP bind). |
+| **Sign-in** | X.509 client certificate (matched by fingerprint against the directory, optionally checked for revocation at sign-in, or forwarded by a TLS-terminating proxy) or directory password (LDAP bind). |
+| **Platform baseline** | The ENS security headers, notice-and-consent banner and session limits; Prometheus metrics on a separate management port, liveness and readiness, JSON logs; a hash-chained `ens-audit/1` audit trail for a SIEM. |
 
 ## Architecture at a glance
 
@@ -101,7 +102,7 @@ See [Architecture](architecture.md) for components, data model and the sync pipe
 | **CertAlert application** | A single Spring Boot application, shipped as the container image `ghcr.io/winllc/cert-alert`, that serves the UI and API and runs every scheduled job. |
 | **Database** | PostgreSQL (included in the release package; your own with Helm). Flyway owns the schema. |
 | **LDAP directory** | The source of truth. Read with a service account; written to only by the optional certificate clean-up job and by editable server attributes. |
-| **SMTP server** *(optional)* | For the daily round-up email and the operator email alert channel. |
+| **SMTP server** *(optional)* | For the daily round-up email and the operator email alert channel. Mail goes through an outbox in the database and is retried while the server is down. |
 | **CRL / OCSP endpoints** *(optional)* | Queried by the revocation job. |
 
 ## Tech stack
@@ -110,12 +111,13 @@ See [Architecture](architecture.md) for components, data model and the sync pipe
 |---|---|
 | Language | Java 21 |
 | Framework | Spring Boot 4.1 (web, data-jpa, security, data-ldap, mail, actuator, thymeleaf, validation) |
-| Build | Gradle (Kotlin DSL) with wrapper |
+| Build | Gradle 9.8.1 (Kotlin DSL) with wrapper, checked against its published checksum. Running Gradle needs JDK 17 or later; the project builds for Java 21 |
 | Directory | Spring LDAP, paged searches; Spring Security LDAP for password sign-in |
 | Persistence | Spring Data JPA + Flyway migrations |
 | Database | PostgreSQL |
 | Tables | spring-data-jpa-datatables |
-| UI | Tabler + Thymeleaf + DataTables + jQuery, all served from webjars (no CDN) |
+| UI | Tabler 1.6.1 + Thymeleaf + DataTables 3 + jQuery 4, all served from webjars (no CDN) |
+| Observability | Spring Boot Actuator, Micrometer with Prometheus (management port only), ECS JSON logs |
 | Container | Red Hat UBI 9 OpenJDK 21 (build) / OpenJDK 21 runtime |
 | Tests | JUnit 5, in-memory UnboundID directory, MockMvc |
 
@@ -131,5 +133,6 @@ See [Architecture](architecture.md) for components, data model and the sync pipe
 | [User guide](user-guide.md) | Everyone | Walkthrough of every screen |
 | [Architecture](architecture.md) | Engineers | Components, data model, sync pipeline, changelog connector |
 | [Security](security.md) | Security / operators | Authentication, roles, permissions matrix, hardening |
+| [FIPS 140-3 and DISA STIG](fips-and-stig.md) | Security / operators | What CertAlert relies on for FIPS 140-3, the license check in FIPS mode, STIG settings |
 | [API reference](api-reference.md) | Integrators | Every REST endpoint |
 | [Troubleshooting](troubleshooting.md) | Operators | Symptoms, causes and fixes |

@@ -143,9 +143,12 @@ licensee and what is licensed. It is still visible to anyone who can read the co
 | Expired, within the grace period (subscriptions: 30 days) | The same, plus a renewal warning for administrators. |
 | Expired past grace | **Read-only**: data stays visible and exportable; nothing can be changed; scheduled jobs, syncs and notifications pause. |
 | Perpetual, but this release was built after its maintenance ended | Read-only. Renew maintenance or run an older release. |
-| Missing, invalid, for another product or installation, superseded by a newer revision, or not yet valid | **Unlicensed**: only sign-in and the license screen work. |
+| Missing, invalid, for another product or installation, superseded by a newer revision, or not yet valid | **Unlicensed**: only sign-in, the license screen and the audit log work (see below). |
 
 Administrators see a renewal reminder from 30 days before expiry.
+
+Whatever the state, the audit log and its pull API stay available in every application, and in
+ReadyRoom so do a person's data export and erasure (erasure also while read-only).
 
 **Size limits.** Each license covers a number of directory users, tracked people or SecurID users. Up
 to 10% over, the application warns. Further over, it stops taking on more, though it never removes

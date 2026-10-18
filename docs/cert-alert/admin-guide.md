@@ -148,7 +148,11 @@ Event kinds:
 
 Only *changes* are recorded: a sweep that finds the directory unchanged writes nothing. Records
 outlive what they describe; after a prune the record keeps the entry's DN and name. Retention is
-off by default (see [Configuration → Audit trail](configuration.md#audit-trail-cert-alertaudit)).
+off by default (see [Configuration → Audit trail](configuration.md#audit-trail)).
+
+The full `ens-audit/1` trail, with sign-ins, refusals, settings, the license and job runs as well
+as entry changes, is on the **Audit log** page, `/admin/audit`: search, export, **Verify
+integrity**, delivery status and SIEM API tokens. See [Audit logging](../audit-logging.md).
 
 ## Notifications administration
 
