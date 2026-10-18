@@ -108,6 +108,8 @@ Never publish that port through an ingress, route or the host. With the Promethe
 | `ens_readyroom_people_in` | gauge | People whose latest event today is a check-in or unlock (refreshed at most once a minute) |
 | `ens_readyroom_alerts_sent_total` | counter | Absence alert emails sent |
 | `ens_readyroom_logoffs_refused_total{reason}` | counter | Logoffs refused: `unknown_session`, `rate_limited` |
+| `ens_readyroom_requests_total{outcome}` | counter | Status requests `created`, `approved`, `rejected`, `cancelled` |
+| `ens_readyroom_retention_purged_total{kind}` | counter | Records the retention purge deleted: `checkin`, `status`, `notification`, `request` |
 
 Suggested alerts: readiness failing; `ens_readyroom_checkins_total` flat during working hours;
 `ens_license_mode{mode="full"}` at 0, or `ens_license_days_remaining` under 30;
@@ -155,6 +157,12 @@ Useful messages:
 | `<user> pinned their session system time to <date>` | Someone is viewing another day, which explains reports of "wrong-looking" data. |
 | `Windows sign-in refused for <principal>: <reason>` | See [Troubleshooting](troubleshooting.md#windows-sign-in). |
 | `<address> sent more than N logoffs with an unusable session id this minute; refusing them with 429 (application.logoff.refused-per-minute)` (`WARN`) | One client address had more than `refused-per-minute` logouts refused within a minute. See [Troubleshooting](troubleshooting.md#check-ins-not-arriving). |
+| `Status requests: [...] need approval; [...] are set by the person; [...] only managers and administrators record` | Startup: the status classes in effect. |
+| `Statuses [...] excuse an absence but are not in application.events.request-statuses: ...` (`WARN`) | Startup: people can set those statuses without approval, and they stop absence alerts. |
+| `N people have delegates (alternate managers) chosen before administrators managed them; ...` | Startup: delegates waiting for review under **Administration → Delegates**. |
+| `Retention: check-in records, statuses, status requests and absence alerts older than N days are summarised by month and deleted (...)`, or `... are kept forever (...)` | Startup: the retention setting in effect. |
+| `Retention purge: before <date> (N days kept), N check-in record(s), ... deleted over N day(s); N monthly summary write(s), in Xms` | One run of the retention purge. |
+| `Mail "<subject>" sent to <address>` / `Failed to send "<subject>" to <address>` | A status request email was sent, or failed (a stack trace follows). Request emails are not retried. |
 
 ## Scheduled jobs
 
@@ -167,6 +175,8 @@ overlap.
 | **Auto check-out** (`MarkInactiveCron`) | 60 s / 30 min (`inactive-cron.fixed-rate`) | 60 s / 30 min | For each user whose **latest event today is a screen lock** older than `check-out-after-minutes`, writes a `CHECK_OUT` timestamped at lock time + that many minutes, flagged `forced = true`. |
 | **Absence alerts** (`SendAbsentNotificationsCron`) | 5 min / 30 min (`send-absent-notification-cron.fixed-rate`) | immediately / 30 min | On working days, raises at most one alert per person per day for users not in by their expected time plus the grace period. See [Administration](admin-guide.md#absence-notifications). |
 | **Directory refresh** (`RefreshUserRecordsCron`) | 1 h / 1 h (`refresh-user-records-cron.fixed-rate`) | 5 min / 5 min | Reads every user from the directory and creates or updates `user_records` (DN, email, phone, organization, employee type, location, branch, duty sub-organization) in batches of changed rows. Set `refresh-user-records-cron.enabled: false` to pause it. |
+| **Retention purge** (`RetentionService`) | `0 17 2 * * *`, 02:17 daily (`application.retention.cron`) | – | Only with `application.retention.events-days` above 0: summarises and deletes old check-ins, statuses, requests and absence alerts. See [Retention](#retention). |
+| **Audit retention** (`AuditRetention`) | `0 23 3 * * *`, 03:23 daily | – | Only with `ENS_AUDIT_RETENTION_DAYS` above 0: prunes delivered audit events. |
 
 The directory refresh also matters for alerts: the absence job only considers people who have a
 `user_records` row, and the refresh creates one for every directory user.
@@ -242,21 +252,41 @@ organization calendar and parse rules, and the audit trail. Take a backup before
 
 ### Retention
 
-**ReadyRoom never deletes old attendance data.** The audit trail is pruned only when
-`ENS_AUDIT_RETENTION_DAYS` is set (see [Audit logging](../audit-logging.md#retention)).
-`check_in_out_records` grows by one row for every logon,
-lock, unlock and logoff on every workstation. 5,000 users over 90 days make about 1.2 million
-rows. `notification_records` and `user_event_records` also grow.
-If you need a retention policy, apply it with SQL on a schedule of your own, after a backup. For
-example:
+**By default ReadyRoom keeps everything.** `check_in_out_records` grows by one row for every
+logon, lock, unlock and logoff on every workstation: 5,000 users over 90 days make about 1.2
+million rows. `user_event_records`, `status_requests` and `notification_records` grow too.
 
-```sql
--- Example only, not part of ReadyRoom: delete raw events older than two years.
-DELETE FROM check_in_out_records WHERE timestamp < now() - interval '2 years';
-```
+Set `APPLICATION_RETENTION_EVENTSDAYS` (Helm: `retention.eventsDays`) to keep them for that many
+days: `0` (the default) keeps them forever; otherwise at least 31, because the home page, My
+Reports and the average login time read the last 30 days. The purge then runs on
+`APPLICATION_RETENTION_CRON` (default `0 17 2 * * *`, 02:17 daily, in ReadyRoom's time zone) and
+deletes what is older than the cutoff:
 
-Keep in mind that a person's average arrival is computed from the last 30 days, the Home page and
-My Reports look back 30 days, and agent coverage looks back 90 days.
+- **check-in records and calendar statuses**, after rolling them up into one summary per person
+  per month (`attendance_summaries` and `attendance_summary_statuses`): days checked in, time in
+  (first check-in to last check-out each day, as the reports count it) and days per status. A later
+  run adds to a month already summarised; nothing is counted twice;
+- **absence alerts**, by the day they were raised, and **status requests**, once their last day is
+  past, without a summary.
+
+It works one day at a time, oldest first, 500 people per transaction, so it never holds a table for
+long. A lock on the single row of `retention_state` stops two instances counting the same day
+twice. Each run is audited as `data.purged` (actor `system`) with its counts and cutoff, and
+counted in `ens_readyroom_retention_purged_total{kind}`; a failed run is `job.failed`, and the next
+run carries on. **Administration → Privacy** shows the setting, the cutoff and the last purge.
+
+**What reports show for purged periods.** Before the cutoff there are no per-day records: the
+group report shows no check-in times, durations or statuses for those days, and adds a
+*Before &lt;date&gt;: monthly summaries* table with each member's days checked in, time in and days
+per status. Calendars show nothing for purged days. The home page, My Reports and metrics read at
+most the last 30 days, which retention never reaches.
+
+**What retention does not touch:** the monthly summaries (kept until a person is erased), the user
+records, and the audit trail, which has its own retention, `ENS_AUDIT_RETENTION_DAYS` (see
+[Audit logging](../audit-logging.md#retention)). Backups keep purged data until they expire.
+
+For what ReadyRoom keeps about people and for how long, see
+[Privacy, DPIA and works council](privacy.md).
 
 ### Schema changes and migrations
 
@@ -264,9 +294,17 @@ Flyway owns the schema. The migrations are versioned `V<n>__<description>.sql` f
 application; at every start, before it serves anything, ReadyRoom applies the ones the database
 does not have yet (recorded in `flyway_schema_history`), each in one transaction. Hibernate then
 only validates the schema (`ddl-auto: validate`). Nothing is run by hand, and neither the release
-package nor the Helm chart carries scripts. The current release has one migration, `V1__baseline`;
-see [Installation → Prepare PostgreSQL](install.md#prepare-postgresql). Developer notes on adding a
-migration are in `db/README.md` in the source.
+package nor the Helm chart carries scripts. Developer notes on adding a migration are in
+`db/README.md` in the source.
+
+| Migration | What it does |
+|---|---|
+| `V1__baseline` | The schema as earlier releases left it, with missing indexes and constraints, the audit trail's append-only trigger, and duplicate user records merged. See [Installation → Prepare PostgreSQL](install.md#prepare-postgresql) |
+| `V2__status_requests` | `status_requests`, for statuses that need approval |
+| `V3__admin_managed_delegates` | Widens the delegates column to 2000 characters, and flags delegates people chose for themselves for an administrator's review |
+| `V4__retention_summaries` | `attendance_summaries`, `attendance_summary_statuses` and `retention_state`, for retention |
+
+V2 to V4 change only the schema, plus one `UPDATE` on `user_records`, so they are quick.
 
 ## Certificate and key rotation
 
@@ -336,6 +374,17 @@ stored, and audited as a failed `auth.login` with the reason *unknown session*. 
    workstation. Without arguments it keeps the existing `inoutworker.config.json`, installs the new
    script, re-registers the five tasks, and corrects the folder permissions an older client left on
    `%ProgramData%\InOutWorker`.
+
+### Upgrading to the approvals and retention release
+
+| Change | What to do |
+|---|---|
+| People can no longer set Out of Office, Work From Home, TDY or Scheduled Leave themselves (or Absent Excused through the API): the calendar sends them as requests | Tell your users and managers. Statuses already on calendars, future ones included, keep their effect; nothing is converted to a request. To let people set one again without approval, leave it out of `APPLICATION_EVENTS_REQUESTSTATUSES` |
+| Only administrators set delegates; `POST /api/users/managers/update` is removed | Review the delegates people chose themselves under **Administration → Delegates**. Until then they keep receiving alerts and may now also approve requests |
+| `POST /api/event/update` returns `{status, fromDate, toDate, outcome, requestId?, message?}`, answers bad input with `400` instead of `500`, accepts plain `yyyy-MM-dd` dates, and refuses ranges over 366 days | Update scripts that call it |
+| Profile note changes are audited as `notesChanged`, without the text | Events from earlier releases keep the old and new text until audit retention prunes them |
+| New settings keep the old behaviour: coworker visibility `full`, retention `0` (forever) | Decide on [coworker visibility and retention](configuration.md#statuses-requests-and-privacy) |
+| New menu entries: **Approvals**, **My data**, and **Delegates** and **Privacy** for admins | |
 
 To roll back, see [Rolling back an upgrade](availability-and-sizing.md#rolling-back-an-upgrade).
 Rolling back past a release that added migrations needs the database backup taken before the

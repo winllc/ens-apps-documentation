@@ -16,9 +16,9 @@ Backups themselves are in [Operations](operator-guide.md#backups).
 | Driver | How the code handles it | Settings |
 |---|---|---|
 | Workstations | Every logon, lock, unlock and logoff is one request from the Windows client and one row in `check_in_out_records`. Logons bunch up at the start of the working day | |
-| Database growth | `check_in_out_records` is never pruned by ReadyRoom: 5,000 users over 90 days make about 1.2 million rows. The audit trail grows too, until `ENS_AUDIT_RETENTION_DAYS` removes old events | [Retention](operator-guide.md#retention), `ENS_AUDIT_RETENTION_DAYS` |
+| Database growth | `check_in_out_records` grows by one row per workstation event, and by default nothing is deleted: 5,000 users over 90 days make about 1.2 million rows. With `APPLICATION_RETENTION_EVENTSDAYS` set, older rows are summarised by month and deleted. The audit trail grows too, until `ENS_AUDIT_RETENTION_DAYS` removes old events | [Retention](operator-guide.md#retention), `APPLICATION_RETENTION_EVENTSDAYS`, `ENS_AUDIT_RETENTION_DAYS` |
 | The directory | Users, group trees and the org chart are cached (at most 5,000 entries each) and refreshed in the background; group memberships are cached for 300 s. LDAP connections are pooled, at most 20 by default | `application.cache-duration-*`, `application.ldap.group-membership-cache-seconds`, `com.sun.jndi.ldap.connect.pool.maxsize` |
-| Scheduled jobs | Auto check-out every minute, absence alerts every 5 minutes, the directory refresh hourly, each on its own thread | `application.inactive-cron.*`, `application.send-absent-notification-cron.*`, `application.refresh-user-records-cron.*` |
+| Scheduled jobs | Auto check-out every minute, absence alerts every 5 minutes, the directory refresh hourly, and, when set, the retention purge daily (one day at a time, 500 people per transaction) | `application.inactive-cron.*`, `application.send-absent-notification-cron.*`, `application.refresh-user-records-cron.*`, `application.retention.*` |
 | Database connections | Spring Boot's connection pool; requests release their connection when the service call ends (`open-in-view: false`) | `spring.datasource.hikari.maximum-pool-size` (Spring Boot's setting) |
 
 `db/perf/seed_volume.sql` and the manual `QueryPerformanceMeasurement` test in the source tree fill a
@@ -42,8 +42,8 @@ How to adjust:
 - **Slow pages.** Turn on `application.diagnostics.request-metrics` to see SQL statements and LDAP
   operations per request, and check the directory's response times first: the LDAP timeouts are 5 s
   (connect) and 30 s (read).
-- **Database.** Watch its size and set a retention policy for `check_in_out_records` with SQL if you
-  need one ([Retention](operator-guide.md#retention)).
+- **Database.** Watch its size, and set `APPLICATION_RETENTION_EVENTSDAYS` if it grows more than
+  you want ([Retention](operator-guide.md#retention)).
 
 ## High availability
 
@@ -76,7 +76,7 @@ days by default). See [Windows client](windows-client.md).
 
 | Item | Holds | Back it up with |
 |---|---|---|
-| The PostgreSQL database | Attendance history, statuses, roles, notes, additional and group managers, notifications, the calendar, parse rules and the audit trail | `./backup.sh`, the Helm backup CronJob, or your database's backups ([Operations](operator-guide.md#backups)) |
+| The PostgreSQL database | Attendance history and monthly summaries, statuses and status requests, roles, notes, delegates and group managers, notifications, the calendar, parse rules and the audit trail | `./backup.sh`, the Helm backup CronJob, or your database's backups ([Operations](operator-guide.md#backups)) |
 | The license volume (`readyroom_ens-license`, or the license PVC) | The license file and **this installation's id** | `./backup.sh` (release package), or a PVC snapshot. Keep the `.lic` file you received as well |
 | Settings | `.env`, `license/`, `tls/`, `kerberos/` (release package); your values file and the Secrets it names (Helm) | Your configuration management. They hold secrets |
 | The release | The package you installed, or the image digests and chart version | Keep the download, or mirror the images |

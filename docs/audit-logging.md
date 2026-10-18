@@ -48,10 +48,10 @@ be reviewed and exported.
 |---|---|
 | `authentication` | `auth.login` (success and failure, with the method: password, LDAP, smart card, API token; a refused client certificate gives its reason, such as `certificate revoked` or `revocation unknown`), `auth.logout`, `auth.lockout`, `auth.consent-acknowledged` (the notice-and-consent banner, when it is on), `auth.session-expired` (with the reason `idle`, `absolute` or `concurrent`), password changes and resets |
 | `authorization` | `access.denied`: every refused request, with the reason (role, not licensed, read-only, feature not licensed, CSRF). Repeats within a minute are counted in one event. |
-| `account` | Users and accounts created, changed, disabled or deleted; roles and permissions granted or revoked |
+| `account` | Users and accounts created, changed, disabled or deleted; roles and permissions granted or revoked; a person's data erased (`person.erased`, ReadyRoom) |
 | `configuration` | `settings.changed` with each changed setting's old and new value; branding, templates, schedules, connectors |
 | `license` | `license.installed`, `license.rejected`, `license.mode-changed`, `license.limit-exceeded` |
-| `data` | The product's own objects created, changed or deleted; `data.exported` for every report or download; bulk uploads |
+| `data` | The product's own objects created, changed or deleted; `data.exported` for every report or download, a person's data export included; bulk uploads; `data.purged` for each retention run (ReadyRoom); status requests (`calendar.request-created`, `-approved`, `-rejected`, `-cancelled`, ReadyRoom). Free-text notes are never recorded: a profile note change is recorded as `notesChanged` |
 | `system` | `system.started`, `system.stopped`, and `job.completed` / `job.failed` / `job.skipped` for each scheduled job run |
 | `audit` | The trail itself: `audit.exported`, `audit.verified`, `audit.token-created`, `audit.token-revoked`, `audit.pruned`, `audit.delivery-failed`, `audit.delivery-recovered` |
 

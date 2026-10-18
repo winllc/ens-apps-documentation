@@ -113,6 +113,7 @@ nav:
           - Security: readyroom/security.md
           - FIPS 140-3 and DISA STIG: readyroom/fips-and-stig.md
           - Sizing, availability and recovery: readyroom/availability-and-sizing.md
+          - Privacy, DPIA and works council: readyroom/privacy.md
           - API reference: readyroom/api-reference.md
           - Troubleshooting: readyroom/troubleshooting.md
   - RSA Operations Portal:

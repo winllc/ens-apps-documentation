@@ -23,6 +23,8 @@ SYSTEM logout task. For background, see [Operations](operator-guide.md) and
 | A setting fails validation (the message names it, for example `APPLICATION_USERBASEDN`, `APPLICATION_BASE_URL`, `ENS_SESSION_IDLE_TIMEOUT`, `ENS_AUDIT_SYSLOG_PROTOCOL`) | Fix the value the message names. Durations are Spring durations of at least one minute (`30m`, `12h`). |
 | Mail is configured but `APPLICATION_NOTIFICATIONSENDEREMAIL` is missing or not an address | With `SPRING_MAIL_HOST` set, the From address is required. Set it, or remove the mail host. |
 | Header mode refuses to start (proxy secret or CA missing) | `ENS_X509_SOURCE=header` needs `ENS_X509_PROXY_SECRET_FILE` or `ENS_X509_PROXY_SECRET` (32 characters or more) and `ENS_X509_TRUSTED_CA_FILE` (or the TLS trust store). The Helm chart refuses to render likewise. |
+| `application.retention.events-days (APPLICATION_RETENTION_EVENTSDAYS) must be 0 (keep forever) or at least 31 ...` | Retention below 31 days is refused, because the home page, My Reports and the average login time read the last 30 days. |
+| `application.events.request-statuses (APPLICATION_EVENTS_REQUESTSTATUSES) cannot list STANDARD ...`, or a bad `APPLICATION_PRIVACY_COWORKERVISIBILITY`, `APPLICATION_RETENTION_CRON` or `APPLICATION_EVENTS_MAXRANGEDAYS` | Fix the value the message names: visibility is `full`, `status` or `none`; the cron has six fields; the range is 1 to 3660 days. |
 | Port in use (release package) | Another process holds the host port `READYROOM_PORT` (8181). Choose another host port in `.env`; ReadyRoom inside the container stays on 8181. |
 
 ## Sign-in and access
@@ -39,7 +41,14 @@ SYSTEM logout task. For background, see [Operations](operator-guide.md) and
 | Login form says the credentials are wrong | The user is searched under `user-base-dn` by `uid`, `cn` or `mail`. Check the base DN, and that exactly the expected entry matches. |
 | No **Log out** in the user menu | Expected for certificate sessions. The certificate would sign you straight back in. |
 | A user cannot open a group | Only admins can open any group. Everyone else can open groups they are a member of in the directory (`uniqueMember`) or manage. Memberships are cached for 300 s. |
-| A manager sees only the status of some people, without times or notes | Expected. Details are shown only for the people they are responsible for: members of groups they manage, their direct reports, and people who named them as an additional manager. The `MANAGER` role alone does not grant them. See [Security → Authorization](security.md#authorization). |
+| A manager sees only the status of some people, without times or notes | Expected. Details are shown only for the people they are responsible for: members of groups they manage, their direct reports, and the people they are a delegate of. The `MANAGER` role alone does not grant them. See [Security → Authorization](security.md#authorization). |
+| Coworkers show only `IN` or `OUT`, or no status at all | `APPLICATION_PRIVACY_COWORKERVISIBILITY` is `status` or `none`. Expected. People see themselves, their reports and the people they are a delegate of in full whatever it says. |
+| A user can no longer set Work From Home, TDY, Out of Office or Scheduled Leave on their calendar; it says *(needs approval)* | Expected since the approvals release: these statuses are requested and approved. Remove a status from `APPLICATION_EVENTS_REQUESTSTATUSES` to let people set it themselves again. |
+| A request is not in anyone's **Waiting for your approval** | Only the person's directory manager, their delegates and administrators decide requests; group managers don't. Check the person's **Manager** field and **Delegates** card, or have an administrator decide it. Nobody decides their own request. |
+| `POST /api/event/update` returns `403` | The caller tried to record a status only managers record on their own calendar, or a status on someone else's calendar without being their manager, delegate or an administrator. |
+| `POST /api/event/update` returns `400` with `range_too_long`, `invalid_range`, `invalid_status`, `invalid_time` or `invalid_dn` | The request body is wrong; the `message` says how. Ranges are limited to `APPLICATION_EVENTS_MAXRANGEDAYS` (366) days. |
+| A user can't change their delegates | Expected: only administrators set them, on the person's details page. |
+| The log shows `N people have delegates (alternate managers) chosen before administrators managed them` | Review them under **Administration → Delegates**: **Keep**, **Change** or **Remove**. |
 | An admin's role change does not show | Roles are loaded at sign-in. The user needs a new session. |
 | Metrics or Settings are missing from the sidebar | They need the `ADMIN` or `MANAGER` role. Check `super-user-dns`, or set the role on the user's details page. |
 
@@ -96,7 +105,9 @@ On the client, `The server redirected instead of accepting Windows sign-in` mean
 | No alerts at all | Look for `End SendAbsentNotificationsCron` in the log. On weekends and holidays the job does nothing. With the built-in defaults, the first run is 30 minutes after startup. |
 | A late person was not alerted | They have no expected time (no preferred login time, no check-in history in 30 days and no late arrival), they have an excusable status, they were already alerted today, or they have no `user_records` row yet (the directory refresh creates one). |
 | Alert created but no email | `Failed to send notification to ...` (SMTP), `Manager does not have an email address`, or `Invalid email address` in the log. |
-| The wrong people are alerted | Recipients are the directory manager (`user-ldap-manager-id-attribute` / `manager-ldap-id-attribute`) plus the person's own *Additional Managers*. Group managers are **not** alerted. |
+| The wrong people are alerted | Recipients are the directory manager (`user-ldap-manager-id-attribute` / `manager-ldap-id-attribute`) plus the person's delegates, which administrators set. Group managers are **not** alerted. |
+| Someone with a pending leave request was alerted | Expected: a request excuses nothing until it is approved. |
+| Request emails don't arrive | No mail server is configured, or sending failed (`Failed to send "<subject>" to ...` in the log). Request emails are sent once and not retried. |
 | The email link points to `localhost` | Set `application.application-base-url`. |
 | Alerts arrive an hour off | `application.timezone` is not set, or does not match the users' zone. The job uses the JVM default time zone. |
 
@@ -110,6 +121,8 @@ On the client, `The server redirected instead of accepting Windows sign-in` mean
 | An organization is missing from the org chart | Its value matches a parse rule's prefix but not its regex. Look for `Parse rule ... did not match` in the log. Or `duty-sub-org-filter` excludes it. |
 | A group tree is cut short, or the log shows a paging warning | Results were truncated at `application.ldap.max-pages`, or the directory's size limit is below `page-size`. |
 | A group is missing from **Groups** | Its base DN is wrong (`Groups base DN not found, returning none` or `Skipping top level group ...` in the log), or the entry is not a `groupOfUniqueNames`. |
+| Old days show no check-in times or statuses, and the group report has a *Before &lt;date&gt;: monthly summaries* table | Retention (`APPLICATION_RETENTION_EVENTSDAYS`) has purged those days and kept monthly summaries. See [Operations → Retention](operator-guide.md#retention). |
+| An erased person reappears with an empty record | They are still in the directory: ReadyRoom recreates them at sign-in and at the hourly directory refresh. Remove or disable them in the directory. |
 | Duplicate users that differ only by DN case | Releases with Flyway merge them automatically: the `V1` migration merges user rows whose DNs differ only by letter case, and the user DN is unique regardless of case. The log shows `Merging N duplicate user record(s)`. |
 
 ## Performance

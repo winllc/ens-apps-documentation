@@ -92,7 +92,9 @@ Replace every `CHANGE_ME`:
 The template also lists these optional blocks, commented out: the consent banner
 (`ENS_CONSENT_BANNER_*`), session lifetimes (`ENS_SESSION_*`), `ENS_COOKIE_SECURE`,
 `SERVER_FORWARD_HEADERS_STRATEGY`, `ENS_CSP_REPORT_ONLY`, client certificates (`ENS_X509_*`), JSON
-logs (`LOGGING_STRUCTURED_FORMAT_CONSOLE`) and the management port (`MANAGEMENT_SERVER_PORT`). See
+logs (`LOGGING_STRUCTURED_FORMAT_CONSOLE`), the management port (`MANAGEMENT_SERVER_PORT`), and
+the statuses that need approval, coworker visibility and retention (`APPLICATION_EVENTS_*`,
+`APPLICATION_PRIVACY_COWORKERVISIBILITY`, `APPLICATION_RETENTION_*`). See
 [Configuration](configuration.md).
 
 `.env` holds the database, directory and mail passwords. `install.sh` makes it mode 600; keep it
@@ -270,6 +272,9 @@ commas.
 | `metrics.enabled` (`true`), `metrics.port` (`9090`), `metrics.serviceMonitor.*`, `metrics.allowFrom` | `MANAGEMENT_SERVER_PORT`: Prometheus and the probes on a port of their own |
 | `logFormat` (`json`) | `LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs`; `text` for plain lines |
 | `backup.*` | A database backup CronJob (off by default; see [Operations](operator-guide.md#backups)) |
+| `events.requestStatuses`, `events.maxRangeDays` | `APPLICATION_EVENTS_REQUESTSTATUSES` (empty list: the default), `APPLICATION_EVENTS_MAXRANGEDAYS` |
+| `privacy.coworkerVisibility` (`full`) | `APPLICATION_PRIVACY_COWORKERVISIBILITY`; the chart's schema refuses other values |
+| `retention.eventsDays` (`0`), `retention.schedule` | `APPLICATION_RETENTION_EVENTSDAYS`, `APPLICATION_RETENTION_CRON`; the schema refuses an `eventsDays` between 1 and 30 |
 | `bannerText`, `timezone`, `checkOutAfterMinutes`, `updateProfileUrl`, `logLevel`, `javaOpts` | The settings under "Other" |
 
 Anything else from [Configuration](configuration.md) goes in `extraEnv`, as an environment variable
@@ -498,11 +503,13 @@ With the release package, PostgreSQL (16) is already set up. With Helm, use your
     | Table | Holds |
     |---|---|
     | `check_in_out_records` | Every check-in, lock, unlock and check-out event, with the session id (which no page or API shows, apart from the check-in's own answer) and the user's organization attributes at that moment |
-    | `user_records` | One row per user DN, unique regardless of letter case: role, notes, favorite groups, additional managers, preferred and average login time, and directory metadata |
+    | `user_records` | One row per user DN, unique regardless of letter case: role, notes, favorite groups, delegates (and whether they await review), preferred and average login time, and directory metadata |
     | `user_event_records` | Per-day statuses (work from home, leave, late arrival, and so on) |
+    | `status_requests` | Requests for statuses that need approval, with their notes and decisions |
+    | `attendance_summaries`, `attendance_summary_statuses`, `retention_state` | Monthly summaries of purged check-ins and statuses, and the retention job's position |
     | `notification_records` | Absence alerts and managers' responses |
     | `permission_records` | Per-user group grants |
-    | `group_records` | Additional managers assigned to a group |
+    | `group_records` | Alternate managers assigned to a group |
     | `global_calendar_records` | Organization calendar events and holidays |
     | `org_parse_rules` | Org-chart parse rules |
     | `audit_events`, `audit_chain_head`, `audit_output_state`, `audit_api_tokens` | The audit trail (`ens-audit/1`, append-only, enforced by a trigger), the chain's newest sequence number and hash, how far each audit output has delivered, and the pull API's tokens |

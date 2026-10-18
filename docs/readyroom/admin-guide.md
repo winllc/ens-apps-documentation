@@ -1,8 +1,9 @@
 # Administration
 
 This page is for people who manage ReadyRoom from inside the application: assigning roles, setting
-up who manages whom, keeping the organization calendar, and shaping the org chart. For running the
-server itself, see [Operations](operator-guide.md).
+up who manages whom, keeping the organization calendar, shaping the org chart, and handling a
+person's data. For running the server itself, see [Operations](operator-guide.md). For what
+ReadyRoom keeps about people, see [Privacy, DPIA and works council](privacy.md).
 
 ## Roles
 
@@ -35,8 +36,10 @@ the stored role of someone listed in `super-user-dns` does not remove their `ADM
     - A **responsibility for people** gives you their details (times, notes, **Audit Log** and
       **Event Calendar**), whatever your role: a **reporting line** in the directory (someone's
       `user-ldap-manager-id-attribute` pointing at you), managing a **group** they are in, or being
-      named as an additional manager on their profile. A reporting line also gives you
-      **My Reports**, the team cards on **Home**, and absence alerts for those people.
+      one of their **delegates** (which admins set). A reporting line also gives you
+      **My Reports**, the team cards on **Home**, and absence alerts for those people. A
+      reporting line or being a delegate also lets you decide their status requests and record
+      statuses for them.
 
     Give the `MANAGER` role only to people who need the manager pages. See
     [Security → Authorization](security.md#authorization) for the full rules.
@@ -60,6 +63,11 @@ the stored role of someone listed in `super-user-dns` does not remove their `ADM
 | **System Date** picker (view another day) | – | ✓ | ✓ |
 | Change someone's **role** | – | – | ✓ |
 | Respond to an absence alert | only alerts sent to them | only alerts sent to them | only alerts sent to them |
+| Request a status that needs approval; follow one's own requests (**Approvals**) | ✓ | ✓ | ✓ |
+| Approve or reject requests, and record a status on someone's calendar | people they decide for: their direct reports in the directory, and the people they are a delegate of | as USER | everyone except themselves |
+| Set a person's **delegates**; the **Delegates** review page | – | – | ✓ |
+| Download one's own data (**My data**) | ✓ | ✓ | ✓ |
+| **Privacy** page: retention status, anyone's export, erasure | – | – | ✓ |
 
 Pages are protected on the server with `@PreAuthorize` rules. The sidebar hides what a role cannot
 open, and a page opened directly without the required role shows *Unauthorized*.
@@ -101,9 +109,9 @@ with its own managers.
 
 !!! warning "Group managers and absence alerts"
     The card says that these managers receive absence notifications. In the current code, absence
-    alerts go only to the person's **directory manager** and the **additional managers** the person
-    chose on their own profile, not to group managers. If a group's managers must be alerted, ask
-    the members to add them under *Additional Managers* on **My Profile**.
+    alerts go only to the person's **directory manager** and their **delegates**, not to group
+    managers, and group managers do not decide status requests. If a group's managers must be
+    alerted, make them the members' delegates (see [Delegates](#delegates)).
 
 ### Favorites
 
@@ -126,10 +134,10 @@ calendar), for every user record, a notification is raised when **all** of these
 - the current time is past that expected time plus
   `application.extra-time-before-absent-notification-minutes` (default 60);
 - they have no excusable status today (*Out of Office*, *Work From Home*, *TDY*, *Scheduled Leave*
-  or *Absent Excused*).
+  or *Absent Excused*). A requested status counts only once it is approved.
 
 **Recipients** are the person's directory manager (found through the reporting-line attributes)
-and the additional managers they chose on their profile. Each recipient gets a notification record
+and their delegates. Each recipient gets a notification record
 and, if their directory entry has a valid email address, an email from
 `application.notification-sender-email` linking to `application.application-base-url` +
 `/app/notifications/id/<id>`. A recipient who is not found in the directory, or has no email
@@ -149,6 +157,62 @@ To set up notifications:
 3. Make sure managers have an email address in the directory attribute set by
    `user-ldap-email-attribute` (default `mail`).
 4. Add your organization's holidays to the calendar (below).
+
+## Delegates
+
+A person's **delegates** (alternate managers) are, besides their manager in the directory, who
+receives their absence alerts, may answer them, decides their status requests and sees their
+details. **Only administrators set them.** People cannot choose their own: their profile only
+lists them.
+
+To set someone's delegates, open their details page (**Users** → the person). On the
+**Delegates** card, search under **Add a delegate**, remove anyone with the remove control, and
+choose **Save delegates**. Each delegate must be someone else in the directory. The change is
+audited as `person.updated` with `details.via` `alternate-managers` and the old and new lists.
+
+**Administration → Delegates** (`/app/admin/delegates`) lists everyone who has delegates, with
+who set them:
+
+| Set by | Meaning | Actions |
+|---|---|---|
+| *An administrator* | Set on the details page, or reviewed | **Change** (opens the details page), **Remove** |
+| *The person, to review* | Chosen by the person themselves, before administrators managed delegates | **Keep**, **Change**, **Remove** |
+
+Delegates people chose for themselves before this release were kept, so the upgrade changed nobody's
+alerts, and they still receive alerts and may approve requests until you review them. **Only
+those to review** filters the list. While any are waiting, ReadyRoom logs at startup how many
+people have delegates chosen before administrators managed them. Keeping them is audited as
+`person.updated` with `details.via` `alternate-managers-reviewed`.
+
+## Privacy: retention, export and erasure
+
+**Administration → Privacy** (`/app/admin/privacy`) is for administrators, and works in every
+license state (erasure too while the license is read-only).
+
+**Retention and visibility** shows how long check-ins and statuses are kept (or *Forever*), when
+the purge runs, the cutoff before which only monthly summaries remain, the last purge, and the
+coworker visibility setting. They are server settings: see
+[Configuration → Statuses, requests and privacy](configuration.md#statuses-requests-and-privacy).
+
+**A person's data.** Enter the person's DN and choose **Show**, or use **Export or erase data** on
+their details page. The page lists how many records of each kind ReadyRoom holds about them.
+
+- **Download their data** gives the same JSON file the person gets from **My data**. Each download
+  is audited as `data.exported` with `requestedBy` set to you.
+- **Erase personal data** deletes, in one transaction, their user record, group access,
+  check-ins, calendar statuses, status requests, absence alerts about them or sent to them, and
+  monthly summaries, and takes them off other people's delegates and groups' alternate managers.
+  Type the person's name to confirm; the browser asks once more. The form is good for 10 minutes
+  and for that person only. Nobody can erase themselves. The erasure is audited as
+  `person.erased`, with the counts and whether the person is still in the directory.
+
+!!! warning "Erase someone who has left the directory first"
+    If the person is still in the directory, the page says so: ReadyRoom creates their account
+    again, empty, at their next sign-in or at the next hourly directory refresh, and their
+    workstation goes on reporting. Remove or disable them in the directory first.
+
+What erasure does not remove is listed in
+[Privacy, DPIA and works council](privacy.md#what-erasure-does-not-remove).
 
 ## Settings page
 

@@ -28,11 +28,11 @@ A wrong username or password shows an error on the same page. When you signed in
 | Area | What it contains |
 |---|---|
 | **Banner** (top and bottom) | The text your organization configured, for example a classification marking. |
-| **Sidebar** | Home, Groups, Users, My Reports, Org Chart and, for admins and managers, Metrics and Settings. |
+| **Sidebar** | Home, Groups, Users, My Reports, Approvals, Org Chart and, for admins and managers, Metrics and Settings. Admins also see License, Delegates, Privacy and Audit Log. |
 | **Bell** (top left) | Your unread notifications. A red dot means there is at least one. Click one to open it, or **Mark All Read** to clear the list. |
 | **System Date** (admins and managers) | Shows the site as it stood on an earlier day. See [Looking at another day](#looking-at-another-day). |
 | **?** | The "How ReadyRoom works" help dialog. |
-| **Avatar menu** | **My Profile**, and **Log out** for password sessions. |
+| **Avatar menu** | **My Profile**, **My data**, and **Log out** for password sessions. |
 
 ## Statuses
 
@@ -43,8 +43,9 @@ A wrong username or password shows an error on the same page. When you signed in
 | `OUT` (blue) | Checked out: you signed out, or ReadyRoom checked you out after the screen had been locked for too long. |
 | `NONE` (grey) | Nothing recorded for the day. |
 
-If you set a status on your calendar for the day (anything other than *Standard*), it is shown
-instead, for example `WORK_FROM_HOME`, `TDY` or `LATE_ARRIVAL`.
+If a status is on your calendar for the day (anything other than *Standard*), it is shown
+instead, for example `WORK_FROM_HOME`, `TDY` or `LATE_ARRIVAL`. A status you asked for counts only
+once it is approved; see [Statuses and approvals](#statuses-and-approvals).
 
 ## Home
 
@@ -138,17 +139,27 @@ person's details.
 type, location, branch, email, phone, manager, average login time and notes. **Member Of** lists
 their directory groups, each linking to the group page.
 
-Coworkers see only the status and the directory details: not the average login time, the notes, or
-the cards below. A status a manager recorded after an absence alert shows to them as
-*Out of Office*. You see everything, including the following, if it is your own page, you are an
-admin, or you are responsible for the person: you manage one of their groups, they report to you
-directly in the directory, or they named you as an additional manager.
+Coworkers see the directory details and, depending on how your organization set ReadyRoom up,
+the status (in, away or out, and the day's status), only whether the person is in or out, or no
+status at all. They never see the average login time, the notes, or the cards below. A status a
+manager recorded after an absence alert shows to them as *Out of Office*. You see everything,
+including the following, if it is your own page, you are an admin, or you are responsible for
+the person: you manage one of their groups, they report to you directly in the directory, or you
+are one of their delegates.
 
 - **Audit Log**: every check-in, lock, unlock and check-out recorded for them, newest first.
+- **Delegates**: the people who, besides their directory manager, receive their absence alerts,
+  may answer them and approve their requests. Only admins change them.
 - **Event Calendar**: their statuses, their online periods ("Online: ..."), and organization events
   and holidays.
 
-Admins also see a **Role** card. See [Administration](admin-guide.md#roles).
+If you are the person's directory manager, one of their delegates or an admin, you can **record a
+status** for them: drag across days on their Event Calendar, choose the status and **Record**. It
+takes effect at once, without approval, and you can record any status, including *Absent*,
+*Absent Unexcused* and *Unscheduled Leave*.
+
+Admins also see a **Role** card, with **Export or erase data**. See
+[Administration](admin-guide.md#roles).
 
 ## My Reports
 
@@ -180,8 +191,8 @@ Open **My Profile** from the avatar menu (`/app/profile`).
 ### Update Profile
 
 - **Notes**: a free-text line shown only to you, admins and the people responsible for you: your
-  manager, your groups' managers and the additional managers you chose. Do not enter classified
-  data or personal data (PII).
+  manager, your groups' managers and your delegates. Do not enter classified data or personal
+  data (PII). The audit trail records that your notes changed, never what they say.
 - **Login Time**: your normal start time. It decides when you are expected in. If you leave it
   empty, your average arrival time is used.
 
@@ -193,34 +204,78 @@ Your directory details: organization, employee type, location, branch, email, ph
 average login time. **View My Details Page** opens your details page. If something is wrong, use
 the **Help Desk** link to report it. ReadyRoom cannot change directory data.
 
-### Additional Managers
+### Delegates
 
-Search for people by name and add them to the list, then choose **Update**. Additional managers
-are notified when you are not in on time, along with your directory manager. They can also see your
-details: your times, notes, **Audit Log** and **Event Calendar**.
+Lists your delegates: besides your manager, the people who receive your absence alerts and approve
+your requests. They can also see your details: your times, notes, **Audit Log** and **Event
+Calendar**. Only an administrator can change them; ask yours if they are wrong.
 
 ### Calendar
 
-Drag across one or more days to set your status for that period, then choose **Submit**:
+Drag across one or more days, choose a status, then choose **Submit**. With the default settings:
 
-| Option | Stored as | Excuses an absence alert? |
+| Option | Stored as | What happens | Excuses an absence alert? |
+|---|---|---|---|
+| normal | `STANDARD` | Set at once. It clears a status you set earlier | No |
+| Early Leave | `EARLY_LEAVE` | Set at once | No |
+| Late Arrival | `LATE_ARRIVAL` | Set at once; the time you enter becomes your expected time that day | No |
+| Out of Office (needs approval) | `OUT_OF_OFFICE` | Sent as a request | Yes, once approved |
+| Work From Home (needs approval) | `WORK_FROM_HOME` | Sent as a request | Yes, once approved |
+| TDY (needs approval) | `TDY` | Sent as a request | Yes, once approved |
+| Scheduled Leave (needs approval) | `SCHEDULED_LEAVE` | Sent as a request | Yes, once approved |
+| Absent Excused (needs approval) | `ABSENT_EXCUSED` | Sent as a request | Yes, once approved |
+
+Which statuses need approval is set by your administrators, so your list may differ. For one
+that needs approval, you can add a **note for your manager** (up to 500 characters); it is kept
+with the request and shown to whoever decides it. Follow it under **Approvals**.
+
+Excusable statuses appear in blue on calendars and others in purple (the defaults); the days of a
+pending request appear in grey, as *Requested: &lt;status&gt;*. Organization holidays and events appear in orange. Setting a status
+again for the same day replaces the one you set before. One request or status can cover at most
+366 days by default.
+
+## Statuses and approvals
+
+Each status is in one of three groups, and ReadyRoom enforces them on the server, whatever page or
+API is used:
+
+| Group | Statuses (default) | Who sets them |
 |---|---|---|
-| Standard | `STANDARD` | No. It clears a status you set earlier. |
-| Out of Office | `OUT_OF_OFFICE` | Yes |
-| WFH | `WORK_FROM_HOME` | Yes |
-| TDY | `TDY` | Yes |
-| Scheduled Leave | `SCHEDULED_LEAVE` | Yes |
-| Early Leave | `EARLY_LEAVE` | No |
-| Late Arrival | `LATE_ARRIVAL` | No, but the time you enter becomes your expected time that day |
+| Set by the person | normal, Early Leave, Late Arrival | You, on your own calendar. They take effect at once |
+| Requested | Out of Office, Work From Home, TDY, Scheduled Leave, Absent Excused | You ask; your directory manager, one of your delegates or an admin approves or rejects. Until approved, the status is not on your calendar, and absence alerts treat the day as not excused |
+| Recorded by managers | Absent, Absent Unexcused, Unscheduled Leave | Only your directory manager, a delegate or an admin, for you (also by answering an absence alert) |
 
-Excusable statuses appear in blue on calendars and others in purple (the defaults). Organization
-holidays and events appear in orange. Setting a status again for the same day replaces the one you
-set before.
+**Approvals** (`/app/approvals`, in the sidebar) has three parts:
+
+- **Waiting for your approval**: requests from people you decide for, with the person, status,
+  dates, number of days, their note and when they asked. **Approve** or **Reject**, each with an
+  optional comment or reason. Nobody decides their own request, admins included.
+- **Ask for a status**: the status, the first and last day, and an optional note; **Send
+  request**. You can also ask from your profile calendar.
+- **My requests**: your requests, their state (requested, approved, rejected or cancelled), who
+  decided and their comment. **Cancel** withdraws a pending request, or an approved one until its
+  last day has passed: its days from today on come off your calendar.
+
+An approval writes the status on each day of the request, replacing what you had set there; a
+rejection writes nothing.
+
+**Email.** When a mail server is configured, a new request goes to the person's manager and
+delegates (*Approval needed: &lt;status&gt; for &lt;name&gt;*), a decision to the person who asked
+(*Your &lt;status&gt; request was approved* or *rejected*), and a cancellation to the approvers
+(*Cancelled: ...*). The emails carry the status and dates, never the notes.
+
+## My data
+
+**My data** (`/app/privacy`, in the avatar menu) shows what ReadyRoom keeps about you, who sees it
+and for how long, and **Download my data**: a JSON file with your profile, the group access
+granted to you in ReadyRoom, whose delegate you are, your check-ins, calendar statuses, status
+requests (with notes and comments), absence alerts about you, and monthly summaries. Each download
+is recorded in the audit trail. The audit trail itself is not in the file; ask an administrator.
 
 ## Notifications (absence alerts)
 
-When one of your reports, or someone who added you as an additional manager, has not checked in by
-their expected time plus the grace period on a working day, you receive:
+When one of your reports, or someone whose delegate you are, has not checked in by their expected
+time plus the grace period on a working day, you receive:
 
 - an **email** titled *Accountability Notification for &lt;name&gt;* with the person, the date,
   the expected check-in time and a **Confirm Status** link, and
@@ -236,7 +291,8 @@ The notification page shows the summary and a **Status** list with these choices
 Only managers the alert was sent to can respond. You can change the answer later, and the day's
 status is updated to match. Alerts are not raised on weekends, on holidays in the organization
 calendar, for anyone already checked in, for anyone with an excusable status that day, or for
-anyone with no expected time at all. Each person gets at most one alert per day.
+anyone with no expected time at all. Each person gets at most one alert per day. A requested
+status that is still waiting for approval does not prevent an alert.
 
 ## Metrics (admins and managers)
 
