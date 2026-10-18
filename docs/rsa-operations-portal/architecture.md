@@ -7,7 +7,7 @@ The root `pom.xml` (`com.winllc.rsaapp:rsaapp:1.0-SNAPSHOT`, packaging `pom`) bu
 | Module | Artifact | Packaging | Purpose |
 |---|---|---|---|
 | `rsaapp-api` | `com.winllc.rsaapp.api:rsaapp-api` | jar | The shared contract. It holds `RSAAuthManagerServiceInterface`, DTO wrappers (`PrincipalDTOWrapper`, `RSALoginWrapper`, `UpdatePrincipalCommandWrapper`, `AppAuthenticationToken`) and about 45 `Rsa*`/`Token*` exception types. It depends on the RSA `am-client.jar`. |
-| `rsaapp-connector` | `com.winllc.rsaapp.connector:rsaapp-connector` | war (deployed in Tomcat in the Connector image) | Implements `RSAAuthManagerServiceInterface` with the RSA AM SDK and exports it at `/connector` with `AllowListHessianServiceExporter`, a Hessian exporter that rebuilds only the classes the interface exchanges. |
+| `rsaapp-connector` | `com.winllc.rsaapp.connector:rsaapp-connector` | war (deployed in Tomcat in the Connector image) | Implements `RSAAuthManagerServiceInterface` with the RSA AM SDK and exports it at `/connector` with `AllowListHessianServiceExporter`, a Hessian exporter that rebuilds only the classes the Portal sends, each named on a list. It reads AM's replies through a deserialization filter and checks AM's host name (`security/AuthManagerTransport`). |
 | `rsaapp-mock-authmanager` | `rsaapp-mock-authmanager` | jar | An in-memory stand-in for RSA AM that serves the same HttpInvoker command endpoint. Used by the tests and the development stack; never deployed. |
 | `rsaapp-portal` | `rsaapp-portal` | Spring Boot jar | The web application. Its main class is `com.winllc.rsaapp.portal.configuration.AppConfig`. |
 
@@ -55,7 +55,10 @@ flowchart TB
 
 * Deployed into Tomcat 9 as `webapps/app.war`, so the context path is **`/app`**. `web.xml` maps a `DispatcherServlet` to `/` and loads `springapp.xml`.
 * Tomcat serves HTTPS on 8443 (TLS 1.2 and 1.3) for the Portal, and plain HTTP on 8080 on the loopback address only, for the container's health check. `bin/setenv.sh` builds the PKCS12 key store Tomcat reads from the PEM certificate and key at each start, so no password reaches the command line.
+* Tomcat's HTTPS asks for a client certificate from `CONNECTOR_TLS_CLIENT_CA` when `CONNECTOR_TLS_CLIENT_AUTH=required` (mutual TLS, on in new installations); `MutualTlsCheck` warns at every start while it is off. `CONNECTOR_HTTPS_ADDRESS` names the address 8443 listens on (default: every interface).
 * `ConnectorAuthFilter` requires the shared secret on every request except `GET`/`HEAD` `/health`. `ConnectorSecrets` reads the AM credentials from files or `RSA_*` variables before the application context starts.
+* `AuthManagerTransport` replaces the request executor of the SDK's HTTP invoker clients with `FilteringHttpInvokerRequestExecutor`, which reads every AM reply through `AuthManagerReplyFilter` (a JEP 290 allow-list and limits) and, for `https`, opens sockets with `HostnameCheckingSocketFactory`, which checks that AM's certificate names the host. The SDK offers no setting for either, so they are reached by reflection; if the SDK is not what the Connector expects, it does not start rather than read unfiltered. See [What the Connector accepts](rsa-integration.md#what-the-connector-accepts).
+* Its Log4j 1 configuration uses `CrlfSafePatternLayout`, which writes CR and LF in a message as `\r` and `\n`.
 * `springapp.xml` imports the RSA SDK's `CommandClientAppContext.xml` and the local `CommandClientAppContextOverrides.xml`, then defines:
     * `authManagerConnection` (`RSAAuthManagerConnection`), built with two HttpInvoker command targets: `AdminHttpInvokerCommandTargetBasicAuth` (`ims.httpinvoker.client.provider.url`) and `ReadOnlyHttpInvokerCommandTargetBasicAuth` (`ims.httpinvoker.client.provider.readonly.url`).
     * `authManagerService` (`RSAAuthManagerService`), which implements the API.
@@ -111,7 +114,7 @@ Flyway owns the schema: at every start the Portal applies the migrations in `db/
 | `AuditOutputState` | How far each audit output (Splunk HEC, syslog) has delivered |
 | `AuditApiToken` | Tokens for the audit pull API, stored as hashes |
 | `CronLock` | Which node has claimed each scheduled job's current occurrence |
-| `HelpDeskRequest` | [Help-desk requests](help-desk.md): the change, the user and token, ticket, reason, verification, approval, state, when it was opened, decided and run (`runStartedAt`). An e-mailed code is kept only as its SHA-256 hash; an emergency access code never |
+| `HelpDeskRequest` | [Help-desk requests](help-desk.md): the change, the user and token, ticket, reason, verification, approval, state, when it was opened, decided and run (`runStartedAt`). An e-mailed code is kept only as an HMAC-SHA256 under the server's key (`rsa.helpdesk.code-key`, `EmailCodeKey`); an emergency access code never |
 | `RateLimitWindow`, `RateLimitBackoff` | Rate-limit counts per fixed window, and backoff per user ID or serial, keyed by SHA-256 hashes of the address, user ID or serial (see [Security](security.md#rate-limits-and-uniform-answers)) |
 
 The Portal's earlier audit event types (`TRUSTED_AGENT_REGISTERED`, `USER_TOKEN_LOST` and so on) were moved into the chain on the first start of the release that introduced `ens-audit/1`; each keeps its original type in `details.legacyType`.

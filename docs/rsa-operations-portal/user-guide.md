@@ -35,7 +35,7 @@ Enter your User ID and passcode. The portal attempts an RSA authentication and r
 * *"Success! You were able to use your token to authenticate…"*, or
 * *"Failed. The system did not recognize the username and passcode combination."*, the same message for a wrong passcode, an unknown user, or a locked or disabled account.
 
-After five tests for one User ID within 15 minutes, further tests are refused for a while.
+After five tests for one User ID in the same 15-minute period (counted from the quarter hour), further tests are refused until the next one.
 
 ### Enroll your token (set your PIN)
 

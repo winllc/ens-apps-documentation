@@ -22,12 +22,13 @@ switches to its FIPS providers.
 | Connection or operation | Component | Notes |
 |---|---|---|
 | HTTPS from browsers (`server.ssl.*`, Helm `tls.*`) | Portal | Only when the Portal terminates TLS itself; otherwise your ingress or proxy does |
-| HTTPS to the Connector | Portal and Connector | TLS 1.3 or 1.2 (the Portal's `JAVA_OPTS`: `-Dhttps.protocols=TLSv1.3,TLSv1.2 -Djdk.tls.client.protocols=TLSv1.3,TLSv1.2`) |
+| HTTPS to the Connector | Portal and Connector | TLS 1.3 or 1.2 (the Portal's `JAVA_OPTS`: `-Dhttps.protocols=TLSv1.3,TLSv1.2 -Djdk.tls.client.protocols=TLSv1.3,TLSv1.2`), with mutual TLS in new installations. The certificates `util/connector-tls.sh` makes are ECDSA P-256 with SHA-256, and the Connector's key is encrypted with AES-256-CBC |
 | TLS to Authentication Manager | Connector, through the RSA AM SDK | See the warning below |
 | TLS to MySQL | Portal | `sslMode=REQUIRED` in the template and the chart |
 | LDAPS to Active Directory | Portal | Optional |
 | TLS to Splunk HEC and syslog | Portal | Optional |
 | The audit hash chain (SHA-256) | Portal | |
+| The help desk's stored e-mail codes (HMAC-SHA256) | Portal | Under `rsa.helpdesk.code-key` |
 | The Connector's PKCS12 key store, built at each start | Connector, with `openssl` | From the PEM certificate and key; see the warning below |
 
 !!! warning "Not tested in FIPS mode"
@@ -49,6 +50,9 @@ switches to its FIPS providers.
 |---|---|---|
 | `ENS_AUDIT_SPLUNK_INSECURE=true` | Trusts any Splunk HEC certificate (logged as a warning) | Add Splunk's CA to the JVM trust store |
 | `CONNECTOR_HTTP_ADDRESS=0.0.0.0` with an `http://` `CONNECTOR_URL` | Plain HTTP between the Portal and the Connector (the demo stack only; the Portal logs a warning) | HTTPS, the default |
+| `CONNECTOR_TLS_CLIENT_AUTH` other than `required` | Any client that reaches the Connector gets as far as the shared secret (the Connector logs a warning) | Mutual TLS: `./util/connector-tls.sh --mutual`, or Helm `connector.tls.mutual=true` |
+| `RSA_TLS_VERIFY_HOSTNAME=false` | The Connector accepts any certificate from AM's CA, whatever host it names (logged as a warning) | A name AM's certificate has in the AM URLs |
+| `CONNECTOR_SERIAL_FILTER=off` | AM's replies are read without the deserialization filter (logged as a warning) | Allow the refused class with `CONNECTOR_SERIAL_FILTER_ALLOW` |
 | A `spring.datasource.url` without `sslMode=REQUIRED` | The database connection may be unencrypted | Keep `sslMode=REQUIRED` |
 
 ### The license check in FIPS mode
@@ -84,6 +88,8 @@ it is on by default; these settings need a decision for a STIG deployment. Each 
 | Audit trail | `ENS_AUDIT_*` | stored in the database, stdout | Forward to your SIEM, and set `ENS_AUDIT_RETENTION_DAYS` to your retention policy ([Audit logging](../audit-logging.md)) |
 | Least privilege in AM | `RSA_ADMIN_USER_ID`, `RSA_READONLY_USER_ID` | | The [custom roles](rsa-integration.md#least-privilege-am-roles), not Super Admin |
 | Secrets off the command line | `RSA_*` variables or `_FILE` | | No AM password in `JAVA_OPTS` |
+| Portal-to-Connector authentication | `CONNECTOR_TLS_CLIENT_AUTH` (Helm `connector.tls.mutual`) | `required` in new installations; an upgrade keeps what it had | `required` (mutual TLS) |
+| Settings file permissions | `util/file-owners.sh` | `.env` and the Portal's client key 640, group 0 | Keep them; `connector.env` and `mysql.env` stay 600 |
 | Classification banner | `security-banner.*` | `UNCLASSIFIED // FOR OFFICIAL USE ONLY` | Your system's marking |
 
 The platform baseline's X.509 revocation and certificate-mapping settings do not apply to this

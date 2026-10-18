@@ -80,11 +80,11 @@ Suggested alerts: readiness failing; `ens_rsa_am_call_seconds_count{outcome="err
     |---|---|---|
     | Portal (Log4j2) | `./logs/rsaapp-portal.log` in the install folder (container `/var/log`) | Rolled daily or at 10 MB into `./logs/rsaapp-portal-YYYY-MM/app-MM-dd-yyyy-N.log.gz`. Configured by `default_build/portal/log4j2.xml`. |
     | Portal console | `docker compose logs -f portal` | Same events, with the date, time, thread, level, logger and the request id. `LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs` writes JSON lines instead. With `ENS_AUDIT_STDOUT=true` (the default) the audit events appear here too, as raw `ens-audit/1` JSON lines |
-    | Connector | `docker compose logs -f connector` | Packaged Log4j 1.x configuration logs to stderr at `DEBUG`. `default_build/log4j.xml` (rolling `/var/log/connector.log`, so `./logs/connector.log` on the host) applies only if you select it through the Connector's `JAVA_OPTS` in `connector.env`. |
+    | Connector | `docker compose logs -f connector` | Packaged Log4j 1.x configuration logs to stderr at `DEBUG`. `default_build/log4j.xml` (rolling `/var/log/connector.log`, so `./logs/connector.log` on the host) applies only if you select it through the Connector's `JAVA_OPTS` in `connector.env`. A configuration of your own should keep the layout `CrlfSafePatternLayout` ([Configuration → Logging](configuration.md#logging)). |
     | MySQL | `docker compose logs mysql` | |
     | All services | `docker compose logs -f` | Ctrl+C to exit |
 
-    To change Portal log levels, edit `default_build/portal/log4j2.xml` (for example the `com.winllc.rsaapp.portal` logger) and run `docker compose restart portal`.
+    To change Portal log levels, edit `default_build/portal/log4j2.xml` (for example the `com.winllc.rsaapp.portal` logger) and run `docker compose restart portal`. Keep `%enc{%m}{CRLF}` in its patterns.
 
 === "Helm"
 
@@ -95,7 +95,17 @@ Suggested alerts: readiness failing; `ens_rsa_am_call_seconds_count{outcome="err
 
     Both components log to standard output. The Portal's lines are JSON (Elastic Common Schema) unless `logFormat: text`. Collect the logs with your cluster's log shipper.
 
-At startup the Portal logs the help-desk and rate-limit settings in effect (`Help desk: ...`, `Rate limits (per client address / per user ID or token serial): ...`). It stops with `Help-desk settings: ...` or `Rate-limit settings: ...` naming any setting that makes no sense, and warns while `rsa.helpdesk.verification.required=false`, `rsa.helpdesk.dual-control.privileged-roles` is empty or `rsa.rate-limit.enabled=false`. User IDs and token serials that people type are escaped before they are logged.
+At startup the Portal logs the help-desk and rate-limit settings in effect (`Help desk: ...`, `Rate limits (per client address / per user ID or token serial): ...`). It stops with `Help-desk settings: ...` or `Rate-limit settings: ...` naming any setting that makes no sense, and warns while `rsa.helpdesk.verification.required=false`, `rsa.helpdesk.dual-control.privileged-roles` is empty or `rsa.rate-limit.enabled=false`. User IDs and token serials that people type are escaped before they are logged, and in the text logs of the Portal and the Connector a line break in a message is written as `\r` or `\n`, so every entry stays on its own line (a stack trace keeps its lines).
+
+The Connector warns at every start while one of its protections is off. Each warning names the setting, so look for them after an upgrade:
+
+| Warning starts with | Means | To clear it |
+|---|---|---|
+| `Mutual TLS is off (CONNECTOR_TLS_CLIENT_AUTH=...)` | Any client that reaches port 8443 gets as far as the shared secret | Release package: `./util/connector-tls.sh --mutual`, `./util/file-owners.sh`, `docker compose up -d`. Helm: `connector.tls.mutual=true` ([Mutual TLS](rsa-integration.md#mutual-tls)) |
+| `RSA_TLS_VERIFY_HOSTNAME=false` | AM's certificate is checked against the CA only, not the host name | Use a name AM's certificate has in the AM URLs and remove the setting |
+| `CONNECTOR_SERIAL_FILTER=off` | AM's replies are read without the deserialization filter | Add the class from the refusal warning to `CONNECTOR_SERIAL_FILTER_ALLOW` and remove the setting |
+
+`Refused a reply from Authentication Manager: ...` at WARN means the Connector refused a reply from AM, and the command failed: see [What the Connector accepts](rsa-integration.md#what-the-connector-accepts). On the Portal, `rsa.helpdesk.code-key is not set` at start means the help desk's e-mailed codes do not survive a restart ([The e-mailed code's key](help-desk.md#the-e-mailed-codes-key)).
 
 The request id in each Portal log line is the caller's `X-Request-Id` (from a proxy or load balancer, if it is a plain token) or a new one. It is returned in the response's `X-Request-Id` and recorded in the request's audit events, so a log line, a user's report and an audit event can be matched.
 
@@ -125,7 +135,7 @@ The request id in each Portal log line is the caller's `X-Request-Id` (from a pr
 
     `CONTAINER_ENGINE=podman` uses podman instead of docker.
 
-    Also keep copies of `.env`, `connector.env`, `mysql.env`, `license/`, `default_build/` (including `ssl/trust.jks`), the Connector's certificates (`connector-tls-ca/`, `default_build/connector-tls/`) and the `ens-license` volume, which holds the installation id. They hold secrets: keep the copies private.
+    Also keep copies of `.env`, `connector.env`, `mysql.env`, `license/`, `default_build/` (including `ssl/trust.jks`), the certificates for HTTPS between the Portal and the Connector (`connector-tls-ca/`, `default_build/connector-tls/`, `portal-tls/`) and the `ens-license` volume, which holds the installation id. They hold secrets: keep the copies private.
 
 === "Helm"
 
@@ -197,6 +207,8 @@ Back up the database first.
     1. Add any settings that `upgrade.sh` reported as new to the file it names (`.env`, `connector.env` or `mysql.env`), then run `docker compose up -d`.
     2. Verify with the [checks in the install guide](install.md#verification).
     3. If `upgrade.sh` split a single `.env`, delete the `.env.before-split.*` copy once the Portal runs: it still holds every secret.
+    4. If `upgrade.sh` said that mutual TLS between the Portal and the Connector is off, turn it on: `./util/connector-tls.sh --mutual`, `./util/file-owners.sh`, `docker compose up -d`.
+    5. Check the Connector's log for `Refused a reply from Authentication Manager` and for a TLS failure to AM naming its host ([Installation → upgrade notes](install.md#upgrade-with-upgradesh)).
 
 === "Helm"
 
@@ -215,10 +227,11 @@ What changes for operators and users with the release that brought help-desk req
 
 | Certificate | Where it lives | Renewal steps |
 |---|---|---|
-| **RSA AM root CA** (Connector trust) | Release package: `default_build/ssl/trust.jks` (the Connector sees it as `/custom/ssl/trust.jks`). Helm: the Secret in `authManager.trustStore.existingSecret`. | Export the new root as in [Installation](install.md#export-the-am-root-certificate-and-build-trustjks) and import it into `trust.jks` (`keytool -import … -alias rsa_am_ca`, using a new alias if you keep the old CA during overlap). Release package: `docker compose restart connector`. Helm: replace the Secret, then restart the Connector Deployment. If the password changed, update `RSA_TRUSTSTORE_PASSWORD` in `connector.env` (Helm: `authManager.trustStore.password` or its Secret) and run `docker compose up -d` or `helm upgrade`. |
-| **Connector HTTPS** (Portal to Connector) | Release package: `default_build/connector-tls/` and the installation's CA in `connector-tls-ca/`. Helm: the Secret `<release>-rsa-operations-portal-connector-tls`, or yours in `connector.tls.existingSecret` | Release package: `util/connector-tls.sh` renews the certificates it made when 60 days are left; `install.sh` and `upgrade.sh` run it, and `util/connector-tls.sh --renew` renews them now. Then `docker compose up -d`. The CA lasts 10 years and the Connector's certificate 5. Your own certificates are left alone: renew them yourself. Helm: the chart's certificates last `connector.tls.validityDays` (3650); with `existingSecret`, cert-manager or you renew them, then restart both Deployments. |
+| **RSA AM root CA** (Connector trust) | Release package: `default_build/ssl/trust.jks` (the Connector sees it as `/custom/ssl/trust.jks`). Helm: the Secret in `authManager.trustStore.existingSecret`. | Export the new root as in [Installation](install.md#export-the-am-root-certificate-and-build-trustjks) and import it into `trust.jks` (`keytool -import … -alias rsa_am_ca`, using a new alias if you keep the old CA during overlap). AM's new certificate must also name the host in the Connector's AM URLs. Release package: `docker compose restart connector`. Helm: replace the Secret, then restart the Connector Deployment. If the password changed, update `RSA_TRUSTSTORE_PASSWORD` in `connector.env` (Helm: `authManager.trustStore.password` or its Secret) and run `docker compose up -d` or `helm upgrade`. |
+| **Connector HTTPS and mutual TLS** (Portal to Connector) | Release package: `default_build/connector-tls/`, the Portal's client certificate in `portal-tls/`, and the installation's CA in `connector-tls-ca/`. Helm: the Secret `<release>-rsa-operations-portal-connector-tls`, or yours in `connector.tls.existingSecret` | Release package: `util/connector-tls.sh` renews the certificates it made, the Portal's included, when 60 days are left; `install.sh` and `upgrade.sh` run it, and `util/connector-tls.sh --renew` renews them now. Then `./util/file-owners.sh` (the Portal reads its new key through group 0) and `docker compose up -d`. The CA lasts 10 years and the Connector's certificate 5. Your own certificates are left alone: renew them yourself. Helm: the chart's certificates last `connector.tls.validityDays` (3650); with `existingSecret`, cert-manager or you renew them, then restart both Deployments. |
 | **Portal HTTPS (8443)** | Release package: a keystore under `default_build/ssl/` (mounted at `/ssl`), referenced by your `server.ssl.*` settings in `.env`. Helm: the Secret in `tls.keystore.existingSecret`. | Replace the keystore (same path and alias, or update the settings), then restart the Portal. See [Security](security.md#tls-and-client-certificates). With Helm and edge termination, renew the ingress or route certificate instead. |
 | **Client-certificate trust (8443)** | The trust store referenced by `server.ssl.trust-store` (Helm: `tls.truststore.existingSecret`) | Add the new issuing CAs for user PKI certificates and restart the Portal. |
+| **Help-desk code key** | `rsa.helpdesk.code-key` in `.env` (Helm: the chart's Secret, key `helpdesk-email-code-key`, or `helpDesk.emailCodeKey.existingSecret`) | No expiry. To change it, replace the value (`openssl rand -hex 32`) and run `docker compose up -d`, or update the Secret and restart the Portal. Only codes sent in the last few minutes then fail; the operator sends a new one. |
 | **Command client password** | `RSA_CMDCLIENT_PASSWORD` in `connector.env` (Helm: `authManager.commandClient`) | If AM regenerates it, read it again with `rsautil manage-secrets --action list`, update `connector.env` and run `docker compose up -d`, or update the Secret and restart the Connector. |
 
 ## Routine checklist
@@ -228,7 +241,7 @@ What changes for operators and users with the release that brought help-desk req
 | Daily | Confirm a new database backup exists. Check `docker compose ps` or the pods' health. |
 | Monthly | Check the Connector's certificate dates if you supply your own (`openssl x509 -enddate -noout -in default_build/connector-tls/tls.crt`). |
 | Daily | Check **Admin → Manual Run Cron Jobs** for failed last-run messages. |
-| Weekly | Review the Portal log for `ERROR` (AM session failures, email failures). |
+| Weekly | Review the Portal log for `ERROR` (AM session failures, email failures), and the Connector's for `Refused a reply from Authentication Manager`. |
 | Before AM upgrades or certificate changes | Plan the `trust.jks` update and test sign-in afterwards. |
 | Quarterly | Test a restore into a scratch environment. |
 

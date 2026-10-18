@@ -46,6 +46,7 @@ FIPS mode does.
 
 - SHA-256 for the audit hash chain and the stored hashes of audit API tokens, and (CertAlert) the
   certificate fingerprints it shows;
+- HMAC-SHA256 for the RSA Operations Portal's stored help-desk e-mail codes;
 - SHA-1 only to name a certificate in an OCSP request (the CertID of RFC 6960), which is an
   identifier, not a signature;
 - the runtime's `SecureRandom` for session ids, CSRF tokens, CSP nonces and API tokens;
@@ -80,7 +81,8 @@ ReadyRoom sets no protocols, so the JDK's defaults apply.
 | Mail | ReadyRoom requires STARTTLS by default. CertAlert uses STARTTLS when you set `SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_ENABLE=true`. The RSA Operations Portal's templates configure no TLS for SMTP |
 | Database | RSA Operations Portal: `sslMode=REQUIRED`. CertAlert and ReadyRoom: the PostgreSQL JDBC driver's default unless you add `sslmode` to the URL (CertAlert's chart: `database.params`, for example `sslmode=verify-full`) |
 | Splunk HEC and syslog | The certificate is checked against the JVM trust store. Syslog defaults to `tcp`, which is plain text; use `tls` |
-| Portal to Connector (RSA) | HTTPS on 8443, with optional mutual TLS |
+| Portal to Connector (RSA) | HTTPS on 8443, with mutual TLS in new installations (an upgraded one keeps what it had) |
+| RSA Connector to Authentication Manager | TLS 1.3 or 1.2, with AM's certificate checked against `trust.jks` and its host name checked |
 
 ### Options that are not FIPS-appropriate
 
@@ -95,6 +97,7 @@ Use these in test setups only.
 | `cert-alert.revocation.allow-unverified-crl` | CertAlert (**`true` by default**) | Believes a CRL whose signature could not be checked. Set `false` and configure `issuer-directory` |
 | `SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_ENABLE=false`, or `SPRING_MAIL_PROPERTIES_MAIL_SMTP_SSL_TRUST` | ReadyRoom | Mail in plain text, or a mail server certificate that isn't checked |
 | `CONNECTOR_HTTP_ADDRESS=0.0.0.0` with an `http://` `CONNECTOR_URL` | RSA Operations Portal | Plain HTTP between the Portal and the Connector (demo stack only) |
+| `RSA_TLS_VERIFY_HOSTNAME=false` | RSA Operations Portal | The Connector accepts any certificate from AM's CA, whatever host it names |
 | `ENS_X509_REVOCATION=off`, `ENS_X509_REVOCATION_FAIL=open` | CertAlert, Directory Services Portal, ReadyRoom | Revoked or unchecked certificates sign in |
 | A PostgreSQL URL without `sslmode=verify-full` | CertAlert, ReadyRoom | Unencrypted, or encrypted without checking the server |
 | `ENS_X509_SOURCE=header` (CertAlert, ReadyRoom), or TLS ended at an ingress or edge Route in front of any product | See the setting | The browser's TLS ends at the proxy, so the proxy's cryptographic module is the one that has to be validated |

@@ -50,7 +50,7 @@ flowchart LR
 ```
 
 * **Portal** (`rsaapp-portal`): serves the Thymeleaf UI, holds the business logic, stores its own data (Trusted Agents, sites, shipments, appointments, audit events, enrollments and similar records) in MySQL, sends email, runs scheduled jobs and, optionally, updates Active Directory group membership.
-* **Connector** (`rsaapp-connector`): the only component that talks to RSA Authentication Manager. It wraps the RSA AM SDK (`am-client.jar`) and exposes it to the portal as a Hessian remote service over HTTPS, protected by a shared secret and, optionally, mutual TLS. Operators' changes run in their own AM sessions; the Connector's service account and an optional read-only account do the rest.
+* **Connector** (`rsaapp-connector`): the only component that talks to RSA Authentication Manager. It wraps the RSA AM SDK (`am-client.jar`) and exposes it to the portal as a Hessian remote service over HTTPS, protected by a shared secret and mutual TLS (on in new installations). It checks AM's certificate and host name, and reads AM's replies through a deserialization filter. Operators' changes run in their own AM sessions; the Connector's service account and an optional read-only account do the rest.
 * **API** (`rsaapp-api`): a shared Java library with the `RSAAuthManagerServiceInterface` contract, DTO wrappers and exceptions used by both the portal and the connector.
 * **MySQL 8.4 LTS**: the portal database (`RSAAPP`). The schema is versioned with Flyway: the Portal applies its migrations at startup, and Hibernate only validates the result.
 * **Mock AM** (`rsaapp-mock-authmanager`): an in-memory stand-in for AM used by the tests and the development stack. It is never part of a deployment.

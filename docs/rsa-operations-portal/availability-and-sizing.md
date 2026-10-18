@@ -92,7 +92,7 @@ Every restart or failover signs users out.
 | The database `RSAAPP` | Trusted Agents, sites, shipments, appointments, enrollments, exemptions, notifications, the audit trail and its chain head | `util/backupdb.sh`, the chart's backup CronJob, or your MySQL backups ([Operator Guide](operator-guide.md#database-backups)) |
 | The license volume (`rsa-operations-portal_ens-license`, or the license PVC) | The license file and **this installation's id** | A copy of the volume, or a snapshot. Keep the `.lic` file you received as well |
 | Settings | `.env`, `connector.env`, `mysql.env` (release package); your values file and the Secrets it names (Helm) | Your configuration management. They hold secrets |
-| AM trust and Connector certificates | `default_build/ssl/` (`trust.jks`, `connector-ca.crt`, `portal-client.*`), `default_build/connector-tls/`, `connector-tls-ca/` | A copy with the settings. If lost, `util/connector-tls.sh` makes new ones; `trust.jks` must be rebuilt from AM's root certificate |
+| AM trust and Connector certificates | `default_build/ssl/` (`trust.jks`, `connector-ca.crt`), `default_build/connector-tls/`, `portal-tls/` (the Portal's client certificate and key), `connector-tls-ca/` | A copy with the settings. If lost, `util/connector-tls.sh` makes new ones; `trust.jks` must be rebuilt from AM's root certificate |
 | Branding | `default_build/properties`, `static`, `email-templates` (release package); the `branding.*` ConfigMaps (Helm) | A copy |
 | The release | The package you installed, or the image digests and chart version | Keep the download, or mirror the images |
 | Users, tokens, PINs, administrative roles | RSA Authentication Manager | AM's own backup and replication. The Portal holds none of it |
@@ -104,8 +104,8 @@ lost. Audit events already forwarded to Splunk or syslog are still there.
 
 1. Install the **same release** as the one that was running: unpack it and run
    `./install.sh /opt/rsa-operations-portal`. It stops after creating the settings files.
-2. Restore `.env`, `connector.env`, `mysql.env`, `default_build/` and `connector-tls-ca/` from your
-   copies, replacing what `install.sh` created.
+2. Restore `.env`, `connector.env`, `mysql.env`, `default_build/`, `portal-tls/` and
+   `connector-tls-ca/` from your copies, replacing what `install.sh` created.
 3. Restore the `rsa-operations-portal_ens-license` volume from your copy before the Portal's first
    start, keeping the files' owner: the Portal runs as uid 1001 and must be able to write there.
    If it is lost:
@@ -114,8 +114,9 @@ lost. Audit events already forwarded to Splunk or syslog are still there.
       screen and ask ENS Solutions to re-bind or re-issue the license.
 4. Start MySQL alone (`docker compose up -d mysql`), wait until it is healthy, and load the backup:
    `gunzip -c RSAAPP-<time>.sql.gz | docker exec -i mysql sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot RSAAPP'`.
-5. Start everything: run `./install.sh` again in the install folder (it checks the settings and
-   waits for the Portal), or `docker compose up -d`.
+5. Start everything: run `./install.sh` again in the install folder (it checks the settings, lets
+   the Portal read `.env` and its client key through group 0 with `util/file-owners.sh`, and waits
+   for the Portal). With `docker compose up -d` instead, run `./util/file-owners.sh` first.
 6. Check: readiness is `UP`; the Connector reports `UP`; the license screen shows the expected state
    and installation id; **Audit Log → Verify integrity** reports the chain intact; sign in as a PMO
    user and as a Trusted Agent.
@@ -166,7 +167,11 @@ the pre-upgrade dump:
 **Settings.** Releases before HTTPS to the Connector expect `http://connector:8080` and the AM
 passwords as `-D` options. `upgrade.sh` kept the originals as `.env.before-split.*` and
 `connector.env.before-secrets.*` where it changed them; a rollback across that change needs the
-matching settings for the older Connector.
+matching settings for the older Connector. Releases before `portal-tls/` do not mount it: going
+back to one, point `CONNECTOR_TLS_CLIENTCERTIFICATE` and `CONNECTOR_TLS_CLIENTKEY` in `.env` at
+files under `default_build/ssl` (`/ssl/...`), or turn mutual TLS off on both sides
+(`CONNECTOR_TLS_CLIENT_AUTH` in `connector.env` too). An older release ignores
+`rsa.helpdesk.code-key`.
 
 **Helm.** `helm rollback <release> <revision>` restores the previous manifests and values, but not
 the database: restore the pre-upgrade backup into your MySQL server first, with the Portal scaled to
