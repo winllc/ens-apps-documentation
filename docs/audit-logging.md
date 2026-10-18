@@ -58,7 +58,9 @@ be reviewed and exported.
 **RSA Operations Portal: Authentication Manager changes and help-desk requests.**
 
 - `am.change-attempt` is stored and committed **before** every change the Portal makes in RSA
-  Authentication Manager. If it can't be stored, the change is not made (fail closed).
+  Authentication Manager. If it can't be stored, the change is not made (fail closed). A change
+  asked for inside a database transaction that has already recorded an event is refused as well,
+  since its attempt could not be committed first.
   `am.change-outcome` follows with `success`, or `failure` and the reason. Both carry the actor (the
   operator; the user, for their own token; or `system` for scheduled jobs), the target user,
   `details.tokenSerial`, `details.operation`, `details.amAccount` (`operator` or
