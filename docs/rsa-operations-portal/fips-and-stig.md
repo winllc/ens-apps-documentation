@@ -22,7 +22,7 @@ switches to its FIPS providers.
 | Connection or operation | Component | Notes |
 |---|---|---|
 | HTTPS from browsers (`server.ssl.*`, Helm `tls.*`) | Portal | Only when the Portal terminates TLS itself; otherwise your ingress or proxy does |
-| HTTPS to the Connector | Portal and Connector | TLS 1.2 or 1.3. The Portal's image pins its own outgoing TLS to 1.2 (`JAVA_OPTS`) |
+| HTTPS to the Connector | Portal and Connector | TLS 1.3 or 1.2 (the Portal's `JAVA_OPTS`: `-Dhttps.protocols=TLSv1.3,TLSv1.2 -Djdk.tls.client.protocols=TLSv1.3,TLSv1.2`) |
 | TLS to Authentication Manager | Connector, through the RSA AM SDK | See the warning below |
 | TLS to MySQL | Portal | `sslMode=REQUIRED` in the template and the chart |
 | LDAPS to Active Directory | Portal | Optional |
@@ -56,8 +56,8 @@ switches to its FIPS providers.
 !!! warning "Current state: the license can't be verified on a Java runtime in FIPS mode"
     The Portal checks its license file with the ENS license library 1.0.0, which verifies an
     Ed25519 signature. Red Hat's OpenJDK in FIPS mode does not offer Ed25519 signatures, so every
-    license is refused and the Portal stays **unlicensed**: only sign-in and the license screen
-    work.
+    license is refused and the Portal stays **unlicensed**: only sign-in, the license screen and
+    the audit log work.
 
     Don't work around it with `-Dcom.redhat.fips=false`: that takes the whole JVM out of FIPS mode.
 

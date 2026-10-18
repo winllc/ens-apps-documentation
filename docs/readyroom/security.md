@@ -174,23 +174,42 @@ All settings are listed in [Configuration](configuration.md#windows-kerberos-sig
   `@PreAuthorize` rules on controllers and REST services. Roles open pages: Metrics, Settings and
   group reports need `MANAGER` or `ADMIN`. Whose data a page shows is decided by `AccessPolicy`.
 - **A person's details:** their arrival, departure and status-change times, notes, average login
-  time, check-in history (**Audit Log**), calendar, and the additional managers they named. These
-  are visible to:
+  time, check-in history (**Audit Log**), calendar, and their delegates. These are visible to:
     - the person themselves;
     - `ADMIN`;
     - the managers of a group the person is a member of: the group's directory `owner`, or an
       additional manager set for the group in ReadyRoom;
     - their manager in the directory (one level up only, not that manager's manager);
-    - people the person named as an additional manager on their profile.
+    - their delegates (alternate managers), whom only administrators set.
 
     These relationships apply whatever the viewer's role. The `MANAGER` role on its own does not
     show anyone's details.
 
-- **Everyone else** sees a coworker, found by search, on a group page or in the org chart, with
-  their directory details (organization, employee type, location, branch, email, phone, manager,
-  groups) and whether they are in, never their times, notes or history. A status a manager recorded
-  in answer to an absence alert (*Unscheduled Leave*, *Absent*, *Absent Excused*,
-  *Absent Unexcused*) shows to them as *Out of Office*.
+- **Everyone else** sees a coworker, found by search, on a group page, an organization's members
+  or in the org chart, with their directory details (organization, employee type, location,
+  branch, email, phone, manager, groups), never their times, notes or history. How much of their
+  day shows is `application.privacy.coworker-visibility`:
+
+    | Value | A coworker's status shows |
+    |---|---|
+    | `full` (default) | In, away or out, or the day's calendar status. A status a manager recorded (*Unscheduled Leave*, *Absent*, *Absent Excused*, *Absent Unexcused*) shows as *Out of Office* |
+    | `status` | `IN` (checked in or unlocked today, screen locked included) or `OUT`; no calendar status |
+    | `none` | No status. The org chart shows headcounts but not how many are present, except to the `ADMIN` and `MANAGER` roles |
+
+    It applies to user search, a group's and an organization's members, a person's page and the
+    org chart, in the pages and the API alike.
+
+- **Statuses and requests:** each status is set by the person (normal, Early Leave, Late
+  Arrival), requested (by default every status that excuses an absence:
+  `application.events.request-statuses`) or recorded by managers only (Absent, Absent Unexcused,
+  Unscheduled Leave). The server enforces this on every API that sets a status. A request is
+  decided by the person's directory manager, their delegates or an administrator; **nobody decides
+  their own request, administrators included**. The same people may record any status for the
+  person directly. A request's note is seen only by the requester, the people who may decide it
+  and administrators, and is never in emails or the audit trail. One call can cover at most
+  `application.events.max-range-days` (366) days.
+- **A person's data:** anyone downloads their own (**My data**); only `ADMIN` downloads someone
+  else's or erases it, never their own. Both are audited.
 - **Groups:** a group's page and its members are open to the group's members, its managers and
   `ADMIN`. Changing its managers, its report and `POST /api/permissions/update` need `ADMIN`, or
   the `MANAGER` role together with being a current manager of that group. A sub-group is a separate

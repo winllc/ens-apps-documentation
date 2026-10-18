@@ -6,7 +6,10 @@ and integrations.
 ## Conventions
 
 - **Authentication**: a session established by a client certificate or by the `/login` form (see
-  [Security](security.md#authentication)). There is no token or HTTP Basic authentication.
+  [Security](security.md#authentication)). The only token authentication is the SIEM pull API's
+  bearer tokens (`/api/audit/events`); there is no HTTP Basic. With the consent banner on, a
+  session that has not agreed to it gets `401` from `/api/**`.
+- **Sessions** end after the idle or absolute limit; a call in an ended session gets `401`.
 - **CSRF**: `POST`, `PUT` and `DELETE` require Spring Security's CSRF token in the header named by
   the page's `_csrf_header` meta tag (value in `_csrf`).
 - **Unauthenticated** API calls get `401`; **forbidden** ones get `403`.
@@ -183,9 +186,27 @@ could not be built) and `messages` (rendered messages, up to 25 on a dry run).
 DataTables audit filters: `action` (one or more audit kinds), `actor`, `subject` (name or DN),
 `from`, `to` (ISO dates).
 
-## Actuator
+The `ens-audit/1` trail, behind the **Audit log** page:
+
+| Method | Path | Access | Purpose |
+|---|---|---|---|
+| `GET` | `/api/v1/admin/audit/events` | admin | Search the trail (paged, filtered) |
+| `GET` | `/api/v1/admin/audit/events/{seq}` | admin | One event in full |
+| `GET` | `/api/v1/admin/audit/export` | admin | The current filter as CSV or NDJSON, up to 100,000 events; recorded as `audit.exported` |
+| `POST` | `/api/v1/admin/audit/verify` | admin | Recompute the hash chain |
+| `GET` | `/api/v1/admin/audit/delivery` | admin | Each output's delivery position, backlog and last error |
+| `GET`, `POST`, `DELETE` | `/api/v1/admin/audit/tokens`, `/api/v1/admin/audit/tokens/{id}` | admin | List, create and revoke SIEM API tokens |
+| `GET` | `/api/audit/events?after=<seq>&limit=<1-1000>` | bearer token | The SIEM pull API: NDJSON, or `{"events":[…],"next":<seq>}` with `Accept: application/json`. Works while unlicensed. See [Audit logging](../audit-logging.md#the-pull-api) |
+
+## Sign-in, consent and health
 
 | Path | Access |
 |---|---|
+| `/login` (`GET`, `POST`) | public: the password form |
+| `/consent` (`GET`, `POST`) | public: the notice-and-consent banner and **I agree**, when it is on |
+| `/livez`, `/readyz` | public, always on the application's port |
 | `/actuator/health`, `/actuator/health/liveness`, `/actuator/health/readiness`, `/actuator/info` | public (health details only for admins) |
 | `/actuator/metrics`, `/actuator/loggers` | admin |
+| `/actuator/prometheus` | public, on the management port (`MANAGEMENT_SERVER_PORT`) only |
+
+With `MANAGEMENT_SERVER_PORT` set, the `/actuator/**` paths move to that port.

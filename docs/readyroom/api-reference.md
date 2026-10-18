@@ -121,13 +121,16 @@ Response: `{"data": [...records], "last_page": n, "total": n, "page": n}`.
 
 | Method and path | Access | Description |
 |---|---|---|
-| `GET /api/users/search?search=&page=1&size=10&sort=id&dir=asc` | Signed in | Directory users whose `cn` contains `search` (all users when empty), with today's status. Only presence and directory fields for people whose details the caller may not see (see [Security](security.md#authorization)). |
+| `GET /api/users/search?search=&page=1&size=10&sort=id&dir=asc` | Signed in | Directory users whose `cn` contains `search` (all users when empty), with today's status. For people whose details the caller may not see, only directory fields and what `application.privacy.coworker-visibility` allows (see [Security](security.md#authorization)). |
 | `GET /api/users/usersearch?search=` | Signed in | Directory users whose `cn` contains `search`. Used by the manager pickers. |
-| `GET /api/users/group/{groupDn}` | A member or manager of the group, or `ADMIN` | `{"data": [...statuses]}` for the group's members, presence only for people whose details the caller may not see. |
+| `GET /api/users/group/{groupDn}` | A member or manager of the group, or `ADMIN` | `{"data": [...statuses]}` for the group's members, limited by the coworker visibility setting for people whose details the caller may not see. |
 | `GET /api/users/reports` | Signed in | `{"data": [...]}`: the caller's direct reports, with status. |
 | `GET /api/users/checkinoutrecords/{dn}?page=1&size=10&sort=timestamp&dir=desc` | Whoever may see the user's details | The user's records, paged, newest first. |
-| `GET /api/users/managers/{dn}` | Whoever may see the user's details | The user's additional managers, as a list of objects with a `dn`. |
-| `POST /api/users/managers/update` | Signed in | Body: a JSON array of DNs. Replaces the **caller's own** additional managers. |
+| `GET /api/users/managers/{dn}` | Whoever may see the user's details | The user's delegates (alternate managers), as a list of objects with a `dn`. |
+| `POST /api/users/managers/update/{dn}` | `ADMIN` | Body: a JSON array of DNs, each someone else in the directory. Replaces that person's delegates. `400` (`invalid_delegate`, `invalid_person`) for a bad list. |
+
+`POST /api/users/managers/update`, with which people set their own additional managers, has been
+removed: only administrators set delegates.
 
 ### Groups and permissions
 
@@ -145,10 +148,39 @@ Response: `{"data": [...records], "last_page": n, "total": n, "page": n}`.
 |---|---|---|
 | `GET /api/event/all?dn=&from=&to=` | Whoever may see the user's details | A user's status entries between two ISO instants, as calendar events. |
 | `GET /api/event/allWithLogins?dn=&from=&to=` | Whoever may see the user's details | The same, plus "Online: ..." periods and organization calendar events. |
-| `POST /api/event/update` | Signed in | Sets the **caller's own** status for each day from `fromDate` up to, but not including, `toDate` (ISO zoned date-times). Body: `{"fromDate","toDate","status","lateArrivalTime"}`. `status` is a `UserStatusEnum` name. `lateArrivalTime` (ISO time) is used with `LATE_ARRIVAL`. |
+| `POST /api/event/update` | Signed in | Puts `status` on each day from `fromDate` up to, but not including, `toDate` (ISO zoned date-times, or plain `yyyy-MM-dd`), at most `application.events.max-range-days` (366) days. Body: `{"fromDate","toDate","status","lateArrivalTime","note","dn"}`. See below. |
+| `GET /api/event/statuses` | Signed in | The statuses the caller may put on their own calendar: `[{"status","name","needsApproval"}]`. |
 | `GET /api/settings/calendar/all?from=&to=` | A/M | Organization calendar events. |
 | `POST /api/settings/calendar/update` | A/M | Body `{"fromDate","toDate","title","holiday"}`. Adds one event per day in the range (end exclusive). |
 | `DELETE /api/settings/calendar/delete/{id}` | A/M | Deletes one calendar event. |
+
+**What `POST /api/event/update` does** depends on whose calendar and which status:
+
+| Case | Result |
+|---|---|
+| The caller's own calendar, a status the person sets (`STANDARD`, `EARLY_LEAVE`, `LATE_ARRIVAL`) | Set at once: `{"status","fromDate","toDate","outcome":"set"}` |
+| The caller's own calendar, a requested status (by default `OUT_OF_OFFICE`, `WORK_FROM_HOME`, `TDY`, `SCHEDULED_LEAVE`, `ABSENT_EXCUSED`) | A request is created: `"outcome":"requested"`, with `requestId` and a `message`. `note` (up to 500 characters) goes with it |
+| The caller's own calendar, a status only managers record (`ABSENT`, `ABSENT_UNEXCUSED`, `UNSCHEDULED_LEAVE`) | `403` |
+| Someone else's calendar (`dn`) | Set at once, any status, if the caller is the person's directory manager, one of their delegates or `ADMIN`; otherwise `403` |
+
+Bad input is answered with `400` and `{"error","message"}`: `range_too_long`, `invalid_range`,
+`invalid_status`, `invalid_time` or `invalid_dn`. Earlier releases answered these with `500`, and
+returned the request body instead of the result.
+
+### Status requests
+
+All need the `calendar` license feature. Who may do what is checked on every call.
+
+| Method and path | Access | Description |
+|---|---|---|
+| `POST /api/requests` | Signed in | Ask for a status on one's own days. Body: `status`, `fromDate`, `toDate` (the day after the last), optional `lateArrivalTime` and `note` (500 characters, shown to approvers). `201` with the request. `400` `not_a_request_status` for a status that is not a requested one |
+| `GET /api/requests/mine` | Signed in | The caller's requests |
+| `GET /api/requests/pending` | Signed in | Pending requests the caller may decide |
+| `GET /api/requests/{id}` | The requester, whoever may decide it, `ADMIN` | One request |
+| `POST /api/requests/{id}/approve`, `/reject` | The requester's directory manager, a delegate or `ADMIN`; never the requester | Optional body `{"comment": "..."}`. `409` (`not_pending`) once decided |
+| `POST /api/requests/{id}/cancel` | The requester or `ADMIN` | A pending request, or an approved one until its last day has passed (`409` `not_cancellable` otherwise). Cancelling an approved one takes its days from today on off the calendar |
+
+A request's `state` is `REQUESTED`, `APPROVED`, `REJECTED` or `CANCELLED`.
 
 ### Notifications, org chart and session
 
@@ -156,28 +188,30 @@ Response: `{"data": [...records], "last_page": n, "total": n, "page": n}`.
 |---|---|---|
 | `GET /api/notifications/my` | Signed in | The caller's notifications that are still unread. |
 | `POST /api/notifications/markAllAsRead` | Signed in | Marks all of the caller's notifications as read. |
-| `GET /api/orgnodes/hierarchy` | Signed in | The org chart tree, with presence statistics. |
-| `GET /api/orgnodes/users/{orgName}` | Signed in | Directory users whose duty sub-organization attribute equals `orgName`, with status. Presence only for people whose details the caller may not see. |
+| `GET /api/orgnodes/hierarchy` | Signed in | The org chart tree, with presence statistics (headcounts only with coworker visibility `none`, except for `ADMIN` and `MANAGER`). |
+| `GET /api/orgnodes/users/{orgName}` | Signed in | Directory users whose duty sub-organization attribute equals `orgName`, with status, limited by the coworker visibility setting for people whose details the caller may not see. |
 | `POST /api/system/updateSystemTime` | Signed in | Body `{"dateTime": "<ISO zoned date-time>"}`. Sets the day viewed for the rest of the session. |
 
 ### Status values
 
-`UserStatusEnum` values, with whether a user can choose them on their calendar and whether they
-excuse an absence alert:
+`UserStatusEnum` values, with who puts them on a person's calendar (with the default
+`application.events.request-statuses`) and whether they excuse an absence alert:
 
-| Value | Name shown | User can choose | Excuses absence |
-|---|---|:-:|:-:|
-| `STANDARD` | normal | ✓ | (clears a status) |
-| `OUT_OF_OFFICE` | Out of Office | ✓ | ✓ |
-| `WORK_FROM_HOME` | Work From Home | ✓ | ✓ |
-| `TDY` | TDY | ✓ | ✓ |
-| `SCHEDULED_LEAVE` | Scheduled Leave | ✓ | ✓ |
-| `EARLY_LEAVE` | Early Leave | ✓ | – |
-| `LATE_ARRIVAL` | Late Arrival | ✓ | – (sets the expected time) |
-| `UNSCHEDULED_LEAVE` | Unscheduled Leave | manager response | – |
-| `ABSENT_EXCUSED` | Absent Excused | manager response | ✓ |
-| `ABSENT_UNEXCUSED` | Absent Unexcused | manager response | – |
-| `ABSENT` | Absent | manager response | – |
+| Value | Name shown | Class | Excuses absence |
+|---|---|---|:-:|
+| `STANDARD` | normal | Set by the person | (clears a status) |
+| `OUT_OF_OFFICE` | Out of Office | Requested | ✓ once approved |
+| `WORK_FROM_HOME` | Work From Home | Requested | ✓ once approved |
+| `TDY` | TDY | Requested | ✓ once approved |
+| `SCHEDULED_LEAVE` | Scheduled Leave | Requested | ✓ once approved |
+| `EARLY_LEAVE` | Early Leave | Set by the person | – |
+| `LATE_ARRIVAL` | Late Arrival | Set by the person | – (sets the expected time) |
+| `UNSCHEDULED_LEAVE` | Unscheduled Leave | Recorded by managers | – |
+| `ABSENT_EXCUSED` | Absent Excused | Requested | ✓ once approved |
+| `ABSENT_UNEXCUSED` | Absent Unexcused | Recorded by managers | – |
+| `ABSENT` | Absent | Recorded by managers | – |
+
+A manager, delegate or administrator can record any of them for someone else, at once.
 
 ## Web pages
 
@@ -197,6 +231,10 @@ excuse an absence alert:
 | `/app/orgchart/details/{orgName}` | Signed in | Members of one organization. Not linked from the current UI. |
 | `/app/metrics` | A/M | Metrics |
 | `/app/profile` (GET, POST) | Signed in | My Profile (`notes`, `loginTime`) |
+| `/app/approvals` | Signed in (`calendar` feature) | Approvals: requests waiting for the caller, the request form, the caller's requests. `POST /app/approvals/request`, `/app/approvals/{id}/approve`, `/reject`, `/cancel` do the same as the API |
+| `/app/privacy`, `GET /app/privacy/export` | Signed in, any license state | My data, and the caller's own data as JSON (`readyroom-personal-data/1`) |
+| `/app/admin/delegates` | ADMIN | Delegates review. `POST /app/admin/delegates/keep` and `/clear` keep or remove a person's delegates |
+| `/app/admin/privacy?dn=` | ADMIN, any license state | Retention status, and a person's data inventory. `GET /app/admin/privacy/export?dn=` downloads it; `POST /app/admin/privacy/erase` erases it (one-time token and typed name) |
 | `/app/notifications/id/{id}` | The recipient, or `ADMIN` | One notification |
 | `POST /app/notifications/update` | Recipient only | Respond to a notification (`notificationId`, `response`) |
 | `/app/settings` | A/M | Settings |

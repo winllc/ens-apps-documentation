@@ -46,6 +46,13 @@ The release package and the chart set `SPRING_PROFILES_ACTIVE=postgres` for you.
     Flyway owns the schema. `validate` makes a drifted mapping fail at boot. The null-ordering
     setting keeps entries with no certificate at the end of expiry-sorted tables on both databases.
 
+**TLS to PostgreSQL.** The release package's PostgreSQL is reachable only on the bundle's internal
+Docker network, and the connection to it is not encrypted. Reach a PostgreSQL anywhere else over
+TLS: add `?sslmode=verify-full` to `CERT_ALERT_DB_URL` (with Helm, `database.params:
+sslmode=verify-full`), and `&sslrootcert=<path>` for a private CA. `sslmode=require` encrypts
+without checking who answered. With no `sslmode`, the PostgreSQL driver tries TLS and falls back
+to plain text without saying so.
+
 ## LDAP connection
 
 | Property | Env var | Default | Description |
@@ -55,6 +62,8 @@ The release package and the chart set `SPRING_PROFILES_ACTIVE=postgres` for you.
 | `spring.ldap.username` | `CERT_ALERT_LDAP_USER` | empty | Service account bind DN (empty = anonymous) |
 | `spring.ldap.password` | `CERT_ALERT_LDAP_PASSWORD` | empty | Service account password |
 | `spring.ldap.base-environment.*` | | none | Extra JNDI properties for every connection, e.g. `java.naming.ldap.attributes.binary` |
+| `spring.ldap.base-environment.[com.sun.jndi.ldap.connect.timeout]` | `CERT_ALERT_LDAP_CONNECT_TIMEOUT_MS` | `10000` | Milliseconds to wait for a connection to the directory (sweeps, changelog, sign-in) |
+| `spring.ldap.base-environment.[com.sun.jndi.ldap.read.timeout]` | `CERT_ALERT_LDAP_READ_TIMEOUT_MS` | `60000` | Milliseconds to wait for each answer: one page of a sweep, one bind. Raise it for a directory that takes longer than a minute to return a page |
 
 ### Scraping (`cert-alert.ldap`)
 
@@ -229,8 +238,26 @@ The only job that **writes to the directory**: it deletes finished certificates 
 | `allow-unverified-crl` | | `true` | Believe a CRL whose signature could not be checked. `false` makes those results *Unknown* |
 | `crl-cache-ttl` | | `6h` | Ceiling on how long a fetched CRL is reused (also bounded by its `nextUpdate`) |
 | `max-crl-bytes` | | `16777216` | Larger CRLs are refused |
-| `connect-timeout` | | `10s` | Connecting to a distribution point |
-| `read-timeout` | | `30s` | Downloading; also sets the JVM OCSP timeout unless `-Dcom.sun.security.ocsp.timeout` is given |
+| `connect-timeout` | | `10s` | Connecting to a distribution point or responder |
+| `read-timeout` | | `30s` | Each wait for one to answer |
+| `max-fetch-time` | | `60s` | The whole of one download, redirects included |
+| `allowed-hosts` | `CERT_ALERT_REVOCATION_ALLOWED_HOSTS` | empty | When set, the only hosts CRLs and OCSP answers are fetched from, comma-separated: host names, `*.example.gov` (the domain and everything under it), or IP addresses and CIDR ranges such as `10.20.0.0/16` |
+
+**What a certificate can make CertAlert fetch.** Distribution points and responder addresses come
+out of certificates, so every fetch is limited:
+
+- link-local and cloud metadata addresses are never fetched from (`169.254.0.0/16`, `fe80::/10`,
+  `fd00:ec2::254`, `100.100.100.200`, `0.0.0.0/8`), whatever `allowed-hosts` says;
+- loopback is fetched from only when its host is named in `allowed-hosts`;
+- the hosts of `default-ocsp-url` and `default-crl-url` are always allowed;
+- at most three redirects are followed, to `http` or `https` only, and each hop is checked the
+  same way; an OCSP request follows none;
+- a refused address is logged as a warning and the result is *Unknown*.
+
+Address ranges match only addresses of their own family: an IPv4 range never matches an IPv6
+address. An IPv4-mapped IPv6 address (`::ffff:10.0.0.1`) counts as the IPv4 address it carries.
+The same rules apply to the revocation check at sign-in
+([Client certificates](#client-certificates-ensx509)).
 
 ## Endpoint probe (`cert-alert.probe`)
 
@@ -292,15 +319,40 @@ separate from per-person notifications.
 
 ### SMTP (`spring.mail.*`)
 
-Both email features use Spring Boot's standard mail settings, for example:
+Both email features use Spring Boot's standard mail settings. The release package's
+`env.template` lists them:
 
-```yaml
-spring:
-  mail:
-    host: smtp.example.gov
-    port: 25
-    # username / password / properties.mail.smtp.starttls.enable as your relay requires
-```
+| Env var | Helm | Description |
+|---|---|---|
+| `SPRING_MAIL_HOST`, `SPRING_MAIL_PORT` | `mail.host`, `mail.port` | The mail server. No host: no mail |
+| `SPRING_MAIL_USERNAME`, `SPRING_MAIL_PASSWORD` | `mail.username`, `mail.password` | If the server needs a sign-in |
+| `SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH` | `mail.smtpAuth` | `true` to sign in |
+| `SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_ENABLE` | `mail.starttls` | `true` to use STARTTLS. CertAlert sets no STARTTLS default of its own |
+| `CERT_ALERT_MAIL_CONNECT_TIMEOUT_MS` | | `30000`. Milliseconds to wait for a connection (`mail.smtp.connectiontimeout`, and `smtps`) |
+| `CERT_ALERT_MAIL_READ_TIMEOUT_MS` | | `30000`. Each answer from the server (`mail.smtp.timeout`) |
+| `CERT_ALERT_MAIL_WRITE_TIMEOUT_MS` | | `30000`. Each write to it (`mail.smtp.writetimeout`) |
+
+The mail server's certificate is checked against the JVM's trust store; for a private CA, see
+[Installation → Directory](install.md#directory).
+
+### Mail outbox (`cert-alert.mail.outbox`)
+
+Every email, round-ups and alerts alike, is written to the `outbound_email` table in the same
+transaction as whatever decided to send it, and sent once that has committed. A mail server that
+is slow holds no transaction open, and one that is down loses nothing: a message that cannot be
+sent is tried again, a minute later and then twice as long each time.
+
+| Property | Default | Description |
+|---|---|---|
+| `poll-interval` | `30s` | How often waiting mail is looked at |
+| `retry-initial` | `1m` | Wait after the first failure; it doubles after each further one |
+| `retry-max` | `1h` | Longest wait between two attempts |
+| `give-up-after` | `3d` | How long a message keeps being tried before it is given up on, with an error in the log |
+| `keep` | `7d` | How long sent, given-up and replaced messages stay in the table |
+
+A newer round-up to the same address replaces one still waiting, so a mail server that comes back
+after a weekend delivers the latest round-up rather than three. A notification is marked emailed
+when its message is actually sent, not when it is queued.
 
 ## Security (`cert-alert.security`)
 
@@ -318,28 +370,97 @@ See [Security](security.md) for how these interact.
 | `ldap.user-search-filter` | `(uid={0})` | How to search for it |
 | `ldap.user-dn-patterns` | `[]` | Bind directly to these DN patterns instead of searching, e.g. `["uid={0},ou=people"]` |
 
+## Client certificates (`ens.x509`)
+
+The ENS platform baseline's client-certificate settings, the same in every ENS product that signs
+in with certificates. They add to `cert-alert.security.x509` above. See
+[Security → Client certificate](security.md#client-certificate-x509) for how they fit together.
+
+| Env var | Default | Helm | Description |
+|---|---|---|---|
+| `ENS_X509_REVOCATION` | `off` | `x509.revocation` | `off`, `ocsp`, `crl` or `ocsp-then-crl`: checked live for every certificate presented, before it is matched to anybody. Off by default so an upgrade changes nothing; with certificate sign-in on and revocation off, startup logs a warning that DISA STIG requires it |
+| `ENS_X509_OCSP_RESPONDER_URL` | none | `x509.ocspResponderUrl` | Ask this responder instead of the one the certificate names, for example a local OCSP relay |
+| `ENS_X509_CRL_DIR` | none | (`extraEnv`, with `extraVolumes`) | A directory of CRL files (DER or PEM), re-read when they change. With it set, no distribution point is fetched: the air-gapped option |
+| `ENS_X509_REVOCATION_FAIL` | `closed` | `x509.revocationFail` | `closed` refuses a certificate whose status cannot be found; `open` allows it, with a warning (and a startup warning) |
+| `ENS_X509_REVOCATION_CACHE` | `10m` | `x509.revocationCache` | How long a good or revoked answer is reused, per issuer and serial number. No answer is reused for 30 seconds |
+| `ENS_X509_ALLOWED_ISSUERS` | none: any issuer the trust store accepts | `x509.allowedIssuers` | Issuer DNs separated by `;`. A certificate from any other issuer is refused. Compared as names, so spacing and case don't matter |
+| `ENS_X509_USER_FILTER` | none | `x509.userFilter` | An LDAP filter that finds the holder of a certificate the directory does not publish, with `{upn}`, `{edipi}`, `{email}` and `{uuid}` filled in, for example `(uid={edipi})`. Used only with `cert-alert.security.x509.require-known-certificate: false`, instead of the uid and address matching |
+| `ENS_X509_SOURCE` | `servlet` | `x509.source` | `servlet`: the certificate comes from the TLS handshake CertAlert terminates. `header`: a proxy terminates TLS and forwards it |
+| `ENS_X509_HEADER` | `X-SSL-Client-Cert` | `x509.header` | Header mode: the header holding the certificate, URL-encoded PEM as nginx's `$ssl_client_escaped_cert` sends it (ingress-nginx: `ssl-client-cert`) |
+| `ENS_X509_TRUSTED_PROXIES` | `127.0.0.1/32,::1/128` | `x509.trustedProxies` (`10.0.0.0/8,172.16.0.0/12,192.168.0.0/16`) | Header mode: the addresses (CIDRs) the header is accepted from, separated by `,`, `;` or spaces. IPv4 ranges never match IPv6 addresses |
+| `ENS_X509_PROXY_SECRET_FILE` / `ENS_X509_PROXY_SECRET` | none | `x509.proxySecret.*` | Header mode: the secret, at least 32 characters, that the proxy sends in `X-ENS-Proxy-Secret`. The file wins |
+| `ENS_X509_TRUSTED_CA_FILE` | none | `x509.trustedCa.*` | PEM certificates of the CAs a forwarded certificate must chain to. Also searched for an issuer when checking revocation |
+
+| Placeholder | Value |
+|---|---|
+| `{upn}` | The subject alternative name otherName UserPrincipalName |
+| `{edipi}` | The digits of a `1234567890@mil` UPN, or else the trailing number of a `LAST.FIRST.MI.1234567890` common name |
+| `{email}` | The rfc822Name subject alternative name, or else the subject's emailAddress |
+| `{uuid}` | The `urn:uuid:` subject alternative name URI (the PIV FASC-N UUID) |
+
+Every value is LDAP-escaped where it is put in. A filter naming a value the certificate does not
+carry is not searched with, and a search that finds no entry, more than one, or one CertAlert has
+not synced signs nobody in.
+
+**CertAlert refuses to start in header mode** without a proxy secret of 32 characters or more,
+without `ENS_X509_TRUSTED_CA_FILE`, or with `SERVER_FORWARD_HEADERS_STRATEGY=native` (use
+`framework`). The Helm chart refuses to render header mode without `x509.proxySecret` and
+`x509.trustedCa`.
+
 ## TLS (`server.ssl`)
 
 | Property | Env var | Default | Description |
 |---|---|---|---|
 | `server.port` | `SERVER_PORT` | `8080` | Listening port (image sets `SERVER_PORT=8080`) |
 | `server.ssl.enabled` | `CERT_ALERT_TLS_ENABLED` | `false` | Serve HTTPS (required for X.509 sign-in) |
+| `server.ssl.enabled-protocols` | | `TLSv1.3,TLSv1.2` | TLS 1.2 and 1.3 only |
 | `server.ssl.client-auth` | | `want` | Request but do not require a client certificate. Do **not** set `need`: it makes the password form unreachable |
 | `server.ssl.key-store` | `CERT_ALERT_KEYSTORE` | empty | e.g. `file:/etc/cert-alert/tls/keystore.p12` |
 | `server.ssl.key-store-password` | `CERT_ALERT_KEYSTORE_PASSWORD` | empty | |
 | `server.ssl.key-store-type` | `CERT_ALERT_KEYSTORE_TYPE` | `PKCS12` | |
-| `server.ssl.trust-store` | `CERT_ALERT_TRUSTSTORE` | empty | CAs whose client certificates are accepted at the handshake |
+| `server.ssl.trust-store` | `CERT_ALERT_TRUSTSTORE` | empty | CAs whose client certificates are accepted at the handshake. Required with TLS on (the Helm chart refuses to render without one) |
 | `server.ssl.trust-store-password` | `CERT_ALERT_TRUSTSTORE_PASSWORD` | empty | |
 | `server.ssl.trust-store-type` | `CERT_ALERT_TRUSTSTORE_TYPE` | `PKCS12` | |
+| (release package) | `CERT_ALERT_BIND_ADDRESS`, `CERT_ALERT_PORT` | `0.0.0.0`, `8080` | The host interface and port the UI is published on. `127.0.0.1` keeps it to the host, behind a reverse proxy of your own. With TLS off and every interface published, `install.sh` and `upgrade.sh` warn that passwords and cookies would cross the network in clear text |
+| `server.forward-headers-strategy` | `SERVER_FORWARD_HEADERS_STRATEGY` | unset | `framework` behind a proxy that terminates TLS and sets `X-Forwarded-*` itself: redirects stay on https, HSTS and the `Secure` cookie follow the browser's request, and the audit trail records the client's address. The Helm chart sets it whenever its ingress or an edge or reencrypt Route terminates TLS. Never `native` with header mode |
 
-## Audit trail (`cert-alert.audit`)
+## Security headers, banner and sessions
+
+The ENS platform baseline, the same in every ENS product. See
+[Security](security.md#security-headers-and-cookies) for what each does.
+
+| Env var | Default | Helm | Description |
+|---|---|---|---|
+| `ENS_CSP_REPORT_ONLY` | `false` | (`extraEnv`) | `true` sends `Content-Security-Policy-Report-Only` instead of enforcing the policy: an escape hatch for a page the policy breaks, not a way to run |
+| `ENS_COOKIE_SECURE` | `false` | (`extraEnv`) | Mark the session cookie `Secure` on every request. Without it, the cookie is `Secure` on any request that arrived over TLS, directly or through a proxy with `SERVER_FORWARD_HEADERS_STRATEGY=framework`. Set it for a proxy that terminates TLS and does not say so |
+| `ENS_SESSION_IDLE_TIMEOUT` | `30m` | `session.idleTimeout` | A session nobody has used for this long ends. `SERVER_SERVLET_SESSION_TIMEOUT` still works as the same setting, and wins if both are set |
+| `ENS_SESSION_ADMIN_IDLE_TIMEOUT` | empty: the idle timeout | `session.adminIdleTimeout` | The same for an administrator's session. DISA STIG suggests `15m` |
+| `ENS_SESSION_ABSOLUTE_TIMEOUT` | `12h` | `session.absoluteTimeout` | A session ends this long after sign-in, however busy |
+| `ENS_SESSION_MAX_PER_USER` | `0` (no limit) | `session.maxPerUser` | Sessions one person may hold at once. Signing in beyond it ends their oldest session. DISA STIG suggests `3` |
+| `ENS_CONSENT_BANNER_ENABLED` | `false` | `consentBanner.enabled` | Show the DoD notice-and-consent banner before sign-in, enforced by the server |
+| `ENS_CONSENT_BANNER_TITLE` | empty: `U.S. Government (USG) Information System (IS) Notice and Consent` | `consentBanner.title` | Its heading |
+| `ENS_CONSENT_BANNER_TEXT` | empty: the standard DoD notice-and-consent text | `consentBanner.text` | Plain text: blank lines separate paragraphs, lines starting `- ` make a list. Shown as written, never as markup |
+| `ENS_CONSENT_BANNER_FILE` | none | (`extraEnv`, with `extraVolumes`) | Read the text from a file instead; wins over `_TEXT`. Read at startup: a file that can't be read stops CertAlert starting. In the release package, put it in `tls/` (mounted at `/etc/cert-alert/tls`) |
+
+Durations are Spring durations (`15m`, `12h`, `90s`).
+
+## Audit trail
+
+CertAlert keeps the shared `ens-audit/1` trail in the database (`audit_event`). Its outputs and
+retention are the `ENS_AUDIT_*` settings in [Audit logging](../audit-logging.md#settings); the
+Helm chart's `audit.*` values set them. Two CertAlert settings remain:
 
 | Property | Default | Description |
 |---|---|---|
-| `enabled` | `true` | `false` stops new records being written; existing ones stay readable |
-| `retention.enabled` | `false` | Trim old records on a schedule |
-| `retention.after` | `365d` | Records older than this are removed |
-| `retention.cron` | `0 30 3 * * SUN` | Trim schedule |
+| `cert-alert.audit.enabled` | `true` | `false` stops the records of entry changes only. Security events (sign-ins, refusals, settings, the license, jobs) are always recorded |
+| `cert-alert.audit.retention.enabled` | `false` | Prune old events on a schedule, while `ENS_AUDIT_RETENTION_DAYS` is `0` |
+| `cert-alert.audit.retention.after` | `365d` | With `retention.enabled`: events older than this are pruned |
+| `cert-alert.audit.retention.cron` | `0 30 3 * * *` | Daily, at 03:30 UTC |
+
+`ENS_AUDIT_RETENTION_DAYS` above `0` takes precedence over `retention.enabled` and `after`.
+Either way, pruning removes only events every forwarding output has delivered, and never the
+newest. CertAlert has no `ENS_AUDIT_QUERY_MAX_SCAN`: the audit page's search runs in the
+database, and **Export** takes up to 100,000 events of the current filter.
 
 ## Classification banner (`cert-alert.banner`)
 
@@ -358,10 +479,14 @@ See [Security](security.md) for how these interact.
 | `server.shutdown` | `graceful` | Finish in-flight requests on SIGTERM |
 | `spring.lifecycle.timeout-per-shutdown-phase` | `30s` | Graceful shutdown limit |
 | `server.error.include-message` | `never` | Error pages never echo exception messages |
-| `management.endpoints.web.exposure.include` | `health,info,metrics,loggers` | Exposed actuator endpoints |
-| `management.endpoint.health.show-details` | `when-authorized` | Health details only for authorised (admin) callers |
-| `management.endpoint.health.probes.enabled` | `true` | Enables `/actuator/health/liveness` and `/readiness` |
+| `management.endpoints.web.exposure.include` | `health,info,metrics,loggers,prometheus` | Exposed actuator endpoints. Prometheus is served only on the management port |
+| `management.server.port` (`MANAGEMENT_SERVER_PORT`) | unset | Give the actuator a port of its own, for example `9090`, plain HTTP. There, health and `/actuator/prometheus` are open without signing in. Unset, Prometheus is not served at all and the actuator stays on the application's port. The Helm chart sets it (`metrics.enabled`, default `true`, `metrics.port` `9090`); the release package publishes no port for it |
+| `management.endpoint.health.show-details` | `when-authorized` | Health details only for administrators |
+| `management.endpoint.health.probes.enabled` | `true` | Enables `/actuator/health/liveness` and `/readiness`, and `/livez` and `/readyz` on the application's port (which stay there when the actuator moves) |
+| `management.endpoint.health.group.liveness.include` | `livenessState` | The process alone |
+| `management.endpoint.health.group.readiness.include` | `readinessState,db,auditLog` | The database and a writable audit log. Not the directory: add `ldap` (`MANAGEMENT_ENDPOINT_HEALTH_GROUP_READINESS_INCLUDE=readinessState,db,auditLog,ldap`) to make a directory outage take CertAlert out of service |
 | `logging.level.com.winllc.certalert` | `INFO` | Application log level |
+| `logging.structured.format.console` (`LOGGING_STRUCTURED_FORMAT_CONSOLE`) | unset | `ecs` writes the application log as one ECS JSON object per line. The Helm chart does so by default (`logFormat: json`). The audit trail's stdout lines are raw `ens-audit/1` JSON either way |
 | `JAVA_OPTS` *(image env)* | `-XX:MaxRAMPercentage=75.0 -XX:+ExitOnOutOfMemoryError` | JVM options in the container |
 
 ## Example configurations
@@ -437,6 +562,12 @@ See [Security](security.md) for how these interact.
     CERT_ALERT_TRUSTSTORE_PASSWORD=...
     CERT_ALERT_BANNER_ENABLED=true
     CERT_ALERT_BANNER_TEXT=UNCLASSIFIED
+    ENS_CONSENT_BANNER_ENABLED=true
+    ENS_SESSION_ADMIN_IDLE_TIMEOUT=15m
+    ENS_SESSION_MAX_PER_USER=3
+    ENS_X509_REVOCATION=ocsp-then-crl
+    ENS_X509_ALLOWED_ISSUERS='CN=DOD ID CA-70,OU=PKI,OU=DoD,O=U.S. Government,C=US'
+    ENS_AUDIT_RETENTION_DAYS=400
     ```
 
 === "Certificate-only sign-in"

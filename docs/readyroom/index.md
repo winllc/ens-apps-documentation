@@ -10,9 +10,9 @@ directory group and organization, builds an org chart, and emails managers when 
 arrived by their expected time.
 
 Nobody has to check in by hand. The first sign-in or unlock of the day counts as arriving, a locked
-screen counts as away, and signing out counts as checking out. People can also set a status for a
-day on a calendar (work from home, TDY, scheduled leave, a late arrival and so on), so their managers
-know where they are when they are not at a workstation.
+screen counts as away, and signing out counts as checking out. People can also put a status on
+their calendar (a late arrival, or work from home, TDY, scheduled leave and so on, which their
+manager approves), so their managers know where they are when they are not at a workstation.
 
 !!! info "Naming"
     The product is called **ReadyRoom** in the UI and on the product page. Older names still show up
@@ -27,7 +27,9 @@ know where they are when they are not at a workstation.
 | **Automatic check-in** | A PowerShell agent run by Windows Task Scheduler posts `login`, `lock`, `unlock` and `logout` events. The day's first unlock is stored as a check-in. |
 | **Status per person** | Each person's status for the day is `IN`, `AWAY` (screen locked), `OUT` (checked out) or `NONE`. A calendar status such as *Work From Home* or *TDY* takes its place when one is set. |
 | **Auto check-out** | A background job checks out anyone who has been locked for longer than `check-out-after-minutes`. The record is flagged as forced. |
-| **Absence alerts** | If someone is not checked in by their expected time plus a grace period on a working day, their directory manager and any additional managers they chose get an in-app notification and an email. Managers record what happened. |
+| **Absence alerts** | If someone is not checked in by their expected time plus a grace period on a working day, their directory manager and their delegates get an in-app notification and an email. Managers record what happened. |
+| **Statuses and approvals** | People set a late arrival or early leave themselves; statuses that excuse an absence (leave, telework, TDY) are requested and approved by their manager or a delegate on the **Approvals** page. Delegates are set by administrators. |
+| **Privacy and retention** | What coworkers see of each other is configurable. Old check-ins and statuses can be summarised by month and deleted after a set number of days. Everyone can download their own data; administrators export or erase a person's data. |
 | **Home dashboard** | Each user sees their own status, the last 30 days, whether their workstation agent is reporting, and anything scheduled in the next two weeks. Users with direct reports also see their team. |
 | **Groups** | Browse the directory group trees (`groupOfUniqueNames`), see each member's status, favorite groups, assign extra group managers, and generate a group report as a PDF. |
 | **Org chart** | Builds a hierarchy from one flat directory attribute (for example `RYS34B` becomes `RYS` → `34` → `B`) and shows how many people are present in each organization. Parse rules can override how values are split. |
@@ -149,7 +151,8 @@ address; a logout with a usable `sessionId` never is.
 | Look up a property, environment variable or client parameter | [Configuration](configuration.md) |
 | Roll out and troubleshoot the workstation agent | [Windows client](windows-client.md) |
 | Use the web application day to day | [User guide](user-guide.md) |
-| Manage roles, group managers, the calendar and org-chart rules | [Administration](admin-guide.md) |
+| Manage roles, group managers, delegates, the calendar, org-chart rules and a person's data | [Administration](admin-guide.md) |
+| Assess what ReadyRoom keeps about people, for a DPIA or a works council | [Privacy, DPIA and works council](privacy.md) |
 | Run, monitor, back up and upgrade the server | [Operations](operator-guide.md) |
 | Size it, plan for availability and recover from a disaster | [Sizing, availability and recovery](availability-and-sizing.md) |
 | Understand authentication, authorization and hardening | [Security](security.md) |

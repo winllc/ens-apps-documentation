@@ -47,18 +47,16 @@ download itself.
 
 ### Verifying the images and the chart
 
-On a release tag, CI for CertAlert, the Directory Services Portal and ReadyRoom also signs each
-published image and the Helm chart with cosign: keyless signatures (Sigstore), made with the release
-workflow's GitHub identity, always by digest. Each image also gets its SPDX SBOM attached as a
-signed attestation. The RSA Operations Portal's CI does not sign its images or chart yet; check
-its download with `SHA256SUMS.asc` as above.
+On a release tag, CI also signs each published image and the Helm chart with cosign: keyless
+signatures (Sigstore), made with the release workflow's GitHub identity, always by digest. Each
+image also gets its SPDX SBOM attached as a signed attestation.
 
 | Product | Images | Chart | Repository in the signing identity |
 |---|---|---|---|
 | CertAlert | `ghcr.io/winllc/cert-alert` | `ghcr.io/winllc/charts/cert-alert` | `winllc/cert-alert` |
 | Directory Services Portal | `ghcr.io/winllc/directory-services-portal-api`, `ghcr.io/winllc/directory-services-portal-web` | `ghcr.io/winllc/charts/directory-services-portal` | `winllc/directory-services-portal` |
 | ReadyRoom | `ghcr.io/winllc/in-n-out-work` | `ghcr.io/winllc/charts/readyroom` | `winllc/in-n-out-work` |
-| RSA Operations Portal | not signed | not signed | |
+| RSA Operations Portal | `ghcr.io/winllc/rsa-operations-portal`, `ghcr.io/winllc/rsa-operations-portal-connector` | `ghcr.io/winllc/charts/rsa-operations-portal` | `winllc/rsa-operations-portal` |
 
 For example, for ReadyRoom:
 
@@ -127,8 +125,8 @@ git tag v1.4.0 && git push origin v1.4.0
 CI then runs the tests, builds and smoke-tests the images, and publishes them to
 `ghcr.io/winllc/...:1.4.0`. From those same tested images it builds the bundle (and, for the Directory
 Services Portal, the native package), packages the Helm chart and publishes it to
-`oci://ghcr.io/winllc/charts/<chart>`, makes the SBOMs and `SHA256SUMS`, signs the checksums (and, for CertAlert, the Directory Services
-Portal and ReadyRoom, signs the images and the chart with cosign), and uploads everything to the release bucket under
+`oci://ghcr.io/winllc/charts/<chart>`, makes the SBOMs and `SHA256SUMS`, signs the checksums, signs the images and the chart with
+cosign, and uploads everything to the release bucket under
 `<product>/<version>/`. A release without a pre-release suffix also updates `<product>/latest.txt`.
 Every pull request builds a dry-run bundle (`0.0.0-pr<n>`) as a workflow artifact, without signing
 or uploading, so packaging problems show up before a release.
