@@ -22,11 +22,11 @@ This applies to the release package. The Helm chart sets the same settings as en
 | Consumer | Mechanism (from the package's `docker-compose.yml`) | Effect |
 |---|---|---|
 | **portal** | `env_file: .env` (and `global.env`, which holds the release version) | Every `key=value` becomes an environment variable. Spring Boot resolves property names from environment variables, and the image's entry point uses `$JAVA_OPTS`. |
-| **portal** | `./.env:/application.properties` | The container's working directory is `/`, so Spring Boot also loads `.env` as an external `application.properties`, which overrides the defaults packaged in the image. |
-| **connector** | `env_file: connector.env` | Environment variables. The Connector reads `CONNECTOR_AUTH_PASSWORD`, the `RSA_*` accounts and the `CONNECTOR_TLS_*` settings itself; Tomcat's `catalina.sh` honours `JAVA_OPTS`, which carries the other Connector settings as `-D` options. |
+| **portal** | `./.env:/application.properties` | The container's working directory is `/`, so Spring Boot also loads `.env` as an external `application.properties`, which overrides the defaults packaged in the image. The Portal runs as uid 1001 in group 0 and reads the file through that group: `util/file-owners.sh`, which `install.sh` and `upgrade.sh` run, makes it mode 640 with group 0. |
+| **connector** | `env_file: connector.env` | Environment variables. The Connector reads `CONNECTOR_AUTH_PASSWORD`, the `RSA_*` accounts and `RSA_TLS_VERIFY_HOSTNAME`, the `CONNECTOR_TLS_*`, `CONNECTOR_HTTPS_ADDRESS` and `CONNECTOR_HTTP_ADDRESS` settings and the `CONNECTOR_SERIAL_FILTER*` settings itself; Tomcat's `catalina.sh` honours `JAVA_OPTS`, which carries the other Connector settings as `-D` options. |
 | **mysql** | `env_file: mysql.env` | Standard `mysql` image variables: `MYSQL_ROOT_PASSWORD`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`. |
 
-The Portal, which users reach, never receives the AM credentials or the MySQL root password. `util/check-env.sh` refuses a `.env` that holds the Connector's `-D` options in `JAVA_OPTS` or any `MYSQL_*` setting.
+The Portal, which users reach, never receives the AM credentials or the MySQL root password. `util/check-env.sh` refuses a `.env` that holds the Connector's `-D` options in `JAVA_OPTS`, any `RSA_*` variable or any `MYSQL_*` setting. So in `.env`, write a Portal setting such as `rsa.helpdesk.code-key` or `rsa.rate-limit.enabled` under its property name, never in its `RSA_...` environment form.
 
 ```text
 # .env (the Portal; excerpt, values are placeholders)
@@ -35,11 +35,16 @@ spring.datasource.url=jdbc:mysql://mysql:3306/RSAAPP
 spring.datasource.username=appuser
 spring.datasource.password=<app password>
 spring.mail.host=smtp.example.org
+CONNECTOR_TLS_TRUSTSTORE=/ssl/connector-ca.crt
+CONNECTOR_TLS_CLIENTCERTIFICATE=/portal-tls/portal-client.crt
+CONNECTOR_TLS_CLIENTKEY=/portal-tls/portal-client.key
+rsa.helpdesk.code-key=<added by util/helpdesk-code-key.sh>
 ...
 
 # connector.env (the Connector)
 CONNECTOR_AUTH_PASSWORD=<shared secret>
 CONNECTOR_TLS_PRIVATE_KEY_PASSWORD=<set by util/connector-tls.sh>
+CONNECTOR_TLS_CLIENT_AUTH=required
 RSA_CMDCLIENT_USER=<command client user>
 RSA_CMDCLIENT_PASSWORD=<command client password>
 RSA_ADMIN_USER_ID=<service account>
@@ -71,7 +76,7 @@ Keep `$` and ` #` out of the values: Docker Compose replaces `$name` with a vari
 
 | Service | Published ports | Volumes (host → container) |
 |---|---|---|
-| `portal` | `8080:8080`, `8443:8443` | `./default_build/properties:/custom`, `./default_build/static:/static`, `./default_build/email-templates:/resources/email-templates`, `./default_build/ssl:/ssl`, `./default_build/portal/log4j2.xml:/log4j2.xml`, `./logs:/var/log`, `ens-license:/var/lib/ens/mfa-portal`, `./.env:/application.properties` |
+| `portal` | `8080:8080`, `8443:8443` | `./default_build/properties:/custom`, `./default_build/static:/static`, `./default_build/email-templates:/resources/email-templates`, `./default_build/ssl:/ssl`, `./portal-tls:/portal-tls` (the Portal's certificate and key for mutual TLS; no other service mounts it), `./default_build/portal/log4j2.xml:/log4j2.xml`, `./logs:/var/log`, `ens-license:/var/lib/ens/mfa-portal`, `./.env:/application.properties` |
 | `connector` | none (reached internally as `https://connector:8443`) | `./default_build:/custom` (the trust store as `/custom/ssl/trust.jks`, the HTTPS certificate in `/custom/connector-tls`), `./logs:/var/log` |
 | `mysql` | none | named volume `mysql_data:/var/lib/mysql` |
 
@@ -133,7 +138,7 @@ With Helm, the Portal and the Connector are two Deployments, the license is on a
 
 ### Connector connection
 
-How the Portal reaches the Connector: `connector.url` (`CONNECTOR_URL`), `connector.tls.*` (`CONNECTOR_TLS_TRUSTSTORE`, `CONNECTOR_TLS_CLIENTCERTIFICATE`, `CONNECTOR_TLS_CLIENTKEY`), `CONNECTOR_AUTH_PASSWORD`, `connector.connect-timeout-millis` (5000), `connector.read-timeout-millis` (120000) and `connector.health-*`. They are described with the Connector's own settings in [RSA AM integration → Portal to Connector](rsa-integration.md#portal-to-connector).
+How the Portal reaches the Connector: `connector.url` (`CONNECTOR_URL`), `connector.tls.*` (`CONNECTOR_TLS_TRUSTSTORE`, `CONNECTOR_TLS_CLIENTCERTIFICATE`, `CONNECTOR_TLS_CLIENTKEY`), `CONNECTOR_AUTH_PASSWORD`, `connector.connect-timeout-millis` (5000), `connector.read-timeout-millis` (120000) and `connector.health-*`. They are described with the Connector's own settings in [RSA AM integration → Portal to Connector](rsa-integration.md#portal-to-connector). In a new installation the Portal presents its own certificate to the Connector (mutual TLS): `env.template` sets `CONNECTOR_TLS_CLIENTCERTIFICATE=/portal-tls/portal-client.crt` and `CONNECTOR_TLS_CLIENTKEY=/portal-tls/portal-client.key`, which `util/connector-tls.sh` makes. Keep them as long as `connector.env` has `CONNECTOR_TLS_CLIENT_AUTH=required`.
 
 ### Security headers, banner and sessions
 
@@ -255,16 +260,18 @@ The descriptions default to: "Send Expiring Token Reminder Cron", "Send Upcoming
 ### Help-desk controls
 
 The `rsa.helpdesk.*` settings (Helm: `helpDesk.*`, the rest under `config`) decide how operators
-verify a user, whose changes need a second operator, and how long requests and emergency codes
-wait. They are listed, with their defaults, in
+verify a user, whose changes need a second operator, how long requests and emergency codes
+wait, and the key the e-mailed codes are kept under (`rsa.helpdesk.code-key`, which `install.sh`
+and `upgrade.sh` add to `.env`). They are listed, with their defaults, in
 [Help-desk requests → Settings](help-desk.md#settings).
 
 ### Rate limits
 
-Limits are written as `attempts/duration`, for example `30/10m`, and counted in fixed windows. The
+Limits are written as `attempts/duration`, for example `30/10m`, and counted in fixed windows aligned to the clock (UTC), not sliding ones. The
 Portal checks these settings at startup and stops with the name of any setting that makes no
-sense. In `.env` use the property names or their environment forms (`RSA_RATELIMIT_ENABLED`,
-`RSA_RATELIMIT_SIGNIN_PERUSER`, `RSA_RATELIMIT_BACKOFF_BASE` and so on). What they do is in
+sense. In `.env` use the property names: `util/check-env.sh` refuses `RSA_*` variables there,
+which are the Connector's. Elsewhere the environment forms are `RSA_RATELIMIT_ENABLED`,
+`RSA_RATELIMIT_SIGNIN_PERUSER`, `RSA_RATELIMIT_BACKOFF_BASE` and so on. What they do is in
 [Security → Rate limits and uniform answers](security.md#rate-limits-and-uniform-answers).
 
 | Name | Default | Helm | Description |
@@ -277,7 +284,7 @@ sense. In `.env` use the property names or their environment forms (`RSA_RATELIM
 | `rsa.rate-limit.helpdesk-code.per-operator`, `.per-user` | `30/1h`, `10/1h` | `rateLimit.helpdeskCode.perOperator`, `.perUser` | The help desk's code sends and code or tokencode checks |
 | `rsa.rate-limit.backoff.free-failures` | `3` | `rateLimit.backoff.freeFailures` | Failures for a user ID or serial before the waiting starts |
 | `rsa.rate-limit.backoff.base`, `.max` | `30s`, `15m` | `rateLimit.backoff.base`, `.max` | The first wait, which doubles with each further failure, and the longest |
-| `rsa.rate-limit.backoff.forget-after` | `1h` | `rateLimit.backoff.forgetAfter` | After this long without a failure, the count starts again |
+| `rsa.rate-limit.backoff.forget-after` | `1h` | `rateLimit.backoff.forgetAfter` | After this long without a failure, the count starts again from the next failure (not a rolling hour) |
 | `rsa.rate-limit.uniform-response-time` | `1s` | `rateLimit.uniformResponseTime` | How long a failed anonymous step takes at least, whatever the cause. `0` (off) to `10s` |
 
 With Helm, an empty value keeps the default.
@@ -333,8 +340,10 @@ The placeholder order is fixed by the code, so keep the same `{n}` meanings when
 
 | File | Mounted at | Default behaviour |
 |---|---|---|
-| `default_build/portal/log4j2.xml` | `/log4j2.xml` (selected by `-Dlogging.config=/log4j2.xml`) | Console plus a rolling file `/var/log/rsaapp-portal.log` (host `./logs/`), rolled daily or at 10 MB into `rsaapp-portal-YYYY-MM/app-MM-dd-yyyy-N.log.gz`. Root level `info`. |
-| `default_build/log4j.xml` | `/custom/log4j.xml` in the connector | Log4j 1.x configuration with a rolling file `/var/log/connector.log` (10 MB × 5). The image does not select it automatically. Pass it through `JAVA_OPTS` if you want it. Without it, the connector uses the packaged `log4j.xml` (stderr, root `DEBUG`). |
+| `default_build/portal/log4j2.xml` | `/log4j2.xml` (selected by `-Dlogging.config=/log4j2.xml`) | Console plus a rolling file `/var/log/rsaapp-portal.log` (host `./logs/`), rolled daily or at 10 MB into `rsaapp-portal-YYYY-MM/app-MM-dd-yyyy-N.log.gz`. Root level `info`. Messages are written with `%enc{%m}{CRLF}`, so their line breaks appear as `\r` and `\n`. |
+| `default_build/log4j.xml` | `/custom/log4j.xml` in the connector | Log4j 1.x configuration with a rolling file `/var/log/connector.log` (10 MB × 5). The image does not select it automatically. Pass it through `JAVA_OPTS` if you want it. Without it, the connector uses the packaged `log4j.xml` (stderr, root `DEBUG`). Both use the layout `com.winllc.rsaapp.connector.logging.CrlfSafePatternLayout`. |
+
+In the text logs of both, CR and LF in a message are written as the two characters `\r` and `\n`, so request data in a message (a user ID someone typed) cannot start a line that looks like another entry. A stack trace still follows its message on lines of its own. The Portal's JSON format escapes them anyway. A configuration of your own should keep `%enc{%m}{CRLF}` (Portal) or `CrlfSafePatternLayout` (Connector).
 
 ## Connector (RSA Authentication Manager) settings
 
@@ -351,7 +360,18 @@ The connector resolves these through `CommandClientAppContextOverrides.xml` from
 
 `util/move-connector-secrets.sh`, which `install.sh` and `upgrade.sh` run, moves these from the `-D` options of an older `connector.env` into the variables, keeping the original as `connector.env.before-secrets.<time>` (mode 600; delete it once the Connector runs). The Helm chart mounts them from Secrets as files under `/var/run/secrets/rsa`.
 
-The Connector's HTTPS settings (`CONNECTOR_TLS_*`, `CONNECTOR_HTTP_ADDRESS`) are in [RSA AM integration → Portal to Connector](rsa-integration.md#portal-to-connector).
+The Connector's HTTPS settings (`CONNECTOR_TLS_*`, `CONNECTOR_HTTPS_ADDRESS`, `CONNECTOR_HTTP_ADDRESS`) are in [RSA AM integration → Portal to Connector](rsa-integration.md#portal-to-connector).
+
+**The connection to AM.** Also in `connector.env` (Helm: `connector.extraEnv`), all optional:
+
+| Variable | Meaning |
+|---|---|
+| `RSA_TLS_VERIFY_HOSTNAME` | `false` stops the Connector checking that AM's certificate names the host in its URLs (it still checks the CA). Only for an AM reached by an IP address or a name its certificate does not have; the Connector warns at every start. See [AM's host name](rsa-integration.md#transport) |
+| `CONNECTOR_SERIAL_FILTER_ALLOW` | More classes the Connector accepts in AM's replies, separated by commas: a class, a package (`com.rsa.example.*`) or a package and its subpackages (`.**`) |
+| `CONNECTOR_SERIAL_FILTER_LIMITS` | Other limits for those replies: `maxdepth=`, `maxrefs=`, `maxarray=` and `maxbytes=` separated by `;` (defaults 32, 10000000, 1000000 and 268435456) |
+| `CONNECTOR_SERIAL_FILTER` | Emergency only: `off`, exactly, reads those replies without the filter, with a warning at every start; any other value stops the Connector |
+
+See [What the Connector accepts](rsa-integration.md#what-the-connector-accepts).
 
 The other settings:
 
@@ -360,7 +380,7 @@ The other settings:
 | `config.properties.location` | none (system property) | URL (`file:` or `classpath:`) of the properties file to load. |
 | `java.naming.factory.initial` | `weblogic.jndi.WLInitialContextFactory` | JNDI factory for the RSA SDK. |
 | `java.naming.provider.url` | dev host | `t3s://<AM primary FQDN>:7002` |
-| `ims.httpinvoker.client.provider.url` | dev host | `https://<AM primary FQDN>:7002/ims-ws/httpinvoker/CommandServer`, used for admin (write) commands. (`GUIDE.md` spells it `ims.httpinvokder…`, but the code uses `httpinvoker`.) |
+| `ims.httpinvoker.client.provider.url` | dev host | `https://<AM primary FQDN>:7002/ims-ws/httpinvoker/CommandServer`, used for admin (write) commands. Use the name in AM's certificate: the Connector checks it. (`GUIDE.md` spells it `ims.httpinvokder…`, but the code uses `httpinvoker`.) |
 | `ims.httpinvoker.client.provider.readonly.url` | dev host | `https://<AM primary or replica FQDN>:7002/ims-ws/httpinvoker/CommandServer`, used for read-only searches. |
 | `ims.soap.client.provider.url` | dev host | `https://<AM primary FQDN>:7002/ims-ws/services/CommandServer` (SOAP target in the SDK context). |
 | `ims.ssl.client.trust.keystore.filename` | developer workstation path | Path to the trust store holding the AM root CA. With the compose mounts, `default_build/ssl/trust.jks` is visible to the connector as `/custom/ssl/trust.jks`. |
