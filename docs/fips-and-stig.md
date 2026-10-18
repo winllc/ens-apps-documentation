@@ -67,11 +67,11 @@ crypto policy apply. Where an application sets TLS protocols, it allows TLS 1.2 
 - CertAlert's own HTTPS (`server.ssl.enabled-protocols: TLSv1.3,TLSv1.2`);
 - the Directory Services Portal's nginx in its client-certificate (`mtls`) configuration;
 - the RSA Connector's HTTPS (its `server.xml`) and its TLS to Authentication Manager
-  (`-Dhttps.protocols=TLSv1.3,TLSv1.2`).
+  (`-Dhttps.protocols=TLSv1.3,TLSv1.2`);
+- the RSA Operations Portal's outgoing TLS (`-Dhttps.protocols=TLSv1.3,TLSv1.2
+  -Djdk.tls.client.protocols=TLSv1.3,TLSv1.2` in its image's and chart's `JAVA_OPTS`).
 
-The exception is the RSA Operations Portal, whose image and chart pin the Portal's outgoing TLS to
-1.2 in `JAVA_OPTS` (`-Dhttps.protocols=TLSv1.2 -Djdk.tls.client.protocols=TLSv1.2`). ReadyRoom sets no
-protocols, so the JDK's defaults apply.
+ReadyRoom sets no protocols, so the JDK's defaults apply.
 
 | Connection | Default |
 |---|---|
@@ -171,7 +171,14 @@ Settings worth fixing for every STIG deployment:
 | CertAlert | Yes, on release tags | In the download, and attested on the image | Yes | `SHA256SUMS`, signed with GPG |
 | Directory Services Portal | Yes, on release tags | In the download, and attested on the images | Yes | `SHA256SUMS`, signed with GPG |
 | ReadyRoom | Yes, on release tags | In the download, and attested on the image | Yes | `SHA256SUMS`, signed with GPG |
-| RSA Operations Portal | No | In the download | No | `SHA256SUMS`, signed with GPG |
+| RSA Operations Portal | Yes, on release tags (both images) | In the download, and attested on the images | Yes, both images | `SHA256SUMS`, signed with GPG |
+
+Each scan fails the build on a HIGH or CRITICAL vulnerability that has a fix; accepted risks are
+listed in the repository's `.trivyignore`, each with its reason and a review date. For the RSA
+Operations Portal this includes the Connector image. Its accepted risks, all due for review by
+2027-04-18, are the Spring Framework 3.2 and Spring Security 3.2 findings that the RSA
+Authentication Manager SDK requires, and the commons-compress 1.19 shaded inside the SDK's
+`jython-standalone.jar`, which the Connector never loads.
 
 The download's `SHA256SUMS.asc` exists only when ENS's release signing key is set on the
 product's repository. How to check the signatures is in
