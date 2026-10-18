@@ -72,6 +72,8 @@ nav:
   - Licensing: licensing.md
   - Releases and downloads: releases.md
   - Audit logging: audit-logging.md
+  - FIPS 140-3 and DISA STIG: fips-and-stig.md
+  - Sizing, availability and recovery: availability-and-sizing.md
   - CertAlert:
       - cert-alert/index.md
       - Install guide: cert-alert/install.md
@@ -82,6 +84,7 @@ nav:
       - Additional guidance:
           - Architecture: cert-alert/architecture.md
           - Security: cert-alert/security.md
+          - Sizing, availability and recovery: cert-alert/availability-and-sizing.md
           - API reference: cert-alert/api-reference.md
           - Troubleshooting: cert-alert/troubleshooting.md
   - Directory Services Portal:
@@ -94,6 +97,8 @@ nav:
       - Additional guidance:
           - Architecture: directory-services-portal/architecture.md
           - Security: directory-services-portal/security.md
+          - FIPS 140-3 and DISA STIG: directory-services-portal/fips-and-stig.md
+          - Sizing, availability and recovery: directory-services-portal/availability-and-sizing.md
           - API reference: directory-services-portal/api-reference.md
   - ReadyRoom:
       - readyroom/index.md
@@ -105,6 +110,8 @@ nav:
       - Additional guidance:
           - Windows client: readyroom/windows-client.md
           - Security: readyroom/security.md
+          - FIPS 140-3 and DISA STIG: readyroom/fips-and-stig.md
+          - Sizing, availability and recovery: readyroom/availability-and-sizing.md
           - API reference: readyroom/api-reference.md
           - Troubleshooting: readyroom/troubleshooting.md
   - RSA Operations Portal:
@@ -118,5 +125,7 @@ nav:
           - Architecture: rsa-operations-portal/architecture.md
           - RSA AM integration: rsa-operations-portal/rsa-integration.md
           - Security: rsa-operations-portal/security.md
+          - FIPS 140-3 and DISA STIG: rsa-operations-portal/fips-and-stig.md
+          - Sizing, availability and recovery: rsa-operations-portal/availability-and-sizing.md
           - HTTP route reference: rsa-operations-portal/api-reference.md
           - Troubleshooting: rsa-operations-portal/troubleshooting.md

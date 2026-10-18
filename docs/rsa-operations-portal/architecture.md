@@ -7,10 +7,11 @@ The root `pom.xml` (`com.winllc.rsaapp:rsaapp:1.0-SNAPSHOT`, packaging `pom`) bu
 | Module | Artifact | Packaging | Purpose |
 |---|---|---|---|
 | `rsaapp-api` | `com.winllc.rsaapp.api:rsaapp-api` | jar | The shared contract. It holds `RSAAuthManagerServiceInterface`, DTO wrappers (`PrincipalDTOWrapper`, `RSALoginWrapper`, `UpdatePrincipalCommandWrapper`, `AppAuthenticationToken`) and about 45 `Rsa*`/`Token*` exception types. It depends on the RSA `am-client.jar`. |
-| `rsaapp-connector` | `com.winllc.rsaapp.connector:rsaapp-connector` | war (deployed in Tomcat in the Connector image) | Implements `RSAAuthManagerServiceInterface` with the RSA AM SDK and exports it with Spring's `HessianServiceExporter` at `/connector`. |
+| `rsaapp-connector` | `com.winllc.rsaapp.connector:rsaapp-connector` | war (deployed in Tomcat in the Connector image) | Implements `RSAAuthManagerServiceInterface` with the RSA AM SDK and exports it at `/connector` with `AllowListHessianServiceExporter`, a Hessian exporter that rebuilds only the classes the interface exchanges. |
+| `rsaapp-mock-authmanager` | `rsaapp-mock-authmanager` | jar | An in-memory stand-in for RSA AM that serves the same HttpInvoker command endpoint. Used by the tests and the development stack; never deployed. |
 | `rsaapp-portal` | `rsaapp-portal` | Spring Boot jar | The web application. Its main class is `com.winllc.rsaapp.portal.configuration.AppConfig`. |
 
-The release package's `util/` folder holds operational scripts (`check-env.sh`, `split-env.sh`, `backupdb.sh`); it is not a Maven module.
+The release package's `util/` folder holds operational scripts (`check-env.sh`, `split-env.sh`, `move-connector-secrets.sh`, `connector-tls.sh`, `backupdb.sh`); it is not a Maven module.
 
 ## Runtime components
 
@@ -36,7 +37,7 @@ flowchart TB
     REST --> JPA
     CRON --> SVC
     DEL --> JPA
-    SVC -->|HessianProxyFactory| HX --> RS --> RC
+    SVC -->|"HessianProxyFactory<br/>HTTPS :8443"| HX --> RS --> RC
     RC -->|"HttpInvoker (admin URL)"| AM[(RSA AM primary)]
     RC -->|"HttpInvoker (read-only URL)"| AMR[(RSA AM primary or replica)]
     JPA --> DB[(MySQL RSAAPP)]
@@ -45,14 +46,16 @@ flowchart TB
 ### Portal
 
 * **Bootstrap.** `AppConfig` is a `@SpringBootApplication` that scans `com.winllc.rsaapp.portal`, enables JPA repositories in `repository.standard` (plus DataTables repositories in `repository.datatables`), and imports the XML contexts `applicationContext.xml` (placeholder configuration and scheduled jobs) and `email-templates.xml` (one `SimpleMailMessage` bean per email template).
-* **Connection to the connector.** The `RSAAuthManagerServiceInterface` bean is a Hessian proxy created against the fixed URL `http://connector:8080/app/connector`. This URL is **not configurable**: the connector must be reachable under the Docker service name `connector`.
-* **Health.** The portal's `RSAAuthManagerService` implements Spring Boot's `HealthIndicator`. On each health check it calls `testConnection()` on the connector, which establishes or validates the admin session to RSA AM.
-* **Thread pools.** `appTaskExecutor` (10–50 threads), `emailTaskExecutor` (50–500), `cronTaskExecutor` (50–500), plus `appExecutor` (50) and `appScheduler` (25) from `applicationContext.xml`. The sizes are hard-coded (the code marks them "todo make configurable").
+* **Connection to the connector.** The `RSAAuthManagerServiceInterface` bean is a Hessian proxy against `connector.url` (default `https://connector:8443/app/connector`). `ConnectorTls` checks the Connector's certificate and host name against `connector.tls.truststore` and, for mutual TLS, presents the Portal's own certificate. Every call carries the shared secret as HTTP Basic credentials, and is bounded by `connector.connect-timeout-millis` (5 s) and `connector.read-timeout-millis` (120 s). See [RSA AM integration](rsa-integration.md#portal-to-connector).
+* **Health.** Liveness (`/actuator/health/liveness`) is the Portal itself; readiness (`/actuator/health/readiness`) adds the database (`db`) and the Connector (`connector`: `ConnectorHealthIndicator` calls the Connector's `/app/health`).
+* **Thread pools.** `appTaskExecutor` (10–50 threads), `emailTaskExecutor` (50–500) and `cronTaskExecutor` (6). The sizes are fixed in the code.
 * **Email** is sent asynchronously on `emailTaskExecutor` through Spring's `JavaMailSender`.
 
 ### Connector
 
-* Deployed into Tomcat 8.5.88 as `webapps/app.war`, so the context path is **`/app`**. `web.xml` maps a `DispatcherServlet` to `/` and loads `springapp.xml`.
+* Deployed into Tomcat 9 as `webapps/app.war`, so the context path is **`/app`**. `web.xml` maps a `DispatcherServlet` to `/` and loads `springapp.xml`.
+* Tomcat serves HTTPS on 8443 (TLS 1.2 and 1.3) for the Portal, and plain HTTP on 8080 on the loopback address only, for the container's health check. `bin/setenv.sh` builds the PKCS12 key store Tomcat reads from the PEM certificate and key at each start, so no password reaches the command line.
+* `ConnectorAuthFilter` requires the shared secret on every request except `GET`/`HEAD` `/health`. `ConnectorSecrets` reads the AM credentials from files or `RSA_*` variables before the application context starts.
 * `springapp.xml` imports the RSA SDK's `CommandClientAppContext.xml` and the local `CommandClientAppContextOverrides.xml`, then defines:
     * `authManagerConnection` (`RSAAuthManagerConnection`), built with two HttpInvoker command targets: `AdminHttpInvokerCommandTargetBasicAuth` (`ims.httpinvoker.client.provider.url`) and `ReadOnlyHttpInvokerCommandTargetBasicAuth` (`ims.httpinvoker.client.provider.readonly.url`).
     * `authManagerService` (`RSAAuthManagerService`), which implements the API.
@@ -90,7 +93,7 @@ Users always authenticate with RSA SecurID. The portal keeps no passwords. Appli
 
 ## Data model (MySQL `RSAAPP`)
 
-Hibernate manages the tables (`ddl-auto=update`, physical naming strategy `PhysicalNamingStrategyStandardImpl`, so each table is named after its entity):
+Flyway owns the schema: at every start the Portal applies the migrations in `db/migration` that the database does not have yet (recorded in `flyway_schema_history`), then Hibernate only validates the tables against the entities (`ddl-auto=validate`) and refuses to start if they differ. A database from release 1.5 or earlier, whose tables Hibernate created, is given a Flyway history at version 0 on its first start, and the first migration adds what is missing; its tables, data and ids are kept. The physical naming strategy is `PhysicalNamingStrategyStandardImpl`, so each table is named after its entity:
 
 | Table | Holds |
 |---|---|
@@ -103,21 +106,29 @@ Hibernate manages the tables (`ddl-auto=update`, physical naming strategy `Physi
 | `CertTokenMapping` | Associations between a client certificate DN and a user ID and token serial. Read only by the certificate-based PIN reset; nothing creates new ones, and the PIN-check reset link records none |
 | `UserExemptionRequest` | MFA exemption requests and their review outcome |
 | `SystemNotification` | Home-page banners (level `INFO`/`ALERT`/`CRITICAL`, expiry) |
-| `AuditEvent` | Audit trail (see the event types below) |
+| `AuditEvent` | The audit trail: `ens-audit/1` events with their sequence number and hash (see [Audit logging](../audit-logging.md)) |
+| `AuditChainHead` | The chain's newest sequence number and hash, locked while an event is added so the chain stays consistent |
+| `AuditOutputState` | How far each audit output (Splunk HEC, syslog) has delivered |
+| `AuditApiToken` | Tokens for the audit pull API, stored as hashes |
+| `CronLock` | Which node has claimed each scheduled job's current occurrence |
 
-Audit event types (`AuditEventType`): `TRUSTED_AGENT_REGISTERED`, `TRUSTED_AGENT_MARKED_ACTIVE`, `TRUSTED_AGENT_MARKED_INACTIVE`, `TRUSTED_AGENT_DELETED`, `USER_TOKEN_LOST`, `USER_TOKEN_PIN_RESET`, `USER_TOKEN_REGISTERED_NEW`, `USER_TOKEN_EMERGENCY_ACCESS_CODE_ISSUED`, `USER_TOKEN_DISTRIBUTED_TO_USER`, `USER_TOKEN_PIN_RESET_BY_USER`, `USER_TOO_MANY_LOST_TOKENS_NOTIFICATION_SENT`, `TOKEN_DEPROVISIONED`, `TOKEN_MARKED_LOST`, `SITE_DELETED`, `SHIPMENT_REQUESTED`, `SHIPMENT_SENT`, `SHIPMENT_CANCELLED`, `SHIPMENT_RECEIVED`, `HELP_DESK_USER_REGISTERED`, `HELP_DESK_USER_MARKED_INACTIVE`, `HELP_DESK_USER_MARKED_ACTIVE`, `HELP_DESK_USER_DELETED`.
+The Portal's earlier audit event types (`TRUSTED_AGENT_REGISTERED`, `USER_TOKEN_LOST` and so on) were moved into the chain on the first start of the release that introduced `ens-audit/1`; each keeps its original type in `details.legacyType`.
 
 User and token data itself (principals, tokens, PINs, admin roles) lives in RSA AM, and the portal reads it live through the connector.
 
 ## Scheduled jobs
 
-The jobs are registered in `applicationContext.xml` and run on the `cronTaskExecutor`. Each one reads `cron.<name>.enabled`, `cron.<name>.debug` and `cron.<name>.description` at run time. When **debug** is `true`, the job runs but sends no email, and its last-run message is prefixed `(DEBUG MODE - NO EMAILS SENT)`.
+`CronScheduleConfig` schedules each job on `cron.<name>.cron`, in the time zone `cron.timezone` (default: the server's, UTC in the containers), and the jobs run on the `cronTaskExecutor`. Each one reads `cron.<name>.enabled`, `cron.<name>.debug` and `cron.<name>.description` at run time. When **debug** is `true`, the job runs but sends no email and changes nothing, and its last-run message is prefixed `(DEBUG MODE - NO EMAILS SENT)`.
+
+- **One node per occurrence.** Each node that runs the scheduler claims the occurrence in the `CronLock` table first; the first claim wins. A claim is released after `cron.lock.maximumHoldMinutes` (360) if its node died, and held at least `cron.lock.minimumHoldSeconds` (120), so a node with a slightly late clock does not run the same occurrence again.
+- **No overlap.** A job still running when its next time comes is skipped. A failed run is logged, shown as `Failed: ...`, and audited as `job.failed`.
+- **License.** The jobs need the `scheduled-jobs` license feature; without it, or while the license is read-only, they are skipped (audited once per license mode change as `job.skipped`).
 
 | Job name (`cron.<name>`) | Class | Default schedule (Spring cron) | What it does |
 |---|---|---|---|
-| `expiring` | `TokenExpiringNotificationCron` | `0 30 0 ? * *` (00:30 daily) | Finds tokens expiring within `cron.expiring.notification.expireInDays` days and emails each assigned user (`user-token-expiring-soon` template). |
-| `appointmentupcoming` | `UpcomingAppointmentsEmailCron` | `0 30 0 ? * *` | Emails a reminder to each requester with a confirmed appointment in the next week, and a digest of their upcoming appointments to each Trusted Agent. |
-| `resyncta` | `ReSyncTrustedAgentsCron` | `0 30 0 ? * *` | Reconciles the local `TrustedAgent` table with the users who hold the mapped `TRUSTED_AGENT` admin role in RSA AM: adds missing agents, marks agents who lost the role inactive, refreshes name and email, and pushes the PMO role to AM for agents flagged as PMO locally. |
+| `expiring` | `TokenExpiringNotificationCron` | `0 30 0 ? * *` (00:30 daily) | Sends one notice per token `cron.expiring.notification.daysBefore` days before it expires (default `30,14,7,1`), to its assigned user (`user-token-expiring-soon` template). |
+| `appointmentupcoming` | `UpcomingAppointmentsEmailCron` | `0 30 0 ? * *` | A reminder `cron.appointmentupcoming.remindDaysBefore` (1) day before each confirmed appointment, and for each Trusted Agent a daily overview of the next `cron.appointmentupcoming.taDigestDays` (7) days. |
+| `resyncta` | `ReSyncTrustedAgentsCron` | `0 30 0 ? * *` | Reconciles the local `TrustedAgent` table with the users who hold the mapped `TRUSTED_AGENT` admin role in RSA AM: adds missing agents, refreshes name and email, deactivates agents who lost the role and reactivates those who got it back. If AM returns no Trusted Agents at all while the Portal has active ones, it deactivates nobody and reports `Stopped`. |
 | `lostTokenThresholdMonitor` | `LostTokenThresholdMonitorCron` | `0 35 0 ? * *` | Finds users who lost at least `tokens.lost` tokens within `window.inDays` days, records an audit event, and emails the list to `mfa.group.email`. **Debug is `true` by default**, so no email is sent until it is set to `false`. |
 | `sendDelayedTokenRegistrationEmails` | `SendDelayedTokenRegistrationEmailsCron` | `0 32 0 ? * *` | For distributed tokens whose allowed enrollment date has arrived, sends the registration email, and repeats every `daysBetweenReminderEmails` days. |
 | `tokenPinCheck` | `ResetTokenPinCheckCron` | `0 30 0 ? * *` | For assigned tokens unused for `daysSinceLastLogin` (60) days, emails the user either a "set your initial PIN" reminder (token still waiting for its first PIN) or a "check your PIN" link with a reset code (`/user/pinReset/start/{code}`) that works for `resetLinkValidDays` (14) days. At most one email per token every `daysBetweenReminderEmails` (14) days; disabled and locked accounts are skipped. |

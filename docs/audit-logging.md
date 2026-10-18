@@ -46,7 +46,7 @@ be reviewed and exported.
 
 | Category | Examples |
 |---|---|
-| `authentication` | `auth.login` (success and failure, with the method: password, LDAP, smart card, API token), `auth.logout`, `auth.lockout`, password changes and resets |
+| `authentication` | `auth.login` (success and failure, with the method: password, LDAP, smart card, API token; a refused client certificate gives its reason, such as `certificate revoked` or `revocation unknown`), `auth.logout`, `auth.lockout`, `auth.consent-acknowledged` (the notice-and-consent banner, when it is on), `auth.session-expired` (with the reason `idle`, `absolute` or `concurrent`), password changes and resets |
 | `authorization` | `access.denied`: every refused request, with the reason (role, not licensed, read-only, feature not licensed, CSRF). Repeats within a minute are counted in one event. |
 | `account` | Users and accounts created, changed, disabled or deleted; roles and permissions granted or revoked |
 | `configuration` | `settings.changed` with each changed setting's old and new value; branding, templates, schedules, connectors |
@@ -145,6 +145,7 @@ environment. Spring-based applications also accept them as `ens.audit.*` propert
 | `ENS_AUDIT_SYSLOG_PROTOCOL` | `tcp` | `udp`, `tcp` or `tls` |
 | `ENS_AUDIT_SYSLOG_FACILITY` | `local0` | Syslog facility |
 | `ENS_AUDIT_RETENTION_DAYS` | `0` (keep forever) | Remove events older than this. Only events every enabled output has delivered are removed, and each removal is itself audited. |
+| `ENS_AUDIT_QUERY_MAX_SCAN` | `2000000` | Directory Services Portal only, which keeps its trail in files: the most events one search or export on the audit page reads. The page says when a search stopped at this limit. |
 
 Splunk's certificate is checked against the JVM trust store for the Java applications, and Node's
 (plus `NODE_EXTRA_CA_CERTS`) for the licensing portal. Add your internal CA there.

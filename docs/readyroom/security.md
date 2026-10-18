@@ -17,9 +17,11 @@ flowchart TD
     X1 -- no --> K{Authorization: Negotiate<br/>Kerberos ticket?}
     K -- valid --> OK2[Authenticated as the directory user<br/>with that account name]
     K -- none or invalid --> N401[401 + WWW-Authenticate: Negotiate]
-    W -- no --> P{Open path?<br/>/actuator/health, /api/check/out,<br/>/login, /error}
+    W -- no --> P{Open path?<br/>/actuator/health only<br/>Prometheus on the management port,<br/>/api/check/out, /login, /consent, /error}
     P -- yes --> PASS[Allowed without sign-in]
-    P -- no --> X2{Client certificate?}
+    P -- no --> C{Consent banner on<br/>and not yet acknowledged?}
+    C -- yes --> CB[Redirect to /consent]
+    C -- no --> X2{Client certificate?}
     X2 -- yes --> OK
     X2 -- no --> S{Signed-in session?}
     S -- yes --> OK3[Continue]
@@ -35,9 +37,26 @@ flowchart TD
   keystore is set and, while `client-auth` is `want` or `need`, a truststore. Put only the CAs that
   issue your users' certificates in the truststore: any certificate one of them issues with a
   user's DN signs in as that user.
-- The **full subject DN** is the username (`subjectPrincipalRegex("(.*)")`). `AppUserDetailsService`
-  looks that DN up in LDAP, through the user cache. With `application.lookup-on-dn-attribute: true`,
-  it instead searches `user-base-dn` for `<user-dn-attribute>=<subject DN>`.
+- By default the **full subject DN** is the username. `AppUserDetailsService` looks that DN up in
+  LDAP, through the user cache. With `application.lookup-on-dn-attribute: true`, it instead
+  searches `user-base-dn` for `<user-dn-attribute>=<subject DN>`. With `ENS_X509_USER_FILTER`, it
+  searches with that filter instead, filled from the certificate (`{upn}`, `{edipi}`, `{email}`,
+  `{uuid}`, `{subject}`, `{cn}`, all LDAP-escaped), and exactly one entry must match.
+- When `ENS_X509_ALLOWED_ISSUERS` is set, only certificates from those issuers sign in.
+- **Revocation** (`ENS_X509_REVOCATION`: `ocsp`, `crl` or `ocsp-then-crl`; `off` by default) is
+  checked per sign-in by the JDK's PKIX validator, with fetches bounded (5 s connect, 10 s read, no
+  redirects, 1 MB OCSP and 20 MB CRL, never link-local or cloud-metadata addresses). With
+  `ENS_X509_REVOCATION_FAIL=closed` (the default), a certificate whose status can't be determined is
+  refused. A CRL directory (`ENS_X509_CRL_DIR`) or a local OCSP responder serves air-gapped sites.
+- **Header mode** (`ENS_X509_SOURCE=header`): a TLS-terminating proxy forwards the certificate. It
+  is accepted only from an address in `ENS_X509_TRUSTED_PROXIES` that sends the proxy secret in
+  `X-ENS-Proxy-Secret` (compared in constant time), and only if it chains to
+  `ENS_X509_TRUSTED_CA_FILE` or the TLS trust store. ReadyRoom does not start in header mode without
+  a secret of 32 characters or more and a CA.
+- Every refusal is audited as a failed `auth.login` with its reason (`certificate revoked`,
+  `revocation unknown`, `issuer not allowed`, `no single directory user matches`,
+  `proxy secret missing or wrong`, ...). The settings are in
+  [Installation → Client certificates](install.md#client-certificates-cacpiv).
 - If the DN is not found in the directory, the certificate does not sign in, and a browser falls
   back to the login form. The refusal is audited as a failed `auth.login` with the reason
   *unknown user*.
@@ -56,6 +75,18 @@ once. Failed sign-ins go back to `/login?error`. Logging out goes to `/login?log
 
 Both methods load roles through the same `AppUserDetailsService`, so a person gets identical access
 whichever way they sign in.
+
+### Notice and consent banner and sessions
+
+- **Consent banner** (`ENS_CONSENT_BANNER_ENABLED=true`): the DoD notice-and-consent banner comes
+  before any sign-in, enforced by the server, not just shown. `/consent` is reachable without
+  signing in. Acknowledging it is audited as `auth.consent-acknowledged`. The Windows client's
+  `/api/check/**` calls are machine endpoints and are not held by it.
+- **Session lifetime:** an idle timeout (`ENS_SESSION_IDLE_TIMEOUT`, `30m`), an optional shorter
+  one for administrators (`ENS_SESSION_ADMIN_IDLE_TIMEOUT`), an absolute lifetime
+  (`ENS_SESSION_ABSOLUTE_TIMEOUT`, `12h`) and an optional limit per user
+  (`ENS_SESSION_MAX_PER_USER`; over it the oldest session ends). Each end is audited as
+  `auth.session-expired`. See [Configuration](configuration.md#security-headers-banner-and-sessions).
 
 ### Windows (Kerberos) sign-in
 
@@ -178,8 +209,10 @@ A refused page is logged at `info` as `Access denied for <METHOD> <URI>`, and th
 | Path | Why it is open |
 |---|---|
 | `POST /api/check/out` | Runs at logoff, after the user's profile and certificate store are gone. It accepts only the `sessionId` of a check-in that no logout has used yet and that is younger than 7 days (`application.logoff.session-max-age-hours`), and records the check-out under that check-in's DN. |
-| `/actuator/health` (and its groups, such as `/actuator/health/liveness`) | Health checks and probes. Status only, no details. It is the only Actuator endpoint exposed, and any other endpoint you expose needs an `ADMIN` sign-in. |
-| `/login`, `/error` | The sign-in and error pages. |
+| `/actuator/health` (and its groups, such as `/actuator/health/liveness`) | Health checks and probes. Status only; details for `ADMIN`. It is the only Actuator endpoint exposed on the application's port, and any other endpoint you expose there needs an `ADMIN` sign-in. |
+| `/actuator/prometheus` | Only on the management port (`MANAGEMENT_SERVER_PORT`), plain HTTP. Never publish that port |
+| `/login`, `/consent`, `/error` | The sign-in, consent banner and error pages. |
+| `GET /api/audit/events` | The audit pull API, with a bearer token instead of a session. See [Audit logging](../audit-logging.md#the-pull-api) |
 | `/libs/**`, `/css/**`, `/js/**`, `/images/**` | Static assets, which bypass the security filters. |
 
 A `sessionId` stands in for a sign-in on the logout, so ReadyRoom treats it as a credential. It
@@ -201,7 +234,15 @@ never limited.
   JSON. Forms carry the token, and the pages add it to their `fetch` calls from the `_csrf` meta
   tags. A missing or wrong token gets `403`, audited as `access.denied`.
 - **Session cookie:** `SameSite=Lax` and `HttpOnly`, and `Secure` when `SSL_ENABLED=true` or
-  `SESSION_COOKIE_SECURE=true`.
+  `ENS_COOKIE_SECURE=true` (the older `SESSION_COOKIE_SECURE` still works).
+- **Security headers** on every response, static files and error pages included: a
+  `Content-Security-Policy` that allows scripts from ReadyRoom itself and inline scripts carrying
+  the request's nonce only (inline event handlers are not allowed), `frame-ancestors 'none'`,
+  `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`,
+  `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy`, and
+  `Strict-Transport-Security` on secure requests. `ENS_CSP_REPORT_ONLY=true` only reports the
+  policy; startup warns while it is on. The PDF export has not been checked against the policy in
+  older browsers.
 - **Windows client files:** the installer makes the install folder and
   `%ProgramData%\InOutWorker` writable by SYSTEM and Administrators only, and the SYSTEM logout task
   reads a user's session file only after checking for links and for its owner. See
@@ -212,20 +253,32 @@ never limited.
 - **Notes field:** the profile form warns *Do not enter any classified or PII data!*. Notes are
   shown only to the people who can see the person's details (see [Authorization](#authorization)).
 - **Server TLS validation on the client** is on by default. `SkipCertificateCheck` is for labs only.
-- **SMTP:** the packaged configuration trusts any SMTP certificate (`mail.smtp.ssl.trust: "*"`).
-  Name your mail host instead.
+- **SMTP:** the mail server's certificate is checked against the JVM's trust store, and STARTTLS
+  is required by default. Earlier releases trusted any certificate.
+  `SPRING_MAIL_PROPERTIES_MAIL_SMTP_SSL_TRUST` is an explicit opt-in to trust a host without checking.
+
+## FIPS 140-3 and DISA STIG
+
+See [FIPS 140-3 and DISA STIG](fips-and-stig.md).
 
 ## Hardening checklist
 
 - [ ] Use your own keystore, truststore and CA. Put only the CAs that issue your users'
-      certificates in the truststore. Never trust the development CA in the source repository's
-      `test/step-ca-data/` ("WINLLC DEV CA"): its private keys are public.
+      certificates in the truststore. Never trust a development CA: the source repository's
+      `test/dev-ca/make-dev-certs.sh` makes a throw-away one for local testing, and the earlier
+      "WINLLC DEV CA" must not be trusted anywhere, because its private keys were published.
+- [ ] With certificates in use: `ENS_X509_REVOCATION` other than `off`, and
+      `ENS_X509_ALLOWED_ISSUERS` if only some trusted CAs issue user certificates.
+- [ ] For DoD systems: `ENS_CONSENT_BANNER_ENABLED=true`, and session limits as your policy requires
+      (DISA STIG suggests `ENS_SESSION_ADMIN_IDLE_TIMEOUT=15m` and `ENS_SESSION_MAX_PER_USER=3`).
+- [ ] Keep the management port (`MANAGEMENT_SERVER_PORT`) off any ingress, route or published port.
 - [ ] Supply all passwords (keystore, truststore, database, LDAP bind, SMTP) in `.env` (mode 600)
       or in Kubernetes Secrets, never in a ConfigMap or the values file you commit.
 - [ ] Use `ldaps://` (or StartTLS) for the directory, with a least-privilege bind account that can
       only read.
 - [ ] Keep Actuator exposure at `health` (the packaged setting).
-- [ ] Behind a proxy that terminates TLS for browsers, set `SESSION_COOKIE_SECURE=true`.
+- [ ] Behind a proxy that terminates TLS for browsers, set `ENS_COOKIE_SECURE=true` and
+      `SERVER_FORWARD_HEADERS_STRATEGY=framework`.
 - [ ] Set `super-user-dns` to the real administrators only.
 - [ ] Keep the Kerberos keytab in `kerberos/` (mounted read-only) or a Secret, and out of images
       and source control.
@@ -234,4 +287,5 @@ never limited.
 - [ ] After upgrading the client, re-run `Install-InOutWorker.ps1` on every workstation, so it
       corrects the folder permissions older clients left.
 - [ ] Leave `SkipCertificateCheck` off on workstations.
-- [ ] Set `spring.mail.properties.mail.smtp.ssl.trust` to your mail host.
+- [ ] Leave `spring.mail.properties.mail.smtp.ssl.trust` unset, and give the JVM your mail server's CA
+      if it is private.

@@ -126,6 +126,7 @@ See [Architecture](architecture.md) for components, data model and the sync pipe
 | [Installation](install.md) | Operators | Prerequisites, the release package, the Helm chart, first start |
 | [Configuration](configuration.md) | Operators | Every property and environment variable, profiles, example files |
 | [Operator guide](operator-guide.md) | Operators | Day-to-day running, jobs, health, backups, upgrades, scaling |
+| [Sizing, availability and recovery](availability-and-sizing.md) | Operators | Sizing, high availability, disaster recovery, rolling back |
 | [Admin guide](admin-guide.md) | Application administrators | In-app administration: sync, revocation, attributes, audit log, projects, notifications |
 | [User guide](user-guide.md) | Everyone | Walkthrough of every screen |
 | [Architecture](architecture.md) | Engineers | Components, data model, sync pipeline, changelog connector |

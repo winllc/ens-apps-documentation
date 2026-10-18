@@ -204,4 +204,6 @@ excuse an absence alert:
 | `POST /app/settings/orgparserules/delete/{id}` | A/M | Delete a parse rule |
 | `POST /app/settings/cache/groups/evict` | A/M | Evict a cached group (`dn`) |
 | `POST /app/settings/cache/groups/evictall` | A/M | Evict every cached group |
-| `/actuator/health` (and its groups, such as `/liveness` and `/readiness` on Kubernetes) | Open | Spring Boot Actuator health, status only. Any other Actuator endpoint you expose needs `ADMIN`. |
+| `/actuator/health` (and its groups `/liveness` and `/readiness`) | Open | Spring Boot Actuator health, status only; details for `ADMIN`. Any other Actuator endpoint you expose on the application's port needs `ADMIN`. With `MANAGEMENT_SERVER_PORT` set, the actuator is on that port instead |
+| `/actuator/prometheus` | Open, management port only | Prometheus metrics; exposed only when `MANAGEMENT_SERVER_PORT` is set |
+| `GET`, `POST /consent` | Open | The notice-and-consent banner and its **I agree**, when `ENS_CONSENT_BANNER_ENABLED` is on |

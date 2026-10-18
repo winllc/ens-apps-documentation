@@ -5,15 +5,15 @@ With the release package, the runtime configuration lives in three files in the 
 | File | Created from | Service | Holds |
 |---|---|---|---|
 | **`.env`** | `env.template` | Portal, which also reads it as its `application.properties` | The Portal settings on this page |
-| **`connector.env`** | `connector.env.template` | Connector | `CONNECTOR_AUTH_PASSWORD`, and `JAVA_OPTS` with the [Connector settings](#connector-rsa-authentication-manager-settings) as `-D` options |
+| **`connector.env`** | `connector.env.template` | Connector | `CONNECTOR_AUTH_PASSWORD`, the AM accounts and trust store password as `RSA_*` variables, the Connector's HTTPS settings (`CONNECTOR_TLS_*`), and `JAVA_OPTS` with the other [Connector settings](#connector-rsa-authentication-manager-settings) as `-D` options |
 | **`mysql.env`** | `mysql.env.template` | MySQL | `MYSQL_ROOT_PASSWORD`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD` |
 
 `install.sh` creates each file from its template (mode 600); the templates comment every setting. See [How the settings files are consumed](#how-the-settings-files-are-consumed). With the Helm chart, the same settings come from your values file: [Installation → Write your values](install.md#3-write-your-values) maps each value to its setting below, and any other Portal setting goes in `config`.
 
 This page lists every setting the code reads, grouped by component, with the default packaged in the images. Several of those defaults are development hostnames and credentials that **must** be overridden.
 
-!!! danger "Packaged sample credentials"
-    The `application.properties` and `config.properties` packaged in the images contain sample passwords for the datasource, the AD bind account, the RSA admin user and the command client. Treat them as public and override every one of them.
+!!! note "Packaged defaults"
+    The `application.properties` and `config.properties` packaged in the images hold no passwords, but they do hold development host names and sample role GUIDs. Set every setting the templates mark `CHANGE_ME`.
 
 ## How the settings files are consumed
 
@@ -23,7 +23,7 @@ This applies to the release package. The Helm chart sets the same settings as en
 |---|---|---|
 | **portal** | `env_file: .env` (and `global.env`, which holds the release version) | Every `key=value` becomes an environment variable. Spring Boot resolves property names from environment variables, and the image's entry point uses `$JAVA_OPTS`. |
 | **portal** | `./.env:/application.properties` | The container's working directory is `/`, so Spring Boot also loads `.env` as an external `application.properties`, which overrides the defaults packaged in the image. |
-| **connector** | `env_file: connector.env` | Environment variables. Tomcat's `catalina.sh` honours `JAVA_OPTS`, which carries the Connector settings as `-D` options. |
+| **connector** | `env_file: connector.env` | Environment variables. The Connector reads `CONNECTOR_AUTH_PASSWORD`, the `RSA_*` accounts and the `CONNECTOR_TLS_*` settings itself; Tomcat's `catalina.sh` honours `JAVA_OPTS`, which carries the other Connector settings as `-D` options. |
 | **mysql** | `env_file: mysql.env` | Standard `mysql` image variables: `MYSQL_ROOT_PASSWORD`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`. |
 
 The Portal, which users reach, never receives the AM credentials or the MySQL root password. `util/check-env.sh` refuses a `.env` that holds the Connector's `-D` options in `JAVA_OPTS` or any `MYSQL_*` setting.
@@ -39,7 +39,15 @@ spring.mail.host=smtp.example.org
 
 # connector.env (the Connector)
 CONNECTOR_AUTH_PASSWORD=<shared secret>
-JAVA_OPTS=-Djava.security.egd=file:/dev/./urandom -Dhttps.protocols=TLSv1.2 -Djdk.tls.client.protocols=TLSv1.2 -Dlogging.config=/log4j2.xml -Dconfig.properties.location=classpath:config.properties -Djava.naming.provider.url=t3s://am-primary.example.org:7002 ...
+CONNECTOR_TLS_PRIVATE_KEY_PASSWORD=<set by util/connector-tls.sh>
+RSA_CMDCLIENT_USER=<command client user>
+RSA_CMDCLIENT_PASSWORD=<command client password>
+RSA_ADMIN_USER_ID=<service account>
+RSA_ADMIN_USER_PASSWORD=<its password>
+RSA_READONLY_USER_ID=<read-only account>
+RSA_READONLY_USER_PASSWORD=<its password>
+RSA_TRUSTSTORE_PASSWORD=<trust.jks password>
+JAVA_OPTS=-Djava.security.egd=file:/dev/./urandom -Dhttps.protocols=TLSv1.3,TLSv1.2 -Dlogging.config=/log4j2.xml -Dconfig.properties.location=classpath:config.properties -Djava.naming.provider.url=t3s://am-primary.example.org:7002 ...
 
 # mysql.env (MySQL)
 MYSQL_ROOT_PASSWORD=<root password>
@@ -54,7 +62,7 @@ Keep `$` and ` #` out of the values: Docker Compose replaces `$name` with a vari
 
 | Name | Default | Used by | Description |
 |---|---|---|---|
-| `JAVA_OPTS` | `-Djava.security.egd=file:/dev/./urandom -Dhttps.protocols=TLSv1.2 -Djdk.tls.client.protocols=TLSv1.2 -Dlogging.config=/log4j2.xml` (set in both images) | portal, connector | JVM options. A `JAVA_OPTS` line in a service's settings file **replaces** that image's default, so keep the default flags when you set it. The Portal's is optional, in `.env`; `env.template` leaves it commented out, so the image default applies. The Connector's is in `connector.env` and carries the RSA settings below, passed as `-D` system properties. The Helm chart builds them from `authManager.*`. The connector gives system properties precedence (`SYSTEM_PROPERTIES_MODE_OVERRIDE`). |
+| `JAVA_OPTS` | Portal image: `-Djava.security.egd=file:/dev/./urandom -Dhttps.protocols=TLSv1.2 -Djdk.tls.client.protocols=TLSv1.2 -Dlogging.config=/log4j2.xml`. Connector image: `-Djava.security.egd=file:/dev/./urandom -Dhttps.protocols=TLSv1.3,TLSv1.2 -Dlogging.config=/log4j2.xml` | portal, connector | JVM options. A `JAVA_OPTS` line in a service's settings file **replaces** that image's default, so keep the default flags when you set it. The Portal's is optional, in `.env`; `env.template` leaves it commented out, so the image default applies. The Connector's is in `connector.env` and carries the RSA settings below (not the passwords), passed as `-D` system properties. The Helm chart builds them from `authManager.*` (`javaOpts`, `connector.javaOpts`). The connector gives system properties precedence (`SYSTEM_PROPERTIES_MODE_OVERRIDE`). A `connector.env` from an older release holds `-Dhttps.protocols=TLSv1.2 -Djdk.tls.client.protocols=TLSv1.2`, which keeps the Connector at TLS 1.2 towards AM; replace them to allow TLS 1.3. |
 | `MYSQL_ROOT_PASSWORD` | none | mysql, `util/backupdb.sh`, `upgrade.sh` | Root password of the MySQL container, in `mysql.env`. Read once, when the data volume is first created. The backup scripts read it inside the `mysql` container, so it never appears on a command line. |
 | `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD` | `RSAAPP`, `appuser`, none | mysql | In `mysql.env`. The database and application user MySQL creates on its first start. `MYSQL_PASSWORD` must equal `spring.datasource.password` in `.env`. |
 | `MFAAPP_PROPERTY_FILES_LOCATION` | unset | portal | If set to an existing directory, **every regular file** under it is loaded as a placeholder property source **instead of** `messages.file.location` and `email-description.location`. Startup fails with "No property files loaded from custom location" if the directory has no files. |
@@ -64,10 +72,10 @@ Keep `$` and ` #` out of the values: Docker Compose replaces `$name` with a vari
 | Service | Published ports | Volumes (host → container) |
 |---|---|---|
 | `portal` | `8080:8080`, `8443:8443` | `./default_build/properties:/custom`, `./default_build/static:/static`, `./default_build/email-templates:/resources/email-templates`, `./default_build/ssl:/ssl`, `./default_build/portal/log4j2.xml:/log4j2.xml`, `./logs:/var/log`, `ens-license:/var/lib/ens/mfa-portal`, `./.env:/application.properties` |
-| `connector` | none (reached internally as `connector:8080`) | `./default_build:/custom`, `./logs:/var/log` |
+| `connector` | none (reached internally as `https://connector:8443`) | `./default_build:/custom` (the trust store as `/custom/ssl/trust.jks`, the HTTPS certificate in `/custom/connector-tls`), `./logs:/var/log` |
 | `mysql` | none | named volume `mysql_data:/var/lib/mysql` |
 
-The Portal's container health check is `curl -fs http://localhost:8080/login`. The Portal starts after the `connector` has started and once `mysql` passes `mysqladmin ping`.
+The Portal also mounts the `ens-audit` volume at `/var/log/ens`, for the optional audit file. The health checks are: Portal `curl -fs http://localhost:8080/login`; Connector `curl -fs http://localhost:8080/app/health` inside its container (`UP` once it has an AM session); MySQL `mysqladmin ping`. The Portal starts after the `connector` has started and once `mysql` passes its health check. MySQL is given 2 minutes to shut down cleanly (`stop_grace_period`).
 
 With Helm, the Portal and the Connector are two Deployments, the license is on a PVC, and branding files come from ConfigMaps (`branding.*`). See [Installation → Install with Helm](install.md#install-with-helm).
 
@@ -78,7 +86,8 @@ With Helm, the Portal and the Connector are two Deployments, the license is on a
 | Name | Default | Description |
 |---|---|---|
 | `server.port` | `8080` | HTTP port inside the container. |
-| `server.servlet.session.timeout` | `480` | Session timeout. With no unit suffix Spring Boot reads this as seconds (8 minutes). |
+| `server.servlet.session.timeout` | not set | The setting up to release 1.5, still read as the idle timeout when `ENS_SESSION_IDLE_TIMEOUT` is not set. Use [`ENS_SESSION_IDLE_TIMEOUT`](#security-headers-banner-and-sessions). |
+| `server.servlet.session.cookie.same-site` | `lax` | The session cookie is `HttpOnly` and `SameSite=Lax`. |
 | `spring.servlet.multipart.max-file-size` | `5MB` | Largest file accepted (Trusted Agent CSV upload, group-email attachment). |
 | `spring.servlet.multipart.max-request-size` | `5MB` | Largest multipart request. |
 | `server.ssl.*` | not set | Port `8443` is published, but the release package configures no TLS by default. Several features read the browser's **client certificate**, so HTTPS with client-certificate negotiation must be configured with the standard Spring Boot `server.ssl.*` properties. In the release package, the `./default_build/ssl` directory is mounted at `/ssl` for keystores. With Helm, set `tls.*` instead. See [Security](security.md#tls-and-client-certificates). |
@@ -88,11 +97,13 @@ With Helm, the Portal and the Connector are two Deployments, the license is on a
 
 | Name | Default | Description |
 |---|---|---|
-| `spring.datasource.url` | `jdbc:mysql://database.winllc-dev.com/RSAAPP` | JDBC URL. In the release package the MySQL host name is `mysql`: `jdbc:mysql://mysql:3306/RSAAPP`. The Helm chart builds it from `database.*`. |
+| `spring.datasource.url` | `jdbc:mysql://database.winllc-dev.com/RSAAPP` | JDBC URL. The release package's template sets `jdbc:mysql://mysql:3306/RSAAPP?sslMode=REQUIRED`. The Helm chart builds it from `database.*` (with `sslMode=REQUIRED` by default). |
 | `spring.datasource.username` | `appuser` | Database user. The release package's MySQL creates `appuser` (`MYSQL_USER`). |
-| `spring.datasource.password` | sample value | Database password. |
+| `spring.datasource.password` | empty | Database password. |
 | `spring.datasource.driver-class-name` | `com.mysql.cj.jdbc.Driver` | JDBC driver. |
-| `spring.jpa.hibernate.ddl-auto` | `update` | Hibernate creates and updates tables automatically. |
+| `spring.jpa.hibernate.ddl-auto` | `validate` | Hibernate only checks that the tables match the entities, and the Portal refuses to start if they don't. Flyway creates and changes the tables. |
+| `spring.flyway.baseline-on-migrate`, `spring.flyway.baseline-version` | `true`, `0` | A database from release 1.5 or earlier, whose tables Hibernate created, gets a Flyway history at version 0 on its first start; the first migration then adds what is missing. Leave them as they are. |
+| `spring.flyway.user`, `spring.flyway.password` | not set (the datasource user) | Optional: run the migrations as a second user with the DDL rights (`CREATE`, `ALTER`, `INDEX`, `REFERENCES`, `DROP`), so `spring.datasource.username` needs only `SELECT`, `INSERT`, `UPDATE` and `DELETE`. Helm: `database.migration.*`. |
 | `spring.jpa.open-in-view` | `false` | |
 | `spring.jpa.hibernate.naming.physical-strategy` | `org.hibernate.boot.model.naming.PhysicalNamingStrategyStandardImpl` | Tables keep their entity names (for example `TrustedAgent`). |
 
@@ -120,6 +131,43 @@ With Helm, the Portal and the Connector are two Deployments, the license is on a
 | `role.mapped.N.name` | `1=TRUSTED_AGENT`, `2=PMO`, `3=HELP_DESK` | Application role (must be one of `TRUSTED_AGENT`, `PMO`, `HELP_DESK`, `USER`). |
 | `role.mapped.N.rsaSecurityGuid` | sample GUIDs | GUID (`ims.…`) of the RSA AM **administrative role** that grants this application role. See [RSA AM Integration](rsa-integration.md#administrative-role-guids). |
 
+### Connector connection
+
+How the Portal reaches the Connector: `connector.url` (`CONNECTOR_URL`), `connector.tls.*` (`CONNECTOR_TLS_TRUSTSTORE`, `CONNECTOR_TLS_CLIENTCERTIFICATE`, `CONNECTOR_TLS_CLIENTKEY`), `CONNECTOR_AUTH_PASSWORD`, `connector.connect-timeout-millis` (5000), `connector.read-timeout-millis` (120000) and `connector.health-*`. They are described with the Connector's own settings in [RSA AM integration → Portal to Connector](rsa-integration.md#portal-to-connector).
+
+### Security headers, banner and sessions
+
+These are the ENS platform settings: every ENS application has them, with the same names and defaults. Put them in `.env` (Helm: `consentBanner.*`, `session.*`, or `config`/`extraEnv`).
+
+| Name | Default | Description |
+|---|---|---|
+| `SERVER_FORWARD_HEADERS_STRATEGY` | unset | `framework`: take the original scheme, host and client address from a TLS-terminating proxy's `X-Forwarded-*` headers. Without it the Portal sees plain HTTP: no HSTS, redirects to `http://`, and the audit trail records the proxy's address. Set it only when every request comes through that proxy and the proxy replaces those headers. The Helm chart sets it when its ingress (with `tls`) or route (`edge` or `reencrypt`) terminates TLS |
+| `ENS_COOKIE_SECURE` | `false` | `true`: the session cookie is always `Secure`. Without it, it is `Secure` only on requests the Portal itself received over TLS. The Helm chart sets it with the ingress or route as above |
+| `ENS_CSP_REPORT_ONLY` | `false` | `true` sends `Content-Security-Policy-Report-Only` instead of enforcing the policy: a stopgap for a page the policy breaks |
+| `ENS_CONSENT_BANNER_ENABLED` | `false` | Show the DoD notice-and-consent banner first in every browser session, and allow nothing else until the user clicks **I agree** |
+| `ENS_CONSENT_BANNER_TITLE` | `U.S. Government (USG) Information System (IS) Notice and Consent` | Its heading |
+| `ENS_CONSENT_BANNER_TEXT` | the standard DoD notice-and-consent text | Plain text; a blank line starts a new paragraph, and paragraphs that start with `- ` form a list |
+| `ENS_CONSENT_BANNER_FILE` | none | A file to read the text from instead; wins over `ENS_CONSENT_BANNER_TEXT`. `.env` holds one line per setting, so a text of several paragraphs goes in a file: `default_build/properties/consent.txt` is `/custom/consent.txt` in the Portal container |
+| `ENS_SESSION_IDLE_TIMEOUT` | `30m` | A session ends after this long without a request. Durations are Spring durations: `30m`, `15m`, `12h`, `90s` |
+| `ENS_SESSION_ADMIN_IDLE_TIMEOUT` | the idle timeout | Idle timeout for users with an administrative role (PMO, Trusted Agent, Help Desk). DISA STIG suggests `15m` |
+| `ENS_SESSION_ABSOLUTE_TIMEOUT` | `12h` | A session ends this long after sign-in, whatever its activity |
+| `ENS_SESSION_MAX_PER_USER` | `0` (no limit) | Sessions one user may have at once; a sign-in over the limit ends that user's oldest session. DISA STIG suggests `3` |
+| `security-banner.text`, `security-banner.background-color`, `security-banner.text-color` | `UNCLASSIFIED // FOR OFFICIAL USE ONLY`, `#007A33`, `#FFFFFF` | Classification banner at the top and bottom of every page. Empty text turns it off; the read-only demo never shows it. Helm: `securityBanner.*` |
+| `user.token.test.maxAttempts`, `user.token.test.windowMinutes` | `5`, `15` | *Test My Token* attempts allowed per user ID in the window. Counted in memory |
+
+!!! warning "Session timeout change from release 1.5"
+    Release 1.5 shipped `server.servlet.session.timeout=480`, which Spring reads as 480 seconds: its sessions ended after 8 minutes idle. They now last 30 minutes unless you set `ENS_SESSION_IDLE_TIMEOUT`.
+
+### Health, metrics and logs
+
+| Name | Default | Description |
+|---|---|---|
+| `MANAGEMENT_SERVER_PORT` | unset | Spring Boot's setting: a port of its own for the actuator. There, without sign-in, are `/actuator/prometheus` and the health endpoints; the Portal's own port then has no actuator. Without it, Prometheus is not exposed at all. Never publish this port to users. The Helm chart sets it (`metrics.enabled`, `metrics.port: 9090`) |
+| `LOGGING_STRUCTURED_FORMAT_CONSOLE` | unset (text) | Spring Boot's setting: `ecs` writes one JSON object per console log line (Elastic Common Schema), with the request id as `requestId`. The Helm chart does that by default (`logFormat: json`) |
+| `management.endpoint.health.group.readiness.include` | `readinessState,db,connector` | What readiness waits for: the database and the Connector |
+
+Each log line carries the request id: the caller's `X-Request-Id` if it is a plain token, otherwise a new one, returned in the response's `X-Request-Id` and recorded in the request's audit events. The metrics are listed in the [Operator Guide](operator-guide.md#health-and-monitoring).
+
 ### Search behaviour
 
 | Name | Default | Description |
@@ -136,7 +184,7 @@ With Helm, the Portal and the Connector are two Deployments, the license is on a
 | `user.registration.complete.path` | `/user/registration/start` | Path appended to `application.dns.name` in registration emails. |
 | `ta.registration.profile.path` | `/ta/profile` | Path used in the Trusted Agent registered email. |
 | `ta.profile.defaultWorkingHours` | `8:00-16:00` | Working hours given to newly registered Trusted Agents. |
-| `exemptionrequest.url` | unset | Target of the **Request Exemption** link in the side menu (read with `environment.getProperty`). Set it, for example to `/user/exemption/request`, or the link has no target. |
+| `exemptionrequest.url` | `/user/exemption/request` | Target of the **Request Exemption** link in the side menu, shown while the license includes `self-service`. |
 
 ### Active Directory (optional)
 
@@ -150,10 +198,15 @@ AD integration adds a user to the "RSA enabled" group when they complete enrollm
 | `active-directory.properties[i].providerURL` | `ldap://ad.winllc-dev.com:389` | LDAP URL. |
 | `active-directory.properties[i].security.authType` | `simple` | Bind type. |
 | `active-directory.properties[i].security.username` | sample DN | Bind DN. |
-| `active-directory.properties[i].security.password` | sample | Bind password. |
+| `active-directory.properties[i].security.password` | empty | Bind password. |
 | `active-directory.properties[i].rsaEnabledGroup` | sample DN | DN of the group whose members must use RSA to sign in to their workstation. |
 | `active-directory.properties[i].userSearchBase` | sample DN | Base for `samAccountName` lookups. |
-| `active-directory.properties[i].ldap-factory-socket` | empty | Optional `java.naming.ldap.factory.socket` class. The code ships `com.winllc.rsaapp.portal.security.ActiveDirectorySocketFactory`, which **trusts all certificates**, so use it only knowingly. |
+| `active-directory.properties[i].trust-store`, `.trust-store-password` | not set | A JKS or PKCS12 file with the AD CA, for `ldaps://` with a private CA. One store must hold the CAs of every AD instance. Without it, the JVM's default trust store is used. Either way the domain controller's certificate and host name are checked |
+| `active-directory.properties[i].connect-timeout-millis`, `.read-timeout-millis` | `5000`, `15000` | Give up on an unreachable or stalled domain controller |
+| `active-directory.properties[i].page-size` | `500` | Large searches are paged; keep it at or below AD's `MaxPageSize` (1000) |
+| `active-directory.properties[i].ldap-factory-socket` | empty | Optional `java.naming.ldap.factory.socket` class. Leave it empty: with a trust store set, the Portal uses its own `ActiveDirectorySocketFactory`, which checks certificates. |
+
+An instance with a missing setting is left out at startup, and the log says which setting is missing.
 
 !!! note
     `applicationContext.xml` contains a commented-out legacy block that uses `activeDirectory.1.*` and `activeDirectory.2.*` keys. Those keys are not used. Use the `active-directory.properties[i].*` form.
@@ -169,11 +222,19 @@ For every job `<name>` in `expiring`, `appointmentupcoming`, `resyncta`, `lostTo
 | `cron.<name>.description` | Label shown on the Manual Cron page. |
 | `cron.<name>.cron` | Spring 6-field cron expression (sec min hour day month weekday). |
 
+| Name | Default | Description |
+|---|---|---|
+| `cron.timezone` | the server's (UTC in the containers) | Time zone the schedules mean, for example `America/New_York`. Helm: `cronTimezone` |
+| `cron.lock.maximumHoldMinutes` | `360` | A job's claim in the `CronLock` table left by a node that died is released after this |
+| `cron.lock.minimumHoldSeconds` | `120` | A claim is held at least this long, so a node with a slightly late clock does not run the same occurrence again |
+
 | Name | Default |
 |---|---|
 | `cron.expiring.enabled` / `.debug` / `.cron` | `true` / `false` / `0 30 0 ? * *` |
-| `cron.expiring.notification.expireInDays` | `720` |
+| `cron.expiring.notification.daysBefore` | `30,14,7,1` (one notice each) |
 | `cron.appointmentupcoming.enabled` / `.debug` / `.cron` | `true` / `false` / `0 30 0 ? * *` |
+| `cron.appointmentupcoming.remindDaysBefore` | `1` |
+| `cron.appointmentupcoming.taDigestDays` | `7` |
 | `cron.resyncta.enabled` / `.debug` / `.cron` | `true` / `false` / `0 30 0 ? * *` |
 | `cron.lostTokenThresholdMonitor.enabled` / `.debug` / `.cron` | `true` / **`true`** / `0 35 0 ? * *` |
 | `cron.lostTokenThresholdMonitor.window.inDays` | `30` |
@@ -246,53 +307,62 @@ The placeholder order is fixed by the code, so keep the same `{n}` meanings when
 
 ## Connector (RSA Authentication Manager) settings
 
-The connector resolves these through `CommandClientAppContextOverrides.xml` from the file named by **`config.properties.location`** (a JVM system property inside the Connector's `JAVA_OPTS` in `connector.env`: the release package keeps `-Dconfig.properties.location=classpath:config.properties` and passes the settings below as `-D` options), with system properties taking precedence. The packaged `WEB-INF/config.properties` contains development values. Override all of them.
+The connector resolves these through `CommandClientAppContextOverrides.xml` from the file named by **`config.properties.location`** (a JVM system property inside the Connector's `JAVA_OPTS` in `connector.env`: the release package keeps `-Dconfig.properties.location=classpath:config.properties` and passes the settings below as `-D` options), with system properties taking precedence. The packaged `WEB-INF/config.properties` contains development host names and no passwords. Override the host names.
+
+**Accounts and passwords.** The Connector reads these itself, before its application context starts (`ConnectorSecrets`). For each, the first of these wins: the file named by `NAME_FILE` (or by the system property `<property>.file`), then the environment variable `NAME`, then the `-D` option, which still works for a password but logs a warning, because the Java command line is readable by every user on the host.
+
+| Variable (also `<NAME>_FILE`) | Property | Meaning |
+|---|---|---|
+| `RSA_CMDCLIENT_USER`, `RSA_CMDCLIENT_PASSWORD` | `com.rsa.cmdclient.user`, `com.rsa.cmdclient.user.password` | The Command Client user name and password (from `rsautil manage-secrets --action list`) |
+| `RSA_ADMIN_USER_ID`, `RSA_ADMIN_USER_PASSWORD` | `rsa.admin.user.id`, `rsa.admin.user.password` | The service account: an **internal** AM user with the [service account role](rsa-integration.md#least-privilege-am-roles). It makes only the changes no signed-in operator makes |
+| `RSA_READONLY_USER_ID`, `RSA_READONLY_USER_PASSWORD` | `rsa.readonly.user.id`, `rsa.readonly.user.password` | Recommended: an internal AM user with a view-only role, for searches and lookups. Unset: the service account does them, and the Connector logs a warning |
+| `RSA_TRUSTSTORE_PASSWORD` | `ims.ssl.client.trust.keystore.password`, `com.rsa.ssl.trust.store.password` | Password of `trust.jks` |
+
+`util/move-connector-secrets.sh`, which `install.sh` and `upgrade.sh` run, moves these from the `-D` options of an older `connector.env` into the variables, keeping the original as `connector.env.before-secrets.<time>` (mode 600; delete it once the Connector runs). The Helm chart mounts them from Secrets as files under `/var/run/secrets/rsa`.
+
+The Connector's HTTPS settings (`CONNECTOR_TLS_*`, `CONNECTOR_HTTP_ADDRESS`) are in [RSA AM integration → Portal to Connector](rsa-integration.md#portal-to-connector).
+
+The other settings:
 
 | Name | Default (packaged `config.properties`) | Description |
 |---|---|---|
 | `config.properties.location` | none (system property) | URL (`file:` or `classpath:`) of the properties file to load. |
 | `java.naming.factory.initial` | `weblogic.jndi.WLInitialContextFactory` | JNDI factory for the RSA SDK. |
 | `java.naming.provider.url` | dev host | `t3s://<AM primary FQDN>:7002` |
-| `com.rsa.cmdclient.user` | sample | Command client user name (from `rsautil manage-secrets --action list`). |
-| `com.rsa.cmdclient.user.password` | sample | Command client password. The package's `GUIDE.md` writes this key as `com.rsa.cmdclient.password`, but the packaged file uses `com.rsa.cmdclient.user.password`. |
 | `ims.httpinvoker.client.provider.url` | dev host | `https://<AM primary FQDN>:7002/ims-ws/httpinvoker/CommandServer`, used for admin (write) commands. (`GUIDE.md` spells it `ims.httpinvokder…`, but the code uses `httpinvoker`.) |
 | `ims.httpinvoker.client.provider.readonly.url` | dev host | `https://<AM primary or replica FQDN>:7002/ims-ws/httpinvoker/CommandServer`, used for read-only searches. |
 | `ims.soap.client.provider.url` | dev host | `https://<AM primary FQDN>:7002/ims-ws/services/CommandServer` (SOAP target in the SDK context). |
 | `ims.ssl.client.trust.keystore.filename` | developer workstation path | Path to the trust store holding the AM root CA. With the compose mounts, `default_build/ssl/trust.jks` is visible to the connector as `/custom/ssl/trust.jks`. |
-| `ims.ssl.client.trust.keystore.password` | none in file (listed in `GUIDE.md`) | Trust store password. |
-| `com.rsa.ssl.trust.store.password` | `changeit` | Trust store password used by the SDK. (The package's `GUIDE.md` writes `com.rsa.ssltrust.store.password`.) |
-| `com.rsa.ssl.client.id.store.password` | `password` | Two-way SSL identity keystore password (only for client-certificate command targets, which the connector does not use by default). |
-| `com.rsa.ssl.client.id.key.password` | `password` | Two-way SSL private key password. |
+| `com.rsa.ssl.client.id.store.password`, `com.rsa.ssl.client.id.key.password` | empty | Two-way SSL identity keystore and key passwords (only for client-certificate command targets, which the connector does not use). |
 | `ims.ssl.client.provider.url` | `t3s://local1:7022` | Two-way SSL provider URL. |
 | `ims.ssl.client.identity.keystore.filename` | `client-identity.jks` | Two-way SSL identity keystore. |
 | `ims.ssl.client.identity.key.alias` | `client-identity` | Identity key alias. |
 | `ims.ssl.client.root.ca.alias` | `rsa_am_ca` | Alias of the AM root CA in the trust store. |
-| `rsa.admin.user.id` | sample | **Internal** RSA AM user with Super Admin rights. The connector logs in as this user for its admin and read-only sessions. |
-| `rsa.admin.user.password` | sample | Its password. |
 | `rsa.authmanager.realm.name` | `SystemDomain` | Realm to search. The connector fails its session check if the realm is not found. |
 | `rsa.authmanager.securityDomain.name` | `SystemDomain` | Security domain the portal manages and searches (sub-domains included). |
 | `token.serial.prefix` | `000` | Token serial prefix (keep it equal to the portal value). |
 
 ## Example: minimal values to change for a new install
 
-The settings that must change for a new install, by the release package file they go in. The RSA AM settings are `-D` options in `JAVA_OPTS` in `connector.env`. `CONNECTOR_AUTH_PASSWORD` goes in both `.env` and `connector.env`, with the same value. With Helm, use the values listed in [Installation → Write your values](install.md#3-write-your-values).
+The settings that must change for a new install, by the release package file they go in. The AM accounts are `RSA_*` variables in `connector.env`; the other RSA AM settings are `-D` options in `JAVA_OPTS` there. `CONNECTOR_AUTH_PASSWORD` goes in both `.env` and `connector.env`, with the same value. With Helm, use the values listed in [Installation → Write your values](install.md#3-write-your-values).
 
 === "connector.env (RSA AM)"
 
     ```properties
     CONNECTOR_AUTH_PASSWORD=<long random value, the same as in .env>
+    RSA_CMDCLIENT_USER=CmdClient_xxxxxxxx
+    RSA_CMDCLIENT_PASSWORD=xxxxxxxxxx
+    RSA_ADMIN_USER_ID=portal_service
+    RSA_ADMIN_USER_PASSWORD=********
+    RSA_READONLY_USER_ID=portal_readonly
+    RSA_READONLY_USER_PASSWORD=********
+    RSA_TRUSTSTORE_PASSWORD=********
     # -D options inside JAVA_OPTS:
     java.naming.provider.url=t3s://am1.example.org:7002
-    com.rsa.cmdclient.user=CmdClient_xxxxxxxx
-    com.rsa.cmdclient.user.password=xxxxxxxxxx
-    rsa.admin.user.id=portal_superadmin
-    rsa.admin.user.password=********
     ims.soap.client.provider.url=https://am1.example.org:7002/ims-ws/services/CommandServer
     ims.httpinvoker.client.provider.url=https://am1.example.org:7002/ims-ws/httpinvoker/CommandServer
     ims.httpinvoker.client.provider.readonly.url=https://am2.example.org:7002/ims-ws/httpinvoker/CommandServer
     ims.ssl.client.trust.keystore.filename=/custom/ssl/trust.jks
-    ims.ssl.client.trust.keystore.password=********
-    com.rsa.ssl.trust.store.password=********
     rsa.authmanager.securityDomain.name=SystemDomain
     ```
 
@@ -300,7 +370,8 @@ The settings that must change for a new install, by the release package file the
 
     ```properties
     CONNECTOR_AUTH_PASSWORD=<long random value, the same as in connector.env>
-    spring.datasource.url=jdbc:mysql://mysql:3306/RSAAPP
+    CONNECTOR_TLS_TRUSTSTORE=/ssl/connector-ca.crt
+    spring.datasource.url=jdbc:mysql://mysql:3306/RSAAPP?sslMode=REQUIRED
     spring.datasource.username=appuser
     spring.datasource.password=********
     spring.mail.host=smtp.example.org

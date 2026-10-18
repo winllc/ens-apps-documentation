@@ -31,22 +31,31 @@ Start with `docker compose ps`, `docker compose logs -f` and `logs/rsaapp-portal
     The countries are read from the absolute path `/resources/countries.csv`, which the portal image provides. Make sure no volume hides `/resources`. The release package mounts only `/resources/email-templates`.
 
 ??? failure "Connector errors such as `Could not find Security Domain: …` or `RsaNoRealmFoundException`"
-    The connector logs in with `rsa.admin.user.id` and then searches for `rsa.authmanager.realm.name` and `rsa.authmanager.securityDomain.name` (default `SystemDomain`). Correct the names, and confirm the admin user is an **internal** AM user with Super Admin rights.
+    The connector logs in with the service account (`RSA_ADMIN_USER_ID`) and then searches for `rsa.authmanager.realm.name` and `rsa.authmanager.securityDomain.name` (default `SystemDomain`). Correct the names, and confirm the service account is an **internal** AM user whose role can view realms and security domains in that scope ([service account role](rsa-integration.md#least-privilege-am-roles)).
+
+??? failure "Connector log: `rsa.readonly.user.id is not set`"
+    Searches and lookups run as the service account. Create a view-only AM user and set `RSA_READONLY_USER_ID` and `RSA_READONLY_USER_PASSWORD` in `connector.env` (Helm: `authManager.readOnlyUser`).
+
+??? failure "Portal fails with `connector.tls.client-certificate and connector.tls.client-key go together` or `Could not load the connector TLS settings`"
+    Set both `CONNECTOR_TLS_CLIENTCERTIFICATE` and `CONNECTOR_TLS_CLIENTKEY`, or neither; and check that `CONNECTOR_TLS_TRUSTSTORE` names a readable PEM file, or a PKCS12/JKS store with the right password.
 
 ## RSA Authentication Manager connectivity
 
-??? failure "`/actuator/health` is DOWN, or every sign-in fails with *Could not login with provided credentials*"
-    The portal health indicator asks the connector to open or validate its admin AM session. Check in order:
+??? failure "Readiness is DOWN, or every sign-in fails with *Could not login with provided credentials*"
+    The Portal's `connector` health indicator calls the Connector's `/app/health`, which reports whether the Connector has an AM admin session. Check in order:
 
-    1. **Connector running**: `docker compose ps` and `docker compose logs connector` (Helm: the Connector Deployment's pod and logs).
-    2. **Name resolution**: in the release package the portal calls `http://connector:8080/app/connector`, so the service must stay named `connector` on the `portal-net` network. The Helm chart points the Portal at its Connector Service for you.
+    1. **Connector running**: `docker compose ps` and `docker compose logs connector` (Helm: the Connector Deployment's pod and logs). `docker compose exec connector curl -s http://localhost:8080/app/health` says `UP` or `DOWN`; the reason is in the Connector's log.
+    2. **Portal to Connector**: the Portal calls `https://connector:8443/app/connector` (`CONNECTOR_URL`). In the Portal's log, a certificate error (`PKIX path building failed`, `No subject alternative names matching`) means the Connector's certificate does not chain to `CONNECTOR_TLS_TRUSTSTORE` or lacks the host name: run `util/connector-tls.sh` (release package) or check `connector.tls.existingSecret` (Helm). A 401 means `CONNECTOR_AUTH_PASSWORD` differs between `.env` and `connector.env`. With mutual TLS, a handshake failure means the Portal's client certificate is missing or not from `CONNECTOR_TLS_CLIENT_CA`. With Helm and a NetworkPolicy, only the Portal's pods may reach the Connector.
     3. **Network to AM**: from the host or a pod, `curl -vk https://<am>:7002/ims-ws/httpinvoker/CommandServer` must connect.
-    4. **TLS trust**: `PKIX path building failed` or `unable to find valid certification path` means `trust.jks` is missing, unreadable or does not contain AM's root CA. Check `ims.ssl.client.trust.keystore.filename` (`/custom/ssl/trust.jks` in both install methods) and both trust store passwords. Rebuild it as in [Installation](install.md#export-the-am-root-certificate-and-build-trustjks).
-    5. **Command client credentials**: authentication errors to the command server mean `com.rsa.cmdclient.user` or `com.rsa.cmdclient.user.password` is wrong. Read them again with `rsautil manage-secrets --action list`. The package's `GUIDE.md` spells the password key `com.rsa.cmdclient.password`; the packaged file uses `…user.password`.
-    6. **System properties**: the connector loads its settings from `config.properties.location`, or from `-D` options in `JAVA_OPTS` in `connector.env`. If neither is set, it silently uses the packaged development `config.properties`.
+    4. **TLS trust to AM**: `PKIX path building failed` or `unable to find valid certification path` in the Connector's log means `trust.jks` is missing, unreadable or does not contain AM's root CA. Check `ims.ssl.client.trust.keystore.filename` (`/custom/ssl/trust.jks` in both install methods) and `RSA_TRUSTSTORE_PASSWORD`. Rebuild it as in [Installation](install.md#export-the-am-root-certificate-and-build-trustjks).
+    5. **Command client credentials**: authentication errors to the command server mean `RSA_CMDCLIENT_USER` or `RSA_CMDCLIENT_PASSWORD` is wrong. Read them again with `rsautil manage-secrets --action list`.
+    6. **System properties**: the connector loads its other settings from `config.properties.location`, or from `-D` options in `JAVA_OPTS` in `connector.env`. If neither is set, it uses the packaged `config.properties`, whose host names are development ones.
 
 ??? failure "Operations fail and the user is suddenly sent to the login page"
-    The connector runs operator actions **as the signed-in user's AM session**. When that AM session has expired, the connector raises `RsaUserSessionEndedException`, and the portal logs the user out. Sign in again. If it happens often, compare the AM session lifetime with the portal's `server.servlet.session.timeout`.
+    The connector runs operator actions **as the signed-in user's AM session**. When that AM session has expired, the connector raises `RsaUserSessionEndedException`, and the portal logs the user out. Sign in again. If it happens often, compare the AM session lifetime with the portal's `ENS_SESSION_IDLE_TIMEOUT` and `ENS_SESSION_ABSOLUTE_TIMEOUT`.
+
+??? failure "An operator's role change, emergency code or *Clear cached Windows password* fails with a permission error"
+    These run in the operator's own AM session. The operator's AM administrative role needs the matching permission: see [Least-privilege AM roles](rsa-integration.md#least-privilege-am-roles).
 
 ??? failure "*User does not exist in RSA Authentication Manager* for a user who exists"
     Searches are limited to the configured security domain (sub-domains included) and the realm's identity sources. Check `rsa.authmanager.securityDomain.name` and `rsa.authmanager.realm.name`. Free-text search returns at most 25 results per identity source. Refine the search, or enable `search.useridonly`.
@@ -81,8 +90,8 @@ Start with `docker compose ps`, `docker compose logs -f` and `logs/rsaapp-portal
 ??? failure "Links in emails point to `http://localhost:8080`"
     Set `application.dns.name` to the external portal URL and recreate the portal (`docker compose up -d`). With Helm, set `publicUrl` and run `helm upgrade`.
 
-??? failure "The *Request Exemption* menu link goes nowhere"
-    Set `exemptionrequest.url` (for example `/user/exemption/request`).
+??? failure "The *Request Exemption* menu link is missing"
+    It is shown while the license includes the `self-service` feature. Its target is `exemptionrequest.url` (default `/user/exemption/request`).
 
 ## Scheduled jobs
 
@@ -90,14 +99,18 @@ Start with `docker compose ps`, `docker compose logs -f` and `logs/rsaapp-portal
     `cron.<name>.enabled` must be `true`. A disabled job is skipped even when run by hand. Last-run details are kept in memory and reset on restart.
 
 ??? failure "Job times seem off"
-    The schedules are Spring 6-field cron expressions evaluated in the container's time zone. The default jobs run around 00:30–00:35.
+    The schedules are Spring 6-field cron expressions evaluated in `cron.timezone`, by default the container's time zone (UTC). Set `cron.timezone` (Helm: `cronTimezone`) to the zone the schedules should mean. The default jobs run around 00:30–00:35.
+
+??? failure "A job is skipped"
+    The jobs need the `scheduled-jobs` license feature and are skipped while the license is read-only. A job still running when its next time comes is skipped too, and so is an occurrence another Portal node has claimed in `CronLock`.
 
 ## Backups and restore
 
 ??? failure "Nightly backup files are missing"
-    * The crontab line must run `util/backupdb.sh` from the install folder (`cd /opt/rsa-operations-portal && util/backupdb.sh -d <backup dir>`), because it uses the `mysql` container.
-    * The clean-up step uses `sudo find`, so the cron user needs password-less `sudo` for it.
+    * The cron user must be allowed to use Docker (`util/backupdb.sh` runs `mysqldump` in the `mysql` container). It needs no `sudo`.
+    * With `-g` or `-a`, the gpg public key must be in that user's keyring, or the age recipient must be valid.
     * Run the line by hand to see errors: `crontab -l | grep backupdb`.
+    * Helm: `kubectl -n rsa-portal get cronjob,jobs` and the backup Job's logs. The CronJob connects as `database.username` with `backup.sslMode`.
 
 ??? failure "A restore fails with an access-denied error"
     Run `mysql` inside the container with the container's own root password, as shown in [Operator Guide → Restore](operator-guide.md#restore).

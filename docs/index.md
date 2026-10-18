@@ -57,6 +57,19 @@ file goes.
 Every application keeps the same tamper-evident audit trail. Administrators can search and export it
 in the application, and it can be sent to Splunk or any other SIEM. See [Audit logging](audit-logging.md).
 
+## FIPS 140-3 and DISA STIG
+
+The applications take their cryptography from the Java runtime (and, for the Directory Services
+Portal's web tier, nginx and OpenSSL) on Red Hat UBI 9 images, and share one platform baseline
+of DISA STIG controls. ENS Solutions does not claim FIPS 140-3 validation, and the license check does
+not yet work on a Java runtime in FIPS mode. See [FIPS 140-3 and DISA STIG](fips-and-stig.md).
+
+## Sizing, availability and recovery
+
+Each application runs as one instance, with restarts, database high availability and a cold
+standby instead of active replicas. See [Sizing, availability and recovery](availability-and-sizing.md)
+for sizing, what to back up, disaster recovery and rollback across the suite.
+
 ## How each section is organised
 
 | Guide | Read it if you… |
@@ -69,15 +82,17 @@ in the application, and it can be sent to Splunk or any other SIEM. See [Audit l
 | **User guide** | use the application day to day |
 
 Most sections also include **Architecture**, **Security**, **API reference** and
-**Troubleshooting** pages. The RSA Operations Portal adds an **RSA AM integration** page. ReadyRoom adds a
+**Troubleshooting** pages. Every section has a **Sizing, availability and recovery** page, and the
+Directory Services Portal, ReadyRoom and the RSA Operations Portal have a **FIPS 140-3 and DISA
+STIG** page. The RSA Operations Portal adds an **RSA AM integration** page. ReadyRoom adds a
 **Windows client** page.
 
 ## At a glance
 
 | | CertAlert | Directory Services Portal | ReadyRoom | RSA Operations Portal |
 |---|---|---|---|---|
-| Server | Spring Boot 4 / Java 21 | Spring Boot 4 / Java 21 + React | Spring Boot 4 / Java 21 | Spring Boot 3 + Tomcat connector |
-| Data store | PostgreSQL | JSON config file | PostgreSQL | MySQL |
+| Server | Spring Boot 4 / Java 21 | Spring Boot 4 / Java 21 + React | Spring Boot 4 / Java 21 | Spring Boot 4 / Java 17 + Tomcat 9 connector |
+| Data store | PostgreSQL | JSON configuration and audit files | PostgreSQL | MySQL 8.4 |
 | Directory | LDAP (IC FSD schema) | LDAP (any schema) | LDAP | RSA Authentication Manager |
 | Sign-in | X.509 or directory password | X.509 or directory password | X.509, LDAP password, Kerberos (client) | RSA AM user ID + SecurID passcode |
 | Install | Release package (Compose) or Helm chart | Release package (Compose or native systemd) or Helm chart | Release package (Compose) or Helm chart, plus the Windows agent | Release package (Compose) or Helm chart |

@@ -25,8 +25,8 @@ their data for correct and unique values.
 | Metrics | Out-of-the-box overviews for every directory, shared dashboards, and an explorer for building ad-hoc charts. Every chart has a table view and CSV download |
 | Data analysis | Saved comparisons (2–6 sources) and quality checks (1–6 sources), run as background tasks, with paged findings and CSV export |
 | Background tasks | Long metrics and all analyses run on the server, with progress, cancellation and notifications |
-| Audit log | Every change and sign-in, with before/after values, written to monthly JSON Lines files and the `audit` logger |
-| Sign-in | LDAP bind with username and password, and/or X.509 client certificates (smart cards such as CAC/PIV) |
+| Audit log | Every change and sign-in, with before/after values, in the hash-chained `ens-audit/1` format, with delivery to Splunk or syslog (see [Audit logging](../audit-logging.md)) |
+| Sign-in | LDAP bind with username and password, and/or X.509 client certificates (smart cards such as CAC/PIV) with OCSP/CRL revocation checking. Optional DoD notice-and-consent banner, session timeouts and limits |
 | Page banners | Optional fixed top/bottom banner, for example a classification marking |
 
 ## Architecture at a glance
@@ -53,12 +53,12 @@ See [Architecture](architecture.md) for components, request flow and data storag
 
 | Layer | Technology |
 |---|---|
-| API | Java 21, Spring Boot 4.1 (Web MVC, Security, Validation), UnboundID LDAP SDK 7.0, Bouncy Castle (certificate parsing) |
-| Web client | React 19, React Router 7, TanStack Query 5, Vite 6, TypeScript 5, lucide-react icons, hand-written SVG charts |
+| API | Java 21, Spring Boot 4.1 (Web MVC, Security, Validation, Actuator), Micrometer with Prometheus, UnboundID LDAP SDK 7.0. Cryptography comes from the JDK's own providers |
+| Web client | React 19, React Router 7, TanStack Query 5, Vite 8, TypeScript 7, lucide-react icons, hand-written SVG charts |
 | Shared code | `shared/` TypeScript workspace: types, DN utilities, validation and schema helpers used by the client |
 | Container images | Red Hat UBI 9: `openjdk-21-runtime` (API, uid 185) and `nginx-126` (web, uid 1001) |
 | Demo directory | Embedded UnboundID in-memory LDAP server, or a demo OpenLDAP (`slapd`) container |
-| Tests | JUnit + MockMvc against the embedded LDAP server, and Vitest + Testing Library for the client |
+| Tests | JUnit + MockMvc against the embedded LDAP server (Bouncy Castle for test certificates and a test OCSP/CRL server), and Vitest + Testing Library for the client. See [what is tested](install.md#directory-servers-what-is-tested) |
 
 ## Documentation map
 
@@ -67,10 +67,12 @@ See [Architecture](architecture.md) for components, request flow and data storag
 | [Installation](install.md) | Operators | Prerequisites, the Docker and native packages (including HTTPS and the demo directory), the Helm chart, verification |
 | [Configuration](configuration.md) | Operators | Every environment variable and property, grouped by area, with examples |
 | [Operator guide](operator-guide.md) | Operators | Start/stop, health, logs, backups, monitoring, upgrades, troubleshooting runbook |
+| [Sizing, availability and recovery](availability-and-sizing.md) | Operators | Sizing, what high availability is possible, disaster recovery, rolling back an upgrade |
 | [Administrator guide](admin-guide.md) | Portal administrators | Schema, forms, directory definitions, permissions, dashboards, data analysis, audit log |
 | [User guide](user-guide.md) | Everyone | Signing in, browsing directories, entry CRUD, My profile, metrics, background tasks |
 | [Architecture](architecture.md) | Engineers | Components, request flow, persistence, background jobs, code layout |
-| [Security](security.md) | Security reviewers | Authentication, sessions, CSRF, X.509, LDAP injection defences, audit |
+| [Security](security.md) | Security reviewers | Authentication, sessions, CSRF, X.509, LDAP injection defences, supply chain, audit |
+| [FIPS 140-3 and DISA STIG](fips-and-stig.md) | Security reviewers | What the portal relies on for FIPS, and the settings a STIG deployment needs |
 | [API reference](api-reference.md) | Integrators | Every REST endpoint under `/api` |
 
 !!! tip "Try it with the demo directory"

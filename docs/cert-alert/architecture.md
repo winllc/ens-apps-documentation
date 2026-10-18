@@ -18,7 +18,7 @@ src/main/java/com/winllc/certalert/
 ├── service/     parsing, status evaluation, sync, notifications, probe, projects, audit…
 └── web/         page controllers, REST API, DataTables endpoints, error handling
 src/main/resources/
-├── db/migration/   Flyway migrations V1–V17
+├── db/migration/   Flyway migrations V1–V19
 ├── static/         css, js (table wiring), img (logo, favicons)
 ├── templates/      Thymeleaf pages, email templates, layout fragments, icon sprite
 └── dev-directory.ldif   sample directory used by the developers' tests (not shipped)
@@ -244,13 +244,15 @@ erDiagram
 | `user_email_alias` | Addresses added to a person (`PERSONAL` or `GROUP`) |
 | `project`, `project_user`, `project_server`, `project_admin` | Projects |
 | `notification`, `notification_setting` | Notifications (recipient held as a user id and/or address, not a foreign key) and the round-up lead-days override |
-| `audit_event` | Audit trail; subject is deliberately **not** a foreign key so records outlive entries |
+| `audit_event` | Audit trail, in the `ens-audit/1` format since `V18`; subject is deliberately **not** a foreign key so records outlive entries |
+| `audit_chain_head`, `audit_delivery`, `audit_api_token` | The chain's newest sequence number and hash (locked while an event is added), each audit output's delivery position, and the pull API's tokens |
+| `outbound_email` | The email outbox: messages waiting to be sent, and what became of recent ones |
 | `server_attribute_definition`, `server_attribute_option` | Editable-attribute definitions (values live only in the directory; the old `server_attribute_value` table was dropped in `V11`) |
 | `changelog_cursor` | Changelog position and counters |
 | `sync_run` | Job run log |
 
 The schema is created and evolved by Flyway (`V1__create_directory_tables` …
-`V17__create_user_additional_email`); Hibernate only validates it.
+`V19__create_outbound_email`); Hibernate only validates it. `V18` moved the audit trail to the `ens-audit/1` format and added `audit_chain_head`, `audit_delivery` and `audit_api_token`; `V19` added the email outbox, `outbound_email`.
 
 ## Front end
 

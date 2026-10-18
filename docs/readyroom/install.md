@@ -84,10 +84,16 @@ Replace every `CHANGE_ME`:
 | Setting | What |
 |---|---|
 | `APPLICATION_BASE_URL` | The address users reach ReadyRoom at. Absence emails link to it. |
-| `LDAP_HOST`, `LDAP_PORT`, `LDAP_USERNAME`, `LDAP_PASSWORD` | Your directory and the service account. For LDAPS, set `SPRING_LDAP_URLS=ldaps://...` instead of host and port. |
+| `SPRING_LDAP_URLS`, `LDAP_USERNAME`, `LDAP_PASSWORD` | Your directory (`ldaps://...:636` in the template) and the service account. For plain `ldap://`, which is not recommended and logs a warning, remove `SPRING_LDAP_URLS` and set `LDAP_HOST` and `LDAP_PORT` instead. |
 | `APPLICATION_USERBASEDN`, `APPLICATION_GROUPS_0_GROUPSBASEDN` | Where users and group trees are. |
-| `APPLICATION_SUPERUSERDNS_0` | At least one administrator, by full DN. |
-| `SPRING_MAIL_*`, `APPLICATION_NOTIFICATIONSENDEREMAIL` | Your SMTP server and the From address. |
+| `APPLICATION_SUPERUSERDNS_0` | At least one administrator, by full DN. None is packaged; without one, startup logs a warning and nobody can administer ReadyRoom or reach the license screen. |
+| `SPRING_MAIL_*`, `APPLICATION_NOTIFICATIONSENDEREMAIL` | Your SMTP server and the From address. With `SPRING_MAIL_HOST` set, `APPLICATION_NOTIFICATIONSENDEREMAIL` is required, or startup fails. |
+
+The template also lists these optional blocks, commented out: the consent banner
+(`ENS_CONSENT_BANNER_*`), session lifetimes (`ENS_SESSION_*`), `ENS_COOKIE_SECURE`,
+`SERVER_FORWARD_HEADERS_STRATEGY`, `ENS_CSP_REPORT_ONLY`, client certificates (`ENS_X509_*`), JSON
+logs (`LOGGING_STRUCTURED_FORMAT_CONSOLE`) and the management port (`MANAGEMENT_SERVER_PORT`). See
+[Configuration](configuration.md).
 
 `.env` holds the database, directory and mail passwords. `install.sh` makes it mode 600; keep it
 private. List settings are numbered (`APPLICATION_SUPERUSERDNS_0`, `_1`, ...). Any other setting
@@ -111,8 +117,8 @@ group 0: `chgrp 0 <file> && chmod 0640 <file>`.
 
 `install.sh` and `upgrade.sh` stop if `SSL_ENABLED=true` but `docker-compose.tls.yml` is not in
 `COMPOSE_FILE`, or if it is and `tls/keystore.p12` or `tls/truststore.p12` is missing. When a reverse
-proxy terminates TLS for browsers and `SSL_ENABLED` stays `false`, set `SESSION_COOKIE_SECURE=true`
-so the session cookie is only sent over HTTPS.
+proxy terminates TLS for browsers and `SSL_ENABLED` stays `false`, set `ENS_COOKIE_SECURE=true`
+(the older name `SESSION_COOKIE_SECURE` still works) so the session cookie is only sent over HTTPS.
 
 ### 4. License
 
@@ -123,14 +129,17 @@ start.
 ### 5. First start
 
 Run `./install.sh` again. It starts ReadyRoom with `docker compose up -d`, and copies the license if
-you supplied one. The first start takes a minute or two while ReadyRoom creates its tables.
+you supplied one. The first start takes a minute or two while ReadyRoom creates its schema (Flyway;
+see [Prepare PostgreSQL](#prepare-postgresql)).
 
 ```bash
 docker compose ps                 # app becomes "healthy"
 docker compose logs -f app        # application log
 ```
 
-Then run the database script once the tables exist; see [Prepare PostgreSQL](#prepare-postgresql).
+The container's health check calls `/actuator/health` on port 8181, or on `MANAGEMENT_SERVER_PORT`
+when that is set in `.env`. It includes the mail server unless `MANAGEMENT_HEALTH_MAIL_ENABLED=false`
+(see [Configure email](#configure-email)).
 
 What is kept where:
 
@@ -153,17 +162,11 @@ Before upgrading:
 - If `.env` has `SSL_ENABLED=true`, make sure `COMPOSE_FILE` includes `docker-compose.tls.yml` and
   that `tls/keystore.p12` and `tls/truststore.p12` are your own. The image contains no keystore or
   truststore, and `upgrade.sh` stops otherwise.
-- If `migrations/001_indexes_and_unique_user_dn.sql` has never been run on this database and
-  `check_in_out_records` is large, run it now, from the new release's `migrations/` (see
-  [Prepare PostgreSQL](#prepare-postgresql)). ReadyRoom declares the index on the session id, and
-  Hibernate would otherwise build it when the new version starts, without `CONCURRENTLY`, blocking
-  writes to `check_in_out_records` while it builds.
-
-Back up the database, then unpack the new release next to the current one and run its `upgrade.sh`,
-naming the current directory:
+Back up first, from the current release's directory, then unpack the new release next to it and run
+its `upgrade.sh`, naming the current directory. `upgrade.sh` does not back up for you.
 
 ```bash
-docker compose exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' > readyroom-backup.sql
+cd readyroom-1.2.3 && ./backup.sh && cd ..       # the database and the license volume, into backups/
 
 tar xzf readyroom-1.2.4.tar.gz
 cd readyroom-1.2.4
@@ -172,9 +175,17 @@ cd readyroom-1.2.4
 
 `upgrade.sh` copies `.env`, `license/`, `tls/` and `kerberos/` across without overwriting anything,
 loads the new images, lists any new settings in `env.template` that your `.env` does not mention,
-and recreates the containers. The database and license volumes are kept, and ReadyRoom updates its
-schema on start. Run any script from `migrations/` that the release notes name. Run ReadyRoom from
-the new directory from then on.
+and recreates the containers. The database and license volumes are kept, and ReadyRoom migrates its
+schema on start (Flyway). Run ReadyRoom from the new directory from then on.
+
+**The first upgrade to a release with Flyway.** Flyway finds tables but no `flyway_schema_history`,
+records the existing schema as version 0, and runs `V1`. `V1` adds the indexes and constraints that
+are missing and the audit trail's append-only trigger, merges user rows whose DNs differ only by
+letter case, and rebuilds an index an interrupted script left invalid. Where the old
+`001_indexes_and_unique_user_dn.sql` had run, it finishes in seconds; where it had not, building the
+indexes on a large check-in table can take minutes. The log shows
+`Migrating schema "public" to version "1 - baseline"` and `Successfully applied 1 migration`. The
+release no longer ships a `migrations/` directory, and there is nothing to run by hand.
 
 Then re-run `Install-InOutWorker.ps1` from the new `windows-client/` on every workstation (see
 [Deploy the Windows client](#deploy-the-windows-client)).
@@ -244,7 +255,7 @@ commas.
 |---|---|
 | `publicUrl` | `APPLICATION_BASE_URL` (defaults to the ingress or route host) |
 | `database.*` | `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USERNAME`, `DB_PASSWORD` |
-| `ldap.host`, `ldap.port`, `ldap.url`, `ldap.bindDn` | `LDAP_HOST`, `LDAP_PORT`, `SPRING_LDAP_URLS`, `LDAP_USERNAME` |
+| `ldap.scheme` (`ldaps`), `ldap.host`, `ldap.port`, `ldap.url`, `ldap.bindDn` | `SPRING_LDAP_URLS`, `LDAP_USERNAME`. The port follows the scheme (636 or 389). `ldap.port: 389` with the default `ldaps` scheme fails the render: set `ldap.scheme: ldap` deliberately for plain LDAP |
 | `ldap.userBaseDn`, `ldap.userFilter`, `ldap.groupBaseDns` | `APPLICATION_USERBASEDN`, `APPLICATION_USERLDAPFILTER`, `APPLICATION_GROUPS_n_GROUPSBASEDN` |
 | `ldap.attributes.*` | `APPLICATION_USERLDAP*ATTRIBUTE`, `APPLICATION_MANAGERLDAPIDATTRIBUTE` |
 | `superUserDns` | `APPLICATION_SUPERUSERDNS_n` |
@@ -253,6 +264,12 @@ commas.
 | `tls.*` | `SSL_ENABLED`, `SERVER_SSL_*` |
 | `windowsAuth.*` | `APPLICATION_WINDOWSAUTH_*` |
 | `audit.*` | `ENS_AUDIT_*` (see [Audit logging](../audit-logging.md)) |
+| `csp.reportOnly`, `consentBanner.*`, `session.*` | `ENS_CSP_REPORT_ONLY`, `ENS_CONSENT_BANNER_*`, `ENS_SESSION_*` |
+| `x509.*` | `ENS_X509_*` (see [Client certificates](#client-certificates-cacpiv)) |
+| `database.migration.*` | `SPRING_FLYWAY_USER`, `SPRING_FLYWAY_PASSWORD` |
+| `metrics.enabled` (`true`), `metrics.port` (`9090`), `metrics.serviceMonitor.*`, `metrics.allowFrom` | `MANAGEMENT_SERVER_PORT`: Prometheus and the probes on a port of their own |
+| `logFormat` (`json`) | `LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs`; `text` for plain lines |
+| `backup.*` | A database backup CronJob (off by default; see [Operations](operator-guide.md#backups)) |
 | `bannerText`, `timezone`, `checkOutAfterMinutes`, `updateProfileUrl`, `logLevel`, `javaOpts` | The settings under "Other" |
 
 Anything else from [Configuration](configuration.md) goes in `extraEnv`, as an environment variable
@@ -266,9 +283,9 @@ helm install readyroom oci://ghcr.io/winllc/charts/readyroom --version 1.2.3 \
 kubectl -n readyroom rollout status deploy/readyroom
 ```
 
-The first start takes a minute or two while ReadyRoom creates its tables. The startup probe allows
-up to 10 minutes. A Job named `readyroom-migrate-<revision>` then runs the database scripts; see
-[Prepare PostgreSQL](#prepare-postgresql). Check the release with `helm test readyroom -n readyroom`.
+The first start takes a minute or two while ReadyRoom creates its schema with Flyway; see
+[Prepare PostgreSQL](#prepare-postgresql). The startup probe allows up to 10 minutes. Check the
+release with `helm test readyroom -n readyroom`.
 
 The chart runs one replica. ReadyRoom's license volume and its scheduled jobs (directory sync,
 auto check-out, absence emails) are single-writer, so more replicas are not supported.
@@ -321,10 +338,11 @@ certificates, ReadyRoom must terminate TLS itself, so traffic must reach the pod
       tls:
         - secretName: readyroom-ingress-tls
           hosts: [readyroom.example.com]
-    extraEnv:
-      - name: SESSION_COOKIE_SECURE   # the ingress terminates TLS: keep the cookie HTTPS-only
-        value: "true"
     ```
+
+    With `ingress.tls` set (and no `ssl-passthrough` annotation), or a route with `edge` or
+    `reencrypt` termination, the chart sets `ENS_COOKIE_SECURE=true` and
+    `SERVER_FORWARD_HEADERS_STRATEGY=framework` itself.
 
 === "Ingress with TLS passthrough"
 
@@ -402,14 +420,13 @@ helm upgrade readyroom oci://ghcr.io/winllc/charts/readyroom --version 1.2.4 \
     -n readyroom -f readyroom-values.yaml
 ```
 
-The license claim and the database are kept. ReadyRoom updates its schema on start, and the
-migration Job runs the database scripts again; they skip what is already done.
+The license claim and the database are kept. The new pod migrates the schema as it starts (Flyway;
+see the release package's [Upgrade](#6-upgrade) for the first upgrade to a release with Flyway). The
+migration Job and the `migrations.enabled` value are gone.
 
 Before upgrading with `tls.enabled`, set `tls.truststore.secretName` (or `tls.clientAuth: none`):
-the chart does not render without it. With `migrations.enabled: false`, run
-`001_indexes_and_unique_user_dn.sql` yourself before upgrading if it has never run and
-`check_in_out_records` is large, for the reason given in
-[Upgrade with the release package](#6-upgrade).
+the chart does not render without it. With `metrics.enabled` (now `true` by default), the probes
+move to the management port, 9090, and the log lines become JSON unless `logFormat: text`.
 
 ### 7. Uninstall
 
@@ -434,7 +451,7 @@ Mirror the images into your registry, keeping their paths:
 | Image | Mirror as |
 |---|---|
 | `ghcr.io/winllc/in-n-out-work:<version>` | `<registry>/winllc/in-n-out-work:<version>` |
-| `postgres:16` (migration Job and embedded database) | `<registry>/postgres:16` |
+| `postgres:16` (the embedded database and the backup CronJob) | `<registry>/postgres:16` |
 | `busybox:1.36.1` (license init container) | `<registry>/busybox:1.36.1` |
 
 The release package's `images/` archive holds the ReadyRoom and PostgreSQL images (`docker load`,
@@ -463,62 +480,55 @@ This runs PostgreSQL 16 in the release, with a generated password and a volume o
 
 ## Prepare PostgreSQL
 
-With the release package, PostgreSQL is already set up. With Helm, use your own server.
+With the release package, PostgreSQL (16) is already set up. With Helm, use your own server.
 
-1. **Create a database and an owner account** (Helm, with your own server):
+1. **Create a database and an account that owns it** (Helm, with your own server):
 
     ```sql
     CREATE ROLE readyroom LOGIN PASSWORD 'change-me';
     CREATE DATABASE readyroom OWNER readyroom;
     ```
 
-2. **Start ReadyRoom once.** Hibernate (`spring.jpa.hibernate.ddl-auto: update`) creates the tables
-   and columns:
+2. **Start ReadyRoom.** It creates and migrates its own schema with Flyway when it starts, before it
+   serves anything. The migrations ship inside the application and run in version order, each once
+   per database, recorded in `flyway_schema_history`. Hibernate only checks the result
+   (`ddl-auto: validate`): ReadyRoom does not start against a schema that does not match. There is
+   no script to run and no migration Job. The tables:
 
     | Table | Holds |
     |---|---|
     | `check_in_out_records` | Every check-in, lock, unlock and check-out event, with the session id (which no page or API shows, apart from the check-in's own answer) and the user's organization attributes at that moment |
-    | `user_records` | One row per user DN: role, notes, favorite groups, additional managers, preferred and average login time, and directory metadata |
+    | `user_records` | One row per user DN, unique regardless of letter case: role, notes, favorite groups, additional managers, preferred and average login time, and directory metadata |
     | `user_event_records` | Per-day statuses (work from home, leave, late arrival, and so on) |
     | `notification_records` | Absence alerts and managers' responses |
     | `permission_records` | Per-user group grants |
     | `group_records` | Additional managers assigned to a group |
     | `global_calendar_records` | Organization calendar events and holidays |
     | `org_parse_rules` | Org-chart parse rules |
+    | `audit_events`, `audit_chain_head`, `audit_output_state`, `audit_api_tokens` | The audit trail (`ens-audit/1`, append-only, enforced by a trigger), the chain's newest sequence number and hash, how far each audit output has delivered, and the pull API's tokens |
+    | `flyway_schema_history` | The migrations applied |
 
-3. **Run the database script.** Hibernate creates no constraints, and no index except the one on
-   the session id.
-   `001_indexes_and_unique_user_dn.sql` adds the indexes that the DN and date lookups need, and makes
-   the user DN unique regardless of case. Before it adds the constraint, it merges any user rows
-   whose DNs differ only by case.
+    If a migration fails, ReadyRoom does not start and nothing of that migration is applied: each runs
+    in one transaction. Fix the cause the log names and start it again.
 
-    === "Release package"
+3. **Optional: a separate migration account.** By default ReadyRoom migrates with its own account
+   (`DB_USERNAME`), which therefore owns the schema. To limit that account to reading and writing
+   rows, let a second account own and migrate the schema: `SPRING_FLYWAY_USER` and
+   `SPRING_FLYWAY_PASSWORD` (Helm: `database.migration.username` and `.password` or
+   `.existingSecret`). Create the database owned by the migration account, then, connected as the
+   migration account, before ReadyRoom first starts:
 
-        Back up the database, then, from the release directory:
+    ```sql
+    REVOKE CREATE ON SCHEMA public FROM PUBLIC;            -- PostgreSQL 14 and older; 15+ already does this
+    GRANT USAGE ON SCHEMA public TO readyroom;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO readyroom;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO readyroom;
+    ```
 
-        ```bash
-        docker compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1' \
-            < migrations/001_indexes_and_unique_user_dn.sql
-        ```
-
-    === "Helm"
-
-        The chart does this for you. On every install and upgrade, a Job waits until ReadyRoom has
-        created its tables and then runs every script with `psql`. Follow it with:
-
-        ```bash
-        kubectl -n readyroom logs -f job/readyroom-migrate-1   # the number is the release revision
-        ```
-
-        The log ends with `Migration 001 complete.` Set `migrations.enabled: false` to run the
-        scripts yourself instead.
-
-    !!! warning "Do not use `--single-transaction`"
-        The indexes are built with `CREATE INDEX CONCURRENTLY`, so the application can keep running
-        and writing while they build, and that cannot happen inside a transaction. Only the short
-        merge step takes a lock, and only on `user_records`. You can run the script again safely:
-        existing indexes are skipped, and an invalid index left by an interrupted run is dropped and
-        rebuilt. If the tables do not exist yet, the script stops with an error.
+    For an existing database whose tables the application's account owns, first hand them over as a
+    superuser (`REASSIGN OWNED BY readyroom TO readyroom_owner;`), then run the statements above and
+    `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO readyroom;` and
+    `GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO readyroom;`.
 
 ## Connect the LDAP directory
 
@@ -526,7 +536,7 @@ Set the connection and describe your directory:
 
 | Setting | `.env` | Helm value |
 |---|---|---|
-| Server | `LDAP_HOST`, `LDAP_PORT`, or `SPRING_LDAP_URLS=ldaps://ldap.example.com:636` | `ldap.host`, `ldap.port`, or `ldap.url` |
+| Server | `SPRING_LDAP_URLS=ldaps://ldap.example.com:636` (the template's default), or `LDAP_HOST` and `LDAP_PORT` for plain LDAP | `ldap.host` with `ldap.scheme` (`ldaps` by default), or `ldap.url` |
 | Bind account | `LDAP_USERNAME`, `LDAP_PASSWORD` | `ldap.bindDn`, `ldap.bindPassword` or `ldap.existingSecret` |
 | Users | `APPLICATION_USERBASEDN`, `APPLICATION_USERLDAPFILTER` | `ldap.userBaseDn`, `ldap.userFilter` |
 | Group trees | `APPLICATION_GROUPS_0_GROUPSBASEDN`, `_1_`, ... | `ldap.groupBaseDns` |
@@ -534,8 +544,13 @@ Set the connection and describe your directory:
 | Attributes | `APPLICATION_USERLDAPORGANIZATIONATTRIBUTE` (`o`), `...LOCATIONATTRIBUTE` (`l`), `...EMPLOYEETYPEATTRIBUTE` (`employeeType`), `...DUTYSUBORGANIZATIONATTRIBUTE` (`departmentNumber`), `APPLICATION_USERLDAPMANAGERIDATTRIBUTE` (`title`), `APPLICATION_MANAGERLDAPIDATTRIBUTE` (`street`) | `ldap.attributes.*` |
 | Org chart | `APPLICATION_DUTYSUBORGGROUPSBASEDN` | `orgChart.groupsBaseDn` |
 
-For LDAPS, the directory's certificate must be trusted by the JVM. A certificate from a public CA
-is.
+LDAPS is the default. The directory's certificate must be trusted by the JVM; a certificate from a
+public CA is. For a private CA there is no chart or release-package setting: give the JVM a trust
+store that holds every CA it must trust, with `JAVA_OPTS` (Helm: `javaOpts`, and the file through
+`extraVolumes` and `extraVolumeMounts`), for example
+`-Djavax.net.ssl.trustStore=/path/truststore.p12 -Djavax.net.ssl.trustStorePassword=...`. Keep
+the default `-XX:MaxRAMPercentage=75.0` when you set it. Password sign-in over `ldap://` without
+StartTLS sends passwords in clear text, and ReadyRoom logs a warning at startup.
 
 Things to check in the directory:
 
@@ -614,6 +629,82 @@ with it. One that does not is sent to the login form.
 
         Then make TLS reach the pod unchanged: see [Expose ReadyRoom](#5-expose-readyroom).
 
+### Client certificates (CAC/PIV)
+
+Client-certificate sign-in is on whenever ReadyRoom terminates TLS and asks for certificates
+(`SSL_ENABLED=true`, `SERVER_SSL_CLIENTAUTH=want`), or whenever certificates come from a proxy
+(`ENS_X509_SOURCE=header`). The browser pages and the Windows client's calls apply the same rules.
+Each refusal is audited as a failed `auth.login` (`details.method` `x509`) with its reason, for
+example `certificate revoked`, `revocation unknown`, `issuer not allowed`,
+`no single directory user matches`, `proxy secret missing or wrong` or
+`certificate not issued by a trusted CA`.
+
+**Who a certificate signs in as.** By default its subject DN must be the user's directory DN. With
+`ENS_X509_USER_FILTER` (Helm: `x509.userFilter`), ReadyRoom searches for the user with an LDAP filter
+under `user-base-dn`, together with `user-ldap-filter`; exactly one entry must match, or nobody signs
+in. Values are LDAP-filter-escaped.
+
+| Placeholder | Value |
+|---|---|
+| `{upn}` | The subject alternative name otherName UserPrincipalName (OID 1.3.6.1.4.1.311.20.2.3) |
+| `{edipi}` | The DoD EDIPI: the digits before `@` of a UPN `1234567890@mil`, or else the trailing `.NNNNNNNNNN` of the CN (`LAST.FIRST.MI.1234567890`) |
+| `{email}` | The rfc822Name subject alternative name, or else the subject's emailAddress |
+| `{uuid}` | The UUID of a `urn:uuid:` URI subject alternative name (the PIV FASC-N UUID), without `urn:uuid:` |
+| `{subject}`, `{cn}` | The subject DN (RFC 2253), and its most specific CN |
+
+For example `(userPrincipalName={upn})` for Active Directory and CAC, or
+`(|(employeeNumber={edipi})(mail={email}))`.
+
+| Env var | Default | Helm | Purpose |
+|---|---|---|---|
+| `ENS_X509_USER_FILTER` | none: the subject DN is the directory DN | `x509.userFilter` | The LDAP filter template that finds the user |
+| `ENS_X509_ALLOWED_ISSUERS` | none: any trusted CA | `x509.allowedIssuers` | Issuer DNs whose certificates may sign in, `;` separated; others are refused even when a trusted CA chains to them |
+| `ENS_X509_REVOCATION` | `off` | `x509.revocation.mode` | `off`, `ocsp`, `crl` or `ocsp-then-crl`. Off by default, for upgrades; with certificates in use and revocation off, startup logs that DISA STIG requires it |
+| `ENS_X509_OCSP_RESPONDER_URL` | the certificate's AIA | `x509.revocation.ocspResponderUrl` | A responder to ask instead, for example a local OCSP relay |
+| `ENS_X509_CRL_DIR` | none | `x509.revocation.crlConfigMap` | A directory of CRL files (DER or PEM), re-read when they change. With it set, distribution points are never fetched: the air-gapped option |
+| `ENS_X509_REVOCATION_FAIL` | `closed` | `x509.revocation.fail` | `closed` refuses a certificate whose status can't be determined; `open` allows it with a warning |
+| `ENS_X509_REVOCATION_CACHE` | `10m` | `x509.revocation.cache` | How long a good or revoked answer is kept, per issuer and serial |
+
+Network fetches for revocation time out after 5 s (connect) and 10 s (response), follow no
+redirects, are capped at 1 MB (OCSP) and 20 MB (CRL), and never go to a link-local or cloud metadata
+address. The JDK's PKIX validator judges every answer, configured for that one check. The issuer's
+certificate must be known: in the chain the client sent, in `ENS_X509_TRUSTED_CA_FILE`, or in the TLS
+trust store.
+
+**Certificates from a TLS-terminating proxy** (`ENS_X509_SOURCE=header`). The proxy (an ingress or a
+load balancer) verifies the client certificate and forwards it as URL-encoded PEM, as nginx's
+`$ssl_client_escaped_cert` sends it, in `ENS_X509_HEADER`, together with a shared secret in
+`X-ENS-Proxy-Secret`. ReadyRoom takes the certificate only from an address in
+`ENS_X509_TRUSTED_PROXIES` with the right secret, compared in constant time, checks that it chains to
+`ENS_X509_TRUSTED_CA_FILE` (or the TLS trust store) and is valid, and otherwise ignores it and audits
+the refusal. A certificate on the connection itself is not used in this mode. ReadyRoom refuses to
+start in header mode without a secret of 32 characters or more, or without a CA; the Helm chart
+refuses to render likewise. Let nothing but the proxy reach ReadyRoom's port.
+
+| Env var | Default | Helm | Purpose |
+|---|---|---|---|
+| `ENS_X509_SOURCE` | `servlet` | `x509.source` | `servlet` (ReadyRoom terminates TLS) or `header` |
+| `ENS_X509_HEADER` | `X-SSL-Client-Cert` | `x509.header` | The header the certificate arrives in (ingress-nginx: `ssl-client-cert`) |
+| `ENS_X509_TRUSTED_PROXIES` | `127.0.0.1/32;::1/128` | `x509.trustedProxies` (`10.0.0.0/8;172.16.0.0/12;192.168.0.0/16`) | Addresses (CIDRs) allowed to send it, `;` or `,` separated |
+| `ENS_X509_PROXY_SECRET_FILE` / `ENS_X509_PROXY_SECRET` | none | `x509.proxySecret.*` | The secret the proxy sends, 32 characters or more; the file wins. Required in header mode |
+| `ENS_X509_TRUSTED_CA_FILE` | none | `x509.trustedCa.*` | PEM certificates of the CAs that issue user certificates: header mode's chain check (required there unless the TLS trust store is configured), and issuers for revocation |
+
+For nginx in front of ReadyRoom:
+
+```nginx
+ssl_client_certificate /etc/nginx/user-cas.pem;
+ssl_verify_client optional;
+proxy_set_header X-SSL-Client-Cert $ssl_client_escaped_cert;
+proxy_set_header X-ENS-Proxy-Secret "<the secret>";
+```
+
+!!! warning "Header mode with ingress-nginx and OpenShift"
+    - **ingress-nginx:** the proxy secret header is added with a `configuration-snippet` annotation,
+      which ingress-nginx disables by default since version 1.9. Allow snippets on your controller,
+      or use another proxy.
+    - **OpenShift:** an edge route does not forward client certificates, so header mode needs a
+      separate proxy. Servlet mode with a passthrough route works.
+
 ## Configure email
 
 Absence alerts are sent through Spring Mail. Set the SMTP host, port, username and password, the
@@ -625,17 +716,22 @@ From address, and the public URL, which becomes the link in each email. See
 | Server | `SPRING_MAIL_HOST`, `SPRING_MAIL_PORT` | `smtp.host`, `smtp.port` |
 | Account | `SPRING_MAIL_USERNAME`, `SPRING_MAIL_PASSWORD` | `smtp.username`, `smtp.password` or `smtp.existingSecret` |
 | AUTH and STARTTLS (on by default) | `SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH`, `..._STARTTLS_ENABLE` | `smtp.auth`, `smtp.starttls` |
-| Trusted mail server certificates (default `*`, any) | `SPRING_MAIL_PROPERTIES_MAIL_SMTP_SSL_TRUST` | `smtp.sslTrust` |
+| Trust a mail server's certificate without checking it (opt-in; unset by default) | `SPRING_MAIL_PROPERTIES_MAIL_SMTP_SSL_TRUST` | `smtp.sslTrust` |
 | From address | `APPLICATION_NOTIFICATIONSENDEREMAIL` | `smtp.from` |
 | Link in each email | `APPLICATION_BASE_URL` | `publicUrl` |
 
-The packaged configuration points at a development mail host, so always set the server.
+No mail server is packaged. Without `SPRING_MAIL_HOST`, absence alerts are recorded but not
+emailed, and startup logs a warning. With it, `APPLICATION_NOTIFICATIONSENDEREMAIL` is required.
+STARTTLS is required by default: nothing, credentials included, is sent to a server that doesn't
+offer it. The mail server's certificate is checked against the JVM's trust store; earlier releases
+trusted any certificate. Sends time out after 30 seconds.
 
 !!! note "Health and mail"
-    `/actuator/health` includes the mail server. If it cannot be reached, ReadyRoom reports `DOWN`
-    and the release package's container shows as unhealthy, although everything except email
-    works. Set `MANAGEMENT_HEALTH_MAIL_ENABLED=false` (Helm: `smtp.healthCheck: false`) if you do
-    not use email. The Helm chart's liveness and readiness probes never include the mail server.
+    The aggregate `/actuator/health` includes the mail server. If it cannot be reached, ReadyRoom
+    reports `DOWN` and the release package's container shows as unhealthy, although everything
+    except email works. Set `MANAGEMENT_HEALTH_MAIL_ENABLED=false` (Helm: `smtp.healthCheck: false`)
+    if you do not use email. The liveness and readiness groups never include the mail server; the
+    Helm chart's probes use them, on the management port (9090) while `metrics.enabled` is `true`.
 
 Set the time zone deliberately. `APPLICATION_TIMEZONE` sets the JVM default time zone, which
 decides what "today" means for every page and job, and `SPRING_JACKSON_TIMEZONE` the zone dates are
@@ -720,14 +816,21 @@ For mass deployment, configuration files, parameters and what each task does, se
       bind a license. See [Licensing](../licensing.md).
 - [ ] You know where the license volume is (`readyroom_ens-license`, or the `readyroom-license`
       claim) and it is in your backups, together with the database.
-- [ ] The database script has run (release package: by hand; Helm: the migration Job's log ends with
-      `Migration 001 complete.`).
+- [ ] The schema is migrated: the log shows `Successfully applied 1 migration` on the first start
+      (or `Schema "public" is up to date` later).
+- [ ] Backups are scheduled: `./backup.sh` from cron (release package), or `backup.enabled` and
+      license-volume snapshots (Helm). See [Operations](operator-guide.md#backups).
+- [ ] For DoD systems: the consent banner is on (`ENS_CONSENT_BANNER_ENABLED=true`), and, with
+      certificates in use, revocation checking (`ENS_X509_REVOCATION`).
 - [ ] Audit events reach your SIEM, if you configured one. See [Audit logging](../audit-logging.md).
 
 ## Verify the installation
 
-- [ ] The health endpoint returns `{"status":"UP"}`:
-      `curl -k https://readyroom.example.com:8181/actuator/health` (release package), or
+- [ ] The probes return `{"status":"UP"}`: `/actuator/health/liveness` and
+      `/actuator/health/readiness` (readiness covers the database, the directory and the audit
+      store), on port 8181, or on `MANAGEMENT_SERVER_PORT` when it is set (Helm: 9090, through
+      `kubectl port-forward`). For example
+      `curl -k https://readyroom.example.com:8181/actuator/health/readiness`, or
       `helm test readyroom -n readyroom` (Helm).
 - [ ] The startup log (`docker compose logs app`, or `kubectl -n readyroom logs deploy/readyroom`)
       shows `Default time zone set to ...` with the zone you expect, and

@@ -23,6 +23,26 @@ tier.
 | License | An ENS license file (`.lic`). For a trial, download an evaluation license from the ENS licensing portal. See [Licensing](../licensing.md) |
 | Release | The release download from ENS Solutions, verified as described in [Releases](../releases.md) |
 
+### Directory servers: what is tested
+
+The portal talks plain LDAPv3 through the UnboundID LDAP SDK and makes no server-specific calls.
+Metrics and analyses read entries with the Simple Paged Results control (500 entries a page),
+marked non-critical, so a server without it still answers up to its own size limit. This is what
+the portal's own tests and CI actually run against:
+
+| Directory server | Status | What runs |
+|---|---|---|
+| UnboundID in-memory directory server (the embedded demo directory, `DIRECTORY_MODE=memory`) | **Tested** on every build | The whole backend test suite: sign-in, groups, permissions, entry CRUD and renames, schema pull, metrics, analyses, X.509 mapping. Also CI's image smoke test |
+| OpenLDAP (`slapd` from Ubuntu's package, the demo image in `deploy/openldap`) | Built for the demo only | Not run by the automated tests or CI. Used by `install.sh --demo-openldap` and the source tree's compose demo |
+| OpenLDAP or 389 Directory Server in production | **Not tested** | The configuration examples are illustrations built from the documented settings |
+| Microsoft Active Directory | **Not tested** | The configuration example (`sAMAccountName`, `memberOf`) is an illustration. AD-specific behaviour, such as setting `unicodePwd`, has not been tested |
+| Others (Oracle, OpenDJ/PingDS, eDirectory, ApacheDS) | **Not tested** | |
+| LDAPS and StartTLS | **Not covered by automated tests** | The embedded directory listens on plain LDAP only |
+
+If you run the portal against a directory that isn't tested, try it on a test instance of that
+directory first: sign-in with your user and group filters, schema pull, and one create, update,
+rename and delete through a form.
+
 ### For the release package
 
 | Package | Requirement |
@@ -88,7 +108,7 @@ Choose how the portal is published:
     ./install.sh --http 8080
     ```
     Adds `docker-compose.publish.yml`, which publishes the web tier on `WEB_BIND:WEB_PORT`. Put a
-    TLS-terminating proxy in front of it, and set `COOKIE_SECURE=true` in `.env`.
+    TLS-terminating proxy in front of it, and set `ENS_COOKIE_SECURE=true` in `.env`.
 
 === "HTTPS + X.509"
 
@@ -97,7 +117,7 @@ Choose how the portal is published:
     ```
     Adds `docker-compose.mtls.yml`: nginx serves HTTPS on `HTTPS_PORT` with
     `certs/server.pem`, `certs/server.key` and `certs/ca.pem`, and the installer sets
-    `X509_ENABLED=true` and `COOKIE_SECURE=true`. Plain HTTP on 8080 redirects to HTTPS. nginx
+    `X509_ENABLED=true` and `ENS_COOKIE_SECURE=true`. Plain HTTP on 8080 redirects to HTTPS. nginx
     forwards a verified certificate to the API together with `X509_PROXY_SECRET` from `.env`; the
     API accepts a forwarded certificate only with that secret, and checks it against
     `certs/ca.pem` too.
@@ -126,6 +146,7 @@ Choose how the portal is published:
 | `--http [PORT]` | Publish plain HTTP on PORT (default 8080) |
 | `--https [PORT]` | Publish HTTPS on PORT (default 8443), X.509 sign-in available; needs `./certs` |
 | `--demo` | Built-in demo directory (no LDAP server), demo users and dashboards |
+| `--demo-openldap` | A demo OpenLDAP container (`docker-compose.openldap.yml`) loaded with the demo organisation, when the package includes its image |
 | `--force-env` | Rewrite `.env` (the old one is kept as `.env.bak-<time>`) |
 | `--start` | Run `./portal.sh up` afterwards |
 | `--skip-verify` | Don't check `SHA256SUMS` |
@@ -157,6 +178,21 @@ All settings are described in [Configuration](configuration.md).
 `.env` holds the bind password and the generated `X509_PROXY_SECRET`, so keep it private (mode
 `600`). Leave `X509_PROXY_SECRET` as generated; to change it, set a new value of at least 32
 characters (for example `openssl rand -hex 32`) and run `./portal.sh up`.
+
+The `.env` written by this release also has these sections; they are described in
+[Configuration](configuration.md):
+
+| Section | Settings |
+|---|---|
+| Sessions and lockout | `ENS_SESSION_IDLE_TIMEOUT` (`30m`), `ENS_SESSION_ADMIN_IDLE_TIMEOUT`, `ENS_SESSION_ABSOLUTE_TIMEOUT` (`12h`), `ENS_SESSION_MAX_PER_USER` (`0`), `GROUP_REFRESH_INTERVAL` (`5m`), `LOGIN_MAX_FAILURES` (`8`), `LOGIN_LOCKOUT_WINDOW` (`15m`) |
+| Headers and cookies | `ENS_COOKIE_SECURE`, `ENS_CSP_REPORT_ONLY` |
+| Consent banner | `ENS_CONSENT_BANNER_ENABLED`, `_TITLE`, `_TEXT`, `_FILE` |
+| X.509 revocation | `ENS_X509_REVOCATION`, `ENS_X509_OCSP_RESPONDER_URL`, `ENS_X509_CRL_DIR`, `ENS_X509_REVOCATION_FAIL`, `ENS_X509_REVOCATION_CACHE`, `ENS_X509_ALLOWED_ISSUERS` |
+| Logs and monitoring | `LOGGING_STRUCTURED_FORMAT_CONSOLE` and `MANAGEMENT_SERVER_PORT`, both commented out |
+| Memory | `API_MEMORY_LIMIT` (`1536m`), `WEB_MEMORY_LIMIT` (`256m`) |
+
+An `.env` carried over from an earlier release keeps its old settings and lacks these lines; the
+defaults then apply, except that an old `SESSION_TTL_MINUTES` keeps setting the idle timeout.
 
 #### License
 
@@ -215,6 +251,7 @@ tar xzf directory-services-portal-<version>-native.tar.gz
 cd directory-services-portal-<version>-native
 sudo ./install.sh                     # add --start to start it right away
 sudo vi /etc/directory-services-portal/portal.env
+printf '%s' 'the-password' | sudo tee /etc/directory-services-portal/ldap-bind-password >/dev/null
 sudo systemctl restart directory-services-portal
 ```
 
@@ -224,12 +261,13 @@ The installer verifies `SHA256SUMS`, creates the system user `dsp` and installs:
 |---|---|
 | `/opt/directory-services-portal/api/directory-services-portal.jar` | The API, run by systemd as user `dsp` on `127.0.0.1:3001` |
 | `/opt/directory-services-portal/web` | The web client (static files) |
-| `/etc/directory-services-portal/portal.env` | Settings (mode `640`, `root:dsp`); kept on upgrades |
+| `/etc/directory-services-portal/portal.env` | Settings (mode `640`, `root:dsp`); kept on upgrades. A new `portal.env` sets `LDAP_BIND_PASSWORD_FILE` and `MANAGEMENT_SERVER_ADDRESS=127.0.0.1` |
+| `/etc/directory-services-portal/ldap-bind-password` | The LDAP service account's password (mode `640`, `root:dsp`), read through `LDAP_BIND_PASSWORD_FILE`. Created empty if missing and never overwritten; write the password into it. An upgraded `portal.env` that still sets `LDAP_BIND_PASSWORD` keeps working |
 | `/etc/directory-services-portal/proxy-secret` | The X.509 proxy secret (mode `640`, `root:dsp`), generated once and kept. The API reads it through `X509_PROXY_SECRET_FILE`, set in the systemd unit |
 | `/etc/directory-services-portal/nginx-proxy-secret.conf` | The copy of the proxy secret that nginx includes (mode `600`, `root`), rewritten from `proxy-secret` on every run |
 | `/var/lib/directory-services-portal` | Data: configuration, audit log, analysis results (back this up) |
 | `/var/lib/ens/directory-portal` | The ENS license and this installation's id; keep it |
-| `/etc/systemd/system/directory-services-portal.service` | The systemd unit (hardened: `ProtectSystem=strict`, `ReadWritePaths` limited to the data and license directories) |
+| `/etc/systemd/system/directory-services-portal.service` | The systemd unit, hardened: `ProtectSystem=strict` with `ReadWritePaths` limited to the data and license directories, no capabilities, a system-call filter, `UMask=0077` and more (see [Security](security.md#network-exposure)) |
 | `/etc/nginx/conf.d/directory-services-portal.conf` (or `sites-enabled/`) | Serves the client on port 8080 and proxies `/api` to `127.0.0.1:3001` (only when nginx is installed) |
 
 - **License:** sign in as an administrator and upload it under *Administration > License*, or
@@ -237,7 +275,9 @@ The installer verifies `SHA256SUMS`, creates the system user `dsp` and installs:
   `sudo install -m 640 -o dsp -g dsp license.lic /var/lib/ens/directory-portal/license.lic`.
 - **Logs:** `journalctl -u directory-services-portal -f`.
 - **HTTPS:** terminate TLS in nginx (add a `listen 443 ssl` server, or put a proxy in front) and
-  set `COOKIE_SECURE=true`.
+  set `ENS_COOKIE_SECURE=true`.
+- **Prometheus:** set `MANAGEMENT_SERVER_PORT` (for example `9090`) in `portal.env`. It listens on
+  `127.0.0.1` only (`MANAGEMENT_SERVER_ADDRESS`).
 - **SELinux:** with SELinux enforcing, run `setsebool -P httpd_can_network_connect 1` so that
   nginx can reach the API.
 - **X.509 sign-in through nginx:** use `X509_SOURCE=header` with
@@ -307,10 +347,17 @@ same version. The chart's README lists every value. Run
 |---|---|
 | `ldap.*`, `admin.*` | Directory connection, users and groups, administrators (the `LDAP_*` and `ADMIN_*` settings) |
 | `directory.mode` | `ldap`, or `memory` for the built-in demo directory (evaluation only) |
-| `server.*` | Session lifetime, secure cookies (`auto` by default), login hint, banner |
-| `metrics.*`, `analysis.*`, `jobs.*` | Metrics, analysis and background-task limits |
+| `server.session.*` | `idleTimeout` (`30m`), `adminIdleTimeout`, `absoluteTimeout` (`12h`), `maxPerUser` (`0`). The deprecated `server.sessionTtlMinutes`, when set, still wins over `idleTimeout` |
+| `server.groupRefreshInterval`, `server.login.*` | Group refresh (`5m`); `maxFailures` (`8`) and `lockoutWindow` (`15m`) for the sign-in lockout |
+| `server.consentBanner.*` | `enabled`, `title`, `text`: the DoD notice-and-consent banner |
+| `server.*` (other) | Secure cookies (`cookieSecure: auto`), `cspReportOnly`, login hint, page banner, header size |
+| `metrics.enabled`, `metrics.port` | `true`, `9090`: Prometheus and the probes on a management port of their own, the `metrics` port of the API's Service (never the ingress or route) |
+| `metrics.serviceMonitor.*`, `metrics.allowFrom` | A Prometheus Operator ServiceMonitor; NetworkPolicy peers admitted to the metrics port |
+| `logFormat` | `json` (ECS JSON log lines, the default) or `text` |
+| `metrics.maxEntries` and the rest of `metrics.*`, `analysis.*`, `jobs.*` | Metrics, analysis and background-task limits |
 | `audit.*` | Audit outputs: stdout, a rolling file, Splunk HEC, syslog, retention (see [Audit logging](../audit-logging.md)) |
 | `x509.*`, `tls.*` | Certificate sign-in, and HTTPS in the web pod |
+| `x509.revocation.*`, `x509.allowedIssuers` | `mode` (`off`), `ocspResponderUrl`, `crlDir`, `fail` (`closed`), `cache` (`10m`), and `egress` (ports 80 and 443) for OCSP and CRL fetches under a NetworkPolicy |
 | `persistence.license`, `persistence.data` | The two volumes: `size`, `storageClass`, `accessModes`, `existingClaim` |
 | `ingress.*`, `route.*`, `service.*` | How users reach the portal |
 | `networkPolicy.*` | Optional NetworkPolicies for both workloads; required for edge-terminated X.509 sign-in |
@@ -333,7 +380,7 @@ stores it in its own Secret) or taken from a Secret you create:
 
 | Secret | Inline value | Existing Secret |
 |---|---|---|
-| LDAP bind password | `ldap.bindPassword.value` | `ldap.bindPassword.existingSecret`, `.existingSecretKey` |
+| LDAP bind password (mounted into the API pod as a file, `LDAP_BIND_PASSWORD_FILE`) | `ldap.bindPassword.value` | `ldap.bindPassword.existingSecret`, `.existingSecretKey` |
 | Splunk HEC token | `audit.splunk.token.value` | `audit.splunk.token.existingSecret`, `.existingSecretKey` |
 | LDAPS trust store password | `ldap.truststore.password.value` | `ldap.truststore.password.existingSecret`, `.existingSecretKey` |
 | ENS license | `license.file` (`--set-file`) | `license.existingSecret` (key `license.lic`) |
@@ -564,13 +611,13 @@ For any installation that isn't a demo, set at least these values: in `.env` (Do
 | `DIRECTORY_MODE` | `directory.mode` | `ldap` |
 | `LDAP_URL` | `ldap.url` | `ldaps://ldap.example.com:636` |
 | `LDAP_BIND_DN` | `ldap.bindDn` | `cn=portal,ou=system,dc=example,dc=com` |
-| `LDAP_BIND_PASSWORD` | `ldap.bindPassword` | (a Secret) |
+| `LDAP_BIND_PASSWORD_FILE` or `LDAP_BIND_PASSWORD` | `ldap.bindPassword` | (a Secret, mounted as a file) |
 | `LDAP_BASE_DN` | `ldap.baseDn` | `dc=example,dc=com` |
 | `LDAP_USER_SEARCH_BASE` | `ldap.userSearchBase` | `ou=people,dc=example,dc=com` |
 | `LDAP_GROUP_SEARCH_BASE` | `ldap.groupSearchBase` | `ou=groups,dc=example,dc=com` |
 | `ADMIN_USERS` | `admin.users` | `jdoe` |
 | `ADMIN_GROUPS` | `admin.groups` | `cn=directory-admins,ou=groups,dc=example,dc=com` |
-| `COOKIE_SECURE` | `server.cookieSecure` | `true` whenever browsers use HTTPS |
+| `ENS_COOKIE_SECURE` | `server.cookieSecure` | `true` whenever browsers use HTTPS |
 
 Separate several administrators with `;` (DNs contain commas); in Helm, use a list. For
 `ldaps://` with a private CA, see
@@ -600,7 +647,9 @@ see [Audit logging](../audit-logging.md).
 | Check | Command / action | Expected |
 |---|---|---|
 | API is up | `curl -s http://<portal>/api/health` | `{"ok":true}` |
-| Directory reachable | `curl -s http://<portal>/api/info` | JSON with `"connected":true`, `mode`, `baseDn`, `version` |
+| API is ready | `curl -s http://localhost:3001/readyz` on the API host or in the API container (`docker compose exec api ...`, `kubectl exec ...`) | `{"status":"UP"}`: the directory answers, the audit log is writable, the disk has room |
+| Directory reachable | `curl -s http://<portal>/api/info` | JSON with `"connected":true`, `mode`, `version` |
+| Images are ENS's | `cosign verify ghcr.io/winllc/directory-services-portal-api@<digest> ...` (see [Security → Supply chain](security.md#supply-chain)) | `Verification for ... The following checks were performed` |
 | Proxy works | Open `http://<portal>/` | The login page, with any configured banner and login hint |
 | Sign-in | Sign in as an administrator | The **Admin** section appears in the sidebar |
 | License | *Administration > License* | The license state, licensee and features; the installation id |
@@ -608,5 +657,6 @@ see [Audit logging](../audit-logging.md).
 | Native package | `systemctl status directory-services-portal` and `journalctl -u directory-services-portal -f` | Active (running) |
 | Helm | `kubectl get pods -n dsp` and `helm test dsp -n dsp` | Both pods `Running` and ready; the test pod succeeds |
 
-If `/api/info` shows `"connected": false`, its `error` field contains the LDAP error. See the
+If `/api/info` shows `"connected": false`, sign in as an administrator: its `error` field then
+contains the LDAP error. See the
 [troubleshooting runbook](operator-guide.md#troubleshooting-runbook).

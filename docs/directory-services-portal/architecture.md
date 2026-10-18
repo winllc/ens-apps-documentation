@@ -49,7 +49,7 @@ flowchart TB
 | Analysis | Comparisons and quality checks, findings paging, stored latest results | `analysis/*` |
 | Jobs | Background execution, progress, cancellation, deduplication, retention | `jobs/*` |
 | Config store | Single JSON document with atomic writes | `store/ConfigStore`, `store/DemoConfigSeeder` |
-| Audit | Monthly JSON Lines files, the `audit` logger, and an in-memory index for searches | `audit/AuditLog` |
+| Audit | The `ens-audit/1` store (hash-chained monthly JSON Lines files with a single synchronized writer), the `ens.audit` logger, delivery to Splunk HEC and syslog, retention, and searches over the files | `audit/*` |
 | LDAP gateway | Pooled service-account connections (UnboundID SDK), TLS options, timeouts | `ldap/LdapDirectory` |
 | Embedded directory | UnboundID in-memory server on a loopback port with demo schema and data | `ldap/EmbeddedDirectory`, `resources/demo/*` |
 
@@ -78,7 +78,8 @@ sequenceDiagram
 ## Sign-in
 
 1. `POST /api/auth/login` with username and password.
-2. The API checks the throttle (8 failures per client address and username in 15 minutes) and the
+2. The API checks that the consent banner, if enabled, has been acknowledged, then the throttle
+   (`LOGIN_MAX_FAILURES` per client address and username in `LOGIN_LOCKOUT_WINDOW`) and the
    username's characters.
 3. The API searches `LDAP_USER_SEARCH_BASE` with `LDAP_USER_FILTER` as the service account. Exactly
    one entry must match.
@@ -98,14 +99,16 @@ steps 1–4 with certificate validation and mapping. See [Security](security.md#
 | Directory entries | LDAP server | Permanent (the embedded demo server is in memory only) |
 | Forms, definitions, grants, custom schema, schema cache, dashboards, analyses | `DATA_DIR/portal-config.json` | Permanent |
 | Latest analysis results | `DATA_DIR/analysis-results/<id>.json` | Until the next run |
-| Audit events | `AUDIT_DIR` or `DATA_DIR/audit/audit-YYYY-MM.jsonl` | Permanent (append-only) |
-| Sessions | API memory | `SESSION_TTL_MINUTES` idle, or until restart |
-| Login throttle | API memory | 15 minutes |
+| Audit events | `AUDIT_DIR` or `DATA_DIR/audit/audit-YYYY-MM.jsonl` | Append-only; kept until `ENS_AUDIT_RETENTION_DAYS` removes them (default: never) |
+| Sessions | API memory | `ENS_SESSION_IDLE_TIMEOUT` idle, `ENS_SESSION_ABSOLUTE_TIMEOUT` at most, or until restart |
+| Login throttle | API memory | `LOGIN_LOCKOUT_WINDOW` (15 minutes) |
 | Background tasks and results | API memory | `JOBS_RETAIN_MINUTES`, or until restart |
 | Metric cache | API memory | `METRICS_CACHE_SECONDS` |
 | Directory-search drop-down cache | API memory | per field, 30 s by default |
 
-Because sessions, tasks and caches live in memory, run **one** API instance.
+Because sessions, tasks and caches live in memory, and the configuration and audit stores have a
+single writer, run **one** API instance. See
+[High availability](availability-and-sizing.md#high-availability).
 
 ## Background jobs
 
