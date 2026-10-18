@@ -203,7 +203,7 @@ The `/data/**` endpoints use `spring-data-jpa-datatables` and accept the standar
 
 | Method | Path | Access | Purpose |
 |---|---|---|---|
-| POST | `https://connector:8443/app/connector` | HTTP Basic with the shared secret (`CONNECTOR_AUTH_PASSWORD`); optionally a client certificate | Hessian endpoint for `RSAAuthManagerServiceInterface` (see [RSA AM Integration](rsa-integration.md#portal-to-connector)) |
+| POST | `https://connector:8443/app/connector` | HTTP Basic with the shared secret (`CONNECTOR_AUTH_PASSWORD`), and the Portal's client certificate where mutual TLS is on (new installations) | Hessian endpoint for `RSAAuthManagerServiceInterface` (see [RSA AM Integration](rsa-integration.md#portal-to-connector)) |
 | GET, HEAD | `http://localhost:8080/app/health` (inside the Connector container) | None | `UP` (200) or `DOWN` (503) |
 
 The Connector's ports are not published by the release package's `docker-compose.yml`, and the Helm chart gives the Connector only a cluster-internal Service that, by default, only the Portal's pods may reach. Keep it that way: the endpoint holds the service account's AM session.

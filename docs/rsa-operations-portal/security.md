@@ -102,6 +102,13 @@ minutes. Paths are matched as Spring Security and Spring MVC match them, so a pe
 counts the same. Once a client's address is refused, the user IDs and serials it sends stop being
 counted, which keeps the tables bounded.
 
+**Fixed windows.** The windows are aligned to the clock (UTC) and do not slide: a `10m` limit
+counts from :00, :10, :20 and so on, a `1h` limit from each full hour, and a `24h` limit from
+midnight UTC. When a window ends the full allowance is available again, so up to twice the
+allowance can arrive in a short time around a window's end. `Retry-After` says when the current
+window ends. The one exception is the PIN reset link's cap (below), a single window that starts
+when the link is issued.
+
 **Over a limit** the answer is `429 Too Many Requests` with `Retry-After` (in seconds) and
 `Cache-Control: no-store`, and Authentication Manager is not asked. Browsers get a short page;
 clients that ask for JSON get `{"error":"rate_limited","retryAfter":N}`. The first refusal in each
@@ -110,17 +117,21 @@ window is audited as `auth.rate-limited` with `details.flow`, `details.limit` an
 
 **Backoff**, per user ID and per token serial, in every flow: the first three failures are free.
 After that, each failure makes the next attempt wait 30 seconds, then twice as long each time, up to
-15 minutes. A success clears it, and the count starts again after an hour without a failure.
-Authentication Manager's own lockout policy still applies.
+15 minutes. A success clears it. The count starts again only after an hour
+(`rsa.rate-limit.backoff.forget-after`) with no failure: this is not a rolling hour, so failures
+keep adding up as long as each comes within an hour of the one before. Someone who fails on
+purpose can make a user ID wait, but never for more than 15 minutes at a time. Authentication
+Manager's own lockout policy still applies.
 
 **Feature caps.** Three limits that belong to their features are counted in the database too, and
 hold even with `rsa.rate-limit.enabled=false`:
 
 - Test My Token: `user.token.test.maxAttempts` (5) attempts per user ID per
-  `user.token.test.windowMinutes` (15);
+  `user.token.test.windowMinutes` (15), in fixed windows;
 - the PIN reset link: `cron.tokenPinCheck.resetLinkMaxAttempts` (5) tokencodes per link, over the
   link's whole life from its issue;
-- the token swap: 5 tokencodes per user per 15 minutes, each counted before the code is checked;
+- the token swap: 5 tokencodes per user per 15 minutes, in fixed windows, each counted before the
+  code is checked;
   the right code clears the count.
 
 Reaching the first two is audited as `auth.lockout`. In the read-only demo, whose database takes no
@@ -230,16 +241,29 @@ The Connector holds the AM administrator's session, so the hop to it is protecte
 |---|---|
 | HTTPS | The Portal calls `https://connector:8443/app/connector` (TLS 1.2 or 1.3) and checks the Connector's certificate and host name against `CONNECTOR_TLS_TRUSTSTORE`. There is no setting that turns the check off. A plain `http` `CONNECTOR_URL` logs a warning |
 | Shared secret | Every request carries HTTP Basic credentials: user `connector.auth.user` (default `portal`) and `CONNECTOR_AUTH_PASSWORD`, the same value in the Portal's and the Connector's settings. The Connector compares them and rejects every request while no password is set |
-| Mutual TLS (optional) | `CONNECTOR_TLS_CLIENT_AUTH=required` on the Connector: only clients with a certificate from `CONNECTOR_TLS_CLIENT_CA` connect. The Portal then presents `CONNECTOR_TLS_CLIENTCERTIFICATE` and `CONNECTOR_TLS_CLIENTKEY` |
-| Network | Plain HTTP on 8080 listens on the Connector container's loopback address only, for its health check (`CONNECTOR_HTTP_ADDRESS`; `0.0.0.0` is for the demo only). With Helm, a NetworkPolicy admits only the Portal's pods to the Connector, even when `networkPolicy.enabled` is `false` (`networkPolicy.connector.enabled`, default `true`) |
+| Mutual TLS (on in new installations) | `CONNECTOR_TLS_CLIENT_AUTH=required` on the Connector: only clients with a certificate from `CONNECTOR_TLS_CLIENT_CA` connect, and the Portal presents `CONNECTOR_TLS_CLIENTCERTIFICATE` and `CONNECTOR_TLS_CLIENTKEY`. Without it, any client that reaches port 8443 gets as far as the shared secret. A new installation has it, from the release package's templates or the Helm chart; an upgrade keeps an installation as it was, and while it is off the Connector logs a warning at every start. See [Mutual TLS](rsa-integration.md#mutual-tls) |
+| Network | Plain HTTP on 8080 listens on the Connector container's loopback address only, for its health check (`CONNECTOR_HTTP_ADDRESS`; `0.0.0.0` is for the demo only). HTTPS on 8443 listens on every interface unless `CONNECTOR_HTTPS_ADDRESS` names one. With Helm, a NetworkPolicy admits only the Portal's pods to the Connector, even when `networkPolicy.enabled` is `false` (`networkPolicy.connector.enabled`, default `true`) |
 
 * The release package makes a CA of the installation's own and the certificates (`util/connector-tls.sh`, run by `install.sh` and `upgrade.sh`); the Helm chart makes them with Helm's `genCA`/`genSignedCert`, or takes yours from `connector.tls.existingSecret`. See [RSA AM integration](rsa-integration.md#portal-to-connector).
-* The Connector's Hessian endpoint rebuilds only the classes the service interface exchanges (`AllowListHessianServiceExporter`). Hessian otherwise instantiates any class a request names.
+* The Connector's Hessian endpoint rebuilds only the classes the Portal sends: the parameter types of `RSAAuthManagerServiceInterface` and what their fields hold, each named on a list, and nothing else (`AllowListHessianServiceExporter`, ending in a deny-all). Hessian otherwise instantiates any class a request names, and its own fallback list would allow all of `java.*` but a few classes. A class not on the list arrives as a map of its fields, never as an instance of itself. The [exact list](rsa-integration.md#what-the-connector-accepts) is in RSA AM integration.
 * `GET` or `HEAD` `/app/health` needs no credentials and answers only `UP` or `DOWN`. Tomcat's error pages show neither stack traces nor the server version.
+
+## The Connector-to-AM hop
+
+The Connector reaches AM over HTTPS with the RSA SDK, which on its own trusts any certificate from the CA in `trust.jks` and reads AM's replies with Java serialization. The Connector adds two checks:
+
+| Control | What it does |
+|---|---|
+| Host name | AM's certificate must name the host in the `ims.httpinvoker.*` URLs (a DNS name, or an IP address it lists), as well as chain to the CA in `trust.jks`. A certificate for another name fails the connection. `RSA_TLS_VERIFY_HOSTNAME=false` turns the name check off for an AM reached by an IP address or a name its certificate lacks; the Connector then warns at every start that any server with a certificate from that CA can pose as AM. `util/check-env.sh` and the Helm chart's notes warn about an AM URL whose host is an IP address or a name without a domain |
+| Deserialization filter | AM's replies are read through a JEP 290 filter, on those replies only: an allow-list of the SDK's commands, data classes and exceptions and the Java types they hold, and limits on nesting depth, object references, array length and size. Anything else is refused, the command fails, and the Connector logs `Refused a reply from Authentication Manager` at WARN. `CONNECTOR_SERIAL_FILTER_ALLOW` and `CONNECTOR_SERIAL_FILTER_LIMITS` extend the list and the limits; `CONNECTOR_SERIAL_FILTER=off` is an emergency switch. See [What the Connector accepts](rsa-integration.md#what-the-connector-accepts) |
+
+Both are on by default. A JVM without serialization filters (not the image's Java 17) stops the Connector rather than read AM's replies unfiltered, and so does an RSA SDK whose internals are not what the Connector expects.
 
 ## Secrets
 
-* **AM credentials stay with the Connector.** The release package keeps settings in three files, each given only to its own service: the AM settings and credentials in `connector.env`, the MySQL root password in `mysql.env`, the Portal's settings in `.env`. `install.sh` makes them mode 600; keep them that way and out of version control. `util/check-env.sh` refuses a `.env` that holds Connector or MySQL settings.
+* **AM credentials stay with the Connector.** The release package keeps settings in three files, each given only to its own service: the AM settings and credentials in `connector.env`, the MySQL root password in `mysql.env`, the Portal's settings in `.env`. `install.sh` makes them mode 600. The Portal runs as uid 1001 in group 0 and reads `.env` as its `application.properties`, so `util/file-owners.sh` (run by `install.sh` and `upgrade.sh`) makes `.env` and the Portal's mutual-TLS key (`portal-tls/portal-client.key`) mode 640 with group 0: no other user on the host may read them. Keep the files out of version control. `util/check-env.sh` refuses a `.env` that holds Connector or MySQL settings, including any `RSA_*` variable.
+* **The Portal's client key stays with the Portal.** The Connector mounts all of `default_build`, so the Portal's key for mutual TLS is kept in `portal-tls/`, which only the Portal mounts. `util/connector-tls.sh` moves a key an earlier release left in `default_build/ssl`, with the settings naming it, and `util/check-env.sh` warns about a `CONNECTOR_TLS_CLIENTKEY` under `/ssl/`.
+* **The help desk's e-mailed codes** are kept only as an HMAC under `rsa.helpdesk.code-key`, never in clear or as a plain hash. See [Help-desk requests → The e-mailed code's key](help-desk.md#the-e-mailed-codes-key).
 * **No passwords on the command line.** The Connector reads the Command Client, service-account, read-only-account and trust-store passwords from `RSA_*` variables or from files (`RSA_ADMIN_USER_PASSWORD_FILE` and so on), not from `-D` options in `JAVA_OPTS`, which every user on the host can read. A `-D` password still works, with a warning. The Helm chart mounts them from Secrets as files under `/var/run/secrets/rsa`.
 * **No sample credentials.** The `application.properties` and `config.properties` packaged in the images hold no passwords.
 * **Upgrades from older layouts.** `upgrade.sh` splits a single `.env` (keeping `.env.before-split.<time>`) and moves `-D` passwords out of `connector.env` (keeping `connector.env.before-secrets.<time>`). Both copies hold the old secrets, mode 600: delete them once the new version runs.
@@ -253,9 +277,9 @@ The Connector's service account no longer needs Super Admin. Give it, and the op
 
 * **Active Directory over LDAPS** verifies the domain controller's certificate against the trust store in `active-directory.properties[n].trust-store`, or the JVM's default, and JNDI checks the host name. Earlier releases trusted any certificate.
 * **Audit trail.** Every sign-in, denial, change and export is recorded in the `ens-audit/1` format in the database, hash-chained. A sign-in, role, settings or license change that cannot be audited does not happen.
-* **Every Authentication Manager change is recorded before it is made.** One service wraps the Connector client: it commits `am.change-attempt` before each change, and if that write fails the change is not made (fail closed). After the change it writes `am.change-outcome`. Both carry the actor (the operator; the user, for their own token; or the system and service account for jobs), the target user, the token serial, the operation, which AM account made it, the help-desk ticket, reason and verification, the client address, and an attempt id linking the two. Tests keep this the only path: every method of the Connector client must be classified as a read, a sign-in or a change, and no other class may call the client. See [Audit logging](../audit-logging.md).
+* **Every Authentication Manager change is recorded before it is made.** One service wraps the Connector client: it commits `am.change-attempt` before each change, and if that write fails the change is not made (fail closed). A change asked for inside a database transaction that has already recorded an audit event is refused too (`AuditOrderException`): that transaction holds the audit chain until it ends, so the attempt could not be committed first, and recording it with that transaction would lose it if the transaction rolled back after the change. No flow in the Portal does this; the check guards future code. After the change it writes `am.change-outcome`. Both carry the actor (the operator; the user, for their own token; or the system and service account for jobs), the target user, the token serial, the operation, which AM account made it, the help-desk ticket, reason and verification, the client address, and an attempt id linking the two. Tests keep this the only path: every method of the Connector client must be classified as a read, a sign-in or a change, and no other class may call the client. See [Audit logging](../audit-logging.md).
 * **Help-desk changes** need a ticket, a verified user, a second operator for privileged users, and notify the user. See [Help-desk requests](help-desk.md).
-* **Logging.** User IDs and token serials that people type are escaped before they are logged.
+* **Logging.** User IDs and token serials that people type are escaped before they are logged. In the Portal's and the Connector's text logs, CR and LF in a message are written as `\r` and `\n`, so request data in a message cannot start a line that looks like another entry; a stack trace keeps its own lines. JSON logs escape them anyway. A log configuration of your own should keep this: `%enc{%m}{CRLF}` in the Portal's `log4j2.xml`, and the layout `com.winllc.rsaapp.connector.logging.CrlfSafePatternLayout` in the Connector's `log4j.xml`.
 * **Containers.** The Helm chart runs the Portal, the Connector and the embedded MySQL with all capabilities dropped, no privilege escalation, a read-only root file system and the `RuntimeDefault` seccomp profile.
 * Email bodies include absolute links built from `application.dns.name`. Set it to the HTTPS URL.
 
