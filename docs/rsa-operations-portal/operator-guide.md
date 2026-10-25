@@ -80,7 +80,7 @@ Suggested alerts: readiness failing; `ens_rsa_am_call_seconds_count{outcome="err
     |---|---|---|
     | Portal (Log4j2) | `./logs/rsaapp-portal.log` in the install folder (container `/var/log`) | Rolled daily or at 10 MB into `./logs/rsaapp-portal-YYYY-MM/app-MM-dd-yyyy-N.log.gz`. Configured by `default_build/portal/log4j2.xml`. |
     | Portal console | `docker compose logs -f portal` | Same events, with the date, time, thread, level, logger and the request id. `LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs` writes JSON lines instead. With `ENS_AUDIT_STDOUT=true` (the default) the audit events appear here too, as raw `ens-audit/1` JSON lines |
-    | Connector | `docker compose logs -f connector` | Packaged Log4j 1.x configuration logs to stderr at `DEBUG`. `default_build/log4j.xml` (rolling `/var/log/connector.log`, so `./logs/connector.log` on the host) applies only if you select it through the Connector's `JAVA_OPTS` in `connector.env`. A configuration of your own should keep the layout `CrlfSafePatternLayout` ([Configuration → Logging](configuration.md#logging)). |
+    | Connector | `docker compose logs -f connector` | Packaged Log4j 1.x configuration logs to stderr at `DEBUG`; from the next release each line starts with its own date and time (`2026-10-25T14:03:07.123Z WARN, ...`). `default_build/log4j.xml` (rolling `/var/log/connector.log`, so `./logs/connector.log` on the host) applies only if you select it through the Connector's `JAVA_OPTS` in `connector.env`. A configuration of your own should keep the layout `CrlfSafePatternLayout` ([Configuration → Logging](configuration.md#logging)). |
     | MySQL | `docker compose logs mysql` | |
     | All services | `docker compose logs -f` | Ctrl+C to exit |
 
@@ -238,6 +238,19 @@ and `ApiClientToken`, `WebhookEndpoint`, `WebhookDelivery`).
 | New help-desk actions, asked for through the API only | `token-assign`, `user-enable`, `user-disable`; operators approve them on the Help-Desk Requests page like the others |
 | The Connector's log lines | Start with `[request=<id> for=<service:identity or user:id>]` during a call from the Portal |
 | New audit actions | `auth.sso-verified`; `api.token-created`, `api.token-revoked`, `api.disable-cap-exceeded`; `webhook.created`, `webhook.deleted`, `webhook.secret-rotated`, `webhook.delivery-failed`; `user.enabled`, `user.disabled` |
+
+### Upgrading to the next release
+
+Nothing needs doing to keep signing in and serving. What changes:
+
+| Change | What to do |
+|---|---|
+| With single sign-on configured, administrative roles that `ENS_SSO_ROLES_*` maps come only through the identity provider: `ENS_SSO_REQUIRE_FOR_ADMIN_ROLES` is now unset by default (it was `false`) | A sign-in with the SecurID passcode alone no longer gets PMO, trusted agent or help desk when a group grants that role; those operators sign in with the provider's button, which they can already. A role no group grants keeps coming from Authentication Manager, with a warning at every start. `ENS_SSO_REQUIRE_FOR_ADMIN_ROLES=false` (Helm `sso.requireForAdminRoles: false`) keeps the old behaviour. Without an identity provider nothing changes. See [Single sign-on](single-sign-on.md#how-a-sign-in-goes) |
+| Signing out of the OpenID Connect provider: `ENS_SSO_OIDC_END_SESSION` (Helm `sso.oidcEndSession`) is new | Off for an existing installation; the `env.template` of new installations turns it on. Allow `<APPLICATION_DNS_NAME>/` as a post-logout redirect URI at the provider before turning it on. While OpenID Connect is configured and it is off, the Portal logs a warning at every start. See [Signing out](single-sign-on.md#signing-out) |
+| Site details (`/sites/details/<id>`) need the trusted agent role | Like the site list and the shipment pages that link there |
+| The audit CSV export guards against spreadsheet formulas | A value starting with `=`, `+`, `-`, `@`, a tab or a carriage return gets a leading `'`. NDJSON is unchanged |
+| The lost-token report (`cron.lostTokenThresholdMonitor`) still only logs unless `debug=false` is set | The Portal now says so in a warning at every start. New installations get `cron.lostTokenThresholdMonitor.debug=false` in `.env`. An upgrade does not turn it on, because the report would go to `mfa.group.email`, whose built-in default is not your address: set that, then add the line (Helm: under `config`) |
+| The Connector's console lines start with a timestamp | `default_build/log4j.xml`, which `upgrade.sh` replaces, and the packaged configuration. A log shipper that parsed the old `LEVEL, message` lines needs the new leading field |
 
 ## Certificate renewal
 

@@ -110,6 +110,12 @@ Start with `docker compose ps`, `docker compose logs -f` and `logs/rsaapp-portal
 ??? failure "Self-service says *Your request has been received*, but no e-mail arrives"
     Appointment booking and exemption requests answer the same whatever the outcome. The audit trail says what happened: `appointment.request-refused` (`unknown_user`, `user_has_token`, `too_many_open`, `authmanager_error`) or `auth.self-service-failed` with `details.flow` and the reason (for example `unknown_user` or `no_email`).
 
+??? warning "After the upgrade to the next release, an operator signing in with the passcode alone has no PMO, trusted agent or help-desk menu"
+    With single sign-on configured, a role that `ENS_SSO_ROLES_*` maps a group to now comes only through the identity provider. The operator signs in with the provider's button on the sign-in page, then the passcode. To keep the old behaviour, set `ENS_SSO_REQUIRE_FOR_ADMIN_ROLES=false` (Helm `sso.requireForAdminRoles: false`); the Portal then warns at every start. See [Single sign-on](single-sign-on.md#how-a-sign-in-goes).
+
+??? warning "Signing out ends at the identity provider with an error about the redirect URI (next release)"
+    `ENS_SSO_OIDC_END_SESSION=true`, but the provider does not allow `<APPLICATION_DNS_NAME>/` as a post-logout redirect URI, or it requires `id_token_hint`, which the Portal cannot send (Okta). Allow the URI at the provider, or set `ENS_SSO_OIDC_END_SESSION=false`. The Portal session and the Authentication Manager session have already ended at that point. See [Signing out](single-sign-on.md#signing-out).
+
 ## Help-desk requests
 
 ??? failure "*None of the verification methods set for this Portal can verify the user for this change*"
@@ -146,7 +152,7 @@ Start with `docker compose ps`, `docker compose logs -f` and `logs/rsaapp-portal
 ??? failure "No emails arrive"
     * Look for `Could not send email`, `Email not sent to:` or `Could not send … email` in the portal log.
     * Check `spring.mail.host` and `spring.mail.port` and the relay's acceptance of `mail.default.from`.
-    * For job emails, check that the job's `cron.<name>.debug` is `false`. `lostTokenThresholdMonitor` ships with **debug on**.
+    * For job emails, check that the job's `cron.<name>.debug` is `false`. `lostTokenThresholdMonitor` ships with **debug on** (from the next release, new installations' `.env` sets `cron.lostTokenThresholdMonitor.debug=false`, and the startup log warns while it is on).
     * Users without an email address in AM are skipped.
 
 ??? failure "Links in emails point to `http://localhost:8080`"

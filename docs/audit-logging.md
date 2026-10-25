@@ -32,7 +32,10 @@ The page lists events newest first. You can filter by:
 
 Open an event to see every field. From the page you can also:
 - **Export** the current filter as CSV, for a spreadsheet, or NDJSON, for another tool or for
-  [checking the chain](#checking-integrity). Exports are themselves audited.
+  [checking the chain](#checking-integrity). Exports are themselves audited. From the next release,
+  the RSA Operations Portal's CSV gives a value starting with `=`, `+`, `-`, `@`, a tab or a carriage
+  return a leading `'`, so that a spreadsheet does not run it as a formula; NDJSON keeps every value
+  exactly.
 - **Verify integrity**: recompute the trail's hash chain and say whether any event has been changed,
   removed or inserted.
 - **Delivery status**: see whether each output (Splunk, syslog) is keeping up, how far behind it is, and

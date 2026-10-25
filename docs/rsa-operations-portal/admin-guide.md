@@ -149,7 +149,7 @@ The **Manual Run Cron Jobs** page lists each job's name, description, enabled an
 | `expiring` | Token-expiry reminder emails |
 | `appointmentupcoming` | Upcoming-appointment reminders to users, and digests to agents |
 | `resyncta` | Re-sync Trusted Agents with RSA AM |
-| `lostTokenThresholdMonitor` | Report users with too many lost tokens to `mfa.group.email` (debug **on** by default) |
+| `lostTokenThresholdMonitor` | Report users with too many lost tokens to `mfa.group.email` (debug **on** by default: only logged. From the next release new installations' `.env` turns debug off, and the Portal warns at every start while it is on) |
 | `sendDelayedTokenRegistrationEmails` | Send or re-send enrollment links for staged roll-outs |
 | `tokenPinCheck` | Initial-PIN and check-PIN emails for tokens that have not been used |
 

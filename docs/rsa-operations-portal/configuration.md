@@ -243,7 +243,7 @@ For every job `<name>` in `expiring`, `appointmentupcoming`, `resyncta`, `lostTo
 | `cron.appointmentupcoming.remindDaysBefore` | `1` |
 | `cron.appointmentupcoming.taDigestDays` | `7` |
 | `cron.resyncta.enabled` / `.debug` / `.cron` | `true` / `false` / `0 30 0 ? * *` |
-| `cron.lostTokenThresholdMonitor.enabled` / `.debug` / `.cron` | `true` / **`true`** / `0 35 0 ? * *` |
+| `cron.lostTokenThresholdMonitor.enabled` / `.debug` / `.cron` | `true` / **`true`** / `0 35 0 ? * *`. With `debug=true` the report of users over the lost-token threshold is only logged, never sent to `mfa.group.email`. From the next release the Portal logs a warning at every start while it only logs, and the package's `env.template` of new installations sets `cron.lostTokenThresholdMonitor.debug=false`. An upgrade does not turn it on (the report would go to `mfa.group.email`, whose built-in default is not your address): add that line to `.env` (Helm: under `config`) once `mfa.group.email` is the MFA team's address |
 | `cron.lostTokenThresholdMonitor.window.inDays` | `30` |
 | `cron.lostTokenThresholdMonitor.tokens.lost` | `3` |
 | `cron.sendDelayedTokenRegistrationEmails.enabled` / `.debug` / `.cron` | `true` / `false` / `0 32 0 ? * *` |
@@ -295,9 +295,12 @@ With Helm, an empty value keeps the default.
 Off until an identity provider is configured. The providers are Spring Boot's own
 `SPRING_SECURITY_OAUTH2_CLIENT_*` and `SPRING_SECURITY_SAML2_RELYINGPARTY_*` settings; the Portal adds
 `ENS_SSO_ROLES_PMO_n`, `ENS_SSO_ROLES_TRUSTED_AGENT_n`, `ENS_SSO_ROLES_HELP_DESK_n`, the claim and
-attribute names, `ENS_SSO_LABELS_<ID>`, `ENS_SSO_REQUIRE_FOR_ADMIN_ROLES` (`false`),
-`ENS_SSO_PENDING_TIMEOUT` (`5m`) and `ENS_SSO_CLOCK_SKEW` (`60s`), and needs `APPLICATION_DNS_NAME`.
-See [Single sign-on](single-sign-on.md#settings); with Helm, the `sso.*` values.
+attribute names, `ENS_SSO_LABELS_<ID>`, `ENS_SSO_REQUIRE_FOR_ADMIN_ROLES` (`false`; unset from the
+next release, which keeps mapped administrative roles to single sign-on), `ENS_SSO_PENDING_TIMEOUT`
+(`5m`) and `ENS_SSO_CLOCK_SKEW` (`60s`), and needs `APPLICATION_DNS_NAME`. The next release adds
+`ENS_SSO_OIDC_END_SESSION` (`false`; `true` in new installations' `env.template`), which signs the
+operator out of the OpenID Connect provider too. See [Single sign-on](single-sign-on.md#settings);
+with Helm, the `sso.*` values.
 
 ### Integration API and webhooks
 
@@ -364,6 +367,12 @@ The placeholder order is fixed by the code, so keep the same `{n}` meanings when
 |---|---|---|
 | `default_build/portal/log4j2.xml` | `/log4j2.xml` (selected by `-Dlogging.config=/log4j2.xml`) | Console plus a rolling file `/var/log/rsaapp-portal.log` (host `./logs/`), rolled daily or at 10 MB into `rsaapp-portal-YYYY-MM/app-MM-dd-yyyy-N.log.gz`. Root level `info`. Messages are written with `%enc{%m}{CRLF}`, so their line breaks appear as `\r` and `\n`. |
 | `default_build/log4j.xml` | `/custom/log4j.xml` in the connector | Log4j 1.x configuration with a rolling file `/var/log/connector.log` (10 MB × 5). The image does not select it automatically. Pass it through `JAVA_OPTS` if you want it. Without it, the connector uses the packaged `log4j.xml` (stderr, root `DEBUG`). Both use the layout `com.winllc.rsaapp.connector.logging.CrlfSafePatternLayout`. |
+
+From the next release, each Connector console line starts with its own date and time
+(`2026-10-25T14:03:07.123Z WARN, ...`, in the container's time zone), whatever the container runtime
+adds: the pattern in the packaged `log4j.xml` and in `default_build/log4j.xml` (which `upgrade.sh`
+replaces) begins with `%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX}`. A log shipper that parsed the old
+`LEVEL, message` lines needs the new leading field.
 
 In the text logs of both, CR and LF in a message are written as the two characters `\r` and `\n`, so request data in a message (a user ID someone typed) cannot start a line that looks like another entry. A stack trace still follows its message on lines of its own. The Portal's JSON format escapes them anyway. A configuration of your own should keep `%enc{%m}{CRLF}` (Portal) or `CrlfSafePatternLayout` (Connector).
 

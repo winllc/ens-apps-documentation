@@ -22,10 +22,28 @@ the operator's own permissions and names the operator in its log, and every
 before the change) applies exactly as to a passcode sign-in.
 
 !!! note "Administrative roles without single sign-on"
-    With an identity provider configured, a passcode-only sign-in still gets the roles Authentication
-    Manager grants, unless `ENS_SSO_REQUIRE_FOR_ADMIN_ROLES=true` (default `false`). With it, a
-    passcode sign-in alone gets the user role only, and administrative roles come only through single
-    sign-on.
+    Up to the current release, with an identity provider configured, a passcode-only sign-in still
+    gets the roles Authentication Manager grants, unless `ENS_SSO_REQUIRE_FOR_ADMIN_ROLES=true`
+    (default `false`). With it, a passcode sign-in alone gets the user role only, and administrative
+    roles come only through single sign-on.
+
+!!! info "From the next release: mapped administrative roles only through the identity provider"
+    `ENS_SSO_REQUIRE_FOR_ADMIN_ROLES` is **unset by default** (it was `false`). With an identity
+    provider configured, a sign-in with the SecurID passcode alone no longer gets an administrative
+    role (PMO, trusted agent, help desk) that `ENS_SSO_ROLES_*` maps a group to: that role comes only
+    through single sign-on, so the provider's conditional access cannot be bypassed. Those operators
+    sign in with the provider's button on the sign-in page, which they can already. A role that no
+    group grants still comes from Authentication Manager (or nobody could hold it), and the Portal
+    logs a warning naming it at every start.
+
+    | `ENS_SSO_REQUIRE_FOR_ADMIN_ROLES` | A passcode-only sign-in gets |
+    |---|---|
+    | Unset (the default from the next release) | The administrative roles Authentication Manager grants, except those a group is mapped to |
+    | `true` | The user role only: every administrative role comes only through single sign-on |
+    | `false` | The roles Authentication Manager grants, as before (a warning at every start) |
+
+    Without an identity provider nothing changes. Helm: `sso.requireForAdminRoles` (`null` by
+    default; `false` keeps the old behaviour).
 
 ## What is checked
 
@@ -40,8 +58,31 @@ before the change) applies exactly as to a passcode sign-in.
   identity provider's POST arrives without the session cookie; the answer that uses one deletes it,
   so a replay is refused. IdP-initiated sign-in is refused. Requests go by HTTP-Redirect (the
   Content-Security-Policy forbids the self-submitting form of HTTP-POST).
-- **No single logout**: signing out of the Portal ends the Portal session and the operator's
-  Authentication Manager session, not the identity provider's.
+- **No single logout** (up to the current release): signing out of the Portal ends the Portal
+  session and the operator's Authentication Manager session, not the identity provider's. From the
+  next release, see [Signing out](#signing-out).
+
+## Signing out
+
+Signing out of the Portal ends the Portal session and the operator's Authentication Manager
+session. From the next release, OpenID Connect can also sign the operator out of the provider:
+
+- With `ENS_SSO_OIDC_END_SESSION=true` (Helm `sso.oidcEndSession`), an operator who signed in by
+  OpenID Connect is sent on, after the Portal's sign-out, to the provider's `end_session_endpoint`
+  (from its discovery document) with `client_id` and
+  `post_logout_redirect_uri=<APPLICATION_DNS_NAME>/`. **Allow that URI at the provider** before
+  turning it on.
+- The Portal goes there from a page of its own, **`/signed-out`**, because the
+  Content-Security-Policy's `form-action 'self'` stops the sign-out form's redirect from leaving the
+  Portal.
+- The Portal does not keep the ID token, so there is no `id_token_hint`: some providers then ask the
+  operator to confirm or pick the account, and those that require it (Okta) refuse the request, so
+  leave the setting off there.
+- A provider without an `end_session_endpoint` is logged as a warning at startup.
+- It is off for an existing installation; the env template of new installations turns it on. While
+  OpenID Connect is configured and it is off, the Portal logs a warning at every start.
+- SAML single logout is not supported: signing out ends the Portal session and the operator's
+  Authentication Manager session only.
 
 ## Settings
 
@@ -60,7 +101,8 @@ part of the URLs to register with the provider.
 | `ENS_SSO_OIDC_USER_ID_CLAIM`, `ENS_SSO_OIDC_GROUPS_CLAIM` | `preferred_username`, `groups`: the claims with the Authentication Manager user ID and the groups |
 | `ENS_SSO_SAML_USER_ID_ATTRIBUTE`, `ENS_SSO_SAML_GROUPS_ATTRIBUTE` | Empty (the NameID), `groups` |
 | `ENS_SSO_LABELS_<ID>` | The button's label (default: the client name, or the id) |
-| `ENS_SSO_REQUIRE_FOR_ADMIN_ROLES` | `false`. `true`: administrative roles only through single sign-on; a passcode sign-in alone gets the user role only |
+| `ENS_SSO_REQUIRE_FOR_ADMIN_ROLES` | `false`. `true`: administrative roles only through single sign-on; a passcode sign-in alone gets the user role only. From the next release unset by default: each administrative role `ENS_SSO_ROLES_*` maps a group to comes only through single sign-on; `false` keeps the old behaviour (warning at every start). See [above](#how-a-sign-in-goes) |
+| `ENS_SSO_OIDC_END_SESSION` (next release) | `false`; the env template of new installations sets `true`. `true`: signing out continues to the OpenID Connect provider's `end_session_endpoint`. See [Signing out](#signing-out) |
 | `ENS_SSO_PENDING_TIMEOUT`, `ENS_SSO_CLOCK_SKEW` | `5m`, `60s` |
 
 Addresses for the identity provider, where `<id>` is the registration id:
@@ -93,8 +135,13 @@ sso:
     pmo: ["CN=RSA PMO,OU=Groups,DC=example,DC=com"]
     trustedAgent: []
     helpDesk: []
-  requireForAdminRoles: false
+  requireForAdminRoles: false        # next release: null (unset) by default; see above
+  oidcEndSession: false              # next release: true signs out of the OIDC provider too
 ```
+
+From the next release, `sso.requireForAdminRoles` defaults to `null` and `sso.oidcEndSession` to
+`false`. A release whose values set `requireForAdminRoles: false` explicitly keeps the old
+behaviour; one that relied on the chart's old default moves to the new rule.
 
 ## Identity providers
 
@@ -119,3 +166,12 @@ Keycloak, Microsoft Entra ID, Okta and ADFS work with these settings.
 
 Single sign-on is new and off until an identity provider is configured. Flyway adds the
 `SsoSamlRequest` table (`V6`) with the release's other migrations.
+
+From the next release, with single sign-on configured:
+
+- A role `ENS_SSO_ROLES_*` maps a group to comes only through the identity provider; a passcode
+  sign-in alone no longer gets it. Operators sign in with the provider's button, as they can
+  already. `ENS_SSO_REQUIRE_FOR_ADMIN_ROLES=false` (Helm `sso.requireForAdminRoles: false`) keeps
+  the old behaviour.
+- `ENS_SSO_OIDC_END_SESSION` is new and off for an existing installation. Allow
+  `<APPLICATION_DNS_NAME>/` as a post-logout redirect URI at the provider before turning it on.
