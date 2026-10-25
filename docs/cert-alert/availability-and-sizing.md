@@ -20,7 +20,7 @@ Backups themselves are in the [Operator guide](operator-guide.md#backups).
 | Revocation checks | Up to `workers` (8) OCSP requests at once. CRLs are fetched up to `max-crl-bytes` (16 MB) each and kept for `crl-cache-ttl` (6h), so memory grows with the number of issuing CAs whose CRLs are cached | `cert-alert.revocation.*` |
 | The expiry round-up | Reads at most `digest.scan-limit` (10,000) certificates per run, and sends at most `email.max-per-run` (500) emails | `cert-alert.notifications.digest.scan-limit`, `.email.max-per-run` |
 | Database rows | One `cached_certificate` row per certificate (parsed fields, not the certificate itself), plus people, servers, identifiers and contacts. The audit trail grows with every sign-in, change and job until retention removes it | `ENS_AUDIT_RETENTION_DAYS` |
-| Database connections | One pool for the web requests, the jobs and the changelog connector | `CERT_ALERT_DB_POOL_SIZE` (10) |
+| Database connections | One pool per replica, for its web requests, jobs and changelog polls | `CERT_ALERT_DB_POOL_SIZE` (10) |
 | Interactive users | Tables are paged on the server; a page is a few database queries | |
 
 ### Starting figures
@@ -36,7 +36,8 @@ How to check and adjust:
 
 - **Sweep duration.** `GET /api/v1/sync/runs` gives each run's duration. A sweep must finish well
   before the next one starts (the users sweep runs at 02:00 and the servers sweep at 04:00 by
-  default); a run that outlasts its interval is skipped with `Skipping the scheduled <JOB> job`.
+  default); a run that finds the same job still running, on this replica or another, logs
+  `Not running <job>: it is already running` and stands down.
   For large directories, consider the changelog connector, which applies only what changed.
 - **Heap.** The JVM exits on running out of memory (`-XX:+ExitOnOutOfMemoryError`), and the
   container restarts. If that happens during a sweep or the revocation run, raise the memory
@@ -49,26 +50,51 @@ How to check and adjust:
 
 ## High availability
 
-**Run one instance.** The scheduled jobs (sweeps, revocation checks, the round-up) and the
-changelog connector run inside the process, guarded per process, and there is no lock shared
-between instances: a second instance would run every job twice. The license volume is
-single-writer too. The Helm chart accepts `replicaCount` of `0` or `1` only and uses the `Recreate`
-strategy, so an upgrade never runs two pods at once; the release package runs one container.
+CertAlert can run as more than one replica against one PostgreSQL database. For the suite-wide
+picture, see [Sizing, availability and recovery](../availability-and-sizing.md).
 
-What you can do:
+**Shared through the database:**
 
-- **Automatic restart.** Docker restarts the container (`restart: unless-stopped`); Kubernetes
-  restarts a pod whose liveness probe fails and reschedules it if its node fails, provided the
-  license volume can be attached on another node.
-- **The database.** Run PostgreSQL with your own high-availability setup (with Helm, an external
-  server). Losing the database stops CertAlert; losing CertAlert loses nothing that is not in the
-  database or the license volume.
-- **Cold standby.** Keep a second host or cluster with the same release installed and stopped, and
-  copy database backups and the license volume to it. To fail over, follow
-  [Disaster recovery](#disaster-recovery). Never run both at once.
+- **Jobs.** Each scheduled job, and the same job started by hand, takes a lock (`shedlock`), so it
+  runs on one replica at a time; the others log that it is already running. A scheduled run keeps
+  its lock for `cert-alert.cluster.scheduled-lock-at-least-for` (10 minutes) after it finishes, so
+  a replica whose schedule fires late does not run the same firing again. Jobs started by hand are
+  recorded in `job_run`, so any replica can report on them.
+- **Work items.** Each mail is claimed (`SENDING`, with a 10-minute lease) before it is sent, so it
+  is never sent twice; the changelog connector's polls, each audit output's deliveries, audit
+  retention and the expired-session sweep are claimed the same way.
+- **Sessions**, with `cert-alert.session.store=jdbc`, the default in the `postgres` profile that the
+  chart and the release package use (`spring_session`). Any replica serves any request, the session
+  controls apply across replicas, and a restart or rolling update signs nobody out.
+- **SAML sign-in requests** (`saml_authn_request`). OIDC keeps its state in the session.
+- **The license**, this installation's id and the revisions seen (`ens_license_*`). A license
+  uploaded on one replica is in force on the others within five seconds.
 
-Every restart or failover signs users out. Jobs missed while CertAlert was down run at their next
-scheduled time, or on demand from the Admin page.
+**Per replica**, by design:
+
+| State | Effect with two replicas |
+|---|---|
+| Repeated sign-in failures for one name (the `alert` after five) | Up to five per replica before the alert |
+| Collapsed `access.denied` and certificate sign-in failures | Up to one event a minute per replica |
+| License mode changes (`license.mode-changed`) | Recorded once by each replica that notices |
+| `ens_certalert_job_last_success_seconds` | Set where the job ran; the PrometheusRule takes the `max` |
+| Directory groups, CRLs, sign-in revocation answers | Each replica fills its own cache |
+
+**Helm.** `replicaCount: 2` or more gives a `RollingUpdate` strategy with `maxUnavailable: 0` and
+`minReadySeconds`, a PodDisruptionBudget (`minAvailable: 1`), a soft preference for spreading the
+pods across nodes and a short `preStop` pause. With one replica nothing changes: `Recreate`, no
+budget. To scale an existing installation, upgrade with one replica first, so the first start
+imports the license and installation id from the license volume; then set
+`persistence.license.imported: true` and raise `replicaCount`. The chart refuses more than one
+replica without it (or a ReadWriteMany license volume), and refuses `session.store: memory` above
+one replica.
+
+**Release package.** It runs one CertAlert container, restarted by Docker or Podman
+(`restart: unless-stopped`). Sessions are in the database, so a restart signs nobody out.
+
+**The database** is the one shared dependency: run PostgreSQL with your own high-availability
+setup (with Helm, an external server). Losing it stops every replica. Jobs missed while CertAlert
+was down run at their next scheduled time, or on demand from the Admin page.
 
 ## Disaster recovery
 
@@ -76,8 +102,8 @@ scheduled time, or on demand from the Admin page.
 
 | Item | Holds | Back it up with |
 |---|---|---|
-| The PostgreSQL database | Everything CertAlert owns that the directory doesn't ([list](operator-guide.md#backups)), including the audit trail | `pg_dump`, or your database's backups |
-| The license volume (`cert-alert_ens-license`, or the license PVC) | The license file and **this installation's id** | A copy of the volume, or a snapshot. Keep the `.lic` file you received as well |
+| The PostgreSQL database | Everything CertAlert owns that the directory doesn't ([list](operator-guide.md#backups)), including the audit trail, the license and **this installation's id** | `pg_dump`, or your database's backups |
+| The license volume (`cert-alert_ens-license`, or the license PVC) | The license state of a release that kept it in files, imported into the database on the first start after upgrading, and not read after that | Keep it until that import is done. Keep the `.lic` file you received as well |
 | Settings | `.env`, `tls/`, `email-templates/`, `license/` (release package); your values file and the Secrets it names (Helm) | Your configuration management. They hold secrets |
 | The release | The package you installed, or the image digests and chart version | Keep the download, or mirror the images |
 | People, servers, certificates | The LDAP directory | The directory's own backups. CertAlert re-reads them on the next sweep |
@@ -89,23 +115,23 @@ after the last backup are lost, and so are audit events that were not forwarded 
 
 1. Unpack the **same release** as the one that was running and restore `.env`, `tls/`,
    `email-templates/` and `license/` into its directory. Don't start it yet.
-2. Restore the `cert-alert_ens-license` volume from your copy, keeping the files' owner (the
-   container runs as uid 185). This keeps the installation id. If it is lost:
+2. Load the images and create the containers: `./install.sh`. Then stop CertAlert alone
+   (`docker compose stop cert-alert`) and restore the database as in
+   [Operator guide → Restore](operator-guide.md#restore). The database holds the license and the
+   installation id, so restoring it keeps them. If no database backup survives:
     - an unbound license works again once you upload the `.lic` file on the license screen, or
       leave it in `license/license.lic` for `install.sh` to copy in;
     - a bound license is refused by the new installation id. Note the new id on the license
       screen and ask ENS Solutions to re-bind or re-issue the license.
-3. Load the images and create the containers: `./install.sh`. Then stop CertAlert alone
-   (`docker compose stop cert-alert`) and restore the database as in
-   [Operator guide → Restore](operator-guide.md#restore).
-4. Start it: `docker compose up -d`.
-5. Check: `docker compose ps` shows it healthy; the license screen shows the expected state and
+3. Start it: `docker compose up -d`.
+4. Check: `docker compose ps` shows it healthy; the license screen shows the expected state and
    installation id; **Admin → Audit log → Verify integrity** reports the chain intact; sign in as
    an administrator; run **Sync directory** and check the run completes.
 
 With Helm: install the same chart version into the new cluster with your values and Secrets and
-`replicaCount: 0`, restore the database into your PostgreSQL and the license PVC from its snapshot
-(or let the init container install the `.lic` file into a new one), then set `replicaCount: 1`.
+`replicaCount: 0`, restore the database into your PostgreSQL (with it the license and the
+installation id), then set `replicaCount` back to what you ran. Above one replica, keep
+`persistence.license.imported: true` in your values.
 
 ### The audit trail after a restore
 
