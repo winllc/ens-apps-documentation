@@ -76,13 +76,13 @@ Keep `$` and ` #` out of the values: Docker Compose replaces `$name` with a vari
 
 | Service | Published ports | Volumes (host → container) |
 |---|---|---|
-| `portal` | `8080:8080`, `8443:8443` | `./default_build/properties:/custom`, `./default_build/static:/static`, `./default_build/email-templates:/resources/email-templates`, `./default_build/ssl:/ssl`, `./portal-tls:/portal-tls` (the Portal's certificate and key for mutual TLS; no other service mounts it), `./default_build/portal/log4j2.xml:/log4j2.xml`, `./logs:/var/log`, `ens-license:/var/lib/ens/mfa-portal`, `./.env:/application.properties` |
+| `portal` | `${PORTAL_HTTP_PUBLISH:-8080}:8080`, `${PORTAL_HTTPS_PUBLISH:-8443}:8443`: every interface by default (see [Address and ports](install.md#4-address-and-ports)) | `./default_build/properties:/custom`, `./default_build/static:/static`, `./default_build/email-templates:/resources/email-templates`, `./default_build/ssl:/ssl`, `./portal-tls:/portal-tls` (the Portal's certificate and key for mutual TLS; no other service mounts it), `./default_build/portal/log4j2.xml:/log4j2.xml`, `./logs:/var/log`, `ens-license:/var/lib/ens/mfa-portal` (the license files of release 1.5 and earlier, imported into the database on the first start), `./.env:/application.properties` |
 | `connector` | none (reached internally as `https://connector:8443`) | `./default_build:/custom` (the trust store as `/custom/ssl/trust.jks`, the HTTPS certificate in `/custom/connector-tls`), `./logs:/var/log` |
 | `mysql` | none | named volume `mysql_data:/var/lib/mysql` |
 
 The Portal also mounts the `ens-audit` volume at `/var/log/ens`, for the optional audit file. The health checks are: Portal `curl -fs http://localhost:8080/login`; Connector `curl -fs http://localhost:8080/app/health` inside its container (`UP` once it has an AM session); MySQL `mysqladmin ping`. The Portal starts after the `connector` has started and once `mysql` passes its health check. MySQL is given 2 minutes to shut down cleanly (`stop_grace_period`).
 
-With Helm, the Portal and the Connector are two Deployments, the license is on a PVC, and branding files come from ConfigMaps (`branding.*`). See [Installation → Install with Helm](install.md#install-with-helm).
+With Helm, the Portal and the Connector are two Deployments, the license is in the database, and branding files come from ConfigMaps (`branding.*`). See [Installation → Install with Helm](install.md#install-with-helm).
 
 ## Portal settings
 
