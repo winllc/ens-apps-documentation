@@ -24,7 +24,8 @@ Where to set them:
 
 | Variable | Property | Default | Description |
 |---|---|---|---|
-| `DIRECTORY_MODE` | `portal.directory-mode` | `memory` | `memory` starts the embedded demo LDAP server; `ldap` connects to `LDAP_URL` |
+| `DIRECTORY_MODE` | `portal.directory-mode` | `memory` | `memory` starts the embedded demo LDAP server; `ldap` connects to `LDAP_URL`. From the next release `memory` starts only with `DEMO_MODE=true` or an API that listens on a loopback address only (`SERVER_ADDRESS=127.0.0.1`); otherwise the API refuses to start and logs why at ERROR. A bare jar or image run with the default must set `DIRECTORY_MODE=ldap` or `DEMO_MODE=true` |
+| `DEMO_MODE` (next release) | `portal.demo-mode` | `false` | `true` says this installation is a demo: the built-in directory's credentials (`admin`/`password`) are public. Required for `DIRECTORY_MODE=memory`. `install.sh --demo`, `docker-compose.demo.yml` and the chart with `directory.mode: memory` set it; the package's `env.template` has `DEMO_MODE=false` |
 | `LDAP_URL` | `portal.ldap.url` | `ldap://localhost:389` | `ldap://` or `ldaps://` URL of the directory server |
 | `LDAP_STARTTLS` | `portal.ldap.start-tls` | `false` | Upgrade plain `ldap://` connections with StartTLS |
 | `LDAP_TLS_REJECT_UNAUTHORIZED` | `portal.ldap.tls-reject-unauthorized` | `true` | Verify the server certificate against the JVM trust store and check the host name. `false` trusts any certificate (testing only) |
@@ -120,7 +121,7 @@ bind.
 | `PORT` | `server.port` | `3001` (`8443` with the `mtls` profile) | HTTP port of the API |
 | `SERVER_ADDRESS` | `server.address` | *(all interfaces)* | Standard Spring Boot bind address. The native package sets `127.0.0.1` |
 | `ENS_COOKIE_SECURE` | `ens.cookie.secure` | `false` | Always mark the `DSP_SESSION` cookie `Secure`. Set to `true` whenever browsers reach the portal over HTTPS through a TLS-terminating proxy. Over direct TLS (the `mtls` profile) the cookie is `Secure` anyway. `COOKIE_SECURE` is the older name and still works |
-| `SERVER_FORWARD_HEADERS_STRATEGY` | `server.forward-headers-strategy` | `none` | Spring Boot's own setting. `framework` honours `X-Forwarded-*` from a reverse proxy that overwrites them; the compose files, the native package and the Helm chart set it. With X.509 header mode use `framework` or `none`, never `native`. `FORWARD_HEADERS_STRATEGY` is the older name and still works |
+| `SERVER_FORWARD_HEADERS_STRATEGY` | `server.forward-headers-strategy` | `none` | Spring Boot's own setting. `framework` honours `X-Forwarded-*` from a reverse proxy that overwrites them; the compose files, the native package and the Helm chart set it. With X.509 header mode use `framework` or `none`, never `native`. `FORWARD_HEADERS_STRATEGY` is the older name and still works. With `none` behind a proxy, the per-address limits (sign-in lockout, bad-token and single sign-on start limits) see only the proxy's address, so one client can get everybody behind it refused. From the next release the API logs a startup WARN when it is evidently behind a proxy (`X509_SOURCE=header`, or `SERVER_ADDRESS` on loopback) while this is `none` |
 | `ENS_CSP_REPORT_ONLY` | `ens.csp.report-only` | `false` | `true` sends `Content-Security-Policy-Report-Only` instead of `Content-Security-Policy`. Set it on the API **and** the web tier. An escape hatch for a page the policy breaks; report the page and turn it off again |
 | `MAX_HTTP_REQUEST_HEADER_SIZE` | `server.max-http-request-header-size` | `32KB` | Largest request header block. Leaves room for a forwarded client certificate and large SSO cookies |
 | `DATA_DIR` | `portal.data-dir` | `./data` | Where `portal-config.json`, `audit/` and `analysis-results/` are stored. The container image sets `/data` |
@@ -271,7 +272,10 @@ OpenID Connect and SAML 2.0, each off until configured: OIDC turns on with `SSO_
 `portal.sso.public-url`) is required for SAML and recommended for OIDC; give the web tier
 `PUBLIC_HOST` too. `PASSWORD_LOGIN_ENABLED=false` leaves only single sign-on and certificates.
 Every `SSO_*` variable, the addresses to register and provider walkthroughs are in
-[Single sign-on](single-sign-on.md#settings).
+[Single sign-on](single-sign-on.md#settings). The next release adds `SSO_START_LIMIT_PER_MINUTE`
+(`30`) and `SSO_MAX_PENDING_REQUESTS` (`10000`), and warns at startup about an
+`SSO_OIDC_USERNAME_CLAIM` that a provider lets be changed; see
+[Single sign-on → Settings](single-sign-on.md#settings).
 
 ## Integration API, webhooks, import and export
 
@@ -487,7 +491,7 @@ characters, `X509_PROXY_SECRET_FILE` cannot be read, `X509_HEADER` is not a head
 | `CONTAINER_ENGINE` | The engine `install.sh` used | `docker` or `podman`. The `CONTAINER_ENGINE` environment variable wins |
 | `COMPOSE_PROJECT_NAME` | `directory-services-portal` | Compose project (and volume name prefix) |
 | `API_IMAGE`, `WEB_IMAGE`, `OPENLDAP_IMAGE` | Package image names | Images to run |
-| `WEB_BIND` | `0.0.0.0` | Host address to publish on (every interface). `127.0.0.1` keeps it to this host |
+| `WEB_BIND` | `0.0.0.0`; from the next release `127.0.0.1` for plain HTTP, `0.0.0.0` with `--https` | Host address to publish on. `0.0.0.0` is every interface; `127.0.0.1` keeps it to this host. An `.env` without `WEB_BIND` publishes on every interface. From the next release `install.sh` warns when plain HTTP is published beyond this host, or `ENS_COOKIE_SECURE` is not `true` there |
 | `WEB_PORT` | `8080` | HTTP port (`docker-compose.yml`) |
 | `HTTPS_PORT` | `8443` | HTTPS port (mTLS overlay) |
 | `HTTPS_PORT_SUFFIX` | `:<HTTPS_PORT>`, empty for 443 | Port shown in redirects |
@@ -498,6 +502,11 @@ characters, `X509_PROXY_SECRET_FILE` cannot be read, `X509_HEADER` is not a head
 
 The packaged compose file fixes `DATA_DIR=/data`, `PORT=3001` and
 `SERVER_FORWARD_HEADERS_STRATEGY=framework` for the API, and passes everything else from `.env`.
+
+The native package's `portal.env` has one deployment setting of its own from the next release:
+`NGINX_LISTEN`, where the packaged nginx site listens (plain HTTP). A new `portal.env` sets
+`127.0.0.1:8080` (this host only); `8080` alone is every interface. `install.sh` writes it into
+the site, so run it again after a change. A `portal.env` without it keeps `8080`, every interface.
 The web container gets `ENS_CSP_REPORT_ONLY`, `X509_PROXY_SECRET`, `X509_HEADER` and
 `X509_EDGE_TERMINATION` from `.env`; the mTLS overlay fixes the last two (`X-SSL-Client-Cert`,
 `false`).

@@ -25,6 +25,28 @@ can be renamed or handed to someone else. An `email` claim is used only when `em
 true. Also restrict who may use the application at the provider (Entra *Assignment required*, Okta
 assignments, AD FS access control policy).
 
+!!! info "From the next release: a warning for a claim that can be changed"
+    The API logs a WARN at startup when `SSO_OIDC_USERNAME_CLAIM` is a claim a provider lets be
+    changed (`preferred_username`, `email`, `upn`, `unique_name`, `name`, ...). Sign-in is
+    unchanged. The API's default stays `preferred_username`, so that upgraded installations keep
+    signing in; new release-package `.env` files get `SSO_OIDC_USERNAME_CLAIM=sub`. The Helm
+    chart's default stays `preferred_username` too, because chart defaults apply to upgraded
+    releases: set it yourself on a new install.
+
+### Moving to an immutable claim
+
+1. Put each user's immutable id into a directory attribute the service account can read: Entra ID
+   `oid` into, for example, `employeeID` or `msDS-cloudExtensionAttribute1` through Entra Connect
+   or Cloud Sync; Okta `sub` into an attribute your provisioning writes.
+2. Check one user: the attribute holds exactly the value the provider sends (decode an ID token,
+   or read the claim in the provider's token preview).
+3. Set `SSO_OIDC_USERNAME_CLAIM` (`oid`, `sub`) and `SSO_OIDC_USER_FILTER` to search that
+   attribute, for example `(&(objectClass=user)(employeeID={{value}}))`, and restart (Helm:
+   `sso.oidc.usernameClaim` and `sso.oidc.userFilter`).
+
+Signed-in sessions are not affected. Users without the attribute get `sso_error=no_account` until
+it is filled in, so fill it for everyone first. The startup WARN then goes away.
+
 ## What is checked
 
 === "OpenID Connect"
@@ -78,11 +100,13 @@ The web tier already forwards `/api/`, so nothing changes in nginx.
 |---|---|---|
 | `PORTAL_PUBLIC_URL` | empty | The address users open, e.g. `https://portal.example.com`. The redirect URI, SAML entity id and assertion consumer are built from it, never from the request's `Host`. **Required for SAML** (unless `SSO_SAML_ENTITY_ID` is set), recommended for OIDC. Give the web tier `PUBLIC_HOST` (its host[:port]) too |
 | `SSO_IDP_ADMIN_SESSION_LIFETIME` | `1h` | A session whose administrator rights come only from the provider's groups ends this long after sign-in |
+| `SSO_START_LIMIT_PER_MINUTE` (next release) | `30` | Sign-ons one client address may start per minute, per API replica, the address as resolved with `SERVER_FORWARD_HEADERS_STRATEGY`. Each start keeps a sign-in request for 10 minutes; further starts are sent back to `/login?sso_error=busy` with `Retry-After`, and the login page says to wait a minute |
+| `SSO_MAX_PENDING_REQUESTS` (next release) | `10000` | Sign-in requests in flight kept in memory at most, without the shared database (with it they are rows, and expired ones are deleted every minute). When full, new starts get `sso_error=busy`. Expired requests are now removed every minute (was five) |
 | `SSO_OIDC_ISSUER_URI` | empty | The issuer |
 | `SSO_OIDC_CLIENT_ID` | empty | With the issuer, turns OpenID Connect on |
 | `SSO_OIDC_CLIENT_SECRET_FILE` / `SSO_OIDC_CLIENT_SECRET` | empty | The client secret (prefer the file); empty makes a public client |
 | `SSO_OIDC_SCOPES` | `openid profile email` | |
-| `SSO_OIDC_USERNAME_CLAIM` | `preferred_username` | The claim mapped through the user filter |
+| `SSO_OIDC_USERNAME_CLAIM` | `preferred_username` (next release's package `env.template`: `sub`) | The claim mapped through the user filter; `email` is used only when `email_verified` is true. From the next release the API warns at startup about a claim a provider lets be changed; see [Moving to an immutable claim](#moving-to-an-immutable-claim) |
 | `SSO_OIDC_USER_FILTER` | `(&(objectClass=inetOrgPerson)(uid={{value}}))` | Must match exactly one entry |
 | `SSO_OIDC_GROUPS_CLAIM` | `groups` | The claim listing the person's groups |
 | `SSO_OIDC_ADMIN_GROUPS` | empty | Provider groups that grant administrator (`;`-separated) |
@@ -162,3 +186,12 @@ conditional access apply) or certificate sign-in (CAC/PIV), and set `PASSWORD_LO
 
 Nothing changes until `SSO_*` is set. The login page gets a button per provider, and
 `/api/auth/sso/**` is new; the web tier already forwards `/api/`.
+
+From the next release:
+
+- Single sign-on starts are limited per client address (`SSO_START_LIMIT_PER_MINUTE`, `30` per
+  replica), and in-memory sign-in requests are capped (`SSO_MAX_PENDING_REQUESTS`, `10000`). A
+  refused start lands on the login page with "wait a minute". Behind a proxy, keep
+  `SERVER_FORWARD_HEADERS_STRATEGY=framework` so the limit sees each client's address.
+- A startup WARN for an `SSO_OIDC_USERNAME_CLAIM` that can be changed. Nothing stops; move to an
+  immutable claim when you can.

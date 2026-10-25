@@ -84,7 +84,11 @@ Delivery is **at least once**: an attempt whose answer was lost is made again wi
   logged and audited as `webhook.delivery-dropped`.
 - **With the shared database** (`DSP_DATABASE_*`): the `webhooks` document and the
   `dsp_webhook_delivery` table (Flyway migration V3, applied at start), where each due delivery is
-  sent by one replica.
+  sent by one replica. Up to the current release, the events of an entry change made while the
+  database can't be reached are logged and lost. From the next release they are kept in that
+  replica's memory (up to 10,000 changes, in order) and queued by the next delivery run that reaches
+  the database, with their original `createdAt`; only a replica that stops during the outage loses
+  them. Nothing to configure.
 - **Signing secrets are stored as they are** (they sign every request), readable only by the portal's
   user. They are never returned by the API again, logged or audited. Back up and protect `DATA_DIR`
   and the database accordingly.
