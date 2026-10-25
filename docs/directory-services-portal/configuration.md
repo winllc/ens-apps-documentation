@@ -449,11 +449,12 @@ characters, `X509_PROXY_SECRET_FILE` cannot be read, `X509_HEADER` is not a head
 
 | Variable | Default (from installer) | Description |
 |---|---|---|
-| `COMPOSE_FILE` | `docker-compose.yml` plus overlays chosen by `install.sh` | `:`-separated compose files: `docker-compose.publish.yml`, `docker-compose.mtls.yml`, `docker-compose.openldap.yml` |
+| `COMPOSE_FILE` | `docker-compose.yml` plus overlays chosen by `install.sh` | `:`-separated compose files. First `docker-compose.yml` (HTTP published on `WEB_BIND:WEB_PORT`) or `docker-compose.no-publish.yml` (nothing published), then optionally `docker-compose.mtls.yml` and `docker-compose.openldap.yml` |
+| `CONTAINER_ENGINE` | The engine `install.sh` used | `docker` or `podman`. The `CONTAINER_ENGINE` environment variable wins |
 | `COMPOSE_PROJECT_NAME` | `directory-services-portal` | Compose project (and volume name prefix) |
 | `API_IMAGE`, `WEB_IMAGE`, `OPENLDAP_IMAGE` | Package image names | Images to run |
-| `WEB_BIND` | `0.0.0.0` | Host address to publish on |
-| `WEB_PORT` | `8080` | HTTP port (publish overlay) |
+| `WEB_BIND` | `0.0.0.0` | Host address to publish on (every interface). `127.0.0.1` keeps it to this host |
+| `WEB_PORT` | `8080` | HTTP port (`docker-compose.yml`) |
 | `HTTPS_PORT` | `8443` | HTTPS port (mTLS overlay) |
 | `HTTPS_PORT_SUFFIX` | `:<HTTPS_PORT>`, empty for 443 | Port shown in redirects |
 | `API_MEMORY_LIMIT` | `1536m` | Memory limit of the API container. The JVM's heap is 75% of it (`-XX:MaxRAMPercentage=75.0`) |
