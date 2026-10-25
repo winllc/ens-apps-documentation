@@ -1,7 +1,7 @@
 # FIPS 140-3 and DISA STIG
 
-This page says what the portal relies on for FIPS 140-3, what does not work in FIPS mode yet, and
-which settings a DISA STIG deployment needs. The suite-wide picture is in
+This page says what the portal relies on for FIPS 140-3, how its license check works in FIPS mode,
+and which settings a DISA STIG deployment needs. The suite-wide picture is in
 [FIPS 140-3 and DISA STIG](../fips-and-stig.md).
 
 !!! note "No ENS validation"
@@ -33,10 +33,16 @@ In those modes, these operations go through the runtime's FIPS providers:
 | HTTPS, and client-certificate verification | nginx, or the API with the `mtls` profile |
 | Certificate path validation, OCSP response and CRL signature checks | API |
 | The audit hash chain (SHA-256) | API |
+| The license signature (Ed25519 or ECDSA P-256) | API; see [The license check in FIPS mode](#the-license-check-in-fips-mode) |
 
 OCSP requests identify a certificate by a SHA-1 hash of its issuer's name and key, as RFC 6960
 responders expect. That is an identifier, not a signature. Bouncy Castle is used by the tests only;
 it is not in the shipped API.
+
+!!! warning "Not tested in FIPS mode"
+    None of the portal's CI jobs runs it on a Java runtime or OpenSSL in FIPS mode. Its copy of the
+    license library's tests simulates a runtime without Ed25519; for the library's checks on real
+    FIPS-mode runtimes, see [Licensing → FIPS 140-3](../licensing.md#fips-140-3).
 
 ### Options that are not FIPS-appropriate
 
@@ -49,24 +55,24 @@ Use these in test setups only. The API logs a warning at startup while one is on
 
 ### The license check in FIPS mode
 
-!!! warning "Current state: the license can't be verified on a Java runtime in FIPS mode"
-    The portal checks its license file with the ENS license library 1.0.0, which verifies an
-    Ed25519 signature. Red Hat's OpenJDK in FIPS mode does not offer Ed25519 signatures, so every
-    license is refused ("Ed25519 Signature not available") and the portal stays **unlicensed**:
-    only sign-in, the license screen and the audit log work.
+The API carries ENS license library 1.2.0 and trusts two ENS production keys: Ed25519 (key id
+`dabdc531a28916c5`) and ECDSA P-256 (key id `e0a2e4ff9c4f5bfc`). A license file may carry either
+signature or both. The API accepts it if any signature by a trusted key verifies with an algorithm
+the Java runtime provides, trying Ed25519 first. A Java runtime in FIPS mode has no Ed25519, so
+there the P-256 signature is the one that counts.
 
-    Don't work around it with `-Dcom.redhat.fips=false`: that takes the whole JVM out of FIPS mode.
+- **A license file signed with both keys** works on every host, FIPS or not.
+- **A license file issued before ENS enabled P-256 signing** carries only the Ed25519 signature. It
+  keeps working on hosts without FIPS mode. On a FIPS host the API refuses it
+  (`UNSUPPORTED_ALGORITHM`: "signed only with Ed25519, which this Java runtime does not provide")
+  and the portal stays **unlicensed**: only sign-in, the license screen and the audit log work.
+  Before moving to a FIPS host, download the license again from your account on the ENS portal (a
+  re-signed copy of the same license, with the P-256 signature) and install it as usual
+  (`./portal.sh license <file>`, the license screen, or the license volume or PVC).
 
-What changes, and when:
-
-1. ENS Solutions issues license files with a second signature, ECDSA P-256 with SHA-256, over the
-   same content. This needs ENS's production P-256 signing key, which has not been created yet.
-2. A portal release with license library 1.1.0 verifies the P-256 signature through the
-   runtime's FIPS provider when Ed25519 is not available.
-
-Both are needed. Dual-signed license files also work with releases that carry library 1.0.0,
-outside FIPS mode, because that library reads only the first (Ed25519) signature. See
-[Licensing → FIPS 140-3](../licensing.md#fips-140-3).
+Don't work around a refused license with `-Dcom.redhat.fips=false`: that takes the whole JVM out
+of FIPS mode. See [Licensing → FIPS 140-3](../licensing.md#fips-140-3) for which runtimes provide
+which algorithm.
 
 ## DISA STIG settings
 
