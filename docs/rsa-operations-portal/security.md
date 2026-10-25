@@ -12,6 +12,8 @@ release implements them, and the settings that change them.
 * **Logout** is `/perform_logout`. It deletes `JSESSIONID` and also logs the AM session out (`CustomLogoutSuccessHandler`).
 * If AM reports the user's session has ended during an operation, `GlobalControllerExceptionHandler` logs the user out and redirects to `/login`.
 * **Rate limits on public self-service**, and the feature caps of Test My Token, the PIN reset link and the token swap: see [Rate limits and uniform answers](#rate-limits-and-uniform-answers).
+* **Single sign-on** for operators (OIDC with PKCE and a nonce, or SAML 2.0 with signed answers to a request this Portal sent, used once; IdP-initiated sign-in refused), off until an identity provider is configured. The provider's groups decide the Portal roles through `ENS_SSO_ROLES_*` only, and the operator must then enter the SecurID passcode of the same user ID, which opens their own AM session. Every URL given to the provider is built from `APPLICATION_DNS_NAME`. No single logout. With a provider configured, a passcode-only sign-in still gets the roles AM grants unless `ENS_SSO_REQUIRE_FOR_ADMIN_ROLES=true`. See [Single sign-on](single-sign-on.md).
+* **Integration API tokens** (`ensapi_...`, SHA-256 hashed, shown once, scoped, expiring, rate-limited across replicas, limited to named security domains or identity sources) authenticate `/api/v1` only, with no session. Every change they ask for is a [help-desk request](help-desk.md) under the same rules as an operator's, and runs on the Connector's service account. See [API and HTTP route reference](api-reference.md#integration-api).
 
 ### Notice and consent banner
 
@@ -80,7 +82,7 @@ The license also gates features (`self-service`, `trusted-agents`, `help-desk`, 
 
 ## CSRF and browser security headers
 
-* **CSRF protection is on** (Spring Security's default). Thymeleaf adds the token to every form, and `static/js/app.js` sends it as a header on non-GET AJAX calls. A request without it is refused with 403 and audited with the reason `csrf_failure`. The audit pull API, which takes a bearer token and no session, is the only exception.
+* **CSRF protection is on** (Spring Security's default). Thymeleaf adds the token to every form, and `static/js/app.js` sends it as a header on non-GET AJAX calls. A request without it is refused with 403 and audited with the reason `csrf_failure`. The two exceptions take a bearer token and keep no session, so a browser's cookie is no use on them: the audit pull API (`/api/audit/**`) and the integration API (`/api/v1/**`).
 * Every response carries `Content-Security-Policy` (scripts, styles, images, fonts and connections from the Portal itself only; no framing; forms post only to the Portal), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin` and `Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=()`. Requests over HTTPS also get `Strict-Transport-Security: max-age=31536000; includeSubDomains`. The pages run no inline script: each page's script is a file under `static/js/pages`.
 * `ENS_CSP_REPORT_ONLY=true` sends the policy as `Content-Security-Policy-Report-Only`: a stopgap for a page the policy breaks.
 * The session cookie is `HttpOnly` and `SameSite=Lax`. It is `Secure` on requests the Portal itself received over TLS, or always with `ENS_COOKIE_SECURE=true`.
@@ -274,6 +276,16 @@ Both are on by default. A JVM without serialization filters (not the image's Jav
 ## Least privilege in Authentication Manager
 
 The Connector's service account no longer needs Super Admin. Give it, and the optional read-only account, the custom AM administrative roles in [RSA AM integration → Least-privilege AM roles](rsa-integration.md#least-privilege-am-roles). Operators' changes run under their own AM roles, so those roles need the permissions for what each operator does in the Portal.
+
+## Webhooks
+
+Webhooks are the Portal's only connections to addresses an administrator chooses. They are `https`
+only, and every address the host resolves to must be public unless the host or range is in
+`ens.webhooks.allowed-hosts`; cloud metadata and platform services, Teredo and local-use NAT64 are
+refused whatever that says. The host is checked again at every delivery and the connection goes to
+the address that was checked, with no redirects and a 15-second deadline. Bodies hold identifiers
+only, and are signed with HMAC-SHA256 over a timestamp and the body. Signing secrets are AES-GCM
+encrypted under a key derived from `rsa.helpdesk.code-key`. See [Webhooks](webhooks.md).
 
 ## Other controls
 

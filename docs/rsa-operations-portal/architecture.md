@@ -116,6 +116,8 @@ Flyway owns the schema: at every start the Portal applies the migrations in `db/
 | `CronLock` | Which node has claimed each scheduled job's current occurrence |
 | `HelpDeskRequest` | [Help-desk requests](help-desk.md): the change, the user and token, ticket, reason, verification, approval, state, when it was opened, decided and run (`runStartedAt`). An e-mailed code is kept only as an HMAC-SHA256 under the server's key (`rsa.helpdesk.code-key`, `EmailCodeKey`); an emergency access code never |
 | `RateLimitWindow`, `RateLimitBackoff` | Rate-limit counts per fixed window, and backoff per user ID or serial, keyed by SHA-256 hashes of the address, user ID or serial (see [Security](security.md#rate-limits-and-uniform-answers)) |
+| `ApiClientToken` | [Integration API](api-reference.md#integration-api) tokens: name, service identity, scopes, the security domains or identity sources they may touch, expiry, limit, last use; the token itself only as SHA-256 |
+| `WebhookEndpoint`, `WebhookDelivery` | [Webhooks](webhooks.md) (URL, events, signing secret AES-GCM encrypted) and their delivery queue and log |
 
 Flyway also creates tables that are not entities: `SPRING_SESSION` and `SPRING_SESSION_ATTRIBUTES` (signed-in sessions, Spring Session JDBC, shared by every Portal replica), `ens_license_*` (the license, the installation id and the license history) and `SsoSamlRequest` (SAML sign-ins in progress). See [High availability](availability-and-sizing.md#high-availability).
 

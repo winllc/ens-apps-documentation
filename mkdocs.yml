@@ -142,8 +142,11 @@ nav:
           - Architecture: rsa-operations-portal/architecture.md
           - RSA AM integration: rsa-operations-portal/rsa-integration.md
           - Help-desk requests: rsa-operations-portal/help-desk.md
+          - Single sign-on: rsa-operations-portal/single-sign-on.md
+          - API and route reference: rsa-operations-portal/api-reference.md
+          - Webhooks: rsa-operations-portal/webhooks.md
           - Security: rsa-operations-portal/security.md
           - FIPS 140-3 and DISA STIG: rsa-operations-portal/fips-and-stig.md
+          - Accessibility: rsa-operations-portal/accessibility.md
           - Sizing, availability and recovery: rsa-operations-portal/availability-and-sizing.md
-          - HTTP route reference: rsa-operations-portal/api-reference.md
           - Troubleshooting: rsa-operations-portal/troubleshooting.md

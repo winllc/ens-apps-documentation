@@ -290,6 +290,27 @@ which are the Connector's. Elsewhere the environment forms are `RSA_RATELIMIT_EN
 
 With Helm, an empty value keeps the default.
 
+### Single sign-on
+
+Off until an identity provider is configured. The providers are Spring Boot's own
+`SPRING_SECURITY_OAUTH2_CLIENT_*` and `SPRING_SECURITY_SAML2_RELYINGPARTY_*` settings; the Portal adds
+`ENS_SSO_ROLES_PMO_n`, `ENS_SSO_ROLES_TRUSTED_AGENT_n`, `ENS_SSO_ROLES_HELP_DESK_n`, the claim and
+attribute names, `ENS_SSO_LABELS_<ID>`, `ENS_SSO_REQUIRE_FOR_ADMIN_ROLES` (`false`),
+`ENS_SSO_PENDING_TIMEOUT` (`5m`) and `ENS_SSO_CLOCK_SKEW` (`60s`), and needs `APPLICATION_DNS_NAME`.
+See [Single sign-on](single-sign-on.md#settings); with Helm, the `sso.*` values.
+
+### Integration API and webhooks
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `ens.api.disable-cap` (`ENS_API_DISABLECAP`) | `10/1h` | Account disables one service identity may make in a rolling window without a second operator |
+| `ens.webhooks.enabled` (`ENS_WEBHOOKS_ENABLED`) | `true` | Send webhook events at all |
+| `ens.webhooks.allowed-hosts` (`ENS_WEBHOOKS_ALLOWEDHOSTS`) | none | Host names and CIDR ranges a webhook may reach although internal |
+
+Tokens themselves (scopes, validity, limits) are set per token on *Admin → Integrations*. Webhook
+retry and timeout settings are in [Webhooks → Settings](webhooks.md#settings). Webhook signing secrets
+are encrypted under `rsa.helpdesk.code-key`; see [Help-desk controls](#help-desk-controls).
+
 ### Branding, text and email templates
 
 | Name | Default | Description |

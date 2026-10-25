@@ -15,6 +15,8 @@ The **RSA Operations Portal** is a web application that simplifies the day-to-da
 | **Trusted Agent directory and appointments** | A public directory of Trusted Agents. Users can book an appointment with a Trusted Agent to pick up, replace or return a token. |
 | **Logistics** | Trusted Agents request token shipments for their **sites**. PMO staff work the shipments and send token serial ranges, and the receiving site confirms receipt. |
 | **Exemptions** | Users request an exemption from the MFA requirement, and the PMO approves or denies it. |
+| **Single sign-on** | Operators can sign in through the organization's identity provider (OpenID Connect or SAML 2.0), followed by their SecurID passcode; the provider's groups decide the Portal roles. See [Single sign-on](single-sign-on.md). |
+| **Integration API and webhooks** | ITSM and identity-governance tools read users and tokens and open help-desk requests through a scoped, token-authenticated REST API (`/api/v1`, OpenAPI document), and receive signed webhooks for help-desk, token and account events. See [API and HTTP route reference](api-reference.md) and [Webhooks](webhooks.md). |
 | **Administration (PMO)** | Register Trusted Agents (one at a time or in bulk from a CSV file), map application roles to RSA AM administrative roles, post home-page system notifications, email groups of users, and run scheduled jobs on demand. |
 | **Automation** | Six scheduled jobs send token-expiry, appointment and PIN-set reminders, re-sync Trusted Agents from RSA AM, and flag users who lose too many tokens. |
 | **Active Directory (optional)** | Adds or removes users in an "RSA enabled" AD group when they enroll a token, lose one, or have one deprovisioned. |
@@ -83,5 +85,8 @@ flowchart LR
 | [Security](security.md) | Security reviewers | Authentication, sessions, rate limits, authorization, CSRF and headers, running behind a proxy, the Connector hop, secrets |
 | [FIPS 140-3 and DISA STIG](fips-and-stig.md) | Security reviewers | What the Portal relies on for FIPS, and the settings a STIG deployment needs |
 | [Sizing, availability and recovery](availability-and-sizing.md) | Operators | Sizing, high availability, disaster recovery, rolling back |
-| [HTTP Route Reference](api-reference.md) | Engineers | Every controller route, its HTTP method and the role it requires |
+| [Single sign-on](single-sign-on.md) | Operators, security reviewers | OIDC and SAML setup for operators, role mapping, what is checked |
+| [API and HTTP route reference](api-reference.md) | Integrators, engineers | The integration API (tokens, scopes, help-desk flow, OpenAPI document), then every controller route, its HTTP method and the role it requires |
+| [Webhooks](webhooks.md) | Integrators | Events, signatures, delivery, where webhooks may point |
+| [Accessibility](accessibility.md) | Buyers, accessibility reviewers | What is checked, and the conformance documents' status |
 | [Troubleshooting](troubleshooting.md) | Operators | Symptom → cause → fix |

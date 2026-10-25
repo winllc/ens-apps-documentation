@@ -14,6 +14,25 @@ In-application administration is done by users with the **PMO** role. The **PMO 
 | Upload multiple Trusted Agents with a CSV file | `/ta/upload` |
 | Manual Run Cron Jobs | `/manualCron` |
 | Manage User Roles | `/roleMapping/search` |
+| Integration API tokens and signed webhooks for ITSM and identity-governance tools | `/admin/integrations` |
+
+## Integrations (`/admin/integrations`)
+
+PMO administrators let ITSM and identity-governance tools in, and tell them what happened:
+
+- **API tokens** for the [integration API](api-reference.md#integration-api): a name, a service
+  identity (for example `servicenow`), scopes, a validity (1 to 730 days, 90 by default), a request
+  limit per minute (60 by default), and the security domains or identity sources whose users the
+  token may touch (required for a token that can change anything, unless you deliberately choose
+  all of them, which is audited as a warning). The token is shown once. The page shows each token's
+  prefix, scopes, expiry, last use and the address it came from, and revokes it.
+- **Webhooks**: an `https` URL and the events (`helpdesk.*`, `token.*`, `user.*`, or single events).
+  The signing secret is shown once; **rotate** replaces it. The page lists the latest deliveries.
+  See [Webhooks](webhooks.md).
+
+Changes an integration asks for are [help-desk requests](help-desk.md): they need a ticket and a
+verified user, and a privileged user's request waits for a second operator, who approves it on the
+Help-Desk Requests page like any other.
 
 ## Managing user roles
 
