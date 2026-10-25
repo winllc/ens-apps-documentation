@@ -8,16 +8,16 @@ the workstation agents, and upgrades.
 
 | Item | Value |
 |---|---|
-| Process | One Java 21 process in a container: the `app` service of the release package, or the `readyroom` Deployment of the Helm chart |
+| Process | One Java 21 process in a container: the `app` service of the release package, or each replica of the `readyroom` Deployment of the Helm chart |
 | Listener | Port **8181**: plain HTTP, or HTTPS once TLS is turned on. With `MANAGEMENT_SERVER_PORT` set (the Helm chart sets 9090), a separate plain-HTTP management port for the probes and Prometheus. |
 | State | PostgreSQL (all records) and in-memory Caffeine caches (directory data). The server keeps no files of its own. |
-| Sessions | HTTP sessions are held in memory. A restart signs out password users. Certificate users are signed in again on their next request. |
+| Sessions | HTTP sessions are kept in the database (Spring Session JDBC), so any replica serves any request and a restart or rolling update signs nobody out. |
 | Outbound | LDAP, PostgreSQL, SMTP. With Windows sign-in enabled, a domain controller is **not** contacted: tickets are checked with the keytab alone. |
 
-!!! warning "Run a single instance"
-    The scheduled jobs have no cluster coordination: every instance runs every job. With two
-    instances, auto check-outs and absence alerts can be produced twice. The release package runs one
-    container, and the Helm chart runs one replica; more are not supported. See
+!!! note "Several replicas"
+    Sessions, scheduled-job locks and the license are in the database, so the Helm chart can run
+    more than one replica (`replicaCount`, default 1) once the license volume is off. The release
+    package runs one container. See
     [High availability](availability-and-sizing.md#high-availability).
 
 ## Start and stop
@@ -44,7 +44,7 @@ the workstation agents, and upgrades.
     kubectl -n readyroom logs -f deploy/readyroom
     kubectl -n readyroom rollout restart deploy/readyroom
     kubectl -n readyroom scale deploy/readyroom --replicas=0    # stop, keep data
-    kubectl -n readyroom scale deploy/readyroom --replicas=1
+    kubectl -n readyroom scale deploy/readyroom --replicas=1    # or your replicaCount
     ```
 
     Change settings in your values file and run `helm upgrade`. The names are for a release named
@@ -168,7 +168,9 @@ Useful messages:
 
 All jobs run inside the application on a 3-thread scheduler (`spring.task.scheduling.pool.size`).
 Each job waits for its previous run to finish before the configured delay starts, so runs never
-overlap.
+overlap. With several replicas, each run holds a lock in the database (ShedLock, table
+`shedlock`), so a job runs on one replica at a time; a replica that finds the lock held skips that
+run. Expired sessions are also deleted once a minute, on one replica.
 
 | Job (class) | Delay (packaged / built-in) | First run (packaged / built-in) | What it does |
 |---|---|---|---|
@@ -242,13 +244,14 @@ background after `cache-duration-refresh-minutes` and discarded after
     | `backup.persistence.*` | `10Gi`, ReadWriteOnce | The PVC the dumps go to, or `existingClaim` |
 
     To back up now: `kubectl -n readyroom create job --from=cronjob/readyroom-backup readyroom-backup-now`.
-    The chart's `README.md` gives the restore steps. The license PVC (the installation id) is not
-    in the dumps: snapshot it too, and copy the dumps off the cluster as well. Also keep your values
-    file and the Secrets it names.
+    The chart's `README.md` gives the restore steps. The dumps include the license and the
+    installation id, which are in the database (`ens_license_*`); the license PVC is only read on
+    the first start of the release that moved them there. Copy the dumps off the cluster as well.
+    Also keep your values file and the Secrets it names.
 
 Everything that cannot be rebuilt from the directory is in the database: attendance history,
 statuses, roles, notes, additional managers, group managers, notifications and responses, the
-organization calendar and parse rules, and the audit trail. Take a backup before every upgrade.
+organization calendar and parse rules, the audit trail, and the license and installation id. Take a backup before every upgrade.
 
 ### Retention
 
