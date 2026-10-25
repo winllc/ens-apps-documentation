@@ -32,6 +32,15 @@ A token in stock, assigned to nobody, is still deprovisioned at once.
 An operator acting on their own account goes through a help-desk request, which always needs a
 second operator.
 
+**From an integration.** ITSM and identity-governance tools open help-desk requests through the
+[integration API](api-reference.md#integration-api), under the same rules: a ticket and a reason, a
+verified user (by e-mailed code or tokencode, never `in-person`), and a second operator's approval on
+the Help-Desk Requests page when the user is privileged. Three more actions exist through the API
+only, and operators approve them like the others: `token-assign`, `user-enable` and `user-disable`.
+Disabling needs no verification, so one service identity may disable at most `ens.api.disable-cap`
+accounts (`10/1h`) before each further disable waits for a second operator. Emergency access codes
+and clearing the cached Windows password are not offered through the API.
+
 ## How a request goes
 
 Requests are opened by users with the `TRUSTED_AGENT` or `HELP_DESK` role. **Help-Desk Requests**

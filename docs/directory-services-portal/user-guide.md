@@ -24,6 +24,13 @@ can't sign in until you do. You see it again before each sign-in.
       failed login attempts. Try again later.").
     - If the portal cannot reach the directory, the page shows **Directory unreachable**.
 
+=== "Single sign-on"
+
+    If your organisation has set it up, the login page shows a button such as **Sign in with single
+    sign-on**. You sign in at your organisation's identity provider and come back signed in, as long
+    as the directory holds exactly one account for you. **Sign out** ends your portal session only,
+    not your session at the identity provider.
+
 === "Certificate (smart card)"
 
     If certificate sign-in is enabled, choose **Sign in with certificate** and let the browser
@@ -215,9 +222,19 @@ the background. The **bell** in the top bar lists your recent tasks:
 | Analysis findings (administrators) | **CSV** on an analysis result: every finding matching the current filters |
 | Custom schema (administrators) | **Export custom** on the Schema page (`.schema` file) |
 | A single entry | **Show raw attributes** on the entry page, then copy the text |
+| A directory's entries | **Export CSV** or **Export LDIF** on the directory page: the entries matching your search (all of them without one), up to 10,000 by default, with the form's fields and never passwords |
+| A group's members | **Export** on the group's page (CSV or LDIF) |
 
-The portal has no bulk export of directory entries; use the charts' table view and CSV, or your
-directory's own tools.
+## Importing entries and changing members in bulk
+
+Where you may write to a directory:
+
+- **Import** takes a CSV in the export's layout or an LDIF file. **Check file** first shows, row by
+  row, what would be created, updated, left unchanged or refused, without writing anything; then
+  **Import** writes. Every entry is checked like a form you saved yourself.
+- On a group, **Change members in bulk** adds and removes many members at once (one per line).
+
+See [Import and export](import-export.md) for the file formats and limits.
 
 ## Errors you may see
 

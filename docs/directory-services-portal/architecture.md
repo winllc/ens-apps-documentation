@@ -92,6 +92,12 @@ sequenceDiagram
 
 Certificate sign-in (`POST /api/auth/x509`, or automatically through `GET /api/auth/me`) replaces
 steps 1–4 with certificate validation and mapping. See [Security](security.md#x509-client-certificates).
+Single sign-on replaces them with the identity provider's answer, mapped to exactly one entry by
+`SSO_*_USER_FILTER`; see [Single sign-on](single-sign-on.md).
+
+A call to the integration API (`/api/v1`) does not sign in: the API token is checked on every call,
+and the call runs as the token's creator, with their rights read again from the directory. See
+[API reference → API tokens](api-reference.md#api-tokens).
 
 ## Persistence
 
@@ -107,6 +113,9 @@ steps 1–4 with certificate validation and mapping. See [Security](security.md#
 | Background tasks and results | API memory | Progress and results in `dsp_job`; the task runs on the instance that started it | `JOBS_RETAIN_MINUTES`, or until restart |
 | Metric cache | API memory | Each instance's memory | `METRICS_CACHE_SECONDS` |
 | Directory-search drop-down cache | API memory | Each instance's memory | per field, 30 s by default |
+| API tokens (SHA-256 hashes) | `DATA_DIR/api-tokens.json` | The shared database | Until revoked or expired |
+| Webhooks (with signing secrets) and the delivery outbox and log | `DATA_DIR/webhooks.json`, `webhook-deliveries.json` | `dsp_document` and `dsp_webhook_delivery` | `WEBHOOK_LOG_RETENTION` for finished deliveries |
+| Single sign-on requests in flight | API memory | `dsp_sso_request` | Ten minutes |
 
 Without a shared database, sessions, tasks and caches live in memory, and the configuration and
 audit stores have a single writer, so run **one** API instance. With one, the API creates its
@@ -144,7 +153,7 @@ not need the source to install or run the portal: install it from a release, as 
 
 | Path | Contents |
 |---|---|
-| `backend/` | Spring Boot service, package `com.winllc.dsp`: `ldap/`, `schema/`, `service/`, `web/` (controllers, DTOs, validation), `store/`, `x509/`, `metrics/`, `analysis/`, `jobs/`, `audit/`, `config/` |
+| `backend/` | Spring Boot service, package `com.winllc.dsp`: `ldap/`, `schema/`, `service/`, `web/` (controllers, DTOs, validation), `store/`, `x509/`, `sso/` (single sign-on), `integration/` (the `/api/v1` API and its tokens), `webhooks/`, `transfer/` (import and export), `metrics/`, `analysis/`, `jobs/`, `audit/`, `cluster/`, `license/`, `config/` |
 | `backend/src/main/resources` | `application.yml`, `application-mtls.yml`, `demo/` (ACME schema LDIF, demo data, demo `portal-config.json`) |
 | `shared/` | TypeScript types, DN utilities, validation and schema helpers used by the client |
 | `web/` | React client: `src/pages` (user, metrics, admin), `src/components` (including SVG charts), `nginx/` |

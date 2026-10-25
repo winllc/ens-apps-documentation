@@ -12,7 +12,8 @@ the directory:
 | Role | Who gets it |
 |---|---|
 | `ROLE_USER` | Everyone who signs in successfully |
-| `ROLE_ADMIN` | Anyone matching a value in `cert-alert.security.admin-identifiers` |
+| `ROLE_AUDITOR` | Anyone matching `cert-alert.security.auditor-identifiers`, in a directory group listed in `security.groups.auditor`, or in an identity provider group listed in that provider's `auditor-groups`. Reads everything an administrator reads and changes nothing |
+| `ROLE_ADMIN` | Anyone matching a value in `cert-alert.security.admin-identifiers`, in a directory group listed in `security.groups.admin`, or in an identity provider group listed in that provider's `admin-groups` |
 | *Project administrator* | Granted per project, in the UI, by an administrator (see [Projects](#projects-and-project-administrators)) |
 | *Point of contact* | Derived from the directory's `serverPOC` and contacts added in CertAlert; grants rights over that server |
 
@@ -29,13 +30,16 @@ cert-alert:
       - "uid=carol,ou=people,dc=example,dc=gov"
 ```
 
-Changing administrators means changing configuration and restarting. On a fresh deployment, when
+Changing the identifier lists means changing configuration and restarting. Group membership
+counts at the person's next sign-in; see [Single sign-on and roles](single-sign-on.md#roles). On a fresh deployment, when
 the cache is still empty, a password sign-in resolves roles from the directory entry just bound
 against, so the first administrator can run the first sync.
 
-You can tell you are an administrator from the account menu (top right), which reads
-**Administrator · via LDAP** or **Administrator · via X509**; readers see **Reader**. The **Admin**
-item appears in the navigation bar only for administrators.
+You can tell your role from the account menu (top right), which reads **Administrator**,
+**Auditor** or **Reader**, followed by how you signed in (**via X509**, **via LDAP**, **via OIDC** or
+**via SAML**). The **Admin**, **Integrations** and **Audit log** items appear in the navigation bar
+for administrators and auditors. An auditor sees the same pages with every control that would change
+something hidden.
 
 The full matrix of who may do what is in [Security → Permissions](security.md#permissions-matrix).
 
@@ -55,7 +59,7 @@ When the changelog connector is enabled, the header also shows its state: **Live
 
 ## The Admin page (`/admin`)
 
-Administrators only. It has four parts.
+Administrators, and auditors read-only. It has four parts.
 
 ### 1. Audit counts
 
@@ -153,6 +157,31 @@ off by default (see [Configuration → Audit trail](configuration.md#audit-trail
 The full `ens-audit/1` trail, with sign-ins, refusals, settings, the license and job runs as well
 as entry changes, is on the **Audit log** page, `/admin/audit`: search, export, **Verify
 integrity**, delivery status and SIEM API tokens. See [Audit logging](../audit-logging.md).
+
+## Integrations: API tokens and webhooks
+
+**Admin > Integrations** (`/admin/integrations`) is where other systems are let in and told about
+events. Administrators manage it; auditors can look.
+
+- **API tokens**: create one with a name, scopes and an optional expiry; the token is shown once.
+  The list shows each token's scopes, expiry and last use, and **Revoke** stops it at once. A token
+  is never more than its creator's directory roles today. See
+  [API reference → API tokens](api-reference.md#api-tokens).
+- **Webhooks**: add an `https://` URL, choose events (`certificate.expiring`,
+  `certificate.expired`, `job.completed`, `job.failed`) and a format (CertAlert JSON, Slack or
+  Microsoft Teams); the signing secret is shown once. **Send a test**, **New secret** and the
+  **Deliveries** log help set up the receiver. See [Webhooks](webhooks.md).
+
+Ask your operators to set `cert-alert.webhooks.secret-key` before you add the first webhook, so the
+secrets and URLs are stored encrypted.
+
+## Scheduled reports
+
+On the **Certificates** page, set the filters, then use **Scheduled reports** to e-mail that export
+as CSV or Excel daily, weekly or monthly to up to 20 addresses. Each run checks again that you are
+still an administrator in the directory and that every recipient is in
+`cert-alert.exports.report-recipient-domains`; until your operators set that, nothing can be
+scheduled. See [Exports, saved views and scheduled reports](exports-and-reports.md#scheduled-reports).
 
 ## Notifications administration
 

@@ -223,6 +223,22 @@ The Portal updates its database schema itself on the first start of the new vers
 
 What changes for operators and users with the release that brought help-desk requests and rate limits is listed in [Installation → Upgrade with upgrade.sh](install.md#upgrade-with-upgradesh), under *To the release with help-desk requests and rate limits*.
 
+### Upgrading to the release with single sign-on, the integration API and webhooks
+
+Nothing needs doing for an existing installation: the first start creates the new tables (Flyway
+`V5` to `V8`: `SPRING_SESSION` and `SPRING_SESSION_ATTRIBUTES`, `SsoSamlRequest`, `ens_license_*`,
+and `ApiClientToken`, `WebhookEndpoint`, `WebhookDelivery`).
+
+| Change | What to do |
+|---|---|
+| [Single sign-on](single-sign-on.md) for operators, off until an identity provider is configured | Set `APPLICATION_DNS_NAME` (Helm: `publicUrl` or the ingress host) before configuring one |
+| The [integration API](api-reference.md#integration-api) (`/api/v1`) | Nobody can call it until a PMO administrator makes a token on *Admin → Integrations*. The ingress needs no change |
+| [Webhooks](webhooks.md) need `rsa.helpdesk.code-key` | `install.sh`, `upgrade.sh` and the chart already set it; their secrets are encrypted under it, so changing it means rotating each webhook's secret. With the chart's NetworkPolicy on, allow the receivers with `networkPolicy.egress.webhookCidrs` |
+| API changes run on the Connector's service account | Give its administrative role the permissions for the API changes you use (assign and unassign tokens, update users' enabled flag); AM refuses the others. Scope it to the security domains and identity sources the integrations need |
+| New help-desk actions, asked for through the API only | `token-assign`, `user-enable`, `user-disable`; operators approve them on the Help-Desk Requests page like the others |
+| The Connector's log lines | Start with `[request=<id> for=<service:identity or user:id>]` during a call from the Portal |
+| New audit actions | `auth.sso-verified`; `api.token-created`, `api.token-revoked`, `api.disable-cap-exceeded`; `webhook.created`, `webhook.deleted`, `webhook.secret-rotated`, `webhook.delivery-failed`; `user.enabled`, `user.disabled` |
+
 ## Certificate renewal
 
 | Certificate | Where it lives | Renewal steps |

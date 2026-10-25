@@ -18,6 +18,11 @@ Without a certificate, the **Sign in** page asks for your directory credentials:
 A wrong username or password shows an error on the same page. When you signed in with a password,
 **Log out** in the user menu (your avatar, top right) ends the session.
 
+Where your organization has set up **single sign-on**, the **Sign in** page also has a button for it
+(for example *Sign in with single sign-on*). You sign in at your organization's identity provider and
+come back signed in, provided the directory holds exactly one account for you. **Log out** ends your
+ReadyRoom session only, not your session at the identity provider.
+
 !!! note "You do not check in on the website"
     Check-in happens on your Windows workstation. The ReadyRoom agent reports when you sign in,
     lock or unlock the screen, and sign out. Your first sign-in or unlock of the day counts as
@@ -109,6 +114,10 @@ without being able to change it.
 - **Generate Group Report** (admins, and managers of this group with the `MANAGER` role): pick a
   date range, then **Generate Report**. See [Group report](#group-report).
 - **Group Managers** (the same people): see [Administration](admin-guide.md#group-managers).
+- **Calendar**: a month calendar combining the statuses each member you may see has set (leave,
+  telework and so on), each named and linked to the person.
+- **CSV** and **Excel** download the member list with each person's status today. The same buttons
+  are on the results of *Find a user*.
 
 !!! note
     Saving a favorite is limited to the `MANAGER` and `ADMIN` roles. For a user with only the `USER`
@@ -123,7 +132,13 @@ The report page shows the group name, the date range and the number of users, th
 - **User Reports**: for each member, each day's status, check-in time, check-out time and how long
   they were checked in.
 
-**Download PDF** saves the report as `group_report.pdf`.
+**Download PDF** saves the report as `group_report.pdf`. **CSV** and **Excel** download a row per
+person and day (status, first check-in, last check-out, minutes in and time zone), with each person's
+times in their own time zone, or choose **My time zone** to show every row in yours. See
+[Reports, exports and time zones](exports.md).
+
+Managers and administrators can have a group's report e-mailed every day, week or month:
+**Scheduled reports** (`/app/reports/schedules`).
 
 ## Users
 
@@ -175,6 +190,7 @@ If nobody does, the page says *No direct reports*.
 | **Daily attendance, last 30 days** | A chart of each day's counts, with **Show as a table**. |
 | **Status today** | Every report's current status, organization and employee type. **Advanced** adds the DN and check-in and check-out times. |
 | **Attendance by report, last 30 days** | For each report: days checked in, status-only days, days with nothing recorded, average arrival, and when their agent last reported. A **Quiet** badge means nothing was received for a week or more. |
+| **Calendar** | A month calendar combining the statuses your reports have set, each named and linked to the person. |
 
 ## Org Chart
 
@@ -195,6 +211,8 @@ Open **My Profile** from the avatar menu (`/app/profile`).
   data (PII). The audit trail records that your notes changed, never what they say.
 - **Login Time**: your normal start time. It decides when you are expected in. If you leave it
   empty, your average arrival time is used.
+- **Time zone**: the time zone your arrival and departure times are shown in on reports, downloads
+  and the public API. Leave it on *My site's time zone* to use your site's.
 
 Choose **Submit**. *Successfully updated profile* appears at the top of the page.
 

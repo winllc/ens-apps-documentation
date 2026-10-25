@@ -1,16 +1,106 @@
 # API reference
 
-The API is served under `/api` by the Spring Boot backend. The web client is its only built-in consumer,
-but scripts can call it too. Behind the bundled nginx, use the portal's own origin
-(`https://portal.example.com/api/...`).
+The portal has two HTTP APIs, both behind the web tier on the portal's own origin
+(`https://portal.example.com/api/...`):
 
-## Conventions
+- the **integration API** under **`/api/v1`**, for other systems: versioned, described by an OpenAPI
+  document, and called with an **API token**;
+- the **portal API** under the rest of `/api`, which the web client uses with a signed-in session.
+  Scripts can call it too, but it is not versioned.
+
+The audit trail's pull API (`/api/audit/events`) has tokens of its own; see [Audit log](#audit-log).
+
+## Integration API (`/api/v1`)
+
+Other systems search and read directories, change entries and manage group members through it. Every
+call goes through the same permission checks, namespace confinement, form validation and audit trail
+as the portal's pages.
+
+### The OpenAPI document
+
+Served at **`/api/v1/openapi`** (JSON), or `/api/v1/openapi.yaml` for YAML, without signing in. Its
+server is `PORTAL_PUBLIC_URL`. CI generates it with the tests and keeps a copy in the source
+repository (`backend/openapi/dsp-api-v1.json`).
+
+### Endpoints and scopes
+
+| Call | Scope |
+|---|---|
+| `GET /api/v1/directories`, `GET /api/v1/directories/{id}` (the fields of its form) | `entries:read` or `groups:read` |
+| `GET /api/v1/directories/{id}/entries?q=&page=&pageSize=`, `GET /api/v1/directories/{id}/entry?dn=` | `entries:read` |
+| `POST /api/v1/directories/{id}/entries` `{"parentDn", "values"}`, `PATCH /api/v1/directories/{id}/entry?dn=` `{"values"}` | `entries:write` |
+| `DELETE /api/v1/directories/{id}/entry?dn=` | `entries:delete` |
+| `GET /api/v1/directories/{id}/members?dn=[&attribute=]` | `groups:read` |
+| `POST /api/v1/directories/{id}/members?dn=` `{"add": [], "remove": []}` | `groups:write` |
+
+```bash
+curl -H "Authorization: Bearer $DSP_TOKEN" \
+  "https://portal.example.com/api/v1/directories/staff/entries?q=smith"
+
+curl -X POST -H "Authorization: Bearer $DSP_TOKEN" -H "Content-Type: application/json" \
+  -d '{"add": ["uid=jdoe,ou=people,dc=example,dc=com"], "remove": []}' \
+  "https://portal.example.com/api/v1/directories/groups/members?dn=cn=staff,ou=groups,dc=example,dc=com"
+```
+
+Member changes are value-level adds and deletes, never a replace of the list (see
+[Import and export → Bulk membership](import-export.md#bulk-membership)).
+
+### API tokens
+
+*Administration → Integrations → API tokens*
+
+- **Created by an administrator** with a name, scopes, an expiry (at most `API_TOKEN_MAX_DAYS`,
+  default 365), optionally a list of directories, and optionally its own rate limit. The value
+  (`dspat_…`) is shown **once**; only its SHA-256 is kept. Tokens can be revoked at once; the list
+  shows each token's last use.
+- **Never more than its creator.** A token acts as the administrator who created it, with their
+  rights *as the directory has them at the time of the call* (read again at most once a minute),
+  narrowed by its scopes and directories. If they lose a permission or their entry, so does the
+  token. A creator whose account the directory marks disabled or locked (`nsAccountLock: true`,
+  Active Directory's ACCOUNTDISABLE flag in `userAccountControl`, or `pwdAccountLockedTime`) makes
+  every call fail with `401 token_owner_disabled` until the account is enabled again. Rights a
+  single sign-on provider asserted at their sign-in don't carry over.
+- **Only for `/api/v1`.** A token opens nothing else, and `/api/v1` accepts nothing but a token (no
+  session cookie), which is why it needs no `X-DSP-Request` header. No session is created; the token
+  is never logged.
+- **Refused**: missing, unknown, expired or revoked tokens get `401` (and an `access.denied` audit
+  event); a missing scope gets `403 insufficient_scope`.
+- **Rate limit**: `API_RATE_LIMIT_PER_MINUTE` (120) per token unless the token sets its own; over it,
+  `429` with `Retry-After`. The count is kept in each API replica's memory, so with several replicas
+  a token can make up to the limit on each. An address that presents more than
+  `API_FAILED_TOKEN_LIMIT_PER_MINUTE` (30) unknown, expired or revoked tokens a minute gets `429`
+  instead of `401` for further bad ones; a request with a valid token is never refused by it.
+- **Audited**: `api.token-created`, `api.token-revoked`; a token's changes name it
+  (`details.apiClientId`, `authMethod: api-token`).
+- **Storage**: `DATA_DIR/api-tokens.json`, or the shared database.
+
+| Variable | Default | Helm | Description |
+|---|---|---|---|
+| `API_TOKEN_MAX_DAYS` | `365` | `integrations.api.maxTokenDays` | The longest lifetime an administrator may give a token |
+| `API_RATE_LIMIT_PER_MINUTE` | `120` | `integrations.api.rateLimitPerMinute` | Requests per minute per token, unless the token sets its own (per replica) |
+| `API_FAILED_TOKEN_LIMIT_PER_MINUTE` | `30` | | Bad tokens one address may present a minute before `429` |
+
+Token administration (session, administrator, `X-DSP-Request: 1`):
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/admin/api-tokens` | The tokens (never their values), with last use |
+| GET | `/api/admin/api-tokens/settings` | Scopes and limits |
+| POST | `/api/admin/api-tokens` | Create; the answer holds the token, once |
+| DELETE | `/api/admin/api-tokens/{id}` | Revoke |
+
+### Webhooks
+
+The portal also posts signed events (`entry.changed`, `group.membership_changed`, `form.submitted`)
+to HTTPS receivers. See [Webhooks](webhooks.md).
+
+## Portal API conventions
 
 | Topic | Rule |
 |---|---|
 | Format | JSON request and response bodies |
-| Authentication | Session cookie `DSP_SESSION`, obtained from `POST /api/auth/login` or `POST /api/auth/x509` |
-| CSRF | Every POST, PUT and DELETE must send `X-DSP-Request: 1` (otherwise 403) |
+| Authentication | Session cookie `DSP_SESSION`, obtained from `POST /api/auth/login`, `POST /api/auth/x509` or [single sign-on](single-sign-on.md) |
+| CSRF | Every POST, PUT and DELETE must send `X-DSP-Request: 1` (otherwise 403). Not needed on `/api/v1`, which takes only API tokens |
 | Admin | `/api/admin/**` requires an administrator (otherwise 403 *Administrator access required*) |
 | Errors | `{"error": "message"}`, with field details for validation errors (400 *Invalid request*) |
 | Status codes | 200, 201 (created), 202 (background job), 204 (deleted), 400, 401 (*Authentication required*, or `"code": "session_expired"`), 403, 404, 405, 409 (conflict, e.g. form in use), 429 (throttled / too many tasks), 500, 503 (the audit store can't be written) |
@@ -31,7 +121,8 @@ curl -b jar https://portal.example.com/api/definitions
 | Method | Path | Description |
 |---|---|---|
 | GET | `/api/health` | Liveness, kept for existing monitoring: `{"ok": true}` |
-| GET | `/api/info` | `mode`, `connected` (whether the directory answers), `version`, `auth` (`password`, `x509`, `x509AutoLogin`), `loginHint`, `banner`, and `consent` (the consent banner's `title` and `text`, or null). `baseDn` only for signed-in users; `ldapUrl` and `error` only for administrators |
+| GET | `/api/v1/openapi`, `/api/v1/openapi.yaml` | The integration API's OpenAPI document |
+| GET | `/api/info` | `mode`, `connected` (whether the directory answers), `version`, `auth` (`password`, `x509`, `x509AutoLogin`, and `sso`: a list of `{id, label, url}` for each single sign-on button), `loginHint`, `banner`, and `consent` (the consent banner's `title` and `text`, or null). `baseDn` only for signed-in users; `ldapUrl` and `error` only for administrators |
 | GET | `/livez`, `/readyz` | Liveness and readiness probes on the API's own port. Not published by the web tier |
 | GET | `/actuator/health`, `/actuator/health/liveness`, `/actuator/health/readiness` | Spring Boot's probes (on the management port when `MANAGEMENT_SERVER_PORT` is set). Details only for administrators. Not published by the web tier |
 | GET | `/actuator/prometheus` | Prometheus metrics, on the management port only |
@@ -46,8 +137,13 @@ curl -b jar https://portal.example.com/api/definitions
 | POST | `/api/auth/logout` | — | Sign out and invalidate the session. Returns `{"ok": true, "consentRequired": ...}`: whether the banner must be acknowledged again before the next sign-in |
 | GET | `/api/auth/me` | — | `{"user": SessionUser or null, "consentRequired": ...}`. With X.509 auto-login enabled, it may sign the user in (only once the banner, if enabled, has been acknowledged), or return `certificateError` |
 
+| GET | `/api/auth/sso/authorize/oidc` | — | Start an OpenID Connect sign-on (a browser redirect); the provider returns to `/api/auth/sso/callback/oidc` |
+| GET | `/api/auth/sso/saml/authenticate/saml` | — | Start a SAML sign-on; the provider posts to `/api/auth/sso/saml/acs/saml` |
+| GET | `/api/auth/sso/saml/metadata` | — | This service provider's SAML metadata, for the identity provider |
+
 `SessionUser` contains `username`, `dn`, `displayName`, `mail`, `groups`, `isAdmin`, `authMethod`
-(`password` or `x509`) and `certificateSubject` (certificate sign-ins only).
+(`password`, `x509`, `oidc` or `saml`) and `certificateSubject` (certificate sign-ins only). See
+[Single sign-on](single-sign-on.md).
 
 ## Directories and entries
 
@@ -63,6 +159,13 @@ curl -b jar https://portal.example.com/api/definitions
 | GET | `/api/directories/{id}/options/{fieldId}` | `q` (typed text) or repeated `value` (labels for stored values, ≤ 200) | Drop-down options |
 | GET | `/api/me/entries` | — | **My profile**: per self-matching definition, the user's entries and self-editable attributes |
 | PUT | `/api/me/{id}/entry` | `dn`; `{"values": {...}}` | Self-service update of the user's own entry |
+| POST | `/api/directories/{id}/export` | `q`, `format` (`csv` or `ldif`) | Export the entries matching the search (up to `EXPORT_MAX_ENTRIES`). Audited as `data.exported` |
+| GET | `/api/directories/{id}/members` | `dn`, `attribute` | A group's members |
+| POST | `/api/directories/{id}/members/export` | `dn`, `attribute`, `format` | Export a group's members |
+| POST | `/api/directories/{id}/members` | `dn`; `{"add": [], "remove": []}` | Bulk membership change (up to `BULK_MAX_MEMBERS`) |
+| POST | `/api/directories/{id}/import` | `format` (`csv`/`ldif`), `mode` (`create`, `update` or `upsert`, the default), `dryRun`; the file as the body | Import, or check the file with `dryRun=true`. Long imports answer 202 as a background job |
+
+See [Import and export](import-export.md).
 
 ## Metrics
 

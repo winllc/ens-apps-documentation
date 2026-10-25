@@ -23,6 +23,8 @@ This page summarises the portal's security controls and the settings that affect
 | Notice and consent banner | `ENS_CONSENT_BANNER_ENABLED=true`: no sign-in of any kind succeeds until the browser session has acknowledged the DoD banner. Enforced by the API (403 `consent_required`), audited as `auth.consent-acknowledged`. See [Configuration](configuration.md#notice-and-consent-banner) |
 | Certificate-only mode | `PASSWORD_LOGIN_ENABLED=false` |
 | Administrator role | `ROLE_ADMIN` from `ADMIN_USERS` / `ADMIN_GROUPS`; required for `/api/admin/**`. Read again from the directory every `GROUP_REFRESH_INTERVAL` (default 5 minutes) |
+| Single sign-on | OIDC (authorization code with PKCE, state, nonce; ID token signature, issuer, audience, expiry) and SAML 2.0 (signed response or assertions, issuer, audience, recipient, times, `InResponseTo`; IdP-initiated responses and replayed assertions refused). The asserted identity must match exactly one directory entry through `SSO_*_USER_FILTER`; unverified e-mail claims are not used. Roles come from the directory, plus administrator through `SSO_*_ADMIN_GROUPS` only, bounded by `SSO_IDP_ADMIN_SESSION_LIFETIME`. Every address given to the provider is built from `PORTAL_PUBLIC_URL`. No provider token is kept; no single logout. See [Single sign-on](single-sign-on.md) |
+| API tokens | `dspat_` and 32 random bytes, kept as SHA-256 and compared in constant time; scoped, expiring, optionally limited to some directories; act as their creator with the creator's rights re-read from the directory, refused when the creator is disabled or locked. Accepted on `/api/v1` only, which accepts nothing else. See [API reference → API tokens](api-reference.md#api-tokens) |
 
 ## Sessions and CSRF
 
@@ -44,7 +46,9 @@ This page summarises the portal's security controls and the settings that affect
   must carry `X-DSP-Request: 1`, or it is refused with 403 *Missing request verification header*.
   Browsers can't add custom headers to cross-site requests without a CORS preflight, which the API
   never approves. The `SameSite=Strict` cookie is a second layer. Spring Security's own CSRF token
-  is turned off because this header check replaces it.
+  is turned off because this header check replaces it. The integration API (`/api/v1`) needs no
+  such header: it accepts only a bearer token, never a session cookie, so a browser cannot be made
+  to call it.
 - **Security headers**: the ENS baseline set (Content-Security-Policy without inline scripts,
   HSTS on HTTPS, `nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy:
   strict-origin-when-cross-origin`, `Permissions-Policy`). nginx sends them and hides the API's
@@ -162,6 +166,18 @@ issuer.
 - The management port (`MANAGEMENT_SERVER_PORT`) serves health and Prometheus without sign-in. It
   is never published by the compose files, the ingress or the route; the native package binds it to
   `127.0.0.1`.
+
+## Webhooks
+
+Outbound webhook requests are the portal's only connections to addresses an administrator chooses.
+They are HTTPS only; every address the host resolves to must be public (private, loopback,
+link-local, carrier-grade NAT, reserved and documentation ranges, and IPv6 forms embedding them, are
+refused) unless the host is listed in `WEBHOOK_ALLOWED_HOSTS`, and cloud metadata addresses are
+refused regardless. The check runs when a webhook is saved and again at every delivery, which
+connects to exactly the address it checked, with no redirects and an overall deadline. Requests are
+signed with HMAC-SHA256 over a timestamp and the body. **Signing secrets are stored unencrypted**,
+readable only by the portal's user (in `DATA_DIR/webhooks.json` or the shared database): protect
+backups accordingly. See [Webhooks](webhooks.md).
 
 ## Supply chain
 

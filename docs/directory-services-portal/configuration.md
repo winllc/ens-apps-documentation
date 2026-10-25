@@ -264,6 +264,37 @@ in every ENS application. They are described in [Audit logging](../audit-logging
 | `JOBS_RETAIN_MINUTES` | `portal.jobs.retain-minutes` | `1440` | How long finished tasks and their results are kept in memory |
 | *(none in `application.yml`)* | `portal.jobs.max-jobs` | `500` | Upper bound on tasks kept in memory (minimum 50). Can be set through Spring's relaxed binding, for example `PORTAL_JOBS_MAX_JOBS` |
 
+## Single sign-on
+
+OpenID Connect and SAML 2.0, each off until configured: OIDC turns on with `SSO_OIDC_ISSUER_URI` and
+`SSO_OIDC_CLIENT_ID`, SAML with `SSO_SAML_METADATA`. `PORTAL_PUBLIC_URL` (property
+`portal.sso.public-url`) is required for SAML and recommended for OIDC; give the web tier
+`PUBLIC_HOST` too. `PASSWORD_LOGIN_ENABLED=false` leaves only single sign-on and certificates.
+Every `SSO_*` variable, the addresses to register and provider walkthroughs are in
+[Single sign-on](single-sign-on.md#settings).
+
+## Integration API, webhooks, import and export
+
+| Variable | Property | Default | Description |
+|---|---|---|---|
+| `API_TOKEN_MAX_DAYS` | `portal.integration.api.max-token-days` | `365` | The longest lifetime an administrator may give an API token |
+| `API_RATE_LIMIT_PER_MINUTE` | `portal.integration.api.rate-limit-per-minute` | `120` | Requests per minute per token, unless the token sets its own; counted per API replica |
+| `API_FAILED_TOKEN_LIMIT_PER_MINUTE` | `portal.integration.api.failed-token-limit-per-minute` | `30` | Bad tokens one client address may present a minute before getting 429 |
+| `WEBHOOKS_ENABLED` | `portal.integration.webhooks.enabled` | `true` | `false` stops sending (deliveries stay queued) and creating webhooks |
+| `WEBHOOK_ALLOWED_HOSTS` | `portal.integration.webhooks.allowed-hosts` | *(empty)* | Host names (or `*.example.com`, `;`-separated) whose webhooks may reach internal addresses |
+| `WEBHOOK_MAX_ATTEMPTS` | `portal.integration.webhooks.max-attempts` | `8` | Attempts per delivery |
+| `WEBHOOK_CONNECT_TIMEOUT`, `WEBHOOK_READ_TIMEOUT`, `WEBHOOK_SEND_TIMEOUT` | `portal.integration.webhooks.*` | `5s`, `10s`, `20s` | Per attempt; the send timeout bounds the whole attempt |
+| `WEBHOOK_RUN_BUDGET` | `portal.integration.webhooks.run-budget` | `40s` | How long one delivery run starts attempts for |
+| `WEBHOOK_LOG_RETENTION` | `portal.integration.webhooks.log-retention` | `30d` | How long finished deliveries are kept |
+| `EXPORT_MAX_ENTRIES` | `portal.integration.transfer.export-max-entries` | `10000` | The most entries one export holds |
+| `IMPORT_MAX_BYTES` | `portal.integration.transfer.import-max-bytes` | `5242880` | The largest import file; raise the web tier's `MAX_BODY_SIZE` with it |
+| `IMPORT_MAX_ROWS` | `portal.integration.transfer.import-max-rows` | `5000` | The most rows one import holds |
+| `BULK_MAX_MEMBERS` | `portal.integration.transfer.bulk-max-members` | `5000` | The most members one bulk change adds and removes |
+
+Helm: `integrations.api.*`, `integrations.webhooks.*` and `integrations.transfer.*`. See the
+[API reference](api-reference.md#integration-api-apiv1), [Webhooks](webhooks.md) and
+[Import and export](import-export.md).
+
 ## X.509 client-certificate sign-in
 
 | Variable | Property | Default | Description |
@@ -425,13 +456,15 @@ substituted. The rendered files hold the proxy secret, so only their owner can r
 | `X509_HEADER` | `X-SSL-Client-Cert` | The header the API reads the client certificate from (letters, digits and `-`) |
 | `X509_EDGE_TERMINATION` | `false` | `true` when a TLS proxy in front of the web tier verifies client certificates and always sets `X509_HEADER` itself: plain HTTP then passes that header on. Nothing else may then reach the web tier |
 | `ENS_CSP_REPORT_ONLY` | `false` | `true` sends `Content-Security-Policy-Report-Only` instead of `Content-Security-Policy`. Set the same value on the API |
+| `MAX_BODY_SIZE` | `5m` | The largest request body (schema and entry imports), an nginx size such as `10m`. Raise it with the API's `IMPORT_MAX_BYTES`. The container exits if it is not a size |
+| `PUBLIC_HOST` | *(empty)* | The host[:port] users open (the host of `PORTAL_PUBLIC_URL`), sent to the API as `X-Forwarded-Host` instead of the browser's `Host`. Set it with single sign-on. The container exits if it is not a host name with an optional port |
 
 Behaviour of the bundled server configuration:
 
 | Setting | Value |
 |---|---|
 | Listen | `8080` (HTTP); `8443 ssl` in the mTLS template |
-| Request body limit | `client_max_body_size 5m` (schema imports) |
+| Request body limit | `client_max_body_size` from `MAX_BODY_SIZE` (default `5m`; schema and entry imports). The native package's nginx site keeps `5m`; edit it there |
 | Header buffers | `large_client_header_buffers 4 32k` (matches the API's 32 KB) |
 | `/api/` proxy | `proxy_read_timeout 120s`; overwrites `X-Forwarded-For` with `$remote_addr`, sets `X-Forwarded-Proto` and `X-Forwarded-Host`; sets `X-DSP-Proxy-Secret`. On plain HTTP, removes `X-SSL-Client-Cert` and `X509_HEADER` from client requests, unless `X509_EDGE_TERMINATION=true`. In the mTLS template, sets `X509_HEADER` to the verified certificate |
 | Security headers | The set in [Security headers](#security-headers). On `/api/` the API's copies are hidden, so each header appears once |

@@ -1,18 +1,128 @@
-# HTTP Route Reference
+# API and HTTP route reference
 
-Every HTTP route served by the portal, taken from the `@Controller`/`@RestController` mappings. The **Access** column shows:
+The Portal has two kinds of HTTP interface:
+
+- the **integration API** under **`/api/v1`**, for ITSM and identity-governance tools: JSON over
+  HTTPS, versioned, described by an OpenAPI document and called with an **API token**;
+- the **pages and routes** the browser uses, listed after it, taken from the
+  `@Controller`/`@RestController` mappings.
+
+The audit trail has its own pull API with its own tokens (see [License and audit log](#license-and-audit-log)).
+
+## Integration API
+
+### The OpenAPI document
+
+Served at **`/api/v1/openapi.json`** without signing in (it does not show the Portal's version). The
+server URL in it is `application.dns.name`. CI keeps a copy of each build's.
+
+### API tokens
+
+A PMO administrator makes tokens on *Admin → Integrations* (`/admin/integrations`):
+
+- a name, a **service identity** (for example `servicenow`), scopes, a validity (1 to 730 days, 90 by
+  default) and a request limit per minute (60 by default);
+- the **security domains and/or identity sources** whose users it may read and change. A token that
+  can ask for changes must have such a list, or be given *all security domains and identity sources*
+  deliberately, which the audit trail records as a warning. Read-only tokens may be left
+  unrestricted.
+
+The token (`ensapi_...`) is shown **once**, on the page that answers the form, sent with
+`Cache-Control: no-store`; only its SHA-256 is kept. The page shows each token's prefix, scopes,
+expiry, last use and the address it came from, and revokes it. A caller sends
+`Authorization: Bearer <token>`.
+
+| Scope | Allows |
+|---|---|
+| `users:read` | `GET /api/v1/users/{userId}`, `GET /api/v1/users/{userId}/tokens` |
+| `tokens:read` | `GET /api/v1/tokens/{serial}`: assigned user, enabled, new-PIN and next-tokencode modes, expiry, last login |
+| `helpdesk:read` | `GET /api/v1/helpdesk/requests/{id}` for requests its service identity opened |
+| `tokens:assign` | `POST /api/v1/tokens/{serial}/assignment` (help-desk action `token-assign`) |
+| `tokens:unassign` | `POST /api/v1/tokens/{serial}/unassignment` (`token-deprovision`, or `token-lost` with `"lost":true`) |
+| `tokens:pin-reset` | Help-desk action `pin-reset` |
+| `users:status` | `POST /api/v1/users/{userId}/enable`, `/disable` (`user-enable`, `user-disable`) |
+
+**Whose accounts a token may touch.** An integration's changes run as the Connector's service
+account, so Authentication Manager does not limit them to a security domain or identity source the
+way it limits an operator's own session. The Portal therefore checks the token's list before anything
+is read or changed: when the request is opened and again when it runs, and for the user and token
+lookups (another domain's user or token is "not found"); an unassigned token counts by its own
+security domain. Also give the Connector's service account an Authentication Manager administrative
+role scoped to only the security domains and identity sources the integrations need.
+
+### Changes are help-desk requests
+
+Every change goes through the [help-desk rules](help-desk.md); the API is not a way around them.
+
+1. `POST /api/v1/helpdesk/requests` (or one of the shortcuts above) with `action`, `userId`, `serial`
+   (for token actions), `ticket` and `reason`: `201` and the request, `VERIFYING`.
+2. Verify the user: `POST /api/v1/helpdesk/requests/{id}/verification/start` with
+   `{"method":"email-code"}` sends the code to the user, and
+   `POST /api/v1/helpdesk/requests/{id}/verification` with `{"method":"email-code","code":"..."}` (or
+   `{"method":"tokencode","serial":...,"tokencode":...}` where a tokencode counts) checks what the user
+   read back. An integration cannot use `in-person`, which is an operator's attestation. Disabling an
+   account needs no verification; everything else does while
+   `rsa.helpdesk.verification.required` is true. One service identity may therefore disable at most
+   `ens.api.disable-cap` accounts (`10/1h` by default, a rolling window, all its tokens together)
+   without a second operator; past it, each further disable answers `202` and waits for approval, and
+   `api.disable-cap-exceeded` is recorded as an alert.
+3. `POST /api/v1/helpdesk/requests/{id}/submit`: `200` with the completed (or failed) request, or
+   **`202` with the request `PENDING_APPROVAL`** when the user is privileged. A second operator
+   approves it on the Portal's Help-Desk Requests page (an integration never approves); then
+   `POST /api/v1/helpdesk/requests/{id}/run`. `POST .../{id}/cancel` withdraws it. The request's `next`
+   field lists the calls that apply now.
+
+```bash
+curl -H "Authorization: Bearer ensapi_..." https://rsa-portal.example.com/api/v1/tokens/000123456789
+
+curl -X POST -H "Authorization: Bearer ensapi_..." -H "Content-Type: application/json" \
+  -d '{"action":"pin-reset","userId":"jdoe","serial":"000123456789","ticket":"INC-1","reason":"Forgot PIN"}' \
+  https://rsa-portal.example.com/api/v1/helpdesk/requests
+```
+
+The change is made in Authentication Manager on the Connector's service account, after its
+`am.change-attempt` is committed. The audit trail's actor is `{"type":"service","id":"<identity>"}`,
+with `details.serviceIdentity`, and the Connector's log names `for=service:<identity>`. The user gets
+the help-desk e-mail, which says the integration made the change. Emergency access codes and clearing
+the cached Windows password are not offered through the API.
+
+### Errors, limits and sessions
+
+- Errors are JSON, `{"error":"...","message":"..."}`: `400`; `401` (no valid token,
+  `WWW-Authenticate: Bearer`); `403` (a scope, the license, the read-only demo); `404` (including
+  another identity's request); `409` (a help-desk step that cannot be taken now; `error` is the
+  reason's key); `429` with `Retry-After` (the token's limit, or the code limits of
+  [Rate limits](security.md#rate-limits-and-uniform-answers)); `502` (Authentication Manager or the
+  Connector failed).
+- Each token's limit is counted in the database, across replicas.
+- Calls keep no session and set no cookie. CSRF protection is off on `/api/v1` only, where nothing
+  runs without a bearer token, so a signed-in browser's cookie is no use there.
+- Audited: `api.token-created` (a warning when a token that can change something is given all
+  security domains), `api.token-revoked`, `api.disable-cap-exceeded`; `access.denied` with
+  `api_token_missing`, `api_token_invalid`, `api_token_expired`, `api_token_revoked` or
+  `api_scope_required`.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `ens.api.disable-cap` (`ENS_API_DISABLECAP`) | `10/1h` | Account disables one service identity may make in a rolling window without a second operator |
+
+The Portal also posts signed events to HTTPS receivers; see [Webhooks](webhooks.md).
+
+## Pages and routes
+
+The **Access** column shows:
 
 * **Public**: the path matches a `permitAll` pattern in `WebSecurityConfig`;
 * **Auth**: any signed-in user;
 * a role name: the `@PreAuthorize` annotation on the handler.
 
-Method security is on, so the server enforces every role below. Every POST, PUT and DELETE needs the CSRF token (forms carry it; AJAX calls send it as a header), except the audit pull API. While the [consent banner](security.md#notice-and-consent-banner) is on, a browser session reaches nothing but `/consent` until it is acknowledged. See [Security](security.md).
+Method security is on, so the server enforces every role below. Every POST, PUT and DELETE needs the CSRF token (forms carry it; AJAX calls send it as a header), except the audit pull API and the integration API, which take a bearer token and no session. While the [consent banner](security.md#notice-and-consent-banner) is on, a browser session reaches nothing but `/consent` until it is acknowledged. See [Security](security.md).
 
 Most routes return HTML (Thymeleaf views). Several POST handlers redirect to `/message?messages=<key>&errors=<key>`, which renders the message keys from `messages.properties`.
 
 The POSTs anyone can reach without signing in (sign-in, Test My Token, the PIN resets, registration, exemption requests, appointment booking and cancelling) are rate-limited: over a limit they answer `429 Too Many Requests` with `Retry-After`, a short page for browsers or `{"error":"rate_limited","retryAfter":N}` for clients that ask for JSON. See [Security → Rate limits and uniform answers](security.md#rate-limits-and-uniform-answers).
 
-## Authentication and common pages
+### Authentication and common pages
 
 | Method | Path | Access | Purpose |
 |---|---|---|---|
@@ -26,10 +136,13 @@ The POSTs anyone can reach without signing in (sign-in, Test My Token, the PIN r
 | GET | `/message` | Public | Shows `messages`/`errors` keys |
 | GET | `/static/**` | Public | Static assets; `/static/custom/**` serves `custom-resource.location` |
 | GET, POST | `/consent` | Public | The notice-and-consent banner and its **I agree** |
+| GET | `/oauth2/authorization/<id>`, `/login/oauth2/code/<id>` | Public, with an OIDC provider configured | Start a [single sign-on](single-sign-on.md), and its redirect URI |
+| GET, POST | `/saml2/authenticate/<id>`, `/login/saml2/sso/<id>`, `/saml2/service-provider-metadata/<id>` | Public, with a SAML provider configured | Start a single sign-on, the Assertion Consumer Service, and the Portal's metadata |
+| GET | `/api/v1/openapi.json` | Public | The integration API's OpenAPI document |
 | GET | `/actuator/health`, `/actuator/health/liveness`, `/actuator/health/readiness` | Public (details for PMO) | Health probes. On the management port instead when `MANAGEMENT_SERVER_PORT` is set |
 | GET | `/actuator/prometheus` | Management port only, no sign-in | Prometheus metrics |
 
-## End-user self-service
+### End-user self-service
 
 | Method | Path | Access | Purpose |
 |---|---|---|---|
@@ -48,7 +161,7 @@ The POSTs anyone can reach without signing in (sign-in, Test My Token, the PIN r
 | GET, POST | `/user/exemption/confirm/{code}` | Public | Confirm an exemption request from the emailed link |
 | GET, POST | `/swaptoken` | Auth | Swap to a replacement token |
 
-## Trusted Agent directory and appointments
+### Trusted Agent directory and appointments
 
 | Method | Path | Access | Purpose |
 |---|---|---|---|
@@ -62,7 +175,7 @@ The POSTs anyone can reach without signing in (sign-in, Test My Token, the PIN r
 | POST | `/appointment/updateNotes` | TRUSTED_AGENT | Update notes |
 | GET | `/rest/appointment/appointmentTimesForTaOnDate/{MM-dd-yyyy}/{taRsaId}` | Public | JSON list of booked times |
 
-## Token management
+### Token management
 
 | Method | Path | Access | Purpose |
 |---|---|---|---|
@@ -77,7 +190,7 @@ The POSTs anyone can reach without signing in (sign-in, Test My Token, the PIN r
 | GET | `/token/deprovision/serial?serial=` | TRUSTED_AGENT, HELP_DESK | Look up a token |
 | POST | `/token/deprovision/serial` | TRUSTED_AGENT, HELP_DESK | Deprovision a token assigned to nobody (`tokenSerialNumber`); for an assigned token, redirects to a new help-desk request |
 
-## User search
+### User search
 
 | Method | Path | Access | Purpose |
 |---|---|---|---|
@@ -89,7 +202,7 @@ The POSTs anyone can reach without signing in (sign-in, Test My Token, the PIN r
 | POST | `/user/search/emergencyTokenCode` | TRUSTED_AGENT, HELP_DESK | Redirects to a new help-desk request for an emergency access code |
 | POST | `/user/search/clearCachedWindowsPassword` | TRUSTED_AGENT, HELP_DESK | Redirects to a new help-desk request to clear the cached Windows password |
 
-## Help-desk requests
+### Help-desk requests
 
 See [Help-desk requests](help-desk.md). Every step is checked on the server; `{id}` is the request's public id.
 
@@ -107,7 +220,7 @@ See [Help-desk requests](help-desk.md). Every step is checked on the server; `{i
 | GET | `/helpdesk/requests` | TRUSTED_AGENT, HELP_DESK, PMO | Requests waiting for your approval, and your own |
 | POST | `/helpdesk/request/{id}/approve`, `/reject` | TRUSTED_AGENT, HELP_DESK, PMO | Decide a request: an approver role from `rsa.helpdesk.dual-control.approver-roles`, not the operator who asked and not the user. A rejection needs a comment |
 
-## Sites, shipments and reports
+### Sites, shipments and reports
 
 | Method | Path | Access | Purpose |
 |---|---|---|---|
@@ -135,7 +248,7 @@ See [Help-desk requests](help-desk.md). Every step is checked on the server; `{i
 | GET | `/report/ta/{rsaId}` | PMO | Trusted Agent report |
 | GET | `/report/overview` | PMO | Not implemented (always errors) |
 
-## Trusted Agent administration and profile
+### Trusted Agent administration and profile
 
 | Method | Path | Access | Purpose |
 |---|---|---|---|
@@ -148,7 +261,7 @@ See [Help-desk requests](help-desk.md). Every step is checked on the server; `{i
 | POST | `/ta/modify/delete/{rsaId}` | PMO | Delete |
 | GET, POST | `/ta/upload` | PMO | CSV bulk upload (`file`) |
 
-## PMO administration
+### PMO administration
 
 | Method | Path | Access | Purpose |
 |---|---|---|---|
@@ -164,7 +277,7 @@ See [Help-desk requests](help-desk.md). Every step is checked on the server; `{i
 | POST | `/user/exemption/review/submit` | PMO | `action=approve` or `deny`, `comments` |
 | POST | `/user/exemption/review/delete` | PMO | Delete a request |
 
-## License and audit log
+### License and audit log
 
 | Method | Path | Access | Purpose |
 |---|---|---|---|
@@ -176,9 +289,10 @@ See [Help-desk requests](help-desk.md). Every step is checked on the server; `{i
 | GET | `/admin/audit/export` | PMO | Export the current filter as CSV or NDJSON (audited) |
 | POST | `/admin/audit/verify` | PMO | Verify the hash chain |
 | POST | `/admin/audit/tokens`, `/admin/audit/tokens/{id}/revoke` | PMO | Create or revoke a pull-API token |
+| GET | `/admin/integrations` | PMO | API tokens and webhooks. `POST /admin/integrations/tokens`, `/tokens/{id}/revoke`, `/webhooks`, `/webhooks/{id}/rotate`, `/webhooks/{id}/delete` |
 | GET | `/api/audit/events?after=<seq>&limit=<n>` | Bearer token | The audit pull API: no session, no CSRF token, works in every license mode. See [Audit logging](../audit-logging.md#the-pull-api) |
 
-## JSON endpoints
+### JSON endpoints
 
 | Method | Path | Access | Returns |
 |---|---|---|---|
@@ -199,7 +313,7 @@ See [Help-desk requests](help-desk.md). Every step is checked on the server; `{i
 
 The `/data/**` endpoints use `spring-data-jpa-datatables` and accept the standard DataTables server-side query parameters.
 
-## Connector endpoint
+### Connector endpoint
 
 | Method | Path | Access | Purpose |
 |---|---|---|---|

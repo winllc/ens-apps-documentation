@@ -138,7 +138,21 @@ Each product's install guide covers both methods in full.
 
 ### Cutting a release
 
-Push a version tag to the product's repository:
+**Before you tag: check the docs against the code.** The product's README is updated with every
+change; this site is not, unless someone ports it. For the release you are about to tag:
+
+- [ ] List the README headings and upgrade notes added or changed since the last release
+  (`git diff v<previous>..HEAD -- README.md`) and find each feature on this site. Anything missing
+  gets a page or a section, in the product's section of `mkdocs.yml`.
+- [ ] Check every setting name and default the site gives for those features against
+  `application.yml` (or `application.properties`), the Helm chart's `values.yaml` and the bundle's
+  `env.template`.
+- [ ] Search the product's pages for statements the release makes false: sign-in methods, roles,
+  "the only token", "internal API", the last Flyway migration number, the API reference's endpoint
+  list against the OpenAPI document.
+- [ ] Merge the docs change to `master` before the release is announced.
+
+Then push a version tag to the product's repository:
 
 ```bash
 git tag v1.4.0 && git push origin v1.4.0

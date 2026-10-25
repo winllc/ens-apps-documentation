@@ -219,6 +219,24 @@ For the setup procedure, see [Security](security.md#windows-kerberos-sign-in).
 | `application.windows-auth.krb5-config-location` | `APPLICATION_WINDOWSAUTH_KRB5CONFIGLOCATION` | – | system `/etc/krb5.conf` | Use a different `krb5.conf`. |
 | `application.windows-auth.debug` | `APPLICATION_WINDOWSAUTH_DEBUG` | – | `false` | Log the JDK's Kerberos detail while the keytab is loaded. |
 
+## Single sign-on
+
+OpenID Connect and SAML 2.0, each off until enabled (`ENS_SSO_OIDC_ENABLED`,
+`ENS_SSO_SAML_ENABLED`). Both need `APPLICATION_BASE_URL` set to the absolute URL users reach, and a
+user filter (`ENS_SSO_OIDC_USER_FILTER`, `ENS_SSO_SAML_USER_FILTER`). `ENS_SSO_ROLE_MAPPING` maps the
+provider's groups to `MANAGER` or `ADMIN`. Every `ENS_SSO_*` setting, the addresses to register and
+provider walkthroughs are in [Single sign-on](single-sign-on.md#settings); with Helm, the `sso.*`
+values.
+
+## Public API, webhooks and reports
+
+| Area | Settings | Details |
+|---|---|---|
+| Public API (`application.api.*`) | `APPLICATION_API_MAXTOKENDAYS` (`366`), `_DEFAULTRATEPERMINUTE` (`120`), `_MAXRATEPERMINUTE` (`1200`), `_MAXRANGEDAYS` (`366`), `_MAXPAGESIZE` (`500`) | [API reference → Settings](api-reference.md#settings) |
+| Live account check (`application.ldap.account-status.*`) | `APPLICATION_LDAP_ACCOUNTSTATUS_FILTER`, `_LOCKOUTDURATION`, `_CACHESECONDS` (`60`), `_BUILTINCHECKS` (`true`), `_ACTIVEDIRECTORY` (`auto`) | Applies to API token, webhook and scheduled report owners; [API reference → Tokens](api-reference.md#tokens) |
+| Webhooks (`application.webhooks.*`) | `APPLICATION_WEBHOOKS_SECRETKEY` (unset: webhooks off), `_ALLOWEDCIDRS`, `_MAXATTEMPTS` (`8`), `_DELIVERYLOGDAYS` (`30`), timeouts and run limits | [Webhooks → Settings](webhooks.md#settings) |
+| Reports and time zones (`application.reports.*`) | `APPLICATION_REPORTS_SITETIMEZONES`, `_MAXRANGEDAYS` (`366`), `_MAXATTACHMENTBYTES` (`10485760`), `_MAXRECIPIENTS` (`20`) | [Reports, exports and time zones](exports.md#settings) |
+
 ## Logging, monitoring and diagnostics
 
 | Property | Packaged | Description |

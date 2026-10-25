@@ -385,7 +385,7 @@ The counts are read from the database at most once a minute.
    person's credentials), revocation endpoints, and risky-name flags (the migration backfills
    these from stored names). Run **Sync directory** after an upgrade to refresh them.
 
-Migrations shipped: `V1` (directory tables) through `V20`:
+Migrations shipped: `V1` (directory tables) through `V28`. The later ones:
 
 | Migration | What it does |
 |---|---|
@@ -393,6 +393,14 @@ Migrations shipped: `V1` (directory tables) through `V20`:
 | `V18__ens_audit_format` | Moves the audit trail to the shared `ens-audit/1` format in the same `audit_event` table, and adds `audit_chain_head`, `audit_delivery` and `audit_api_token`. Rows written before it are numbered and chained by the application at its first start, oldest first, before it writes anything new; on a large audit table that first start takes longer |
 | `V19__create_outbound_email` | The email outbox: a message is stored in the same transaction as whatever decided to send it, and sent after that commits, retried until it goes or is old enough to give up on |
 | `V20__check_attribute_type_without_an_in_list` | Recreates the check on `server_attribute_definition.type` in a form the embedded H2 database keeps enforcing. No data changes; on PostgreSQL it changes nothing in effect |
+| `V21__create_shedlock` | `shedlock`: the database lock every scheduled job, outbox and manual run takes, so one replica runs each |
+| `V22__create_job_run` | `job_run`: jobs started by hand, so any replica can answer `GET /api/v1/jobs/{id}` |
+| `V23__create_spring_session` | `spring_session`, `spring_session_attributes`: sessions in the database |
+| `V24__create_saml_authn_request` | `saml_authn_request`: SAML sign-in requests waiting for their answer (ten minutes, used once) |
+| `V25__ens_license_state` | `ens_license_*`: the license, installation id and revisions, imported from the license volume at the first start |
+| `V26__create_api_token_and_webhook` | `api_token`, `webhook_endpoint`, `webhook_delivery`: [API tokens](api-reference.md#api-tokens) and [webhooks](webhooks.md) |
+| `V27__create_saved_view_and_scheduled_report` | `saved_view`, `scheduled_report`, and three attachment columns on `outbound_email`: [saved views and scheduled reports](exports-and-reports.md) |
+| `V28__webhook_url_encrypted_and_report_owner_dn` | A wider, encryptable webhook URL and a scheduled report owner's DN |
 
 ### Upgrading to the platform-baseline release
 
@@ -407,6 +415,21 @@ Migrations shipped: `V1` (directory tables) through `V20`:
 
 Migrations are not undone. Going back to an older release means restoring the backup taken before
 the upgrade; see [Rolling back an upgrade](availability-and-sizing.md#rolling-back-an-upgrade).
+
+### Upgrading to the release with single sign-on, the public API and exports
+
+Nothing to do by hand: the migrations above run on the first start, and every new feature is off or
+inert until someone uses it.
+
+| Change | What to do |
+|---|---|
+| [Single sign-on](single-sign-on.md) and the auditor role are new, and off | Nothing changes until `cert-alert.sso.*`, `auditor-identifiers` or `security.groups` is set. Single sign-on needs `CERT_ALERT_SSO_PUBLIC_URL`; SAML needs HTTPS |
+| A **Certificates** page, exports, saved views and [scheduled reports](exports-and-reports.md) | Exports are audited (`inventory.exported`). Scheduled reports cannot be created until `CERT_ALERT_EXPORTS_REPORT_RECIPIENT_DOMAINS` (Helm `exports.reportRecipientDomains`) names your domains |
+| [API tokens](api-reference.md#api-tokens), the OpenAPI document and [webhooks](webhooks.md) | Nothing changes until an administrator creates a token or a webhook on **Admin > Integrations**. `/api/v1/**` now also accepts `Authorization: Bearer cat_…`; a proxy or WAF that strips `Authorization` must let it through. `/api/v1/openapi.yaml` is served without signing in |
+| Tokens are checked against the creator's live entry | The service account must read people's lock attributes and the lockout policy (see [API tokens](api-reference.md#api-tokens)). On OpenLDAP with `olcPPolicyDefault`, set `cert-alert.ldap.lockout.assumed-duration` or a locked-out creator's tokens stay refused until an administrator clears the lock |
+| Webhooks post from CertAlert to the receivers | Set `CERT_ALERT_WEBHOOKS_SECRET_KEY` (Helm `webhooks.secretKey`) before creating any, the same on every replica. With the chart's NetworkPolicy on, `networkPolicy.egress.web` must reach the receivers; an HTTP proxy is not used |
+| New audit actions | `api.*`, `webhook.*`, `report.*` and `inventory.exported` |
+| Page markup changed for [accessibility](accessibility.md) | Custom CSS that targeted `h2.page-title` or `h3.card-title` needs the new elements |
 
 ## Scaling
 

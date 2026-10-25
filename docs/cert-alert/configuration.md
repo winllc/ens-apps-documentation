@@ -369,6 +369,52 @@ See [Security](security.md) for how these interact.
 | `ldap.user-search-base` | `""` | Where to search for the username |
 | `ldap.user-search-filter` | `(uid={0})` | How to search for it |
 | `ldap.user-dn-patterns` | `[]` | Bind directly to these DN patterns instead of searching, e.g. `["uid={0},ou=people"]` |
+| `auditor-identifiers` | `[]` | Values granting `ROLE_AUDITOR` (read everything, change nothing), matched as `admin-identifiers` is. Indexed variables: `CERT_ALERT_SECURITY_AUDITOR_IDENTIFIERS_0`, ... |
+| `groups.admin`, `groups.auditor` | `[]` | Directory group DNs whose members get `ROLE_ADMIN` or `ROLE_AUDITOR` (`CERT_ALERT_SECURITY_GROUPS_ADMIN_0`, ...) |
+| `groups.directory` | `true` | Read the person's groups (`memberOf`) from the directory at sign-in |
+| `groups.member-of-attribute` | `memberOf` | The attribute listing a person's groups |
+| `groups.cache-for` | `5m` | How long a certificate sign-in's groups are remembered |
+
+See [Single sign-on and roles](single-sign-on.md#roles) for how the roles combine.
+
+## Single sign-on (`cert-alert.sso`)
+
+OpenID Connect and SAML 2.0, each off until enabled. `cert-alert.sso.public-url`
+(`CERT_ALERT_SSO_PUBLIC_URL`) is required with either. Every setting, the addresses to register at
+the provider and walkthroughs for Entra ID, Okta and ADFS are in
+[Single sign-on and roles](single-sign-on.md#settings).
+
+## Exports and scheduled reports (`cert-alert.exports`)
+
+| Property | Default | Description |
+|---|---|---|
+| `max-rows` | `200000` | The most rows one CSV or Excel download holds |
+| `report-max-rows` | `50000` | The most rows a scheduled report's file holds |
+| `report-recipient-domains` | `[]` | Domains a scheduled report may be e-mailed to (`example.gov`, `*.mil`). **Required for scheduled reports** |
+| `max-reports-per-user` | `20` | Scheduled reports one administrator may own |
+| `report-poll-interval` | `5m` | How often due reports are looked for |
+
+See [Exports, saved views and scheduled reports](exports-and-reports.md).
+
+## Public API (`cert-alert.api`)
+
+| Property | Default | Description |
+|---|---|---|
+| `tokens-enabled` | `true` | `false` refuses every API token without deleting any |
+| `requests-per-minute` | `300` | Per token, per replica; `0` turns the limit off |
+| `max-lifetime` | `365d` | The longest a token lives; `0` removes the limit |
+| `use-audit-interval` | `1h` | A token's reads are audited once per interval |
+| `max-page-size` | `500` | The largest page a list returns |
+| `creator-roles-cache-for` | `1m` | How long a token creator's live directory check is reused |
+
+`cert-alert.ldap.lockout.assumed-duration` (unset) is the lockout length to assume where the
+directory does not say; see [API reference → API tokens](api-reference.md#api-tokens).
+
+## Webhooks (`cert-alert.webhooks`)
+
+`enabled` (`true`), `allowed-hosts` (empty), `block-private-networks` (`false`) and `secret-key`
+(unset; set it before creating webhooks), plus timeouts, retry and retention settings. All of them
+are in [Webhooks → Settings](webhooks.md#settings).
 
 ## Client certificates (`ens.x509`)
 
@@ -378,10 +424,10 @@ in with certificates. They add to `cert-alert.security.x509` above. See
 
 | Env var | Default | Helm | Description |
 |---|---|---|---|
-| `ENS_X509_REVOCATION` | `off` | `x509.revocation` | `off`, `ocsp`, `crl` or `ocsp-then-crl`: checked live for every certificate presented, before it is matched to anybody. Off by default so an upgrade changes nothing; with certificate sign-in on and revocation off, startup logs a warning that DISA STIG requires it |
+| `ENS_X509_REVOCATION` | unset (`ocsp-then-crl`, soft-fail) | `x509.revocation` | `off`, `ocsp`, `crl` or `ocsp-then-crl`: checked live for every certificate presented, before it is matched to anybody. Unset means `ocsp-then-crl`: a certificate found revoked is refused, and one no responder or CRL answers for signs in with a warning. With certificate sign-in on and revocation `off`, startup logs a warning that DISA STIG requires it |
 | `ENS_X509_OCSP_RESPONDER_URL` | none | `x509.ocspResponderUrl` | Ask this responder instead of the one the certificate names, for example a local OCSP relay |
 | `ENS_X509_CRL_DIR` | none | (`extraEnv`, with `extraVolumes`) | A directory of CRL files (DER or PEM), re-read when they change. With it set, no distribution point is fetched: the air-gapped option |
-| `ENS_X509_REVOCATION_FAIL` | `closed` | `x509.revocationFail` | `closed` refuses a certificate whose status cannot be found; `open` allows it, with a warning (and a startup warning) |
+| `ENS_X509_REVOCATION_FAIL` | `open` while `ENS_X509_REVOCATION` is unset, otherwise `closed` | `x509.revocationFail` | `closed` refuses a certificate whose status cannot be found; `open` allows it, with a warning (and a startup warning when set explicitly) |
 | `ENS_X509_REVOCATION_CACHE` | `10m` | `x509.revocationCache` | How long a good or revoked answer is reused, per issuer and serial number. No answer is reused for 30 seconds |
 | `ENS_X509_ALLOWED_ISSUERS` | none: any issuer the trust store accepts | `x509.allowedIssuers` | Issuer DNs separated by `;`. A certificate from any other issuer is refused. Compared as names, so spacing and case don't matter |
 | `ENS_X509_USER_FILTER` | none | `x509.userFilter` | An LDAP filter that finds the holder of a certificate the directory does not publish, with `{upn}`, `{edipi}`, `{email}` and `{uuid}` filled in, for example `(uid={edipi})`. Used only with `cert-alert.security.x509.require-known-certificate: false`, instead of the uid and address matching |

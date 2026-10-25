@@ -11,17 +11,33 @@ A signed-in user is an administrator when:
 
 - their username (the value of `LDAP_USERNAME_ATTRIBUTE`) is listed in `ADMIN_USERS`, or
 - they are a member of a group listed in `ADMIN_GROUPS`. Membership comes from `memberOf` on the user entry plus the
-  `LDAP_GROUP_FILTER` search.
+  `LDAP_GROUP_FILTER` search, or
+- they signed in by [single sign-on](single-sign-on.md) and the identity provider lists them in a group named in
+  `SSO_OIDC_ADMIN_GROUPS` or `SSO_SAML_ADMIN_GROUPS`. Such a session ends after `SSO_IDP_ADMIN_SESSION_LIFETIME`
+  (default `1h`), because the provider is not asked again during it.
 
 See [Configuration → Users, groups and administrators](configuration.md#users-groups-and-administrators).
 Administrators see an **Admin** section in the sidebar with **Directory definitions**, **Forms**,
-**Schema**, **Permissions**, **Data analysis** and **Audit log**. Every `/api/admin/**` call
+**Schema**, **Permissions**, **Data analysis**, **Integrations** and **Audit log**. Every `/api/admin/**` call
 requires the administrator role.
 
 !!! info "Administrators and data access"
     Administrators have full read/write access to every **read/write** definition. They still
     cannot write through a **read-only (white pages)** definition. Every directory operation runs
     as the portal's LDAP service account, so the service account's own ACLs still apply.
+
+## Integrations: API tokens and webhooks
+
+*Administration → Integrations* lets other systems in and tells them about changes.
+
+- **API tokens** give a system access to the [integration API](api-reference.md#integration-api-apiv1)
+  (`/api/v1`). Choose a name, scopes (`entries:read`, `entries:write`, `entries:delete`, `groups:read`,
+  `groups:write`), an expiry, and optionally the directories it may use and its own rate limit. The token is
+  shown once. It acts as you, with your rights as the directory has them at each call, so it stops working if
+  you lose them or your account is disabled. Revoke tokens nobody uses; the list shows each one's last use.
+- **Webhooks** post signed events (`entry.changed`, `group.membership_changed`, `form.submitted`) to an HTTPS
+  receiver, optionally for some directories only. The signing secret is shown once; **Send test event** checks
+  the receiver, and the delivery log shows what was sent. See [Webhooks](webhooks.md).
 
 ## Getting started
 

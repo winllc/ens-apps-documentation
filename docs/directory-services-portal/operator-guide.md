@@ -147,6 +147,8 @@ installation id).
 | `portal-config.json` | Forms, directory definitions, grants, custom schema, schema cache, dashboards, analyses | Read at startup, written atomically on every admin change |
 | `audit/` | The audit store: `audit-YYYY-MM.jsonl` (hash-chained `ens-audit/1` events), `audit-state.json` (output cursors), `audit-api-tokens.json` (pull API token hashes) | Appended and synced to disk in the request that caused the event. Only the retention job (`ENS_AUDIT_RETENTION_DAYS`) removes events |
 | `analysis-results/<id>.json` | Latest result of each saved analysis | Re-creatable by running the analysis again |
+| `api-tokens.json` | [API tokens](api-reference.md#api-tokens) (SHA-256 hashes only) | Owner-readable only |
+| `webhooks.json`, `webhook-deliveries.json` | [Webhooks](webhooks.md), **with their signing secrets**, and pending deliveries | Owner-readable only. Protect the backups that contain them |
 | License directory (`/var/lib/ens/directory-portal`) | The license file and the installation id | Not in `DATA_DIR`. Losing it gives the installation a new id; bound licenses must then be re-bound |
 
 Directory data stays on your LDAP server and must be backed up there.
@@ -294,6 +296,20 @@ revocation checking) changes these things operators notice:
 | Startup warnings | Certificate sign-in without revocation checking, and `LDAP_TLS_REJECT_UNAUTHORIZED=false`, now log a DISA STIG or FIPS warning |
 | `/api/info` says less to anonymous callers | Monitoring that read `connected` or `error` from it should use `/readyz` instead |
 | `AUDIT_MEMORY_EVENTS` is no longer used | Nothing to do; the audit page searches all retained history |
+
+### Upgrading to the release with single sign-on, the integration API and import and export
+
+Nothing needs changing: without `SSO_*` the portal signs in as before, no API token or webhook
+exists until an administrator creates one, and every new setting has a safe default.
+
+| Change | What to do |
+|---|---|
+| [Single sign-on](single-sign-on.md) (OIDC, SAML 2.0), off until configured | The login page gets a button per provider; `/api/auth/sso/**` is new (the web tier already forwards `/api/`) |
+| [Integration API](api-reference.md#integration-api-apiv1) (`/api/v1`, API tokens) and its OpenAPI document (`/api/v1/openapi`) | Tokens are stored as SHA-256 in `DATA_DIR/api-tokens.json`, or in the shared database |
+| [Webhooks](webhooks.md) | HTTPS only, never to private, loopback, link-local or metadata addresses unless the host is in `WEBHOOK_ALLOWED_HOSTS`. Alone, kept in `DATA_DIR/webhooks.json` and `webhook-deliveries.json` (the first holds the signing secrets); with the shared database, in the database (table `dsp_webhook_delivery`, Flyway V3). A NetworkPolicy or firewall must let the API reach the receivers on 443 (Helm `networkPolicy.egress.webhooks`) |
+| [Import and export](import-export.md) on directory pages | The web tier's upload limit is now `MAX_BODY_SIZE` (default `5m`, as before); raise it with `IMPORT_MAX_BYTES`. The native package's nginx site keeps `client_max_body_size 5m`; edit it there |
+| [Accessibility](accessibility.md) | Darker secondary text, underlined links in text, 3:1 form-field borders, a skip link and a title per page |
+| New variables | The release bundle's `env.template` lists `SSO_*`, `API_*`, `WEBHOOK*`, `EXPORT_*`, `IMPORT_*`, `BULK_MAX_MEMBERS` and `MAX_BODY_SIZE`; `upgrade.sh` keeps your `.env`, so add them only if you use them |
 
 To go back to the previous release, see
 [Rolling back an upgrade](availability-and-sizing.md#rolling-back-an-upgrade).
