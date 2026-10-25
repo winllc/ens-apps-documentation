@@ -32,11 +32,12 @@ the NSS FIPS module through `SunPKCS11-NSS-FIPS`, and the system crypto policy.
 | OCSP and CRL fetches, and the certificate path check | The JDK's PKIX validator. SHA-1 appears only in the OCSP request's CertID (RFC 6960), which names a certificate and is not a signature |
 | SHA-256 | The audit hash chain, the pull-API token hashes and the session id fingerprints |
 | `SecureRandom` | Session ids, CSRF tokens, CSP nonces and tokens |
-| Ed25519 | The license signature: see [The license check in FIPS mode](#the-license-check-in-fips-mode) |
+| Ed25519 or ECDSA P-256 | The license signature: see [The license check in FIPS mode](#the-license-check-in-fips-mode) |
 
 !!! warning "Not tested in FIPS mode"
-    - **ReadyRoom itself** has no CI job that runs it on a Java runtime in FIPS mode. The license
-      library's own FIPS test (below) is the only FIPS-mode test.
+    - **ReadyRoom itself.** None of its CI jobs runs it on a Java runtime in FIPS mode. Its copy
+      of the license library's tests simulates a runtime without Ed25519; for the library's checks
+      on real FIPS-mode runtimes, see [Licensing → FIPS 140-3](../licensing.md#fips-140-3).
     - **Windows (Kerberos) sign-in** uses the JDK's Kerberos with the keytab's encryption types; it
       has not been run on a Java runtime in FIPS mode.
     - **The Windows client** runs in Windows PowerShell and uses Windows' own TLS. It asks for TLS
@@ -63,17 +64,27 @@ These weaken what FIPS mode protects and should stay off in a FIPS deployment.
 
 ### The license check in FIPS mode
 
-!!! warning "Current state: the license can't be verified on a Java runtime in FIPS mode"
-    ReadyRoom checks its license file with the ENS license library 1.0.0, which verifies an Ed25519
-    signature. Red Hat's OpenJDK in FIPS mode does not offer Ed25519 signatures, so every license
-    is refused ("Ed25519 Signature not available") and ReadyRoom stays **unlicensed**: only sign-in,
-    the license screen, the audit log and a person's data export and erasure work.
+ReadyRoom carries ENS license library 1.2.0, which checks ECDSA P-256 signatures as well as
+Ed25519, and trusts two ENS production keys: Ed25519 (key id `dabdc531a28916c5`) and ECDSA P-256
+(key id `e0a2e4ff9c4f5bfc`). A license file may carry both signatures. ReadyRoom accepts it if any
+signature by a trusted key verifies with an algorithm the Java runtime provides, trying Ed25519
+first. A Java runtime in FIPS mode has no Ed25519, so there only the P-256 signature counts.
 
-    Don't work around it with `-Dcom.redhat.fips=false`: that takes the whole JVM out of FIPS mode.
+!!! warning "Licenses issued before ENS enabled P-256 signing"
+    Such a license is Ed25519-only. It keeps working on a runtime that is not in FIPS mode. On a
+    FIPS host it is refused, the license screen says the file is signed only with an algorithm this
+    runtime does not provide, and ReadyRoom stays **unlicensed**: only sign-in, the license screen,
+    the audit log and a person's data export and erasure work.
 
-It changes when ENS Solutions both issues license files that also carry an ECDSA P-256 signature
-(which needs ENS's production P-256 key, not yet created) and ships a ReadyRoom release with license
-library 1.1.0. See [Licensing → FIPS 140-3](../licensing.md#fips-140-3).
+    Before moving to a FIPS host, get a re-signed copy of the same license that carries a P-256
+    signature: download it again from the ENS licensing portal, or ask ENS for it. Then upload it
+    on the license screen.
+
+    Don't work around a refused license with `-Dcom.redhat.fips=false`: that takes the whole JVM
+    out of FIPS mode.
+
+See [Licensing → FIPS 140-3](../licensing.md#fips-140-3) for which runtimes provide which
+algorithm.
 
 ## DISA STIG settings
 
