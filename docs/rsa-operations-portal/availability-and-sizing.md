@@ -30,7 +30,7 @@ Backups themselves are in the [Operator Guide](operator-guide.md#database-backup
 | Portal | request `250m` CPU, `768Mi`; limit `1536Mi` | No limit set | The chart's `javaOpts` sets `-XX:MaxRAMPercentage=75`, so the heap follows the limit |
 | Connector | request `100m` CPU, `512Mi`; limit `1Gi` | No limit set | The same heap rule |
 | Embedded MySQL (evaluation only) | request `100m`, `512Mi`; limit `1Gi`; `8Gi` volume | The MySQL container, no limit | In production, size your MySQL server for the audit table's growth |
-| License volume | `100Mi` | Docker volume | A few small files |
+| License volume | `100Mi` | Docker volume | Read only on the first start after upgrading from release 1.5 or earlier |
 | Backup PVC | `10Gi` (`backup.persistence.size`) | `util/backupdb.sh` writes to the host | Dumps compress well; keep `keepDays` of them |
 
 How to adjust:
@@ -45,43 +45,52 @@ How to adjust:
 
 ## High availability
 
-**Run one Portal.** The Helm chart accepts `replicaCount` of `0` or `1` only, and uses the
-`Recreate` strategy so an upgrade never runs two Portal pods at once. The reasons are in the code:
+The Portal keeps what it shares between requests in the database, so more than one Portal replica
+can run against one MySQL database, and a restart or rolling update signs nobody out. For the
+suite-wide picture, see [Sizing, availability and recovery](../availability-and-sizing.md).
 
-| State | Where it lives | With a second Portal |
-|---|---|---|
-| Sign-in sessions, and an emergency access code waiting to be revealed | The Portal's memory | A user whose requests reach the other Portal is signed out, and an operator loses a code not yet revealed |
-| Rate limits, backoff and the feature caps (Test My Token, PIN reset links, token swap) | The `RateLimitWindow` and `RateLimitBackoff` tables | Safe: every node counts together |
-| Help-desk requests | The `HelpDeskRequest` table; every node expires overdue ones | Safe: a request claimed for running is not run twice |
-| License state and installation id | Files on a ReadWriteOnce volume | The second pod can't mount the volume on another node |
-| Scheduled jobs | Claimed per occurrence in the `CronLock` table | Safe: one node runs each occurrence |
-| Audit trail | The database, under a row lock on `AuditChainHead` | Safe: the chain stays consistent |
+**Shared through the database:**
 
-The jobs, the audit trail, the rate limits and the help-desk requests were built to be safe with
-several Portal nodes, but the sessions and the license volume are not, so more than one Portal is
-not supported.
+| What | Where |
+|---|---|
+| Sessions | `SPRING_SESSION*` (Spring Session JDBC). `ENS_SESSION_STORE=memory` keeps them in each Portal's memory |
+| Rate limits and backoff | `RateLimitWindow`, `RateLimitBackoff` |
+| Scheduled jobs, including data retention and audit pruning | Each run takes a lock row (`CronLock`) first, so a job runs on one replica at a time. The help-desk request expiry and the purges of expired rows are safe to run on every replica |
+| License, installation id, license history | `ens_license_*` |
+| SAML requests in progress | `SsoSamlRequest`; OpenID Connect sign-ins in progress are in the session |
 
-**The Connector** is stateless in the sense that it stores nothing, and the chart allows more than
-one (`connector.replicaCount`). Each replica keeps its own AM sessions. A multi-step sign-in (next
-tokencode, new PIN) is held for 4 minutes in the memory of the Connector that started it, so with
-several replicas a later step can reach a replica that doesn't know it, and the sign-in fails.
-More than one Connector replica has not been tested; the release package and the chart's default
-run one.
+**Two things stay on one machine:**
 
-What you can do:
+- **Emergency access codes** are shown only by the replica that made them; they are never written
+  anywhere. With several Portal replicas the chart gives the Portal Service ClientIP session
+  affinity; give the ingress or load balancer cookie affinity too (ingress-nginx:
+  `nginx.ingress.kubernetes.io/affinity: cookie`), or the code may have to be made again.
+- **The Connector runs as one replica.** A SecurID sign-in that asks for a new PIN or the next
+  tokencode keeps its Authentication Manager login in the Connector's memory between the steps.
+  The chart refuses `connector.replicaCount` above 1, rolls the Connector with the new pod ready
+  before the old one stops, and gives its Service ClientIP session affinity, so the steps of a
+  sign-in stay on one Connector pod. A Connector restart interrupts only sign-ins that are between
+  steps; the user starts again.
+
+**Helm.** `replicaCount` (default 1) can be more than 1 once the license volume is no longer
+mounted (`persistence.license.enabled=false`, after the first start of this release has copied it
+into the database) or is ReadWriteMany; the chart refuses otherwise. The strategy is
+`RollingUpdate` (`maxUnavailable: 0`, `maxSurge: 1`), or `Recreate` while a ReadWriteOnce license
+volume is mounted. With more than one replica the chart renders a PodDisruptionBudget
+(`podDisruptionBudget.minAvailable`, 1). Helm keeps the license PVC
+(`helm.sh/resource-policy: keep`) until you delete it.
+
+**Release package.** The Compose installation runs one Portal and one Connector. Its upgrades keep
+everyone signed in.
+
+What else you can do:
 
 - **Automatic restart.** Docker restarts the containers (`restart: unless-stopped`); Kubernetes
-  restarts a pod whose liveness probe fails and reschedules it if its node fails, provided the
-  license volume can be attached on another node.
+  restarts a pod whose liveness probe fails and reschedules it if its node fails.
 - **The database.** Run MySQL with your own high-availability setup (Helm: an external server).
   The embedded MySQL has none.
 - **Authentication Manager.** Point the read-only URL at a replica for searches. Writes and sign-ins
   go to the primary (`ims.httpinvoker.client.provider.url`).
-- **Cold standby.** Keep a second server or cluster with the same release installed and stopped,
-  and copy the database backups and the settings to it. To fail over, follow
-  [Disaster recovery](#disaster-recovery). Never run both against the same database.
-
-Every restart or failover signs users out.
 
 ## Disaster recovery
 
@@ -89,8 +98,8 @@ Every restart or failover signs users out.
 
 | Item | Holds | Back it up with |
 |---|---|---|
-| The database `RSAAPP` | Trusted Agents, sites, shipments, appointments, enrollments, exemptions, notifications, the audit trail and its chain head | `util/backupdb.sh`, the chart's backup CronJob, or your MySQL backups ([Operator Guide](operator-guide.md#database-backups)) |
-| The license volume (`rsa-operations-portal_ens-license`, or the license PVC) | The license file and **this installation's id** | A copy of the volume, or a snapshot. Keep the `.lic` file you received as well |
+| The database `RSAAPP` | Trusted Agents, sites, shipments, appointments, enrollments, exemptions, notifications, the audit trail and its chain head, sessions, and the license and **this installation's id** | `util/backupdb.sh`, the chart's backup CronJob, or your MySQL backups ([Operator Guide](operator-guide.md#database-backups)) |
+| The license volume (`rsa-operations-portal_ens-license`, or the license PVC) | The license state of release 1.5 or earlier, copied into the database on the first start after upgrading, and not read after that | Keep it until that start is done. Keep the `.lic` file you received as well |
 | Settings | `.env`, `connector.env`, `mysql.env` (release package); your values file and the Secrets it names (Helm) | Your configuration management. They hold secrets |
 | AM trust and Connector certificates | `default_build/ssl/` (`trust.jks`, `connector-ca.crt`), `default_build/connector-tls/`, `portal-tls/` (the Portal's client certificate and key), `connector-tls-ca/` | A copy with the settings. If lost, `util/connector-tls.sh` makes new ones; `trust.jks` must be rebuilt from AM's root certificate |
 | Branding | `default_build/properties`, `static`, `email-templates` (release package); the `branding.*` ConfigMaps (Helm) | A copy |
@@ -106,9 +115,9 @@ lost. Audit events already forwarded to Splunk or syslog are still there.
    `./install.sh /opt/rsa-operations-portal`. It stops after creating the settings files.
 2. Restore `.env`, `connector.env`, `mysql.env`, `default_build/`, `portal-tls/` and
    `connector-tls-ca/` from your copies, replacing what `install.sh` created.
-3. Restore the `rsa-operations-portal_ens-license` volume from your copy before the Portal's first
-   start, keeping the files' owner: the Portal runs as uid 1001 and must be able to write there.
-   If it is lost:
+3. The license and this installation's id are in the database, which the next step restores
+   before the Portal's first start. If no database backup survives, the installation gets a new
+   id (set `ENS_LICENSE_ALLOW_NEW_INSTALLATION_ID=true` once if the Portal refuses to make one):
     - an unbound license works again once you upload the `.lic` file on the license screen;
     - a bound license is refused by the new installation id. Note the new id on the license
       screen and ask ENS Solutions to re-bind or re-issue the license.
@@ -122,9 +131,8 @@ lost. Audit events already forwarded to Splunk or syslog are still there.
    user and as a Trusted Agent.
 
 With Helm: install the same chart version into the new cluster with your values and Secrets and
-`replicaCount: 0`, restore the database into your MySQL server and the license PVC from its
-snapshot (or let the init container install the `.lic` file into a new one), then set
-`replicaCount: 1`.
+`replicaCount: 0`, restore the database into your MySQL server (it holds the license and the
+installation id), then set `replicaCount` back to what you ran.
 
 ### The audit trail after a restore
 

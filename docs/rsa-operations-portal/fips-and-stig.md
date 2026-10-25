@@ -29,9 +29,13 @@ switches to its FIPS providers.
 | TLS to Splunk HEC and syslog | Portal | Optional |
 | The audit hash chain (SHA-256) | Portal | |
 | The help desk's stored e-mail codes (HMAC-SHA256) | Portal | Under `rsa.helpdesk.code-key` |
+| The license signature (Ed25519 or ECDSA P-256) | Portal | See [The license check in FIPS mode](#the-license-check-in-fips-mode) |
 | The Connector's PKCS12 key store, built at each start | Connector, with `openssl` | From the PEM certificate and key; see the warning below |
 
 !!! warning "Not tested in FIPS mode"
+    - **The Portal and the Connector.** None of the CI jobs runs them on a Java runtime in FIPS
+      mode, and a run of the license library's check on a FIPS-mode RHEL host has not been recorded
+      for the Portal yet.
     - **The RSA AM SDK** (`am-client` 8.8 and the WebLogic client it uses for `t3s`) has not been
       run on a Java runtime in FIPS mode. Whether it works there is RSA's to state for your AM
       release.
@@ -57,17 +61,28 @@ switches to its FIPS providers.
 
 ### The license check in FIPS mode
 
-!!! warning "Current state: the license can't be verified on a Java runtime in FIPS mode"
-    The Portal checks its license file with the ENS license library 1.0.0, which verifies an
-    Ed25519 signature. Red Hat's OpenJDK in FIPS mode does not offer Ed25519 signatures, so every
-    license is refused and the Portal stays **unlicensed**: only sign-in, the license screen and
-    the audit log work.
+The Portal carries ENS license library 1.2.0 and trusts two ENS production keys: Ed25519 (key id
+`dabdc531a28916c5`) and ECDSA P-256 (prime256v1, key id `e0a2e4ff9c4f5bfc`). A license file may
+carry both signatures. The Portal accepts it if any signature by a trusted key verifies with an
+algorithm the Java runtime provides, trying Ed25519 first. A Java runtime in FIPS mode has no
+Ed25519, so there the P-256 signature counts, and the same file works on both kinds of host.
 
-    Don't work around it with `-Dcom.redhat.fips=false`: that takes the whole JVM out of FIPS mode.
+!!! warning "Licenses issued before ENS enabled P-256 signing"
+    Such a license carries only an Ed25519 signature. Hosts not in FIPS mode keep accepting it. On a
+    FIPS host the Portal can't check it and runs **unlicensed**: only sign-in, sign-out and the
+    License screen work. The License screen and the `License:` startup line say the file is signed
+    only with Ed25519.
 
-It changes when ENS Solutions both issues license files that also carry an ECDSA P-256 signature
-(which needs ENS's production P-256 key, not yet created) and ships a Portal release with license
-library 1.1.0. See [Licensing → FIPS 140-3](../licensing.md#fips-140-3).
+    Before moving such an installation to FIPS mode, download the re-signed `.lic` from the ENS
+    licensing portal (or ask ENS Solutions for it) and install it as usual. The license id,
+    installation binding and revision stay the same.
+
+    Don't work around a refused license with `-Dcom.redhat.fips=false`: that takes the whole JVM
+    out of FIPS mode.
+
+Earlier Portal releases trust only the Ed25519 key, so they need a host that is not in FIPS mode,
+whatever the file. See [Licensing → FIPS 140-3](../licensing.md#fips-140-3) for which runtimes
+provide which algorithm.
 
 ## DISA STIG settings
 
