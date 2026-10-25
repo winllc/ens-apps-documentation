@@ -121,21 +121,18 @@ the license library's own (below). In particular:
 
 ### The license check
 
-!!! warning "Current state: licenses can't be verified on a Java runtime in FIPS mode"
-    All four applications carry license library 1.0.0, which checks only the license's Ed25519
-    signature. Red Hat's OpenJDK in FIPS mode has no Ed25519 signatures, so on a FIPS-enabled host
-    every license is refused and the application is **unlicensed**. Don't work around it with
-    `-Dcom.redhat.fips=false`: that takes the whole JVM out of FIPS mode.
+All four applications carry license library 1.2.0, which accepts a license's ECDSA P-256
+signature when the runtime has no Ed25519, as Red Hat's OpenJDK in FIPS mode does not. The check
+goes through the runtime's FIPS provider.
 
-It changes when both of these have happened:
+!!! warning "Get a re-signed license before moving to FIPS mode"
+    A license issued before ENS Solutions enabled P-256 signing carries only the Ed25519 signature,
+    so on a FIPS-enabled host it is refused and the application is **unlicensed**. Ask ENS
+    Solutions for a re-signed file of the same license and upload it first. Don't work around it
+    with `-Dcom.redhat.fips=false`: that takes the whole JVM out of FIPS mode.
 
-1. ENS Solutions creates its production ECDSA P-256 signing key (not yet done), so that license
-   files carry an ECDSA P-256 signature next to the Ed25519 one;
-2. each application ships a release with license library 1.1.0, which checks the P-256 signature
-   through the runtime's FIPS provider when Ed25519 is not available.
-
-Files issued before step 1 will need to be re-issued for use in FIPS mode. The details, and the
-results of the library's FIPS tests, are in [Licensing → FIPS 140-3](licensing.md#fips-140-3).
+The details, and the results of the library's FIPS tests, are in
+[Licensing → FIPS 140-3](licensing.md#fips-140-3).
 
 ## DISA STIG
 

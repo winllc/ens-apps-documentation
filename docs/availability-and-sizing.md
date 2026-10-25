@@ -29,30 +29,36 @@ raising the limit raises the heap. The product pages name the metrics to watch.
 
 ## High availability
 
-**Every application runs as one instance.** Each keeps state that a second instance would not
-share or would corrupt, and each Helm chart accepts `replicaCount` of `0` or `1` only (for the
-Directory Services Portal, `api.replicaCount`) with the `Recreate` strategy, so an upgrade never
-runs two at once.
+**Every application can run as several replicas** behind one Service or load balancer, with
+the Helm chart. Sessions, scheduled-job locks, single sign-on requests in progress and the license
+state (installation id, license, revisions seen) are kept in the database, so any replica serves any
+request, each scheduled job runs on one replica at a time, and a restart or rolling update signs
+nobody out. Each product page lists exactly what is shared and what stays per replica.
 
-| Product | Why one instance | What can have more than one |
+| Product | Several replicas | What stays on one |
 |---|---|---|
-| CertAlert | Its scheduled jobs and changelog connector run in the process with no lock shared between instances; the license volume is single-writer | Nothing |
-| Directory Services Portal | The API is the single writer of its configuration file and its hash-chained audit files; sessions, lockout counters and background tasks are in memory | The web tier (`web.replicaCount`), which is stateless |
-| ReadyRoom | Its scheduled jobs (auto check-out, absence alerts, the directory refresh) run in every instance; sessions are in memory; the license volume is single-writer | Nothing |
-| RSA Operations Portal | Sessions are in the Portal's memory, and the license volume is single-writer. Its jobs, audit trail, rate limits and help-desk requests are safe across nodes, but that is not enough | The Connector (`connector.replicaCount`), with a caveat: a multi-step sign-in is held in one Connector's memory. More than one has not been tested |
+| CertAlert | `replicaCount` | Nothing that matters: per-replica caches, sign-in failure counts and collapsed audit events |
+| Directory Services Portal | `api.replicaCount`, with a shared PostgreSQL (`DSP_DATABASE_URL`, `database.url` in the chart); without it the API stays one instance, as before. The web tier (`web.replicaCount`) is stateless | Background tasks run on the instance that started them (their progress is shared) |
+| ReadyRoom | `replicaCount` | Per-replica caches and limits; two replicas also keep events flowing through an upgrade |
+| RSA Operations Portal | `replicaCount` for the Portal | **The Connector runs as one replica** (the chart refuses more), and emergency access codes are shown only by the replica that made them, so the Portal needs session affinity |
 
-What every product supports instead:
+With more than one replica each chart uses a RollingUpdate strategy (a new pod ready before an old
+one goes) and a PodDisruptionBudget (`podDisruptionBudget.minAvailable`, default 1). The license
+volume is ReadWriteOnce, so above one replica the chart needs it turned off (once the first start
+of this release has copied the license state into the database) or ReadWriteMany; it refuses
+otherwise. Run that first start with one replica. The Compose release package runs one instance
+of each application.
+
+Also:
 
 - **Automatic restart**: Docker's restart policy, systemd (the Directory Services Portal's native
-  package), or Kubernetes probes and rescheduling. Rescheduling to another node needs storage that
-  can attach the ReadWriteOnce volumes there.
-- **Database high availability** is yours: run PostgreSQL (CertAlert, ReadyRoom) or MySQL (RSA
-  Operations Portal) with your own replication or failover, and point the application at it. The
-  Directory Services Portal has no database.
-- **Cold standby**: a second host or cluster with the same release installed and stopped, with
-  backups copied to it. Never run it while the primary could still be running.
-
-Every restart or failover signs users out.
+  package), or Kubernetes probes and rescheduling.
+- **Database high availability** is yours: run PostgreSQL (CertAlert, ReadyRoom, and the Directory
+  Services Portal when it has a database) or MySQL (RSA Operations Portal) with your own
+  replication or failover, and point the application at it.
+- **Cold standby** remains an option for a site without Kubernetes: a second host with the same
+  release installed and stopped, with backups copied to it. Never run it while the primary could
+  still be running.
 
 ## Backups and disaster recovery
 
@@ -68,8 +74,9 @@ names), the release you installed (or the image digests and chart version), and 
 you received. Directory data, and for the RSA Operations Portal everything in Authentication
 Manager, are backed up by those systems, not by the applications.
 
-**The license volume holds the installation id.** Restore it with the data, and a license bound to
-the installation keeps working. If it is lost, the application gets a new id: an unbound license
+**The installation id** is in the database (for the Directory Services Portal without a database,
+in the license volume), next to the license and the revisions seen. Restore it with the data, and
+a license bound to the installation keeps working. If it is lost, the application gets a new id: an unbound license
 works again once you upload the file, but a bound license is refused, and ENS Solutions has to
 re-bind or re-issue it.
 
