@@ -29,12 +29,16 @@ marked; they are described fully in the [Admin guide](admin-guide.md).
 Some deployments first show a **notice and consent** page (the DoD banner). Read it and press
 **I agree**; nothing signs you in until you do, and it is shown again for every new session.
 
-CertAlert then offers two ways in:
+CertAlert then offers up to three ways in:
 
 1. **Client certificate**: if your browser presents a certificate that the directory publishes for
    you, you are signed in without a form.
 2. **Directory password**: otherwise you see the **Sign in** page. Enter your directory username
    and password; they are checked by binding to the directory and never stored.
+3. **Single sign-on**: where your organization has set it up, the **Sign in** page also shows a
+   button for its identity provider (for example *Sign in with Entra ID*). You sign in there and
+   come back signed in, provided the directory holds an entry for you. Signing out of CertAlert
+   does not sign you out of the identity provider.
 
 Messages on the sign-in page:
 
@@ -45,8 +49,10 @@ Messages on the sign-in page:
 | *You have been signed out.* | After **Sign out** |
 | *Your session has ended. Sign in again to carry on.* | Your session timed out after a period of inactivity, reached its maximum length, or was ended because you signed in elsewhere |
 
-Your name, role (**Administrator** or **Reader**) and method (**via X509** / **via LDAP**) appear
-in the account menu at the top right, together with your directory DN and **Sign out**.
+Your name, role (**Administrator**, **Auditor** or **Reader**) and method (**via X509**,
+**via LDAP**, **via OIDC** or **via SAML**) appear in the account menu at the top right, together
+with your directory DN and **Sign out**. An **Auditor** can read everything an administrator can and
+change nothing.
 
 !!! note "Classification banner"
     Some deployments show a coloured bar with a classification marking across the top and bottom
@@ -58,9 +64,10 @@ in the account menu at the top right, together with your directory DN and **Sign
 |---|---|
 | **People** | `/users`: the people table (also the home page `/`) |
 | **Servers** | `/servers`: the servers table |
+| **Certificates** | `/certificates`: every certificate, with filters, exports and saved views |
 | **Projects** | `/projects` |
 | **Metrics** | `/metrics` |
-| **Admin** | `/admin` (administrators only) |
+| **Admin**, **Integrations**, **Audit log** | `/admin`, `/admin/integrations`, `/admin/audit` (administrators and auditors) |
 | Bell icon | `/notifications`, with your unread count |
 
 ## People (`/users`)
@@ -127,6 +134,22 @@ organization**, **Certs**, **Status**, **Expires**, **Last expires**, **Last syn
 The **Points of contact** cell shows the first contact, a **+n more** count, and **+n added** for
 contacts added in CertAlert. Hover the count to see everyone. Expanding a row shows details,
 certificates, the contacts editor and recent audit records.
+
+## Certificates (`/certificates`)
+
+Every certificate the directory publishes, one row each, with who holds it. Filter by text
+(subject, issuer, serial, fingerprint, names, owner), state, people or servers, expiry window,
+issuer, key algorithm and size, hash algorithm, revocation and, where licensed, risky names.
+
+- **Export CSV** and **Export Excel** download everything the filters match, without the paging.
+  Each export is recorded in the audit trail.
+- **Save view** keeps the current filters under a name, for you only; choose it again from
+  **Saved views**.
+- Tick server certificates and use **Add to selected** to add one point of contact to all their
+  servers, where you may manage them.
+- Administrators can e-mail the current view on a schedule (**Scheduled reports**).
+
+See [Exports, saved views and scheduled reports](exports-and-reports.md).
 
 ## Person details (`/users/{id}`)
 

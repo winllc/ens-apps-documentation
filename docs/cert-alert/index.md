@@ -43,7 +43,10 @@ certificate crosses into expiry.
 | **Audit trail** | Every sign-in, refusal, setting, job run and change to an entry is recorded in the hash-chained `ens-audit/1` trail, searchable and verifiable at `/admin/audit` and sent on to a SIEM. See [Audit logging](../audit-logging.md). |
 | **Metrics** | Directory-wide reporting: states, falling-due counts, algorithms, issuance, revocation, organization breakdowns. |
 | **Classification banner** | Optional fixed top/bottom banners for accredited networks. |
-| **Sign-in** | X.509 client certificate (matched by fingerprint against the directory, optionally checked for revocation at sign-in, or forwarded by a TLS-terminating proxy) or directory password (LDAP bind). |
+| **Sign-in** | X.509 client certificate (matched by fingerprint against the directory, optionally checked for revocation at sign-in, or forwarded by a TLS-terminating proxy), directory password (LDAP bind), or single sign-on by OpenID Connect or SAML 2.0. See [Single sign-on and roles](single-sign-on.md). |
+| **Roles** | Reader, a read-only **auditor**, and administrator, from configuration, directory groups or an identity provider's groups. |
+| **Certificate inventory** | A *Certificates* page with crypto filters (key algorithm and size, hash, issuer), CSV and Excel exports, saved views, bulk point-of-contact assignment and scheduled e-mailed reports. See [Exports, saved views and scheduled reports](exports-and-reports.md). |
+| **Public API and webhooks** | A versioned REST API (`/api/v1`, OpenAPI document) for scoped, expiring API tokens, and HMAC-signed webhooks (JSON, Slack, Microsoft Teams) for expiry alerts and job results. See [API reference](api-reference.md) and [Webhooks](webhooks.md). |
 | **Platform baseline** | The ENS security headers, notice-and-consent banner and session limits; Prometheus metrics on a separate management port, liveness and readiness, JSON logs; a hash-chained `ens-audit/1` audit trail for a SIEM. |
 
 ## Architecture at a glance
@@ -129,10 +132,14 @@ See [Architecture](architecture.md) for components, data model and the sync pipe
 | [Configuration](configuration.md) | Operators | Every property and environment variable, profiles, example files |
 | [Operator guide](operator-guide.md) | Operators | Day-to-day running, jobs, health, backups, upgrades, scaling |
 | [Sizing, availability and recovery](availability-and-sizing.md) | Operators | Sizing, high availability, disaster recovery, rolling back |
-| [Admin guide](admin-guide.md) | Application administrators | In-app administration: sync, revocation, attributes, audit log, projects, notifications |
+| [Admin guide](admin-guide.md) | Application administrators | In-app administration: sync, revocation, attributes, audit log, integrations, scheduled reports, projects, notifications |
 | [User guide](user-guide.md) | Everyone | Walkthrough of every screen |
 | [Architecture](architecture.md) | Engineers | Components, data model, sync pipeline, changelog connector |
+| [Single sign-on and roles](single-sign-on.md) | Operators / security | OIDC and SAML setup, Entra ID, Okta and ADFS, administrator and auditor roles from groups |
 | [Security](security.md) | Security / operators | Authentication, roles, permissions matrix, hardening |
 | [FIPS 140-3 and DISA STIG](fips-and-stig.md) | Security / operators | What CertAlert relies on for FIPS 140-3, the license check in FIPS mode, STIG settings |
-| [API reference](api-reference.md) | Integrators | Every REST endpoint |
+| [API reference](api-reference.md) | Integrators | The public API: tokens, scopes, OpenAPI document, rate limits, every REST endpoint |
+| [Webhooks](webhooks.md) | Integrators | Events, formats, verifying signatures, delivery, where webhooks may go |
+| [Exports, saved views and scheduled reports](exports-and-reports.md) | Everyone | The Certificates page's downloads, saved views and e-mailed reports |
+| [Accessibility](accessibility.md) | Buyers / accessibility reviewers | What is checked, and the conformance documents' status |
 | [Troubleshooting](troubleshooting.md) | Operators | Symptoms, causes and fixes |

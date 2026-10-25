@@ -85,11 +85,15 @@ nav:
       - Admin guide: cert-alert/admin-guide.md
       - User guide: cert-alert/user-guide.md
       - Additional guidance:
+          - Single sign-on and roles: cert-alert/single-sign-on.md
+          - Exports, saved views and scheduled reports: cert-alert/exports-and-reports.md
+          - API reference: cert-alert/api-reference.md
+          - Webhooks: cert-alert/webhooks.md
           - Architecture: cert-alert/architecture.md
           - Security: cert-alert/security.md
           - FIPS 140-3 and DISA STIG: cert-alert/fips-and-stig.md
+          - Accessibility: cert-alert/accessibility.md
           - Sizing, availability and recovery: cert-alert/availability-and-sizing.md
-          - API reference: cert-alert/api-reference.md
           - Troubleshooting: cert-alert/troubleshooting.md
   - Directory Portal:
       - directory-services-portal/index.md

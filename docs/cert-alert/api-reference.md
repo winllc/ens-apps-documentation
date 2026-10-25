@@ -1,24 +1,185 @@
 # API reference
 
-CertAlert's UI is built on a JSON API under `/api/v1`. The same endpoints can be used by scripts
-and integrations.
+Everything under `/api/v1` is both the API CertAlert's own pages use and its **public API** for
+other systems. A script or integration calls the same endpoints with an **API token**; a browser
+calls them with its session. The SIEM pull API for the audit trail (`/api/audit/events`) is separate
+and has tokens of its own (see [Audit logging](../audit-logging.md#the-pull-api)).
+
+## Public API
+
+### The OpenAPI document
+
+Every installation serves an OpenAPI 3.1 document at **`/api/v1/openapi.yaml`**, without signing in
+(it describes the product, not your data). It lists every endpoint a token may call and the scope the
+server enforces for it; a test in CertAlert's build holds the document to the code. Load it into
+your API client or code generator rather than copying paths from this page.
+
+### Calling the API with a token
+
+```bash
+curl -H "Authorization: Bearer cat_…" \
+  "https://certalert.example.gov/api/v1/certificates?status=EXPIRING_SOON&expiresWithinDays=30&size=500"
+
+curl -H "Authorization: Bearer cat_…" \
+  "https://certalert.example.gov/api/v1/summary/expiry?ownerType=SERVER"
+
+# Start a directory sync (needs jobs:run) and poll the run it returns
+curl -X POST -H "Authorization: Bearer cat_…" https://certalert.example.gov/api/v1/sync
+curl -H "Authorization: Bearer cat_…" https://certalert.example.gov/api/v1/jobs/<id>
+
+# Download the filtered inventory as Excel (a POST, because every export is audited)
+curl -X POST -H "Authorization: Bearer cat_…" -o inventory.xlsx \
+  "https://certalert.example.gov/api/v1/certificates/export?format=xlsx&status=EXPIRED"
+```
+
+The read paths an integration usually wants:
+
+| Method | Path | Scope | What |
+|---|---|---|---|
+| `GET` | `/api/v1/certificates` | `certificates:read` | Every certificate with its owner, filtered and paged (`?status=EXPIRING_SOON&expiresWithinDays=30&issuer=DigiCert&keyAlgorithm=RSA&keySizeMax=2047&hashAlgorithm=SHA-1&ownerType=SERVER&q=web&page=0&size=100&sort=notAfter,asc`) |
+| `GET` | `/api/v1/certificates/{id}` | `certificates:read` | One certificate |
+| `POST` | `/api/v1/certificates/export?format=csv\|xlsx` | `certificates:read` | The same, as a file; see [Exports](exports-and-reports.md) |
+| `GET` | `/api/v1/summary/expiry` | `certificates:read` | Counts by state, expiring within 7/30/60/90 days, revoked, by owner type; takes the same filters |
+| `GET` | `/api/v1/servers`, `/api/v1/servers/{id}` | `certificates:read` | Servers, `?q=&certificateStatus=` |
+| `GET` | `/api/v1/people`, `/api/v1/people/{id}` | `people:read` | People, `?q=&certificateStatus=` |
+| `GET` | `/api/v1/jobs`, `/api/v1/jobs/{id}` | `jobs:read` | Job runs |
+| `POST` | `/api/v1/sync`, `/api/v1/revocation/check`, `/api/v1/notifications/digest`, ... | `jobs:run` | Start a job: `202` and a run to poll (see [Sync and jobs](#sync-and-jobs)) |
+
+Lists answer `{"content":[...],"page":0,"size":100,"totalElements":…,"totalPages":…}`. `size` is
+capped at `cert-alert.api.max-page-size` (500).
+
+### API tokens
+
+Administrators create and revoke tokens on **Admin > Integrations** (`/admin/integrations`);
+auditors can see the list.
+
+- **Created with** a name, one or more scopes and, optionally, an expiry date. The token (`cat_`
+  and 43 characters) is shown **once**, in the response that creates it. CertAlert keeps only its
+  SHA-256; the token is never written to a log, the audit trail or the session.
+- **Never more than its creator, now.** Each scope needs a role: reads need a signed-in user,
+  `jobs:read` an auditor or administrator, the rest an administrator. Only the roles **the
+  directory** gives the creator count (`admin-identifiers`, `auditor-identifiers` or a directory
+  group in `security.groups`), never an identity provider's groups, so an administrator by IdP
+  group alone can create read-only tokens only. On **every use** the creator's entry is read from
+  the live directory: an entry that is gone, disabled or locked, or a directory that cannot be read,
+  refuses the token (`401`); otherwise the token does no more than the creator's roles allow today.
+  A good answer is reused for at most `cert-alert.api.creator-roles-cache-for` (a minute); a refusal
+  never is.
+- **Disabled or locked** means `nsAccountLock: true`; Active Directory's ACCOUNTDISABLE flag in
+  `userAccountControl`; or a lockout (AD `msDS-User-Account-Control-Computed` or `lockoutTime`,
+  password-policy `pwdAccountLockedTime`, 389 `accountUnlockTime`). Lockouts **fail closed**: a lockout
+  counts as lapsed only where a known, non-zero lockout length shows it has. Where the length cannot
+  be found (for example OpenLDAP with `olcPPolicyDefault` and no `pwdPolicySubentry`), the account is
+  locked unless `cert-alert.ldap.lockout.assumed-duration` is set to the real lockout length.
+- **The service account must be able to read** people's entries and the lock attributes
+  (`nsAccountLock`, `userAccountControl`, `msDS-User-Account-Control-Computed`, `lockoutTime`,
+  `pwdAccountLockedTime`, `pwdPolicySubentry`, `accountUnlockTime`, and `memberOf` where groups grant
+  roles) and the lockout policy (`pwdLockoutDuration`, AD's domain `lockoutDuration`). A refused read
+  refuses the token.
+- **A year at most.** `cert-alert.api.max-lifetime` (`365d`) is the expiry of a token created without
+  one, the most that may be asked for, and the age at which any token stops working; `0` removes it.
+- **Refused** (`401`, `WWW-Authenticate: Bearer error="invalid_token"`) when unknown, revoked, past
+  its expiry, out-ranked, or when `cert-alert.api.tokens-enabled` is `false`.
+- **Out of scope** (`403`, `error="insufficient_scope"`) for an endpoint its scopes do not cover. No
+  token, whatever its scopes, can create or revoke tokens, configure webhooks, read a person's
+  notifications or use the DataTables endpoints: those stay with people.
+- **Rate-limited** per token, **per replica**: `cert-alert.api.requests-per-minute` (300); beyond it,
+  `429` with `Retry-After`.
+- **No session, no CSRF.** A request with `Authorization: Bearer` on `/api/v1/**` goes through a
+  filter chain of its own that keeps and reads no session, and has no CSRF check. The same endpoints
+  called with a session cookie still need the CSRF token. A proxy or WAF that strips
+  `Authorization` must let it through for the API to work.
+- **Audited**: `api.token-created`, `api.token-revoked`, `api.token-refused` (at most once a minute
+  per token, or per client address for a value that is no token at all), `api.request` for every
+  request that changes something, and `api.token-used` once per token per
+  `cert-alert.api.use-audit-interval` (an hour) for its reads. The actor is `api-token:<id>`.
+
+### Scopes
+
+| Scope | Needs the creator to be | Allows |
+|---|---|---|
+| `certificates:read` | signed in | The certificate inventory and its export, expiry summaries, servers and their certificates, contacts and attributes, projects, revocation counts, server stats |
+| `people:read` | signed in | People, their certificates and addresses, people stats |
+| `jobs:read` | auditor or administrator | Job runs, sync history, changelog status |
+| `jobs:run` | administrator | Start the sweeps, refresh, changelog poll, revocation check and round-up (implies `jobs:read`) |
+| `inventory:write` | administrator | Points of contact, projects and their members, server attribute values |
+| `admin` | administrator | Everything above, plus pruning, certificate clean-up, project administrators, the endpoint probe, the audit trail and its export, attribute definitions and the license |
+
+The full list of which method and path needs which scope is in the OpenAPI document.
+
+### Token settings
+
+| Property (`cert-alert.api.`) | Env var | Helm | Default | Description |
+|---|---|---|---|---|
+| `tokens-enabled` | `CERT_ALERT_API_TOKENS_ENABLED` | `api.tokensEnabled` | `true` | `false` refuses every token (`401`) without deleting any |
+| `requests-per-minute` | `CERT_ALERT_API_REQUESTS_PER_MINUTE` | `api.requestsPerMinute` | `300` | Per token, per replica; `0` turns the limit off |
+| `max-lifetime` | `CERT_ALERT_API_MAX_LIFETIME` | `api.maxLifetime` | `365d` | The longest a token lives; `0` removes the limit |
+| `use-audit-interval` | | | `1h` | A token's reads are audited once per interval |
+| `max-page-size` | | | `500` | The largest `size` a list returns |
+| `creator-roles-cache-for` | | | `1m` | How long a creator's directory check is reused |
+
+### Token administration
+
+| Method | Path | Access | Purpose |
+|---|---|---|---|
+| `GET` | `/api/v1/admin/api-tokens` | admin, auditor | The tokens, without their values |
+| `GET` | `/api/v1/admin/api-tokens/scopes` | admin, auditor | The scopes, what each allows and the role it needs |
+| `POST` | `/api/v1/admin/api-tokens` | admin (session only) | Create: `{"name", "scopes": [...], "expiresAt"}`; the answer holds the token, once |
+| `DELETE` | `/api/v1/admin/api-tokens/{id}` | admin (session only) | Revoke |
 
 ## Conventions
 
-- **Authentication**: a session established by a client certificate or by the `/login` form (see
-  [Security](security.md#authentication)). The only token authentication is the SIEM pull API's
-  bearer tokens (`/api/audit/events`); there is no HTTP Basic. With the consent banner on, a
-  session that has not agreed to it gets `401` from `/api/**`.
+- **Authentication**: an API token (above), or a session established by a client certificate,
+  the `/login` form or [single sign-on](single-sign-on.md). There is no HTTP Basic. With the consent
+  banner on, a session that has not agreed to it gets `401` from `/api/**`.
 - **Sessions** end after the idle or absolute limit; a call in an ended session gets `401`.
-- **CSRF**: `POST`, `PUT` and `DELETE` require Spring Security's CSRF token in the header named by
-  the page's `_csrf_header` meta tag (value in `_csrf`).
+- **CSRF**: with a session, `POST`, `PUT` and `DELETE` require Spring Security's CSRF token in the
+  header named by the page's `_csrf_header` meta tag (value in `_csrf`). Token calls need none.
+- **Auditors**: a session with `ROLE_AUDITOR` is refused (`403`) on every `POST`, `PUT` and `DELETE`
+  except the DataTables queries, audit-chain verification and their own saved views. See
+  [Single sign-on and roles](single-sign-on.md#the-auditor-changes-nothing).
 - **Unauthenticated** API calls get `401`; **forbidden** ones get `403`.
 - **Errors** are RFC 7807 problem details (`application/problem+json`) with a `detail` message.
 - **Null fields are omitted** from JSON responses.
-- **Access** column: *user* = anyone signed in; *admin* = `ROLE_ADMIN`; *editors* =
-  `cert-alert.security.contact-editors` (admins by default, or anyone signed in); *server* = a
-  point of contact for that server, a project administrator of a project containing it, or an
-  admin (or anyone when `contact-editors: AUTHENTICATED`).
+- **Access** column: *user* = anyone signed in; *admin* = `ROLE_ADMIN`; *auditor* =
+  `ROLE_AUDITOR`; *editors* = `cert-alert.security.contact-editors` (admins by default, or anyone
+  signed in); *server* = a point of contact for that server, a project administrator of a project
+  containing it, or an admin (or anyone when `contact-editors: AUTHENTICATED`).
+
+## Certificate inventory, saved views and reports
+
+| Method | Path | Access | Purpose |
+|---|---|---|---|
+| `GET` | `/api/v1/certificates`, `/api/v1/certificates/{id}` | user | The inventory, filtered and paged, or one certificate |
+| `POST` | `/api/v1/certificates/export?format=csv\|xlsx` | user | Download the filtered inventory; audited as `inventory.exported` |
+| `GET` | `/api/v1/summary/expiry` | user | Counts over the same filters |
+| `GET` | `/api/v1/servers`, `/api/v1/servers/{id}` | user | Servers with their certificate state |
+| `GET` | `/api/v1/people`, `/api/v1/people/{id}` | user | People with their certificate state |
+| `GET`, `POST` | `/api/v1/saved-views` | user (auditors too) | Your saved views; save one (`{"page", "name", "query"}`, the query string of the filters; the same name replaces it) |
+| `DELETE` | `/api/v1/saved-views/{id}` | user (auditors too) | Delete one of yours |
+| `POST` | `/api/v1/servers/contacts/bulk` | user, checked per server | `{"serverIds": [...], "userId": 42}` or `{"serverIds": [...], "email": "..."}`: add one point of contact to many servers. Answers `added`, `alreadyContact`, `refused` and `notFound` |
+| `GET` | `/api/v1/admin/reports` | admin, auditor | Scheduled reports |
+| `POST` | `/api/v1/admin/reports` | admin | Create one |
+| `PUT` | `/api/v1/admin/reports/{id}/enabled` | admin | `{"enabled": false}` pauses, `true` resumes |
+| `POST` | `/api/v1/admin/reports/{id}/send` | admin | Send now |
+| `DELETE` | `/api/v1/admin/reports/{id}` | admin | Delete |
+
+See [Exports, saved views and scheduled reports](exports-and-reports.md).
+
+## Webhooks
+
+| Method | Path | Access | Purpose |
+|---|---|---|---|
+| `GET` | `/api/v1/admin/webhooks` | admin, auditor | Webhooks (auditors see each URL's scheme and host only) |
+| `GET` | `/api/v1/admin/webhooks/events` | admin, auditor | The events a webhook can subscribe to |
+| `POST` | `/api/v1/admin/webhooks` | admin (session only) | Add one; the answer holds its signing secret, once |
+| `PUT` | `/api/v1/admin/webhooks/{id}` | admin (session only) | Change one |
+| `POST` | `/api/v1/admin/webhooks/{id}/secret` | admin (session only) | New signing secret, shown once |
+| `POST` | `/api/v1/admin/webhooks/{id}/test` | admin (session only) | Queue a `webhook.test` event |
+| `DELETE` | `/api/v1/admin/webhooks/{id}` | admin (session only) | Delete |
+| `GET` | `/api/v1/admin/webhooks/{id}/deliveries` | admin, auditor | The delivery log |
+
+See [Webhooks](webhooks.md) for events, signatures and the address rules.
 
 ## Sync and jobs
 
@@ -35,8 +196,8 @@ and integrations.
 | `GET` | `/api/v1/sync/runs?limit=20` | user | Run log, newest first (`limit` 1–100) |
 | `GET` | `/api/v1/changelog` | user | Connector status |
 | `POST` | `/api/v1/changelog/poll` | admin | Read one changelog batch now; the run's `result` is the status |
-| `GET` | `/api/v1/jobs/{id}` | admin | A job started by hand: `state` and, once finished, `result` or `error` |
-| `GET` | `/api/v1/jobs` | admin | Recent runs started by hand |
+| `GET` | `/api/v1/jobs/{id}` | admin, auditor | A job started by hand: `state` and, once finished, `result` or `error` |
+| `GET` | `/api/v1/jobs` | admin, auditor | Recent runs started by hand |
 
 The `POST` job endpoints (and `POST /api/v1/notifications/digest` without `dryRun`) answer
 **202 Accepted** at once with a run, and the job runs in the background:
@@ -199,7 +360,7 @@ could not be built) and `messages` (rendered messages, up to 25 on a dry run).
 | `GET` | `/api/v1/servers/{id}/audit?page=&size=` | user | A server's history |
 | `POST` | `/api/v1/datatables/audit?subjectType=&subjectId=` | user | One entry's history as a DataTables table (`subjectType` is `USER` or `SERVER`) |
 | `POST` | `/api/v1/datatables/audit` (no subject) | admin | The whole trail |
-| `GET` | `/api/v1/audit/summary` | admin | Counts (total, last day, last week, distinct actors) and span |
+| `GET` | `/api/v1/audit/summary` | admin, auditor | Counts (total, last day, last week, distinct actors) and span |
 
 DataTables audit filters: `action` (one or more audit kinds), `actor`, `subject` (name or DN),
 `from`, `to` (ISO dates).
@@ -208,12 +369,12 @@ The `ens-audit/1` trail, behind the **Audit log** page:
 
 | Method | Path | Access | Purpose |
 |---|---|---|---|
-| `GET` | `/api/v1/admin/audit/events` | admin | Search the trail (paged, filtered) |
-| `GET` | `/api/v1/admin/audit/events/{seq}` | admin | One event in full |
-| `GET` | `/api/v1/admin/audit/export` | admin | The current filter as CSV or NDJSON, up to 100,000 events; recorded as `audit.exported` |
-| `POST` | `/api/v1/admin/audit/verify` | admin | Recompute the hash chain |
-| `GET` | `/api/v1/admin/audit/delivery` | admin | Each output's delivery position, backlog and last error |
-| `GET`, `POST`, `DELETE` | `/api/v1/admin/audit/tokens`, `/api/v1/admin/audit/tokens/{id}` | admin | List, create and revoke SIEM API tokens |
+| `GET` | `/api/v1/admin/audit/events` | admin, auditor | Search the trail (paged, filtered) |
+| `GET` | `/api/v1/admin/audit/events/{seq}` | admin, auditor | One event in full |
+| `GET` | `/api/v1/admin/audit/export` | admin, auditor | The current filter as CSV or NDJSON, up to 100,000 events; recorded as `audit.exported` |
+| `POST` | `/api/v1/admin/audit/verify` | admin, auditor | Recompute the hash chain |
+| `GET` | `/api/v1/admin/audit/delivery` | admin, auditor | Each output's delivery position, backlog and last error |
+| `GET`, `POST`, `DELETE` | `/api/v1/admin/audit/tokens`, `/api/v1/admin/audit/tokens/{id}` | admin (auditors may list) | List, create and revoke SIEM pull-API tokens (`ensat_`), which are separate from API tokens |
 | `GET` | `/api/audit/events?after=<seq>&limit=<1-1000>` | bearer token | The SIEM pull API: NDJSON, or `{"events":[…],"next":<seq>}` with `Accept: application/json`. Works while unlicensed. See [Audit logging](../audit-logging.md#the-pull-api) |
 
 ## Sign-in, consent and health
@@ -221,6 +382,9 @@ The `ens-audit/1` trail, behind the **Audit log** page:
 | Path | Access |
 |---|---|
 | `/login` (`GET`, `POST`) | public: the password form |
+| `/oauth2/authorization/oidc`, `/login/oauth2/code/oidc` | public, when OIDC is on: start a single sign-on and its redirect URI |
+| `/saml2/authenticate/saml`, `/login/saml2/sso/saml`, `/saml2/service-provider-metadata/saml` | public, when SAML is on: start a single sign-on, the assertion consumer and the service provider's metadata |
+| `/api/v1/openapi.yaml` | public: the OpenAPI document |
 | `/consent` (`GET`, `POST`) | public: the notice-and-consent banner and **I agree**, when it is on |
 | `/livez`, `/readyz` | public, always on the application's port |
 | `/actuator/health`, `/actuator/health/liveness`, `/actuator/health/readiness`, `/actuator/info` | public (health details only for admins) |

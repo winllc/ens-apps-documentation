@@ -369,6 +369,52 @@ See [Security](security.md) for how these interact.
 | `ldap.user-search-base` | `""` | Where to search for the username |
 | `ldap.user-search-filter` | `(uid={0})` | How to search for it |
 | `ldap.user-dn-patterns` | `[]` | Bind directly to these DN patterns instead of searching, e.g. `["uid={0},ou=people"]` |
+| `auditor-identifiers` | `[]` | Values granting `ROLE_AUDITOR` (read everything, change nothing), matched as `admin-identifiers` is. Indexed variables: `CERT_ALERT_SECURITY_AUDITOR_IDENTIFIERS_0`, ... |
+| `groups.admin`, `groups.auditor` | `[]` | Directory group DNs whose members get `ROLE_ADMIN` or `ROLE_AUDITOR` (`CERT_ALERT_SECURITY_GROUPS_ADMIN_0`, ...) |
+| `groups.directory` | `true` | Read the person's groups (`memberOf`) from the directory at sign-in |
+| `groups.member-of-attribute` | `memberOf` | The attribute listing a person's groups |
+| `groups.cache-for` | `5m` | How long a certificate sign-in's groups are remembered |
+
+See [Single sign-on and roles](single-sign-on.md#roles) for how the roles combine.
+
+## Single sign-on (`cert-alert.sso`)
+
+OpenID Connect and SAML 2.0, each off until enabled. `cert-alert.sso.public-url`
+(`CERT_ALERT_SSO_PUBLIC_URL`) is required with either. Every setting, the addresses to register at
+the provider and walkthroughs for Entra ID, Okta and ADFS are in
+[Single sign-on and roles](single-sign-on.md#settings).
+
+## Exports and scheduled reports (`cert-alert.exports`)
+
+| Property | Default | Description |
+|---|---|---|
+| `max-rows` | `200000` | The most rows one CSV or Excel download holds |
+| `report-max-rows` | `50000` | The most rows a scheduled report's file holds |
+| `report-recipient-domains` | `[]` | Domains a scheduled report may be e-mailed to (`example.gov`, `*.mil`). **Required for scheduled reports** |
+| `max-reports-per-user` | `20` | Scheduled reports one administrator may own |
+| `report-poll-interval` | `5m` | How often due reports are looked for |
+
+See [Exports, saved views and scheduled reports](exports-and-reports.md).
+
+## Public API (`cert-alert.api`)
+
+| Property | Default | Description |
+|---|---|---|
+| `tokens-enabled` | `true` | `false` refuses every API token without deleting any |
+| `requests-per-minute` | `300` | Per token, per replica; `0` turns the limit off |
+| `max-lifetime` | `365d` | The longest a token lives; `0` removes the limit |
+| `use-audit-interval` | `1h` | A token's reads are audited once per interval |
+| `max-page-size` | `500` | The largest page a list returns |
+| `creator-roles-cache-for` | `1m` | How long a token creator's live directory check is reused |
+
+`cert-alert.ldap.lockout.assumed-duration` (unset) is the lockout length to assume where the
+directory does not say; see [API reference → API tokens](api-reference.md#api-tokens).
+
+## Webhooks (`cert-alert.webhooks`)
+
+`enabled` (`true`), `allowed-hosts` (empty), `block-private-networks` (`false`) and `secret-key`
+(unset; set it before creating webhooks), plus timeouts, retry and retention settings. All of them
+are in [Webhooks → Settings](webhooks.md#settings).
 
 ## Client certificates (`ens.x509`)
 

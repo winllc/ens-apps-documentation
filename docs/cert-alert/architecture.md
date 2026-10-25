@@ -8,11 +8,14 @@ certificates into a relational database and serves a server-rendered UI and a JS
 ```text
 src/main/java/com/winllc/certalert/
 ├── alert/          AlertNotifier SPI, AlertDispatcher, log / email / notification channels
+├── api/            API tokens, scopes and the filter chain for bearer tokens, the OpenAPI document
 ├── audit/          the ens-audit/1 trail: store, outputs (stdout, file, Splunk, syslog), pull API, audit page
 ├── cluster/        job locks in the database (ShedLock) and jobs started by hand (job_run)
 ├── config/         properties classes, clock, DataTables repository factory, email templates
 ├── demo/           the read-only demo mode
 ├── domain/         JPA entities and enums
+├── export/         CSV and Excel exports, scheduled reports
+├── inventory/      the certificate inventory API, saved views, bulk point-of-contact assignment
 ├── ldap/           attribute mapping, paged streaming directory client, changelog client
 ├── license/        the ENS license check and the license screen's wiring
 ├── net/            address ranges matched within their own family
@@ -20,11 +23,13 @@ src/main/java/com/winllc/certalert/
 ├── repository/     Spring Data / DataTables repositories and filter specifications
 ├── revocation/     CRL store, OCSP/CRL checker, issuer certificates, fetch policy, revocation at sign-in
 ├── scheduling/     DirectoryJobScheduler (all cron jobs)
-├── security/       X.509 (servlet and header mode) and LDAP-bind authentication, consent banner,
-│                   session limits, security headers, roles, ServerAccessPolicy
+├── security/       X.509 (servlet and header mode) and LDAP-bind authentication, single sign-on
+│                   (sso/: OIDC and SAML), consent banner, session limits, security headers, roles
+│                   and groups, the auditor's read-only filter, ServerAccessPolicy
 ├── service/        parsing, status evaluation, sync, notifications, mail outbox, probe, projects…
 ├── session/        sessions in the database (Spring Session JDBC), attribute allow-list, expiry sweep
-└── web/            page controllers, REST API, DataTables endpoints, error handling
+├── web/            page controllers, REST API, DataTables endpoints, error handling
+└── webhook/        webhook endpoints, the delivery outbox, address guard, signing and secret encryption
 src/main/resources/
 ├── db/migration/   Flyway migrations V1–V28
 ├── static/         css, js (table wiring), img (logo, favicons)
@@ -258,9 +263,17 @@ erDiagram
 | `server_attribute_definition`, `server_attribute_option` | Editable-attribute definitions (values live only in the directory; the old `server_attribute_value` table was dropped in `V11`) |
 | `changelog_cursor` | Changelog position and counters |
 | `sync_run` | Job run log |
+| `shedlock`, `job_run` | Job locks across replicas, and jobs started by hand |
+| `spring_session`, `spring_session_attributes` | Sessions in the database |
+| `saml_authn_request` | SAML sign-in requests waiting for their answer |
+| `ens_license_*` | The license, installation id and revisions |
+| `api_token` | API tokens (SHA-256 of the token, scopes, expiry, creator) |
+| `webhook_endpoint`, `webhook_delivery` | Webhooks (URL and signing secret, AES-GCM encrypted when a key is set) and their delivery outbox and log |
+| `saved_view`, `scheduled_report` | Saved views of the Certificates page, and scheduled e-mailed reports |
 
 The schema is created and evolved by Flyway (`V1__create_directory_tables` …
-`V20__check_attribute_type_without_an_in_list`); Hibernate only validates it. `V18` moved the
+`V28__webhook_url_encrypted_and_report_owner_dn`; the list is in the
+[Operator guide](operator-guide.md#upgrades)); Hibernate only validates it. `V18` moved the
 audit trail to the `ens-audit/1` format and added `audit_chain_head`, `audit_delivery` and
 `audit_api_token`; `V19` added the email outbox, `outbound_email`; `V20` rewrote the check on
 `server_attribute_definition.type` so the embedded H2 database keeps enforcing it.

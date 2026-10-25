@@ -5,8 +5,9 @@ settings referenced are in [Configuration → Security](configuration.md#securit
 
 ## Authentication
 
-Two methods, in order of preference. No passwords are stored by CertAlert; there is no local
-user database.
+Three methods for people: a client certificate, the directory password and, when configured,
+single sign-on through an identity provider. Integrations use [API tokens](#api-tokens). No passwords
+are stored by CertAlert; there is no local user database.
 
 ### Client certificate (X.509)
 
@@ -127,6 +128,26 @@ The sign-in is resolved to the cached person at the DN the bind used, and to nob
 the cache does not hold yet (not swept yet, or one the sweep does not reach) signs in under the
 username typed, without a cached person, and is never matched to someone else by name.
 
+### Single sign-on (OIDC and SAML)
+
+Off until configured. The identity provider says who somebody is; CertAlert then matches that value
+to exactly one directory entry, by uid or DN (never an e-mail address or a name), and refuses anybody
+the directory does not hold. Roles come from the directory as for any other sign-in, plus the
+provider's own `admin-groups` and `auditor-groups`. OIDC uses the authorization code flow with PKCE
+and checks the ID token's signature, issuer, audience, authorized party, expiry and nonce. SAML
+requires a signed response or assertion that answers a request this browser started, once. Every
+address given to the provider is built from `cert-alert.sso.public-url`, never from request headers.
+There is no single logout. See [Single sign-on and roles](single-sign-on.md).
+
+### API tokens
+
+`Authorization: Bearer cat_…` on `/api/v1/**` authenticates an integration. Tokens are created by
+administrators with scopes and an expiry (a year at most by default), stored as SHA-256, shown once,
+re-checked against the creator's live directory entry on every use (fail-closed on disabled or
+locked accounts), rate-limited per token, and never kept in a session; no token can manage tokens or
+webhooks. Token requests have no session and need no CSRF token. See
+[API reference → API tokens](api-reference.md#api-tokens).
+
 ### Notice and consent banner
 
 With `ENS_CONSENT_BANNER_ENABLED=true`, every request from a browser session that has not pressed
@@ -159,8 +180,9 @@ the SIEM pull API (`/api/audit/**`, bearer tokens).
 - Unauthenticated calls under `/api/**` get **401** (not a redirect); pages redirect to `/login`.
 - CSRF protection is on; the pages send the token from the `_csrf` meta tags, and the tables send
   it with their own requests.
-- The only token authentication is the SIEM pull API's bearer tokens (`/api/audit/**`), which
-  read the audit trail and nothing else. There is no HTTP Basic.
+- Two kinds of bearer token exist, and neither opens a session: [API tokens](#api-tokens) on
+  `/api/v1/**`, scoped and never more than their creator, and the SIEM pull API's tokens on
+  `/api/audit/**`, which read the audit trail and nothing else. There is no HTTP Basic.
 
 ### Security headers and cookies
 
@@ -181,10 +203,16 @@ the SIEM pull API (`/api/audit/**`, bearer tokens).
 
 | Role | Granted to | May |
 |---|---|---|
-| `ROLE_USER` | Everyone who authenticates | Read tables, details, metrics, notifications; contextual rights below |
-| `ROLE_ADMIN` | People matching `cert-alert.security.admin-identifiers` | Everything |
+| `ROLE_USER` | Everyone who authenticates | Read tables, the certificate inventory, details, metrics, notifications; keep saved views; contextual rights below |
+| `ROLE_AUDITOR` | `cert-alert.security.auditor-identifiers`, a directory group in `security.groups.auditor`, or a single sign-on provider's `auditor-groups` | Read everything an administrator reads, and change nothing |
+| `ROLE_ADMIN` | `cert-alert.security.admin-identifiers`, a directory group in `security.groups.admin`, or a single sign-on provider's `admin-groups` | Everything |
 
-`admin-identifiers` is matched against two things only: the person's `uid` and their entry DN.
+Somebody who is both an auditor and an administrator is an administrator. An auditor is refused
+(`403`, audited as `access.denied`) on every request but `GET`, `HEAD` and `OPTIONS`, with a short
+list of exceptions that only read or concern the session; see
+[Single sign-on and roles](single-sign-on.md#the-auditor-changes-nothing).
+
+`admin-identifiers` (and `auditor-identifiers`) is matched against two things only: the person's `uid` and their entry DN.
 An address is never matched, not even one the directory publishes: many directories let people
 edit their own `mail`, so matching it would let anybody take an administrator's address and the
 role with it. An address in the list is ignored, and startup logs a warning naming the uid or DN
@@ -205,27 +233,36 @@ Two further, **per-server** rights derive from data rather than configuration:
 
 ## Permissions matrix
 
-| Action | Reader | Point of contact (that server) | Project admin (servers in project) | Admin |
-|---|:-:|:-:|:-:|:-:|
-| View People, Servers, details, Metrics, own Notifications | ✓ | ✓ | ✓ | ✓ |
-| View an entry's audit history | ✓ | ✓ | ✓ | ✓ |
-| View the system audit log (`/admin`, `/admin/audit`) | | | | ✓ |
-| Manage a server's contacts | `AUTHENTICATED`¹ | ✓ | ✓ | ✓ |
-| Run the endpoint probe | `AUTHENTICATED`¹ | ✓ | ✓ | ✓ |
-| Add/remove a person's addresses | `AUTHENTICATED`¹ | `AUTHENTICATED`¹ | `AUTHENTICATED`¹ | ✓ |
-| Create/rename/delete projects; add/remove members | `AUTHENTICATED`¹ | `AUTHENTICATED`¹ | `AUTHENTICATED`¹ | ✓ |
-| Grant/revoke project administrator | | | | ✓ |
-| Read editable attribute values | ✓ | ✓ | ✓ | ✓ |
-| Define editable attributes / set values | | | | ✓ |
-| Trigger sync, refresh, prune, clean-up, changelog poll | | | | ✓ |
-| Run revocation check | | | | ✓ |
-| Run / dry-run the round-up | | | | ✓ |
-| Change round-up lead days | | | | ✓ |
-| `/actuator/health`, `/health/**`, `/info`, `/livez`, `/readyz` | public | public | public | public |
-| Other actuator endpoints (`metrics`, `loggers`) on the application's port | | | | ✓ |
-| The audit log page (`/admin/audit`), the license screen (`/admin/license`) | | | | ✓ |
+| Action | Reader | Point of contact (that server) | Project admin (servers in project) | Auditor | Admin |
+|---|:-:|:-:|:-:|:-:|:-:|
+| View People, Servers, Certificates, details, Metrics, own Notifications | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Keep saved views of the Certificates page | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Export the inventory (CSV, Excel) | ✓ | ✓ | ✓ | ² | ✓ |
+| View an entry's audit history | ✓ | ✓ | ✓ | ✓ | ✓ |
+| View the Admin page, the audit log (`/admin/audit`) and the license screen | | | | ✓ | ✓ |
+| View Integrations (API tokens, webhooks, deliveries) and scheduled reports | | | | ✓ | ✓ |
+| Verify the audit chain | | | | ✓ | ✓ |
+| Create or revoke API tokens; add, change or delete webhooks; manage scheduled reports | | | | | ✓ |
+| Manage a server's contacts (one at a time or in bulk) | `AUTHENTICATED`¹ | ✓ | ✓ | | ✓ |
+| Run the endpoint probe | `AUTHENTICATED`¹ | ✓ | ✓ | | ✓ |
+| Add/remove a person's addresses | `AUTHENTICATED`¹ | `AUTHENTICATED`¹ | `AUTHENTICATED`¹ | | ✓ |
+| Create/rename/delete projects; add/remove members | `AUTHENTICATED`¹ | `AUTHENTICATED`¹ | `AUTHENTICATED`¹ | | ✓ |
+| Grant/revoke project administrator | | | | | ✓ |
+| Read editable attribute values | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Define editable attributes / set values | | | | | ✓ |
+| Trigger sync, refresh, prune, clean-up, changelog poll | | | | | ✓ |
+| View job runs started by hand (`/api/v1/jobs`) | | | | ✓ | ✓ |
+| Run revocation check | | | | | ✓ |
+| Run / dry-run the round-up | | | | | ✓ |
+| Change round-up lead days | | | | | ✓ |
+| `/actuator/health`, `/health/**`, `/info`, `/livez`, `/readyz` | public | public | public | public | public |
+| Other actuator endpoints (`metrics`, `loggers`) on the application's port | | | | | ✓ |
 
-¹ Only when `cert-alert.security.contact-editors: AUTHENTICATED` (default `ADMIN`).
+¹ Only when `cert-alert.security.contact-editors: AUTHENTICATED` (default `ADMIN`). An auditor is
+refused these whatever `contact-editors` says.
+
+² The export is a `POST` (it is audited), and in this release the auditor rule refuses it with
+`403`.
 
 Refusals are **403** with a problem-detail body for API calls. The UI hides controls a user cannot
 use (it asks the API whether the current user may edit a given server).
@@ -233,10 +270,13 @@ use (it asks the API whether the current user may edit a given server).
 ## Public paths
 
 `/login`, `/consent`, `/css/**`, `/js/**`, `/img/**`, `/webjars/**`, `/favicon.ico`, `/error`,
-`/actuator/health`, `/actuator/health/**`, `/actuator/info`, `/livez` and `/readyz`. On the
-management port (`MANAGEMENT_SERVER_PORT`), health and `/actuator/prometheus` are open; never
-publish that port beyond your monitoring network. `/api/audit/**` takes a bearer token instead of
-a session. Everything else requires signing in.
+`/actuator/health`, `/actuator/health/**`, `/actuator/info`, `/livez`, `/readyz` and the OpenAPI
+document `/api/v1/openapi.yaml`. With single sign-on on, also `/oauth2/authorization/**`,
+`/login/oauth2/code/**`, `/saml2/authenticate/**`, `/login/saml2/sso/**` and
+`/saml2/service-provider-metadata/**`. On the management port (`MANAGEMENT_SERVER_PORT`), health and
+`/actuator/prometheus` are open; never publish that port beyond your monitoring network.
+`/api/audit/**` takes a SIEM bearer token instead of a session, and `/api/v1/**` accepts an API
+token as well as a session. Everything else requires signing in.
 
 ## Outbound connections
 
@@ -247,6 +287,8 @@ a session. Everything else requires signing in.
 | CRL distribution points / OCSP responders (HTTP or `ldap://`) | The nightly revocation check, and the check at sign-in | `cert-alert.revocation.enabled`, `ENS_X509_REVOCATION`, and the fetch policy (`cert-alert.revocation.allowed-hosts`) |
 | Server TLS endpoints | Endpoint probe (user-initiated) | `cert-alert.probe.enabled` |
 | Splunk HEC, syslog | Audit outputs | `ENS_AUDIT_SPLUNK_*`, `ENS_AUDIT_SYSLOG_*` |
+| Identity provider | OIDC discovery document and signing keys; SAML metadata (when given as a URL) | `cert-alert.sso.*` |
+| Webhook receivers (HTTPS) | Expiry alerts and job results, signed | Admin > Integrations; `cert-alert.webhooks.*` (see [Webhooks](webhooks.md#where-a-webhook-may-go)) |
 
 Every distribution point and responder address comes out of a certificate, so fetches never go to
 link-local or cloud metadata addresses, go to loopback only when it is named in `allowed-hosts`,
@@ -300,4 +342,10 @@ See [FIPS 140-3 and DISA STIG](fips-and-stig.md).
 - Set `revocation.allow-unverified-crl: false` once `issuer-directory` is populated.
 - Leave `server.error.include-message: never`.
 - Configure the classification banner where policy requires it.
+- With single sign-on, map on a claim people cannot change, and serve CertAlert over HTTPS (SAML
+  requires it).
+- Before creating webhooks, set `cert-alert.webhooks.secret-key` (the same on every replica), and
+  narrow their destinations with `allowed-hosts` or `block-private-networks: true`.
+- Give API tokens the fewest scopes and the shortest expiry that serve the integration; revoke the
+  ones nobody uses (the Integrations page shows each token's last use).
 - The container runs as non-root uid 185.
