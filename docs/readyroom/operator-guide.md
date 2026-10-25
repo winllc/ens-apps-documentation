@@ -306,8 +306,15 @@ package nor the Helm chart carries scripts. Developer notes on adding a migratio
 | `V2__status_requests` | `status_requests`, for statuses that need approval |
 | `V3__admin_managed_delegates` | Widens the delegates column to 2000 characters, and flags delegates people chose for themselves for an administrator's review |
 | `V4__retention_summaries` | `attendance_summaries`, `attendance_summary_statuses` and `retention_state`, for retention |
+| `V5__logoff_client_address` | `check_in_out_records.client_address`: the logoff that cannot sign in is bound to the address its logon came from. Earlier check-ins are marked as usable from any address until they expire or are used |
+| `V6__high_availability` | `shedlock`, `spring_session`, `spring_session_attributes`, `service_heartbeat` and `service_outage`, for several replicas |
+| `V7__single_sign_on` | `sso_saml_request` and `sso_assertion_seen`, for [SAML single sign-on](single-sign-on.md) across replicas |
+| `V8__ens_license_state` | `ens_license_*`: the license, installation id and revisions in the database, imported from the license volume at the first start |
+| `V9__public_api` | `api_tokens`, `webhook_endpoints` (signing secrets encrypted) and `webhook_deliveries`, for the [public API](api-reference.md#public-api-apiv1) and [webhooks](webhooks.md). New tables only |
+| `V10__reports` | `user_records.time_zone` and `report_schedules`, for [time zones and scheduled reports](exports.md) |
 
-V2 to V4 change only the schema, plus one `UPDATE` on `user_records`, so they are quick.
+V2 to V4 change only the schema, plus one `UPDATE` on `user_records`, so they are quick; V6 to V10
+add tables and columns only.
 
 ## Certificate and key rotation
 
@@ -392,6 +399,19 @@ stored, and audited as a failed `auth.login` with the reason *unknown session*. 
 To roll back, see [Rolling back an upgrade](availability-and-sizing.md#rolling-back-an-upgrade).
 Rolling back past a release that added migrations needs the database backup taken before the
 upgrade.
+
+### Upgrading to the release with single sign-on, the public API and exports
+
+Nothing to do by hand: Flyway adds the tables above, and nothing existing changes.
+
+| Change | What to do |
+|---|---|
+| [Single sign-on](single-sign-on.md), off until enabled | Set `APPLICATION_BASE_URL` to the absolute URL users reach before enabling it; SAML needs HTTPS |
+| The [public API](api-reference.md#public-api-apiv1) at `/api/v1` | Reachable once an administrator creates a token; nothing but its OpenAPI document is reachable without one. Put `/api/v1` behind the same ingress rules as the rest of the application |
+| [Webhooks](webhooks.md) stay off until `APPLICATION_WEBHOOKS_SECRETKEY` is set | Helm: `webhooks.enabled: true` with `webhooks.secretKey` (a value or your Secret); release package: set it in `.env`. With the chart's NetworkPolicy on, egress to port 443 is then opened for them (`webhooks.ports`). Use the same key on every replica and keep it across upgrades |
+| Owners of tokens, webhooks and scheduled reports are checked live in the directory | The bind account must read the account-status attributes listed in [API reference → Tokens](api-reference.md#tokens) |
+| Site time zones | Set `APPLICATION_REPORTS_SITETIMEZONES` where people work in more than one zone; until then reports look as before |
+| Calendar colours | The organization calendar's and requested statuses' default colours are darker ([Accessibility](accessibility.md)); colours you configured are kept |
 
 ## Runbook
 

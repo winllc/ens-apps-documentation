@@ -232,6 +232,8 @@ A refused page is logged at `info` as `Access denied for <METHOD> <URI>`, and th
 | `/actuator/prometheus` | Only on the management port (`MANAGEMENT_SERVER_PORT`), plain HTTP. Never publish that port |
 | `/login`, `/consent`, `/error` | The sign-in, consent banner and error pages. |
 | `GET /api/audit/events` | The audit pull API, with a bearer token instead of a session. See [Audit logging](../audit-logging.md#the-pull-api) |
+| `/api/v1/**` | The [public API](api-reference.md#public-api-apiv1): a bearer API token instead of a session, read-only. Its OpenAPI document (`/api/v1/openapi`, `/api/v1/openapi.yaml`) needs no token |
+| `/oauth2/authorization/oidc`, `/login/oauth2/code/oidc`, `/saml2/authenticate/saml`, `/login/saml2/sso/saml`, `/saml2/service-provider-metadata/saml` | [Single sign-on](single-sign-on.md), when enabled: starting a sign-in, the provider's answer, and this service provider's metadata |
 | `/libs/**`, `/css/**`, `/js/**`, `/images/**` | Static assets, which bypass the security filters. |
 
 A `sessionId` stands in for a sign-in on the logout, so ReadyRoom treats it as a credential. It
@@ -245,6 +247,26 @@ event with `details.count`. After `application.logoff.refused-per-minute` (30)
 in a minute, the next ones get `429` and are audited once for that address and minute, with the
 reason *too many unknown sessions* (method `session-id`). A logout with a usable `sessionId` is
 never limited.
+
+## Single sign-on, API tokens and webhooks
+
+- **Single sign-on** (OIDC with PKCE, state and nonce; SAML with signed responses, `InResponseTo`,
+  one use per assertion across replicas, no IdP-initiated sign-in) maps the provider's identity to
+  exactly one directory user by an LDAP filter, and grants `MANAGER` or `ADMIN` from the provider's
+  groups only through `ENS_SSO_ROLE_MAPPING`. Every address given to the provider is built from
+  `APPLICATION_BASE_URL`, never from request headers. No provider token is kept; no single logout.
+  See [Single sign-on](single-sign-on.md).
+- **API tokens** are SHA-256 hashed, shown once, scoped per endpoint, expiring, rate-limited (per
+  replica), and act for their creating administrator with that person's roles and account status
+  re-checked live in the directory on every call, failing closed. The `/api/v1` chain accepts nothing
+  but a bearer token and serves `GET`s only. See [API reference → Tokens](api-reference.md#tokens).
+- **Webhooks** go to `https://` receivers on public addresses only (internal ranges only through
+  `APPLICATION_WEBHOOKS_ALLOWEDCIDRS`, cloud metadata never), connect to the address just checked,
+  follow no redirects, and are HMAC-SHA256 signed. Signing secrets are encrypted in the database with
+  `APPLICATION_WEBHOOKS_SECRETKEY` (AES-256-GCM). See [Webhooks](webhooks.md).
+- **Exports** are form posts with the CSRF token, audited before they start, and hold only what the
+  viewer may see; CSV cells that could run as formulas are neutralised. See
+  [Reports, exports and time zones](exports.md).
 
 ## Other protections and notes
 

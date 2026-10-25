@@ -29,6 +29,9 @@ manager approves), so their managers know where they are when they are not at a 
 | **Auto check-out** | A background job checks out anyone who has been locked for longer than `check-out-after-minutes`. The record is flagged as forced. |
 | **Absence alerts** | If someone is not checked in by their expected time plus a grace period on a working day, their directory manager and their delegates get an in-app notification and an email. Managers record what happened. |
 | **Statuses and approvals** | People set a late arrival or early leave themselves; statuses that excuse an absence (leave, telework, TDY) are requested and approved by their manager or a delegate on the **Approvals** page. Delegates are set by administrators. |
+| **Reports and exports** | Group reports as PDF, CSV or Excel, people lists, and scheduled e-mailed reports, with each person's times in their own or their site's time zone. See [Reports, exports and time zones](exports.md). |
+| **Public API and webhooks** | A read-only REST API (`/api/v1`, OpenAPI document) for scoped API tokens, and HMAC-signed webhooks for absence alerts and status changes. See [API reference](api-reference.md) and [Webhooks](webhooks.md). |
+| **Single sign-on** | OpenID Connect and SAML 2.0, beside client certificates and the directory password. See [Single sign-on](single-sign-on.md). |
 | **Privacy and retention** | What coworkers see of each other is configurable. Old check-ins and statuses can be summarised by month and deleted after a set number of days. Everyone can download their own data; administrators export or erase a person's data. |
 | **Home dashboard** | Each user sees their own status, the last 30 days, whether their workstation agent is reporting, and anything scheduled in the next two weeks. Users with direct reports also see their team. |
 | **Groups** | Browse the directory group trees (`groupOfUniqueNames`), see each member's status, favorite groups, assign extra group managers, and generate a group report as a PDF. |
@@ -133,7 +136,7 @@ address; a logout with a usable `sessionId` never is.
 |---|---|
 | Language and runtime | Java 21 |
 | Framework | Spring Boot 4.1.1 (Web MVC, Security, Data JPA, Data LDAP, Mail, Actuator, Cache) |
-| Security | Spring Security 7.1.1: X.509, `spring-security-ldap`, `spring-security-kerberos-core` |
+| Security | Spring Security 7.1.1: X.509, `spring-security-ldap`, `spring-security-kerberos-core`, OAuth 2.0 client (OIDC) and SAML 2.0 service provider |
 | Views | Thymeleaf with the layout dialect and Spring Security extras |
 | Database | PostgreSQL (16 in the release package and the chart's embedded database). Flyway owns the schema; Hibernate only validates it (`ddl-auto: validate`) |
 | Observability | Micrometer with Prometheus, on a separate management port; ECS JSON logs |
@@ -157,5 +160,9 @@ address; a logout with a usable `sessionId` never is.
 | Size it, plan for availability and recover from a disaster | [Sizing, availability and recovery](availability-and-sizing.md) |
 | Understand authentication, authorization and hardening | [Security](security.md) |
 | Run it on FIPS-enabled hosts, or to DISA STIG settings | [FIPS 140-3 and DISA STIG](fips-and-stig.md) |
-| Call or integrate with the HTTP endpoints | [API reference](api-reference.md) |
+| Call or integrate with the public API (`/api/v1`) or the HTTP endpoints | [API reference](api-reference.md) |
+| Receive absence alerts and status changes in another system | [Webhooks](webhooks.md) |
+| Set up OIDC or SAML single sign-on | [Single sign-on](single-sign-on.md) |
+| Download reports, schedule e-mailed reports, set time zones | [Reports, exports and time zones](exports.md) |
+| Check accessibility conformance | [Accessibility](accessibility.md) |
 | Fix a problem | [Troubleshooting](troubleshooting.md) |

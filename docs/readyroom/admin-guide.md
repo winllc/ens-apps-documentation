@@ -15,6 +15,12 @@ ReadyRoom has three roles (`UserRoleEnum`):
 | `MANAGER` | An admin sets it on the person's details page. It is stored in `user_records.user_role`. |
 | `ADMIN` | The person's DN is listed in `application.super-user-dns` (matched without regard to case). The role list in the UI does not offer `ADMIN`. The application also honors `ADMIN` if it is stored in `user_records.user_role`, which can only be set directly in the database. |
 
+With [single sign-on](single-sign-on.md), the identity provider's groups can add `MANAGER` or
+`ADMIN` for that session through `ENS_SSO_ROLE_MAPPING` (for example
+`ReadyRoom Admins=ADMIN;ReadyRoom Managers=MANAGER`); a group not listed there grants nothing.
+Roles from the provider's groups do not count for [API tokens](api-reference.md#tokens), whose
+creator must be an administrator in ReadyRoom itself at every call.
+
 A user record is created automatically the first time someone signs in, and also by the hourly
 directory refresh, with the role `USER`. A certificate or account whose DN cannot be found in the
 directory does not sign in at all.
@@ -213,6 +219,20 @@ their details page. The page lists how many records of each kind ReadyRoom holds
 
 What erasure does not remove is listed in
 [Privacy, DPIA and works council](privacy.md#what-erasure-does-not-remove).
+
+## Integrations: API tokens and webhooks
+
+*Administration → Integrations* (`/app/admin/integrations`):
+
+- **API tokens** for the read-only [public API](api-reference.md#public-api-apiv1): a name, scopes
+  (`people:read`, `attendance:read`, `absences:read`), an expiry and a rate limit. The token is shown
+  once. It acts for you and never sees more than you may see at the time of each call; if you stop
+  being an administrator or your account is disabled, locked or removed, it stops working. Revoke
+  tokens nobody uses.
+- **Webhooks** for absence alerts and status changes: an `https://` URL and the events. The signing
+  secret is shown once; **Send test** posts a `ping`, and the page lists recent deliveries. Webhooks
+  stay unavailable until your operators set `APPLICATION_WEBHOOKS_SECRETKEY`. See
+  [Webhooks](webhooks.md).
 
 ## Settings page
 

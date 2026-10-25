@@ -121,11 +121,15 @@ nav:
       - User guide: readyroom/user-guide.md
       - Additional guidance:
           - Windows client: readyroom/windows-client.md
+          - Single sign-on: readyroom/single-sign-on.md
+          - Reports, exports and time zones: readyroom/exports.md
+          - API reference: readyroom/api-reference.md
+          - Webhooks: readyroom/webhooks.md
           - Security: readyroom/security.md
           - FIPS 140-3 and DISA STIG: readyroom/fips-and-stig.md
+          - Accessibility: readyroom/accessibility.md
           - Sizing, availability and recovery: readyroom/availability-and-sizing.md
           - Privacy, DPIA and works council: readyroom/privacy.md
-          - API reference: readyroom/api-reference.md
           - Troubleshooting: readyroom/troubleshooting.md
   - RSA Portal:
       - rsa-operations-portal/index.md
