@@ -117,6 +117,8 @@ Flyway owns the schema: at every start the Portal applies the migrations in `db/
 | `HelpDeskRequest` | [Help-desk requests](help-desk.md): the change, the user and token, ticket, reason, verification, approval, state, when it was opened, decided and run (`runStartedAt`). An e-mailed code is kept only as an HMAC-SHA256 under the server's key (`rsa.helpdesk.code-key`, `EmailCodeKey`); an emergency access code never |
 | `RateLimitWindow`, `RateLimitBackoff` | Rate-limit counts per fixed window, and backoff per user ID or serial, keyed by SHA-256 hashes of the address, user ID or serial (see [Security](security.md#rate-limits-and-uniform-answers)) |
 
+Flyway also creates tables that are not entities: `SPRING_SESSION` and `SPRING_SESSION_ATTRIBUTES` (signed-in sessions, Spring Session JDBC, shared by every Portal replica), `ens_license_*` (the license, the installation id and the license history) and `SsoSamlRequest` (SAML sign-ins in progress). See [High availability](availability-and-sizing.md#high-availability).
+
 The Portal's earlier audit event types (`TRUSTED_AGENT_REGISTERED`, `USER_TOKEN_LOST` and so on) were moved into the chain on the first start of the release that introduced `ens-audit/1`; each keeps its original type in `details.legacyType`.
 
 User and token data itself (principals, tokens, PINs, admin roles) lives in RSA AM, and the portal reads it live through the connector.
@@ -140,7 +142,7 @@ User and token data itself (principals, tokens, PINs, admin roles) lives in RSA 
 
 Two housekeeping tasks run on every node, outside the job table: overdue help-desk requests are expired every 5 minutes, and expired rate-limit rows are deleted every 10 minutes, in batches.
 
-The last-run details are held **in memory only**. The PMO can see them, and trigger any job, at **Admin → Manual Run Cron Jobs** (`/manualCron`). A job whose `enabled` flag is `false` does nothing, even when triggered by hand.
+The last-run details are held **in memory only**, separately on each Portal replica. The PMO can see them, and trigger any job, at **Admin → Manual Run Cron Jobs** (`/manualCron`). A job whose `enabled` flag is `false` does nothing, even when triggered by hand.
 
 ## Customization assets
 

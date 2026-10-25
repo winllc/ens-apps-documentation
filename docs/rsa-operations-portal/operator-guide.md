@@ -6,8 +6,8 @@ Day-to-day operation of the RSA Operations Portal, installed from the release pa
 
 | Component | Release package (`docker-compose.yml`) | Helm chart | Health check |
 |---|---|---|---|
-| Portal | Service and container `portal`, image `ghcr.io/winllc/rsa-operations-portal:<version>`, `restart: unless-stopped` | Deployment `rsa-portal-rsa-operations-portal`, one replica, `Recreate` strategy | Package: `curl -f http://localhost:8080/login`. Helm: startup and liveness probes on `/actuator/health/liveness`, readiness on `/actuator/health/readiness`, on the management port (9090) |
-| Connector | Service and container `connector`, image `ghcr.io/winllc/rsa-operations-portal-connector:<version>`. HTTPS on 8443 inside the network; plain HTTP on 8080 inside the container only | Deployment `rsa-portal-rsa-operations-portal-connector` (stateless), Service port 8443 | `curl http://localhost:8080/app/health` inside the container: `UP` once it has an AM session. Helm: readiness on that; startup and liveness on the HTTPS port |
+| Portal | Service and container `portal`, image `ghcr.io/winllc/rsa-operations-portal:<version>`, `restart: unless-stopped` | Deployment `rsa-portal-rsa-operations-portal`, `replicaCount` replicas (default 1); `RollingUpdate`, or `Recreate` while a ReadWriteOnce license volume is mounted | Package: `curl -f http://localhost:8080/login`. Helm: startup and liveness probes on `/actuator/health/liveness`, readiness on `/actuator/health/readiness`, on the management port (9090) |
+| Connector | Service and container `connector`, image `ghcr.io/winllc/rsa-operations-portal-connector:<version>`. HTTPS on 8443 inside the network; plain HTTP on 8080 inside the container only | Deployment `rsa-portal-rsa-operations-portal-connector`, one replica at most (multi-step sign-ins are in its memory), Service port 8443 | `curl http://localhost:8080/app/health` inside the container: `UP` once it has an AM session. Helm: readiness on that; startup and liveness on the HTTPS port |
 | MySQL | Service and container `mysql`, the MySQL 8.4 image in the package | Your own MySQL server (an embedded StatefulSet for evaluations only) | `mysqladmin ping` |
 
 ## Start, stop and status
@@ -41,7 +41,7 @@ Day-to-day operation of the RSA Operations Portal, installed from the release pa
     | Stop the Portal (data is kept) | `kubectl -n rsa-portal scale deploy/rsa-portal-rsa-operations-portal --replicas=0` |
     | Change settings | Edit your values file and run `helm upgrade` (see [Upgrades](#upgrades)) |
 
-    Keep `replicaCount: 1` for the Portal. Its license volume is single-writer, and sign-in sessions are held in memory.
+    Sessions, rate limits, job locks and the license are in the database, so a restart or rolling update signs nobody out. The Portal can run more than one replica once the license volume is no longer mounted; the Connector stays at one. See [High availability](availability-and-sizing.md#high-availability).
 
 ## Health and monitoring
 
@@ -51,7 +51,7 @@ Day-to-day operation of the RSA Operations Portal, installed from the release pa
 | Liveness | `/actuator/health/liveness` | The Portal itself is running |
 | Readiness | `/actuator/health/readiness` | The Portal can serve: the database (`db`) and the Connector (`connector`) answer. `connector` is `DOWN` when the Connector can't be reached over HTTPS (address, certificate, shared secret) or can't open an AM session |
 | Connector | `docker compose exec connector curl -s http://localhost:8080/app/health` | `UP` or `DOWN`, checked against AM at most every 30 seconds. The reason for `DOWN` is in the Connector's log |
-| Scheduled jobs | Sign in as PMO, then **Admin → Manual Run Cron Jobs** | Shows each job's enabled and debug flags and its last-run message (in memory, cleared on restart). Each run is also audited as `job.completed` or `job.failed` |
+| Scheduled jobs | Sign in as PMO, then **Admin → Manual Run Cron Jobs** | Shows each job's enabled and debug flags and its last-run message (in the memory of the Portal replica serving the page, cleared on restart). Each run is also audited as `job.completed` or `job.failed` |
 | Email | Look for `Could not send email` or `Email not sent to:` in the Portal log | SMTP failures. Sending is asynchronous, so the UI may still report success. |
 
 The health endpoints need no sign-in; their details (database, Connector, disk) are shown to PMO users only. Without `MANAGEMENT_SERVER_PORT` they are on the Portal's port 8080 (Helm: through `kubectl port-forward`).
@@ -135,7 +135,7 @@ The request id in each Portal log line is the caller's `X-Request-Id` (from a pr
 
     `CONTAINER_ENGINE=podman` uses podman instead of docker.
 
-    Also keep copies of `.env`, `connector.env`, `mysql.env`, `license/`, `default_build/` (including `ssl/trust.jks`), the certificates for HTTPS between the Portal and the Connector (`connector-tls-ca/`, `default_build/connector-tls/`, `portal-tls/`) and the `ens-license` volume, which holds the installation id. They hold secrets: keep the copies private.
+    Also keep copies of `.env`, `connector.env`, `mysql.env`, `license/`, `default_build/` (including `ssl/trust.jks`), the certificates for HTTPS between the Portal and the Connector (`connector-tls-ca/`, `default_build/connector-tls/`, `portal-tls/`). They hold secrets: keep the copies private. The license and the installation id are in the database, so the dump has them; the `ens-license` volume is read only on the first start of the release that moved them there.
 
 === "Helm"
 
@@ -157,7 +157,7 @@ The request id in each Portal log line is the caller's `X-Request-Id` (from a pr
     | `backup.persistence.*` | `10Gi`, ReadWriteOnce | The PVC the dumps go to. The chart's PVC is kept by `helm uninstall`; or name your own in `existingClaim` |
     | `backup.image.*` | the embedded MySQL's image | The image with `mysqldump`, `gzip` and `gpg`. Use the same major version as the server |
 
-    The PVC is in the cluster, so copy the dumps off it to your backup storage as well. Also keep your values file, the Secrets it names, and the license PVC `rsa-portal-rsa-operations-portal-license`, which holds the installation id.
+    The PVC is in the cluster, so copy the dumps off it to your backup storage as well. Also keep your values file and the Secrets it names. The license and the installation id are in the database, so the dumps have them; the license PVC `rsa-portal-rsa-operations-portal-license` is read only on the first start of the release that moved them there.
 
     The embedded MySQL (`database.embedded.enabled`) has no high availability. Use it for evaluations only.
 
@@ -177,13 +177,13 @@ The request id in each Portal log line is the caller's `X-Request-Id` (from a pr
 
 === "Helm"
 
-    Scale the Portal to 0, restore the dump into your MySQL server with its usual tools, then scale the Portal back to 1:
+    Scale the Portal to 0, restore the dump into your MySQL server with its usual tools, then scale the Portal back to its `replicaCount`:
 
     ```bash
     kubectl -n rsa-portal scale deploy/rsa-portal-rsa-operations-portal --replicas=0
     gunzip -c RSAAPP-<time>.sql.gz | kubectl -n rsa-portal exec -i <a pod with the mysql client> -- \
       sh -c 'MYSQL_PWD=... mysql -h <database host> -u <user> RSAAPP'
-    kubectl -n rsa-portal scale deploy/rsa-portal-rsa-operations-portal --replicas=1
+    kubectl -n rsa-portal scale deploy/rsa-portal-rsa-operations-portal --replicas=1    # or your replicaCount
     ```
 
 After restoring an older backup, read [Disaster recovery](availability-and-sizing.md#disaster-recovery) about the audit trail's sequence numbers.

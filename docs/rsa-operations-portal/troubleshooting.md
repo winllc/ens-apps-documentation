@@ -158,7 +158,7 @@ Start with `docker compose ps`, `docker compose logs -f` and `logs/rsaapp-portal
 ## Scheduled jobs
 
 ??? failure "A job never runs, or **Run** on the Manual Cron page does nothing"
-    `cron.<name>.enabled` must be `true`. A disabled job is skipped even when run by hand. Last-run details are kept in memory and reset on restart.
+    `cron.<name>.enabled` must be `true`. A disabled job is skipped even when run by hand. Last-run details are kept in the memory of each Portal replica and reset on restart.
 
 ??? failure "Job times seem off"
     The schedules are Spring 6-field cron expressions evaluated in `cron.timezone`, by default the container's time zone (UTC). Set `cron.timezone` (Helm: `cronTimezone`) to the zone the schedules should mean. The default jobs run around 00:30–00:35.
