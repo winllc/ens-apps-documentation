@@ -195,6 +195,22 @@ compares parsed DNs (RFC 4514), so string tricks cannot escape the namespace.
 Deleting a definition also removes all its permission grants. The audit log records how many grants
 were removed.
 
+!!! warning "From the next release: attribute matching must be safe"
+    Matching by an attribute (*entry attribute equals the user's attribute*) is only as strong as
+    those attributes. A user who can edit `mail` in self service could set it to a colleague's and
+    match the colleague's entry. So, from the next release, **My profile** refuses a definition's
+    attribute matching, with a message, while:
+
+    - users can edit the **entry attribute** in this definition's own form (a **Self-service**
+      field); or
+    - users can edit the **user attribute** in any self-service form (unless it is `dn`); or
+    - the user's value matches **more than one entry**. Matching by the user's `dn` may still find
+      several, for example the user's devices.
+
+    The form linter warns before a form makes a match attribute self-editable. Check definitions
+    that match by `mail` or similar: make the field not self-editable, or match on an attribute
+    users can't change. Matching by DN (*entry DN equals the user's DN*) is not affected.
+
 !!! example "Demo definitions"
     | Name | Base DN | Scope | Mode | Everyone reads | Self match |
     |---|---|---|---|---|---|
@@ -234,6 +250,9 @@ flowchart TD
 - Read-only definitions accept only view grants.
 - **Self-service**: users can always see definitions that can locate them (self match) on
   **My profile**, and edit their own entry's **Self-service** fields there, even without a grant.
+  From the next release, attribute matching must find exactly one entry (unless it matches by the
+  user's `dn`) and neither attribute may be self-editable; see
+  [Directory definitions](#directory-definitions).
 
 ### What the license changes
 

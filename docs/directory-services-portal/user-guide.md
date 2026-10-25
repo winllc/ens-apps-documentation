@@ -139,6 +139,11 @@ outside it. Read-only (white pages) directories can never be edited, not even by
 
 If no directory can locate you, the page shows *No directories can locate you*.
 
+From the next release, a directory that finds you by an attribute (such as your `uid` or `mail`)
+shows a message instead of your entries when that match is not safe: when it finds more than one
+entry for you, or when users can edit one of the matched attributes in self service. Ask an
+administrator to fix the directory's set-up.
+
 ## Metrics
 
 **Metrics** (`/metrics`) offers statistics and charts computed live from the directories you can

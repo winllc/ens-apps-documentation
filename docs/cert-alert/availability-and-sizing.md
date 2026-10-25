@@ -102,9 +102,9 @@ was down run at their next scheduled time, or on demand from the Admin page.
 
 | Item | Holds | Back it up with |
 |---|---|---|
-| The PostgreSQL database | Everything CertAlert owns that the directory doesn't ([list](operator-guide.md#backups)), including the audit trail, the license and **this installation's id** | `pg_dump`, or your database's backups |
+| The PostgreSQL database | Everything CertAlert owns that the directory doesn't ([list](operator-guide.md#backups)), including the audit trail, the license and **this installation's id** | `pg_dump`, or your database's backups. From the next release, `./backup.sh` in the release package, and the chart's optional `upgradeBackup` hook before upgrades |
 | The license volume (`cert-alert_ens-license`, or the license PVC) | The license state of a release that kept it in files, imported into the database on the first start after upgrading, and not read after that | Keep it until that import is done. Keep the `.lic` file you received as well |
-| Settings | `.env`, `tls/`, `email-templates/`, `license/` (release package); your values file and the Secrets it names (Helm) | Your configuration management. They hold secrets |
+| Settings | `.env`, `tls/`, `email-templates/`, `license/` (release package); your values file and the Secrets it names (Helm). This includes the webhook secret key (`CERT_ALERT_WEBHOOKS_SECRET_KEY`, `webhooks.secretKey`), without which the webhooks' stored secrets and URLs cannot be read | Your configuration management. They hold secrets |
 | The release | The package you installed, or the image digests and chart version | Keep the download, or mirror the images |
 | People, servers, certificates | The LDAP directory | The directory's own backups. CertAlert re-reads them on the next sweep |
 
@@ -171,6 +171,11 @@ A rollback therefore always restores the database backup taken before the upgrad
     The old images must still be loaded (`docker image ls`); if they were removed, load them from
     the old release's `images/` directory first.
 
+    When the release you go back to has `restore.sh` (the next release and later), use it
+    instead: from that release's directory, `./restore.sh ../cert-alert-<new>/backups/cert-alert-before-<new>-<time>.sql.gz`
+    stops CertAlert, loads the dump in one transaction and starts it again, then run
+    `./install.sh` there.
+
 === "Helm"
 
     Scale the Deployment to 0, restore the pre-upgrade backup into your PostgreSQL, then roll
@@ -184,7 +189,9 @@ A rollback therefore always restores the database backup taken before the upgrad
     ```
 
     `helm rollback` restores the previous chart's manifests and values, not the database. The
-    license PVC is kept.
+    license PVC is kept. From the next release, with `upgradeBackup.enabled`, the dump taken
+    before the upgrade is on the backup volume; the chart's `README.md` ("Backups and upgrades")
+    shows how to restore it from a pod that mounts that volume.
 
 Configuration, contacts and audit events recorded since the upgrade are lost from CertAlert;
 forwarded audit events stay in your SIEM. Run **Sync directory** after the rollback.

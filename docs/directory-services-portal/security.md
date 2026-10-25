@@ -71,7 +71,10 @@ This page summarises the portal's security controls and the settings that affect
   single-value rules, options (including directory-search options, which are looked up directly),
   formats and patterns (`FormValidator`, which mirrors the client rules in `shared/`).
 - Self-service edits are limited to `selfEditable`, non-read-only fields on entries that the
-  definition's self match resolves to the signed-in user.
+  definition's self match resolves to the signed-in user. From the next release, a self match by an
+  attribute is refused while users can edit either of its attributes in self service, or when the
+  user's value matches more than one entry (matching by the user's `dn` may still find several), so
+  a user cannot claim another person's entry by editing their own `mail`.
 - Metrics and analyses read through the same permission checks. Non-administrators may chart and
   filter only the attributes the directory shows them. Password attributes can never be charted or
   filtered on. Comparisons and quality checks are for administrators only.
@@ -141,7 +144,17 @@ issuer.
 ## Network exposure
 
 - The compose files never publish the API. Only the web proxy can reach it, which is why
-  `FORWARD_HEADERS_STRATEGY=framework` is safe there.
+  `FORWARD_HEADERS_STRATEGY=framework` is safe there. Behind a proxy, `none` would make every
+  request seem to come from the proxy, so the per-address limits (sign-in lockout, bad API tokens,
+  single sign-on starts) would let one client get everybody refused; from the next release the API
+  warns at startup when it is evidently behind a proxy (`X509_SOURCE=header`, or `SERVER_ADDRESS`
+  on loopback) with `none`.
+- **Plain HTTP stays on the host by default (next release).** The Docker package's `install.sh`
+  writes `WEB_BIND=127.0.0.1` for plain HTTP (with `--https`, `0.0.0.0`), and the native package's
+  nginx site listens on `NGINX_LISTEN=127.0.0.1:8080`. Upgraded installations keep their address;
+  the installers warn about plain HTTP reachable from the network.
+- **The built-in demo directory (next release).** `DIRECTORY_MODE=memory`, whose administrator
+  password is public, starts only with `DEMO_MODE=true` or an API on loopback only.
 - The web proxy overwrites `X-Forwarded-For` with the real client address, so clients can't spoof
   their address.
 - The native package binds the API to `127.0.0.1` and runs it as the unprivileged `dsp` user under a
@@ -208,7 +221,8 @@ deployment needs, and the options that are not FIPS-appropriate.
 
 ## Hardening checklist
 
-- [ ] `DIRECTORY_MODE=ldap` with a dedicated, least-privilege service account
+- [ ] `DIRECTORY_MODE=ldap` with a dedicated, least-privilege service account, and `DEMO_MODE`
+      unset or `false`
 - [ ] The bind password in a file (`LDAP_BIND_PASSWORD_FILE`) rather than the environment, where the
       deployment allows it
 - [ ] `ldaps://` or `LDAP_STARTTLS=true`, with `LDAP_TLS_REJECT_UNAUTHORIZED=true`
@@ -216,6 +230,9 @@ deployment needs, and the options that are not FIPS-appropriate.
 - [ ] `SERVER_FORWARD_HEADERS_STRATEGY=framework` only when the API is reachable solely through your
       proxy
 - [ ] `ADMIN_GROUPS` set to a small, controlled group
+- [ ] With OIDC single sign-on, `SSO_OIDC_USERNAME_CLAIM` an immutable claim held in the directory
+      (`sub`, Entra ID `oid`); the next release warns at startup otherwise
+- [ ] Self matches by attribute use attributes users can't edit in self service
 - [ ] `SEED_DEMO_CONFIG=false` in production
 - [ ] Session limits as your policy requires (DISA STIG suggests `ENS_SESSION_ADMIN_IDLE_TIMEOUT=15m`,
       `ENS_SESSION_MAX_PER_USER=3` and `LOGIN_MAX_FAILURES=3`)

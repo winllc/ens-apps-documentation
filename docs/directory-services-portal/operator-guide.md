@@ -311,6 +311,21 @@ exists until an administrator creates one, and every new setting has a safe defa
 | [Accessibility](accessibility.md) | Darker secondary text, underlined links in text, 3:1 form-field borders, a skip link and a title per page |
 | New variables | The release bundle's `env.template` lists `SSO_*`, `API_*`, `WEBHOOK*`, `EXPORT_*`, `IMPORT_*`, `BULK_MAX_MEMBERS` and `MAX_BODY_SIZE`; `upgrade.sh` keeps your `.env`, so add them only if you use them |
 
+### Upgrading to the next release
+
+What changes for an upgraded installation, and what to do (nothing, unless a line says so):
+
+| Change | What to do |
+|---|---|
+| `DIRECTORY_MODE=memory` (the built-in demo directory) needs `DEMO_MODE=true`, or an API listening on loopback only (`SERVER_ADDRESS=127.0.0.1`, as the native package does); otherwise the API refuses to start (ERROR in the log) | Docker package: `install.sh` (also run by `upgrade.sh`) adds `DEMO_MODE=true` to an `.env` that sets `DIRECTORY_MODE=memory` and has no `DEMO_MODE` line. Helm: the chart sets it for `directory.mode: memory`. `docker-compose.demo.yml` sets it. A bare jar or image run with the default mode must now set `DIRECTORY_MODE=ldap` or `DEMO_MODE=true`. New in `env.template`: `DEMO_MODE=false` |
+| Docker package: plain HTTP on this host only for new installs | A new `.env` without `--bind` gets `WEB_BIND=127.0.0.1` (with `--https`, `0.0.0.0` and `ENS_COOKIE_SECURE=true` as before); `--bind 0.0.0.0` publishes plain HTTP on every interface. An existing `.env` is never rewritten: it keeps its `WEB_BIND` (none: every interface), and `install.sh` warns when plain HTTP is published beyond the host or `ENS_COOKIE_SECURE` is not `true` |
+| Native package: nginx listens on `NGINX_LISTEN` | New installs: `127.0.0.1:8080`. An upgraded `portal.env` without it keeps `8080` (every interface) |
+| Single sign-on starts are limited per client address | `SSO_START_LIMIT_PER_MINUTE` (`30`, per replica); in-memory sign-in requests are capped at `SSO_MAX_PENDING_REQUESTS` (`10000`), and expired ones are removed every minute (was five). A refused start lands on the login page with "wait a minute" |
+| A startup WARN when the API is evidently behind a proxy (`X509_SOURCE=header`, or a loopback `SERVER_ADDRESS`) while `SERVER_FORWARD_HEADERS_STRATEGY` is `none` | The per-address limits then see only the proxy's address. Set it to `framework` (every package and the chart do) |
+| A startup WARN when `SSO_OIDC_USERNAME_CLAIM` is a claim a provider lets be changed | Sign-in is unchanged. Move to `sub` or Entra ID's `oid` when you can ([how](single-sign-on.md#moving-to-an-immutable-claim)). New release-package `.env` files get `SSO_OIDC_USERNAME_CLAIM=sub`; the Helm chart's default stays `preferred_username`: set it yourself |
+| Self-service matching by an attribute is refused while users can edit either attribute in self service, or when the user's value matches more than one entry | Check definitions that match by `mail` or similar: make the field not self-editable, or match on an attribute users can't change. The form linter warns about it. See [Directory definitions](admin-guide.md#directory-definitions) |
+| Webhooks: events of a change made while the shared database is unreachable are kept in memory and queued once it is back, instead of being lost | Nothing to configure. See [Webhooks → Storage](webhooks.md#storage) |
+
 To go back to the previous release, see
 [Rolling back an upgrade](availability-and-sizing.md#rolling-back-an-upgrade).
 
@@ -324,6 +339,8 @@ To go back to the previous release, see
 | Symptom | Likely cause | Action |
 |---|---|---|
 | API exits at startup with `Invalid banner configuration: ...` | `BANNER_TEXT` longer than 200 characters, or an invalid `BANNER_FOREGROUND`/`BANNER_BACKGROUND` | Fix the value (hex, `rgb()`/`hsl()` or a CSS color name) |
+| API exits with `Refusing to start: DIRECTORY_MODE=memory runs the embedded demo directory ...` (next release) | `DIRECTORY_MODE` is `memory` (its default) without `DEMO_MODE=true`, and the API listens beyond loopback | For a real directory set `DIRECTORY_MODE=ldap` and `LDAP_URL`; for a demo set `DEMO_MODE=true` (or `SERVER_ADDRESS=127.0.0.1` to keep it to this host) |
+| Single sign-on lands back on the login page with "wait a minute" (`sso_error=busy`, next release) | More than `SSO_START_LIMIT_PER_MINUTE` (30) sign-on starts from one client address in a minute, or `SSO_MAX_PENDING_REQUESTS` sign-in requests in flight | Wait a minute. If everybody gets it, check `SERVER_FORWARD_HEADERS_STRATEGY=framework` behind your proxy (the startup log warns otherwise), so the limit sees each client's address |
 | API exits with `Could not read .../portal-config.json` | Corrupt or hand-edited config store | Restore from backup, or fix the JSON |
 | API exits with `Invalid LDAP connection settings for <url>` | Malformed `LDAP_URL` | Use `ldap://host:port` or `ldaps://host:port` |
 | API exits with `Cannot read trusted CA file ...` / `No certificates found in ...` | `X509_TRUSTED_CA_FILE` path or content wrong | Mount a PEM bundle and check the path |

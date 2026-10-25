@@ -87,7 +87,7 @@ release key and verifying the image signatures are described in
 ```bash
 tar xzf directory-services-portal-<version>.tar.gz
 cd directory-services-portal-<version>
-./install.sh                      # plain HTTP on 0.0.0.0:8080
+./install.sh                      # plain HTTP on 0.0.0.0:8080 (next release: 127.0.0.1:8080)
 ```
 
 The installer picks the container engine, verifies `SHA256SUMS`, loads the images from
@@ -105,11 +105,23 @@ engine has its own containers and volumes: to move an installed portal to the ot
 By default the web tier is published over plain HTTP on **every interface**
 (`WEB_BIND=0.0.0.0`), port 8080 (`WEB_PORT`). Choose another way with the installer's options:
 
+!!! info "From the next release: plain HTTP on this host only by default"
+    A new `.env` written by `./install.sh` without `--bind` has `WEB_BIND=127.0.0.1`: plain HTTP
+    carries directory passwords and the session cookie in clear, so it is not offered to the
+    network unless you choose it. To serve the network, put a TLS-terminating proxy on this host
+    in front of it (and set `ENS_COOKIE_SECURE=true` in `.env`), or use `--https`, which publishes
+    on every interface (`0.0.0.0`) and sets `ENS_COOKIE_SECURE=true` as before. `--bind 0.0.0.0`
+    publishes plain HTTP on every interface, for a TLS proxy on another host; the installer warns
+    about it. An existing `.env` is never rewritten: an upgrade keeps its `WEB_BIND` (an `.env`
+    without one keeps every interface), and `install.sh` warns whenever plain HTTP is published
+    beyond the host, or `ENS_COOKIE_SECURE` is not `true` there.
+
 === "Plain HTTP"
 
     ```bash
-    ./install.sh                      # 0.0.0.0:8080
+    ./install.sh                      # 0.0.0.0:8080 (next release: 127.0.0.1:8080)
     ./install.sh --bind 127.0.0.1     # this host only, for a TLS proxy on the same host
+    ./install.sh --bind 0.0.0.0       # every interface: only behind a TLS proxy elsewhere
     ./install.sh --http 8081          # another port
     ```
     Put a TLS-terminating proxy in front, and set `ENS_COOKIE_SECURE=true` in `.env`.
@@ -146,10 +158,10 @@ By default the web tier is published over plain HTTP on **every interface**
 |---|---|
 | `--http [PORT]` | Plain HTTP on PORT (default 8080, the default). With `--https` too, it redirects to HTTPS |
 | `--https [PORT]` | HTTPS on PORT (default 8443), X.509 sign-in available; needs `./certs`. Without `--http`, only HTTPS is published |
-| `--bind ADDRESS` | Host address to publish on (default `0.0.0.0`; `127.0.0.1` for this host only) |
+| `--bind ADDRESS` | Host address to publish on (default `0.0.0.0`; `127.0.0.1` for this host only). From the next release the default is `127.0.0.1` for plain HTTP and `0.0.0.0` with `--https` |
 | `--no-publish` | Publish nothing; route your own proxy on the compose network to `web:8080` |
 | `--engine ENGINE` | `docker` or `podman` |
-| `--demo` | The built-in demo directory (no LDAP server), demo users and dashboards. It is published like any install, so add `--bind 127.0.0.1` |
+| `--demo` | The built-in demo directory (no LDAP server), demo users and dashboards. It is published like any install, so add `--bind 127.0.0.1`. From the next release it also sets `DEMO_MODE=true`, which the built-in directory requires |
 | `--demo-openldap` | A demo OpenLDAP container (`docker-compose.openldap.yml`), when the package includes its image |
 | `--force-env` | Rewrite `.env` (the old one is kept as `.env.bak-<time>`) |
 | `--start` | Run `./portal.sh up` afterwards |
@@ -239,12 +251,17 @@ reused. To go back, run `./portal.sh up` in the old directory and, if needed,
 !!! note "What an upgrade keeps"
     - **Ports and addresses.** `WEB_BIND`, `WEB_PORT` and `HTTPS_PORT` are not changed, so an
       installation bound to `127.0.0.1` stays local. Only new installations get the `0.0.0.0`
-      default.
+      default. From the next release, new installations get `127.0.0.1` for plain HTTP instead;
+      an `.env` without `WEB_BIND` still publishes on every interface, and `install.sh` warns when
+      plain HTTP is published beyond the host or `ENS_COOKIE_SECURE` is not `true`.
     - **From a package before Podman support.** There, `docker-compose.yml` published nothing and
       `docker-compose.publish.yml` published `WEB_PORT`. `upgrade.sh` rewrites `COMPOSE_FILE`:
       without `docker-compose.publish.yml` it uses `docker-compose.no-publish.yml` (still nothing
       published); with it, the file is dropped (the same `WEB_BIND:WEB_PORT`). It also adds
       `CONTAINER_ENGINE=docker`. Nothing needs doing by hand.
+    - **Demo directory (next release).** An `.env` that sets `DIRECTORY_MODE=memory` and has no
+      `DEMO_MODE` line gets `DEMO_MODE=true` added by `install.sh` (which `upgrade.sh` runs), so a
+      demo keeps starting.
     - **New settings** are not written into an existing `.env` (except `X509_PROXY_SECRET`): they
       take their defaults, and older names keep working (`SESSION_TTL_MINUTES`, `COOKIE_SECURE`,
       `X509_CHECK_REVOCATION`). Compare your `.env` with the package's `env.template` to adopt
@@ -318,7 +335,16 @@ The installer verifies `SHA256SUMS`, creates the system user `dsp` and installs:
 | `/var/lib/directory-services-portal` | Data: configuration, audit log, analysis results (back this up) |
 | `/var/lib/ens/directory-portal` | The ENS license and this installation's id; keep it |
 | `/etc/systemd/system/directory-services-portal.service` | The systemd unit, hardened: `ProtectSystem=strict` with `ReadWritePaths` limited to the data and license directories, no capabilities, a system-call filter, `UMask=0077` and more (see [Security](security.md#network-exposure)) |
-| `/etc/nginx/conf.d/directory-services-portal.conf` (or `sites-enabled/`) | Serves the client on port 8080 and proxies `/api` to `127.0.0.1:3001` (only when nginx is installed) |
+| `/etc/nginx/conf.d/directory-services-portal.conf` (or `sites-enabled/`) | Serves the client on port 8080 and proxies `/api` to `127.0.0.1:3001` (only when nginx is installed). From the next release it listens on `NGINX_LISTEN` from `portal.env`: see below |
+
+!!! info "From the next release: nginx listens on this host only by default"
+    A new `portal.env` sets `NGINX_LISTEN=127.0.0.1:8080`, and `install.sh` writes it into the
+    nginx site: plain HTTP on this host only, for a TLS proxy on it (set `ENS_COOKIE_SECURE=true`
+    in `portal.env` then). `NGINX_LISTEN=8080` listens on every interface, for a TLS proxy on
+    another host; the installer warns about plain HTTP reachable from the network. The value is
+    `PORT`, `ADDRESS:PORT` or `[IPv6]:PORT`; run `install.sh` again after changing it. A
+    `portal.env` from an earlier release has no `NGINX_LISTEN` and keeps listening on every
+    interface (`8080`), as before, and the installer says so.
 
 ### 3. License, HTTPS and the rest
 
@@ -353,7 +379,9 @@ The installer verifies `SHA256SUMS`, creates the system user `dsp` and installs:
 
 Run the new package's `sudo ./install.sh`. Settings and data are kept. It generates the X.509
 proxy secret if there is none yet; restart the API afterwards
-(`systemctl restart directory-services-portal`).
+(`systemctl restart directory-services-portal`). From the next release, an upgraded `portal.env`
+without `NGINX_LISTEN` keeps nginx on every interface; add `NGINX_LISTEN=127.0.0.1:8080` and run
+`install.sh` again to keep plain HTTP to this host.
 
 ## Install with Helm
 
@@ -630,6 +658,14 @@ and restarts both workloads. Before upgrading an edge-terminated setup (`x509.en
     - The license PVC is now kept on `helm uninstall`.
     - Nothing changes for single sign-on or the database until you set `sso.*` or `database.*`.
 
+!!! note "Next release"
+    - With `directory.mode: memory` the chart sets `DEMO_MODE=true`, which the API requires for the
+      built-in demo directory.
+    - `sso.oidc.usernameClaim` keeps its default `preferred_username`, because chart defaults
+      apply to upgraded releases too, and the API now warns at startup about it. Set an immutable
+      claim yourself (`sub`, or `oid` for Entra ID): see
+      [Single sign-on](single-sign-on.md#moving-to-an-immutable-claim).
+
 ### 8. Uninstall
 
 ```bash
@@ -705,8 +741,8 @@ needs to be mirrored.
 
 The portal's source repository has a `docker-compose.demo.yml` at its root. It builds the web tier
 and the API from source and runs the API in memory mode (`DIRECTORY_MODE=memory`,
-`SEED_DEMO_CONFIG=true`): an embedded demo directory, with example forms, directories and
-permissions. Sign in as `admin` (administrator), or `alice`, `bob`, `erin`, `dave` or `frank`,
+`SEED_DEMO_CONFIG=true`, and from the next release `DEMO_MODE=true`): an embedded demo directory,
+with example forms, directories and permissions. Sign in as `admin` (administrator), or `alice`, `bob`, `erin`, `dave` or `frank`,
 all with the password `password`.
 
 1. Download an evaluation license for the portal from the ENS licensing portal, and save it as
@@ -752,7 +788,7 @@ For any installation that isn't a demo, set at least these values: in `.env` (Do
 
 | Setting | Helm value | Example |
 |---|---|---|
-| `DIRECTORY_MODE` | `directory.mode` | `ldap` |
+| `DIRECTORY_MODE` | `directory.mode` | `ldap`. From the next release the API refuses to start with the default, `memory` (the built-in demo directory, whose administrator password is public), unless `DEMO_MODE=true` or it listens on loopback only |
 | `LDAP_URL` | `ldap.url` | `ldaps://ldap.example.com:636` |
 | `LDAP_BIND_DN` | `ldap.bindDn` | `cn=portal,ou=system,dc=example,dc=com` |
 | `LDAP_BIND_PASSWORD_FILE` or `LDAP_BIND_PASSWORD` | `ldap.bindPassword` | (a Secret, mounted as a file) |

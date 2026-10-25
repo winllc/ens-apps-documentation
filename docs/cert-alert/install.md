@@ -106,7 +106,8 @@ Then, if you use them:
 
 - SMTP (`SPRING_MAIL_*`) and its timeouts (`CERT_ALERT_MAIL_*_TIMEOUT_MS`);
 - TLS (`CERT_ALERT_TLS_*`, with the keystores in `tls/`);
-- where the UI is published (see [step 4](#4-choose-where-it-listens));
+- how the UI is reached (see [step 4](#4-choose-where-it-listens)). From the next release,
+  `install.sh` will not start CertAlert serving plain HTTP to other hosts until you choose;
 - sessions (`ENS_SESSION_*`) and the notice-and-consent banner (`ENS_CONSENT_BANNER_*`);
 - client certificates (`ENS_X509_*`): revocation at sign-in, allowed issuers, mapping, and
   header mode;
@@ -121,7 +122,10 @@ added as its environment variable: `cert-alert.ldap.page-size` is `CERT_ALERT_LD
 
 !!! note "Keep .env private"
     `.env` holds passwords. `install.sh` makes it readable by its owner only (`0600`). Values that
-    contain spaces, `#` or `$` go in single quotes.
+    contain spaces, `#` or `$` go in single quotes. From the next release the first run also
+    generates `CERT_ALERT_WEBHOOKS_SECRET_KEY`, the key webhook secrets are encrypted with: keep a
+    copy of `.env` with your backups, because the webhooks' stored secrets and URLs cannot be read
+    without it.
 
 ### 3. Add the license
 
@@ -151,12 +155,23 @@ A new install publishes the UI on **every interface** (`CERT_ALERT_BIND_ADDRESS=
 | A reverse proxy on this host | `CERT_ALERT_BIND_ADDRESS=127.0.0.1`, `SERVER_FORWARD_HEADERS_STRATEGY=framework`, `ENS_COOKIE_SECURE=true`. Point the proxy at `http://127.0.0.1:8080` |
 | A reverse proxy container on the compose network | `cp docker-compose.no-ports.yml docker-compose.override.yml`. Nothing is published; the proxy joins `cert-alert_default` and forwards to `http://cert-alert:8080`. Needs Docker Compose 2.24+ or podman-compose 1.4.0+ |
 | Another port | `CERT_ALERT_PORT`. Rootless Podman needs 1024 or above |
+| Plain HTTP to other hosts anyway: a lab, or a network that encrypts for you (next release) | `CERT_ALERT_ALLOW_PLAIN_HTTP=true`. `install.sh` warns every time it runs |
 
 !!! warning "Plain HTTP on 0.0.0.0"
     With TLS off and the UI on any address other than `127.0.0.1`, CertAlert is reachable over
     plain HTTP: directory passwords and session cookies cross the network in clear text.
-    `install.sh` and `upgrade.sh` warn every time they run. Turn TLS on, or put a
-    TLS-terminating proxy in front and bind to `127.0.0.1`.
+    Up to the current release, `install.sh` and `upgrade.sh` warn every time they run. Turn TLS
+    on, or put a TLS-terminating proxy in front and bind to `127.0.0.1`.
+
+!!! info "From the next release: plain HTTP to other hosts is refused on new installs"
+    A new `.env` sets `CERT_ALERT_ALLOW_PLAIN_HTTP=false`, and `install.sh` refuses to start
+    CertAlert with TLS off on an address other than `127.0.0.1` until `.env` turns TLS on
+    (`CERT_ALERT_TLS_ENABLED=true`), sets `CERT_ALERT_BIND_ADDRESS=127.0.0.1` behind your own
+    TLS-terminating proxy, or sets `CERT_ALERT_ALLOW_PLAIN_HTTP=true`. An upgrade keeps its `.env`
+    as it is: one that does not mention the setting (written before the next release) is warned
+    about, not refused, and the warning says to add `CERT_ALERT_ALLOW_PLAIN_HTTP=true` or move to
+    TLS. An `.env` that sets `CERT_ALERT_ALLOW_PLAIN_HTTP=false` itself (from the release that
+    briefly defaulted to `127.0.0.1`) is held to it.
 
 ### 5. Start it
 
@@ -213,7 +228,9 @@ release means restoring that backup.
     - **Address and port.** It keeps `CERT_ALERT_BIND_ADDRESS` and `CERT_ALERT_PORT` from `.env`.
       An install on `127.0.0.1` stays there. If `.env` was written for the release that listened
       on `127.0.0.1` by default and does not set the address, the upgrade adds
-      `CERT_ALERT_BIND_ADDRESS=127.0.0.1`. `CERT_ALERT_ALLOW_PLAIN_HTTP` is no longer read.
+      `CERT_ALERT_BIND_ADDRESS=127.0.0.1`. In the current release `CERT_ALERT_ALLOW_PLAIN_HTTP`
+      is not read; from the next release it is read again (see [step 4](#4-choose-where-it-listens)),
+      and an `.env` that does not mention it is only warned about.
     - **Administrators.** `CERT_ALERT_SECURITY_ADMIN_IDENTIFIERS` now matches uids and entry DNs
       only. Replace any e-mail address with the uid that the startup warning names.
     - **License.** The license, the installation id and the revisions seen are now kept in the
@@ -222,6 +239,19 @@ release means restoring that backup.
       once more.
     - **Revocation.** With `ENS_X509_REVOCATION` unset, client certificates are now checked at
       sign-in, soft-fail. `ENS_X509_REVOCATION=off` restores the old behaviour.
+
+    From the next release, `.env` is still never rewritten by an upgrade, and:
+
+    - **Backups.** `upgrade.sh` takes its backup through the new `backup.sh`; `backup.sh` and
+      `restore.sh` also run on demand (see
+      [Operator guide → Backups](operator-guide.md#backup-and-restore-scripts-next-release)).
+    - **Webhooks.** Private addresses are refused for webhooks saved from then on unless
+      `CERT_ALERT_WEBHOOKS_ALLOWED_HOSTS` names the host; existing webhooks keep their address until
+      their URL changes (named in a startup warning). `CERT_ALERT_WEBHOOKS_BLOCK_PRIVATE_NETWORKS=false`
+      keeps the old rule. Without `CERT_ALERT_WEBHOOKS_SECRET_KEY`, webhook secrets stay
+      unencrypted: add one (`openssl rand -base64 32`) to encrypt them.
+    - **OpenID Connect.** `CERT_ALERT_SSO_OIDC_PROVIDER_LOGOUT=true` signs out at the provider too
+      (register `<public URL>/login?logout` there first); off unless you set it.
 
     Read the upgrade notes in the package's `README.md` before upgrading.
 
@@ -324,6 +354,7 @@ chart writes to its own Secret, or an `existingSecret` and `existingSecretKey`:
 | Trust store password | `tls.truststore.password` | `truststore-password` |
 | Private CA trust store password | `caTruststore.password` | `ca-truststore-password` |
 | Splunk HEC token | `audit.splunk.token` | `splunk-hec-token` |
+| Webhook secret key | `webhooks.secretKey` (from the next release generated on a new install when neither is given: `webhooks.generateSecretKey`, default `true`) | `webhooks-secret-key` |
 | Header-mode proxy secret | `x509.proxySecret.value` | `proxy-secret` |
 | Header-mode CA certificates | `x509.trustedCa.value` | `ca.pem` |
 
@@ -492,6 +523,20 @@ Migrations are not undone by `helm rollback`: going back means restoring the bac
       one replica without it (or a ReadWriteMany license volume).
     - **Metrics and logs.** `metrics.enabled` is `true` (the actuator and the probes on port
       `9090`, plain HTTP) and `logFormat` is `json`.
+
+!!! note "Before you upgrade to the next release"
+    - **Backups.** `upgradeBackup.enabled=true` adds a `pre-upgrade` hook that dumps the database
+      onto a volume before every `helm upgrade` and stops the upgrade if it cannot. It is off by
+      default; see [Operator guide → Backups](operator-guide.md#backup-and-restore-scripts-next-release).
+    - **Webhooks.** `webhooks.blockPrivateNetworks` defaults to `""`: webhooks saved after the
+      upgrade may not go to a private address unless `webhooks.allowedHosts` names the host; the
+      existing ones keep theirs (startup warning) until their URL changes. `false` keeps the old
+      rule for all.
+    - **Webhook key.** `webhooks.generateSecretKey` gives new installations a key; an upgraded
+      release without one is unchanged. Set `webhooks.secretKey` to start encrypting. A key is
+      never generated under `helm template` or Argo CD: give it yourself there.
+    - **Sign-out.** `sso.oidc.providerLogout` is on for new installations only; an upgrade signs
+      out as before.
 
 ### 7. Uninstall
 

@@ -131,6 +131,7 @@ The POSTs anyone can reach without signing in (sign-in, Test My Token, the PIN r
 | GET/POST | `/login` | Public | Login page |
 | POST | `/perform_login` | Public | Spring Security login processing (`username`, `password`) |
 | POST/GET | `/perform_logout` | Auth | Logout (also ends the AM session) |
+| GET | `/signed-out` | Public (next release) | After sign-out with `ENS_SSO_OIDC_END_SESSION=true`: says the operator is signed out of the Portal and goes on to the OpenID Connect provider's `end_session_endpoint` (a page refresh and a **Continue** button). See [Single sign-on → Signing out](single-sign-on.md#signing-out) |
 | GET | `/additionalParameterLoginHandler` | Public | Additional RSA login prompts |
 | POST | `/additionalParameterLoginHandler/submit` | Public | Answer the prompts |
 | GET | `/message` | Public | Shows `messages`/`errors` keys |
@@ -225,7 +226,7 @@ See [Help-desk requests](help-desk.md). Every step is checked on the server; `{i
 | Method | Path | Access | Purpose |
 |---|---|---|---|
 | GET | `/sites/list` | TRUSTED_AGENT | Site list |
-| GET | `/sites/details/{shippingId}` | Auth | Site details |
+| GET | `/sites/details/{shippingId}` | Auth; TRUSTED_AGENT from the next release, like the site list and the shipment pages that link there | Site details |
 | GET, POST | `/sites/add` | TRUSTED_AGENT | Add a site |
 | GET | `/sites/edit/{shippingId}` | PMO | Edit form |
 | POST | `/sites/edit` | PMO | Save an edit |
@@ -286,7 +287,7 @@ See [Help-desk requests](help-desk.md). Every step is checked on the server; `{i
 | GET | `/license/status` | Auth | License state as JSON; PMO users also get the installation id and file |
 | GET | `/admin/audit` | PMO | Audit Log page (search and filters) |
 | GET | `/admin/audit/events/{seq}` | PMO | One event |
-| GET | `/admin/audit/export` | PMO | Export the current filter as CSV or NDJSON (audited) |
+| GET | `/admin/audit/export` | PMO | Export the current filter as CSV or NDJSON (audited). From the next release, a CSV value starting with `=`, `+`, `-`, `@`, a tab or a carriage return gets a leading `'`; NDJSON keeps every value exactly |
 | POST | `/admin/audit/verify` | PMO | Verify the hash chain |
 | POST | `/admin/audit/tokens`, `/admin/audit/tokens/{id}/revoke` | PMO | Create or revoke a pull-API token |
 | GET | `/admin/integrations` | PMO | API tokens and webhooks. `POST /admin/integrations/tokens`, `/tokens/{id}/revoke`, `/webhooks`, `/webhooks/{id}/rotate`, `/webhooks/{id}/delete` |

@@ -139,7 +139,10 @@ provider's own `admin-groups` and `auditor-groups`. OIDC uses the authorization 
 and checks the ID token's signature, issuer, audience, authorized party, expiry and nonce. SAML
 requires a signed response or assertion that answers a request this browser started, once. Every
 address given to the provider is built from `cert-alert.sso.public-url`, never from request headers.
-There is no single logout. See [Single sign-on and roles](single-sign-on.md).
+From the next release, an Entra ID sign-in whose groups were left out of the token (group overage)
+is refused rather than signed in without the roles its groups grant, and
+`cert-alert.sso.oidc.provider-logout` also signs the person out at an OIDC provider. SAML single
+logout is not supported. See [Single sign-on and roles](single-sign-on.md).
 
 ### API tokens
 
@@ -239,7 +242,7 @@ Two further, **per-server** rights derive from data rather than configuration:
 |---|:-:|:-:|:-:|:-:|:-:|
 | View People, Servers, Certificates, details, Metrics, own Notifications | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Keep saved views of the Certificates page | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Export the inventory (CSV, Excel) | ✓ | ✓ | ✓ | ² | ✓ |
+| Export the inventory (CSV, Excel; auditors from the next release, audited as `inventory.exported`) | ✓ | ✓ | ✓ | ✓ | ✓ |
 | View an entry's audit history | ✓ | ✓ | ✓ | ✓ | ✓ |
 | View the Admin page, the audit log (`/admin/audit`) and the license screen | | | | ✓ | ✓ |
 | View Integrations (API tokens, webhooks, deliveries) and scheduled reports | | | | ✓ | ✓ |
@@ -262,9 +265,6 @@ Two further, **per-server** rights derive from data rather than configuration:
 
 ¹ Only when `cert-alert.security.contact-editors: AUTHENTICATED` (default `ADMIN`). An auditor is
 refused these whatever `contact-editors` says.
-
-² The export is a `POST` (it is audited), and in this release the auditor rule refuses it with
-`403`.
 
 Refusals are **403** with a problem-detail body for API calls. The UI hides controls a user cannot
 use (it asks the API whether the current user may edit a given server).
@@ -330,7 +330,7 @@ See [FIPS 140-3 and DISA STIG](fips-and-stig.md).
   (DISA STIG suggests `ENS_SESSION_ADMIN_IDLE_TIMEOUT=15m` and `ENS_SESSION_MAX_PER_USER=3`).
 - Behind a TLS-terminating proxy: `SERVER_FORWARD_HEADERS_STRATEGY=framework`, and
   `ENS_COOKIE_SECURE=true` if the proxy does not send `X-Forwarded-Proto`. In the release package,
-  `CERT_ALERT_BIND_ADDRESS=127.0.0.1`.
+  `CERT_ALERT_BIND_ADDRESS=127.0.0.1`. Never set `CERT_ALERT_ALLOW_PLAIN_HTTP=true` outside a lab.
 - In header mode, let only the proxy reach CertAlert, and keep the proxy secret in a file or
   Secret.
 - Keep the management port off every ingress, route and published port.
@@ -338,7 +338,8 @@ See [FIPS 140-3 and DISA STIG](fips-and-stig.md).
 - Keep `x509.require-known-certificate: true`.
 - Keep `admin-identifiers` short; keep `contact-editors: ADMIN` unless servers' owners are expected
   to curate projects and addresses themselves.
-- Never set `cert-alert.security.enabled: false` outside local development.
+- Never set `cert-alert.security.enabled: false` outside local development. From the next
+  release the application refuses to start with it unless the `dev` profile is active.
 - Keep keystores out of the image: in the release package's `tls/` directory (mounted
   read-only), or in Kubernetes Secrets with Helm.
 - Set `revocation.allow-unverified-crl: false` once `issuer-directory` is populated.
@@ -346,8 +347,12 @@ See [FIPS 140-3 and DISA STIG](fips-and-stig.md).
 - Configure the classification banner where policy requires it.
 - With single sign-on, map on a claim people cannot change, and serve CertAlert over HTTPS (SAML
   requires it).
-- Before creating webhooks, set `cert-alert.webhooks.secret-key` (the same on every replica), and
-  narrow their destinations with `allowed-hosts` or `block-private-networks: true`.
+- Before creating webhooks, set `cert-alert.webhooks.secret-key` (the same on every replica; new
+  installations of the next release get one generated), keep it with your backups, and narrow
+  their destinations with `allowed-hosts`. Leave `block-private-networks` unset or `true`, and
+  name internal receivers in `allowed-hosts` instead of setting it to `false`.
+- With OIDC single sign-on, turn on `cert-alert.sso.oidc.provider-logout` (next release) so signing
+  out also ends the session at the provider.
 - Give API tokens the fewest scopes and the shortest expiry that serve the integration; revoke the
   ones nobody uses (the Integrations page shows each token's last use).
 - The container runs as non-root uid 185.

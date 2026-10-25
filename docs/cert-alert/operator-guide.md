@@ -86,7 +86,10 @@ CertAlert logs to standard output (no file appender is configured). The applicat
 `com.winllc.certalert` is at `INFO`. Change it with `logging.level.com.winllc.certalert` and a
 restart, or at runtime through the standard Spring Boot `/actuator/loggers` endpoint
 (`POST /actuator/loggers/com.winllc.certalert` with `{"configuredLevel":"DEBUG"}`), which requires
-an administrator's session.
+an administrator's session. From the next release, every level change made through `loggers` is
+recorded in the audit trail as `logging.level-changed` (category `configuration`: who, which
+logger, the old and the new level) before it takes effect; if the trail cannot be written, the
+level is left as it was.
 
 `LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs` writes the log as one ECS JSON object per line, for a log
 collector; the Helm chart does so by default (`logFormat: json`). The audit trail's own stdout
@@ -220,9 +223,16 @@ Everything else (`directory_user`, `directory_server`, `cached_certificate`, ide
 can be rebuilt by a sweep.
 
 !!! note "No scheduled backup is included"
-    The release package and the Helm chart have no backup script or backup CronJob. The only
-    automatic backup is the one `upgrade.sh` takes before an upgrade. Schedule the commands below
-    with your own tools.
+    The release package and the Helm chart have no backup CronJob. Up to the current release the
+    only automatic backup is the one `upgrade.sh` takes before an upgrade, and the commands below
+    are scheduled with your own tools. From the next release the release package adds
+    `backup.sh` and `restore.sh`, and the chart an optional pre-upgrade backup hook; see
+    [Backup and restore scripts](#backup-and-restore-scripts-next-release).
+
+**Keep the configuration with the dumps.** The database does not hold `.env`, the chart's values or
+its Secrets, and in particular not the webhook secret key (`CERT_ALERT_WEBHOOKS_SECRET_KEY`,
+`webhooks.secretKey`), without which the webhooks' stored secrets and URLs cannot be read. Back it
+up as carefully as the dumps.
 
 === "Release package"
 
@@ -267,6 +277,65 @@ can be rebuilt by a sweep.
 
     The chart's evaluation database (`database.embedded.enabled`) is not backed up. Do not keep
     data you need in it.
+
+### Backup and restore scripts (next release)
+
+=== "Release package"
+
+    The release package's directory gains two scripts:
+
+    ```bash
+    ./backup.sh                              # backups/cert-alert-<UTC time>.sql.gz
+    ./backup.sh --keep 14                    # ... and keep the newest 14 of these
+    ./backup.sh --out /srv/backups/ca.sql.gz # somewhere else
+    ./restore.sh backups/<file>.sql.gz       # asks first; --yes not to
+    ```
+
+    `backup.sh` takes a consistent `pg_dump` (one transaction) while CertAlert keeps running,
+    gzipped and readable by its owner only. Run it from cron or a systemd timer, for example
+    `15 2 * * * cd /opt/cert-alert-<version> && ./backup.sh --keep 14`. `upgrade.sh` takes its
+    pre-upgrade backup (`backups/cert-alert-before-<version>-*.sql.gz`) through `backup.sh`.
+
+    `restore.sh FILE` asks first (or `--yes`), stops CertAlert, empties the schema and loads the
+    dump in one transaction (a dump that does not load leaves the database as it was), then starts
+    CertAlert again, which migrates an older dump forward. To go back to an earlier release,
+    restore the dump its upgrade took from the earlier release's directory with that release's own
+    `restore.sh`, then run `./install.sh` there.
+
+=== "Helm"
+
+    Back up an external PostgreSQL with your own tooling. `upgradeBackup.enabled=true` adds a
+    `pre-upgrade` hook Job that `pg_dump`s the database onto a volume before `helm upgrade` changes
+    anything, and stops the upgrade if the dump fails. It is off by default.
+
+    | Value | Default | Description |
+    |---|---|---|
+    | `upgradeBackup.enabled` | `false` | The hook. For the embedded database, or an external one given `database.password` or `database.existingSecret` |
+    | `upgradeBackup.persistence.existingClaim` | `""` | A PVC of your own; otherwise `<release>-cert-alert-upgrade-backups` is created (`size` `8Gi`) and kept on uninstall |
+    | `upgradeBackup.keep` | `5` | Dumps kept, newest first |
+    | `upgradeBackup.sslMode` | `prefer` | `PGSSLMODE` for an external database (`disable` for the embedded one) |
+    | `upgradeBackup.activeDeadlineSeconds` | `1800` | The most the dump may take; `helm upgrade --timeout` must allow it too |
+    | `upgradeBackup.image` | the embedded database's | `pg_dump` must be at least the server's major version (PostgreSQL 17 by default) |
+
+    - **Turning it on.** The upgrade that turns it on creates the volume, and the first dump is
+      taken at the next upgrade. With `existingClaim` it is taken from the first upgrade on. Under
+      Argo CD the hook runs as a PreSync hook at every sync and needs `existingClaim`; turn it on
+      after the first sync, when the database exists.
+    - **Why it is off by default.** On an existing release it would need a volume that can bind
+      (a default storage class), a dump that fits in `helm upgrade --timeout` (5 minutes by
+      default), a `pg_dump` as new as an external server and, with `networkPolicy` on, an external
+      database that admits the Job's pod. Any of these could stop an upgrade that works today.
+    - **A failed dump stops the upgrade** before anything is applied. The Job is kept for its log
+      (`kubectl logs job/<release>-cert-alert-upgrade-backup`); `helm upgrade --no-hooks` skips it.
+    - **Restoring one.** Scale CertAlert to zero, load the dump into an emptied schema in one
+      transaction from a pod that mounts the volume, and `helm rollback` to the revision it was
+      taken before. The chart's `README.md` ("Backups and upgrades") has the commands. The webhook
+      secret key must be the one the dump was taken with.
+
+    Your own database backups remain what to rely on; the hook is the undo for one upgrade.
+
+Test a restore before you need one: into a second installation, or with `./restore.sh` on a copy
+of the host.
 
 ### Restore
 
@@ -385,7 +454,8 @@ The counts are read from the database at most once a minute.
    person's credentials), revocation endpoints, and risky-name flags (the migration backfills
    these from stored names). Run **Sync directory** after an upgrade to refresh them.
 
-Migrations shipped: `V1` (directory tables) through `V28`. The later ones:
+Migrations shipped: `V1` (directory tables) through `V28`, and `V29` from the next release. The
+later ones:
 
 | Migration | What it does |
 |---|---|
@@ -401,6 +471,13 @@ Migrations shipped: `V1` (directory tables) through `V28`. The later ones:
 | `V26__create_api_token_and_webhook` | `api_token`, `webhook_endpoint`, `webhook_delivery`: [API tokens](api-reference.md#api-tokens) and [webhooks](webhooks.md) |
 | `V27__create_saved_view_and_scheduled_report` | `saved_view`, `scheduled_report`, and three attachment columns on `outbound_email`: [saved views and scheduled reports](exports-and-reports.md) |
 | `V28__webhook_url_encrypted_and_report_owner_dn` | A wider, encryptable webhook URL and a scheduled report owner's DN |
+| `V29__webhook_private_networks_allowed` (next release) | `webhook_endpoint.private_networks_allowed`, set for every webhook that exists at the upgrade, so it keeps a private address until its URL changes (see [Webhooks → Private networks](webhooks.md#private-networks)) |
+
+Migrations are written **expand-only**: tables, nullable or defaulted columns and indexes are
+added in a release, and anything dropped, renamed or narrowed goes at least one release after the
+code stops using it. So with several replicas, the old pods keep serving on the migrated schema
+during a rolling update. `V21` to `V29` are all expand-only. `helm rollback` and starting an older
+release still do not undo a migration: the way back is the backup taken before the upgrade.
 
 ### Upgrading to the platform-baseline release
 
@@ -415,6 +492,25 @@ Migrations shipped: `V1` (directory tables) through `V28`. The later ones:
 
 Migrations are not undone. Going back to an older release means restoring the backup taken before
 the upgrade; see [Rolling back an upgrade](availability-and-sizing.md#rolling-back-an-upgrade).
+
+### Upgrading to the next release
+
+These changes come with the next release. Nothing stops working on the upgrade; the ones marked
+*new installs* change the default only for an installation made with the next release.
+
+| Change | What to do |
+|---|---|
+| Release package: plain HTTP to other hosts is refused on *new installs* | A new `.env` has `CERT_ALERT_ALLOW_PLAIN_HTTP=false`, and `install.sh` will not start CertAlert with TLS off on an address other than `127.0.0.1` until `.env` turns TLS on, sets `CERT_ALERT_BIND_ADDRESS=127.0.0.1` behind your proxy, or sets `CERT_ALERT_ALLOW_PLAIN_HTTP=true` (warned about at every run). An upgraded `.env` that does not mention the setting is only warned about: add `CERT_ALERT_ALLOW_PLAIN_HTTP=true` to say so, or move to TLS. An `.env` that sets `false` itself is held to it. See [Choose where it listens](install.md#4-choose-where-it-listens) |
+| Webhooks: private addresses refused for new webhooks | `block-private-networks` is unset by default: existing webhooks keep their address (migration `V29`, named in a startup warning) until their URL changes. List internal receivers in `CERT_ALERT_WEBHOOKS_ALLOWED_HOSTS`, which may now name private hosts and ranges; `false` keeps the old rule for every webhook. See [Webhooks → Private networks](webhooks.md#private-networks) |
+| Webhook secret key generated on *new installs* | An upgrade without `CERT_ALERT_WEBHOOKS_SECRET_KEY` (Helm `webhooks.secretKey`) keeps storing secrets unencrypted, with the warning. Set one (`openssl rand -base64 32`) to encrypt them at the next start, and back it up |
+| OIDC: Entra ID group overage refused | A sign-in whose token names `_claim_names.groups` instead of carrying the groups is refused (`/login?sso_error=groups`, a failed `auth.login`). Send only the groups assigned to the application; see [Single sign-on](single-sign-on.md#microsoft-entra-id-oidc) |
+| OIDC: signing out at the provider | `CERT_ALERT_SSO_OIDC_PROVIDER_LOGOUT` (Helm `sso.oidc.providerLogout`) is off on upgrade, with a startup warning while OIDC is on, and on for *new installs*. Register `<public-url>/login?logout` as a post-logout redirect URI before turning it on |
+| Auditors may export the inventory | `POST /api/v1/certificates/export` is open to the auditor role, audited as `inventory.exported` |
+| `cert-alert.security.enabled=false` needs the `dev` profile | The application refuses to start with it otherwise. It was never meant for anything but local development |
+| Log-level changes are audited | Changing a level through `/actuator/loggers` records `logging.level-changed` (category `configuration`) |
+| Sign-in log lines stay on one line | Certificate subjects and issuers, identity-provider usernames and sign-in identifiers are logged with line breaks as spaces and other control characters as `?`. A log search for an exact subject containing such characters no longer matches it verbatim |
+| Backups | The release package adds `backup.sh` and `restore.sh`; the chart adds `upgradeBackup` (off). See [Backup and restore scripts](#backup-and-restore-scripts-next-release) |
+| Migration `V29` | Adds `webhook_endpoint.private_networks_allowed` on the first start (expand-only) |
 
 ### Upgrading to the release with single sign-on, the public API and exports
 

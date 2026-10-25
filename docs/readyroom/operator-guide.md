@@ -183,6 +183,12 @@ run. Expired sessions are also deleted once a minute, on one replica.
 The directory refresh also matters for alerts: the absence job only considers people who have a
 `user_records` row, and the refresh creates one for every directory user.
 
+!!! note "Demo mode (next release)"
+    In demo mode (`demo.enabled`) the jobs that write attendance data do not run: the directory
+    refresh, auto check-out, absence alerts and scheduled reports (each logs once that it is
+    skipping), and the retention purge. Audit retention, the clean-up of ended sessions, the
+    license mode check and the service heartbeat keep running.
+
 !!! tip "Set the job timings for your organization"
     The release package's `.env` (`APPLICATION_CHECKOUTAFTERMINUTES`) and the Helm chart
     (`checkOutAfterMinutes`) check people out after **240 minutes** locked. The job delays keep
@@ -412,6 +418,23 @@ Nothing to do by hand: Flyway adds the tables above, and nothing existing change
 | Owners of tokens, webhooks and scheduled reports are checked live in the directory | The bind account must read the account-status attributes listed in [API reference → Tokens](api-reference.md#tokens) |
 | Site time zones | Set `APPLICATION_REPORTS_SITETIMEZONES` where people work in more than one zone; until then reports look as before |
 | Calendar colours | The organization calendar's and requested statuses' default colours are darker ([Accessibility](accessibility.md)); colours you configured are kept |
+
+### Upgrading to the next release
+
+No database change. Sign-in keeps working for every installation that kept its settings; check the
+points below.
+
+| Change | What to do |
+|---|---|
+| Client-certificate revocation is checked by default: with `ENS_X509_REVOCATION` unset (Helm `x509.revocation.mode` now defaults to `""`), OCSP then CRL, soft-fail | A revoked certificate is refused (audited `certificate revoked`); one no responder answers for still signs in, with a WARN. An installation that set `ENS_X509_REVOCATION` (or `x509.revocation.mode`) keeps exactly what it set, `off` included. `ENS_X509_REVOCATION_FAIL` now defaults to `open` while the mode is unset and to `closed` once a mode is set; `closed` set without a mode is honoured, so make sure ReadyRoom reaches your OCSP responders and CRL distribution points, or set `ENS_X509_CRL_DIR`, or set the mode to `off`. With the chart's NetworkPolicy on and certificate sign-in on, egress to ports 80 and 443 is opened unless the mode is `off` (or `crl` with `crlConfigMap`). Where a firewall silently drops the traffic, a sign-in can wait up to 5 s per responder and distribution point; see [Revocation from the next release](install.md#revocation-from-the-next-release) |
+| Single sign-on trust material over HTTPS only | `ENS_SSO_SAML_IDP_METADATA` must be `https://` or a file, and `ENS_SSO_OIDC_ISSUER_URI` (with the endpoints and key set its discovery document names) `https://`; `http://` stops startup naming the setting. Serve the metadata over https or download it to a file |
+| SAML needs an `https://` `APPLICATION_BASE_URL` | With `ENS_SSO_SAML_ENABLED=true` and an `http://` `APPLICATION_BASE_URL` (Helm `publicUrl`), startup stops instead of warning. SAML could not have worked there: its browser-binding cookie is never sent over HTTP |
+| Demo mode runs no writing jobs, and refuses Windows sign-in | Production installations (demo mode off) are not affected |
+| Release package: `env.template` has a *Single sign-on* block | Copy the `ENS_SSO_*` lines into an older `.env` to use single sign-on |
+
+Rate limits stay per replica, as before: a public API token's requests a minute and refused logoffs
+per client address are counted in each replica's memory (see
+[Availability](availability-and-sizing.md#high-availability)).
 
 ## Runbook
 

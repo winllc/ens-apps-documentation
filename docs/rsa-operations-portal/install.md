@@ -141,7 +141,8 @@ In `/opt/rsa-operations-portal`, replace every `CHANGE_ME` in the three settings
 - [ ] `spring.datasource.password`, the same as `MYSQL_PASSWORD` in `mysql.env`
 - [ ] `CONNECTOR_AUTH_PASSWORD`, any long random value: the Portal uses it to authenticate to the Connector
 - [ ] `role.mapped.1.rsaSecurityGuid` (TRUSTED_AGENT), `role.mapped.2.rsaSecurityGuid` (PMO), `role.mapped.3.rsaSecurityGuid` (HELP_DESK)
-- [ ] `spring.mail.host`, `mail.smtp.host`, `mail.default.from`, `mfa.group.email`
+- [ ] `spring.mail.host`, `mail.smtp.host`, `mail.default.from`, `mfa.group.email` (from the next release, a new `.env` has `cron.lostTokenThresholdMonitor.debug=false`, so the nightly lost-token report goes to `mfa.group.email`: set it to the MFA team's address)
+- [ ] With an OpenID Connect provider (next release): the new `.env` has `ENS_SSO_OIDC_END_SESSION=true`, so allow `<application.dns.name>/` as a post-logout redirect URI at the provider, or set it to `false`
 - [ ] `application.dns.name`: the URL users will reach
 
 `connector.env` (the Connector):
@@ -272,6 +273,14 @@ It stays with the engine that runs the installation (`--engine` to choose). `upg
 It keeps `.env`, `connector.env`, `mysql.env`, `license/`, a `docker-compose.override.yml`, your branding in `default_build/` (`properties`, `static`, `email-templates`, `ssl`), the certificates for HTTPS to the Connector (`connector-tls-ca/`, `default_build/connector-tls/`, `portal-tls/`), the logs, the database and the installed license. If `license/license.lic` is there, `upgrade.sh` sets `ENS_LICENSE` in `.env` from it, installed unless a different usable license, or a newer revision of it, is installed already.
 
 The Portal updates its database schema itself on the first start of the new version (Flyway migrations). A database from release 1.5 or earlier, whose tables Hibernate created, is taken over: its tables, data and ids are kept, and what is missing is added. On a large audit table that first start takes longer. To roll back, see [Rolling back an upgrade](availability-and-sizing.md#rolling-back-an-upgrade).
+
+!!! note "To the next release"
+    Nothing needs doing to keep signing in and serving. `.env` is kept, so the settings below stay as they were unless you add them:
+
+    - **Single sign-on and administrative roles.** With an identity provider configured, a role `ENS_SSO_ROLES_*` maps a group to now comes only through the provider; a passcode sign-in alone no longer gets it. `ENS_SSO_REQUIRE_FOR_ADMIN_ROLES=false` keeps the old behaviour. See [Single sign-on](single-sign-on.md#how-a-sign-in-goes).
+    - **`ENS_SSO_OIDC_END_SESSION`** is off for an existing installation (a warning at every start while OpenID Connect is configured). Allow `<APPLICATION_DNS_NAME>/` as a post-logout redirect URI at the provider, then set it to `true`.
+    - **`cron.lostTokenThresholdMonitor.debug=false`** is in new installations' `.env` only. The report still only logs on an upgraded one, with a warning at every start; add the line once `mfa.group.email` is right.
+    - **Site details** need the trusted agent role; the **audit CSV export** neutralises formulas; the **Connector's console lines** start with a timestamp (`upgrade.sh` replaces `default_build/log4j.xml`).
 
 !!! note "To the release with Docker and Podman support"
     An installation on Docker stays on Docker and needs nothing done. A Portal published without an address keeps a bare port and stays on IPv4 and IPv6; one on `127.0.0.1` (or `0.0.0.0`) keeps that address; one that published nothing gets `127.0.0.1`. New installations get `8080` and `8443`. The package's MySQL image is now named in full (`docker.io/library/mysql:<version>`), which Docker treats as the same image as before.
@@ -526,6 +535,9 @@ helm upgrade rsa-portal oci://ghcr.io/winllc/charts/rsa-operations-portal --vers
 ```
 
 Back up the database first. The Portal updates its schema on the first start of the new version, and `helm rollback` restores the previous images and settings, not the previous database. The license PVC and the database are kept. The [release notes for the release package](#upgrade-with-upgradesh) apply to Helm too.
+
+!!! note "To the next release"
+    With single sign-on configured, a role `sso.roles` maps a group to now comes only through the identity provider, because `sso.requireForAdminRoles` defaults to `null` (unset); a release that set `requireForAdminRoles: false` explicitly keeps the old behaviour. `sso.oidcEndSession` (default `false`) signs operators out of the OpenID Connect provider too; allow `<publicUrl>/` as a post-logout redirect URI first. The lost-token report still only logs unless `config` sets `cron.lostTokenThresholdMonitor.debug=false`.
 
 !!! note "To the release with sessions and the license in the database"
     The license PVC stays mounted, and the first start copies the license and the installation id into the database; then you can turn the volume off ([License](#helm-license)). Sessions open during that upgrade end once; later upgrades sign nobody out.
