@@ -48,12 +48,14 @@ Each refusal is recorded as a failed `auth.login` (`details.method` `x509`) with
 the certificate's fingerprint in `details.fingerprint`; a revoked certificate's refusal has
 `alert` severity. A successful certificate sign-in is recorded once per session.
 
-!!! warning "Revocation at sign-in is off by default"
-    With `ENS_X509_REVOCATION=off` (the default, so an upgrade changes nothing), step 2 is skipped
-    and step 4 uses the status the last nightly check cached: a certificate whose status is *Not
-    checked* or *Unknown* still signs in, and a newly revoked one signs in until the next check.
-    Startup logs a warning while certificate sign-in is on and revocation is off. DISA STIG
-    requires it on.
+!!! warning "Revocation at sign-in is soft-fail by default"
+    With `ENS_X509_REVOCATION` unset, step 2 runs as `ocsp-then-crl` but soft-fail: a certificate
+    found revoked is refused, and one no responder or CRL answers for signs in with a warning. DISA
+    STIG requires hard-fail: set the mode explicitly, which makes `ENS_X509_REVOCATION_FAIL`
+    default to `closed`. With `ENS_X509_REVOCATION=off`, step 2 is skipped and step 4 uses the
+    status the last nightly check cached: a certificate whose status is *Not checked* or *Unknown*
+    still signs in, and a newly revoked one signs in until the next check; startup logs a warning
+    while certificate sign-in is on and revocation is off.
 
 **The revocation check at sign-in** needs the certificate's issuer. It is taken from the chain
 the browser presented, `ENS_X509_TRUSTED_CA_FILE`, `cert-alert.revocation.issuer-directory` or
