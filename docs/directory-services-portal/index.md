@@ -26,7 +26,10 @@ their data for correct and unique values.
 | Data analysis | Saved comparisons (2–6 sources) and quality checks (1–6 sources), run as background tasks, with paged findings and CSV export |
 | Background tasks | Long metrics and all analyses run on the server, with progress, cancellation and notifications |
 | Audit log | Every change and sign-in, with before/after values, in the hash-chained `ens-audit/1` format, with delivery to Splunk or syslog (see [Audit logging](../audit-logging.md)) |
-| Sign-in | LDAP bind with username and password, and/or X.509 client certificates (smart cards such as CAC/PIV) with OCSP/CRL revocation checking. Optional DoD notice-and-consent banner, session timeouts and limits |
+| Sign-in | LDAP bind with username and password, X.509 client certificates (smart cards such as CAC/PIV) with OCSP/CRL revocation checking, and single sign-on by OpenID Connect or SAML 2.0 ([Single sign-on](single-sign-on.md)). Optional DoD notice-and-consent banner, session timeouts and limits |
+| Integration API | A versioned REST API (`/api/v1`) with an OpenAPI document, for scoped, expiring API tokens that never exceed their creator ([API reference](api-reference.md)) |
+| Webhooks | HMAC-signed HTTPS events for entry changes, group membership changes and form submissions, with an SSRF guard and a delivery log ([Webhooks](webhooks.md)) |
+| Import and export | CSV and LDIF export of entries and group members, CSV and LDIF import with a dry run, bulk membership changes ([Import and export](import-export.md)) |
 | Page banners | Optional fixed top/bottom banner, for example a classification marking |
 
 ## Architecture at a glance
@@ -71,11 +74,15 @@ See [Architecture](architecture.md) for components, request flow and data storag
 | [Operator guide](operator-guide.md) | Operators | Start/stop, health, logs, backups, monitoring, upgrades, troubleshooting runbook |
 | [Sizing, availability and recovery](availability-and-sizing.md) | Operators | Sizing, what high availability is possible, disaster recovery, rolling back an upgrade |
 | [Administrator guide](admin-guide.md) | Portal administrators | Schema, forms, directory definitions, permissions, dashboards, data analysis, audit log |
-| [User guide](user-guide.md) | Everyone | Signing in, browsing directories, entry CRUD, My profile, metrics, background tasks |
+| [User guide](user-guide.md) | Everyone | Signing in, browsing directories, entry CRUD, My profile, metrics, background tasks, import and export |
+| [Single sign-on](single-sign-on.md) | Operators | OIDC and SAML setup, Entra ID, Okta and AD FS, administrators from provider groups |
+| [Import and export](import-export.md) | Everyone | CSV and LDIF export and import, bulk membership, limits |
+| [Webhooks](webhooks.md) | Integrators | Events, signatures, delivery, where webhooks may go |
+| [Accessibility](accessibility.md) | Buyers / accessibility reviewers | What is checked, and the conformance documents' status |
 | [Architecture](architecture.md) | Engineers | Components, request flow, persistence, background jobs, code layout |
 | [Security](security.md) | Security reviewers | Authentication, sessions, CSRF, X.509, LDAP injection defences, supply chain, audit |
 | [FIPS 140-3 and DISA STIG](fips-and-stig.md) | Security reviewers | What the portal relies on for FIPS, and the settings a STIG deployment needs |
-| [API reference](api-reference.md) | Integrators | Every REST endpoint under `/api` |
+| [API reference](api-reference.md) | Integrators | The integration API (`/api/v1`, tokens, scopes, OpenAPI) and every portal endpoint under `/api` |
 
 !!! tip "Try it with the demo directory"
     Unpack the Docker package and run `./install.sh --demo --bind 127.0.0.1 --start`. Then open

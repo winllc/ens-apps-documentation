@@ -103,11 +103,15 @@ nav:
       - Admin guide: directory-services-portal/admin-guide.md
       - User guide: directory-services-portal/user-guide.md
       - Additional guidance:
+          - Single sign-on: directory-services-portal/single-sign-on.md
+          - Import and export: directory-services-portal/import-export.md
+          - API reference: directory-services-portal/api-reference.md
+          - Webhooks: directory-services-portal/webhooks.md
           - Architecture: directory-services-portal/architecture.md
           - Security: directory-services-portal/security.md
           - FIPS 140-3 and DISA STIG: directory-services-portal/fips-and-stig.md
+          - Accessibility: directory-services-portal/accessibility.md
           - Sizing, availability and recovery: directory-services-portal/availability-and-sizing.md
-          - API reference: directory-services-portal/api-reference.md
   - ReadyRoom:
       - readyroom/index.md
       - Install guide: readyroom/install.md
