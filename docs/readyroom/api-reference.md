@@ -74,7 +74,10 @@ Administrators create and revoke tokens on *Administration → Integrations*
 - **Bearer tokens only.** The API's security chain accepts bearer tokens and nothing else: it reads
   and creates no session, so it needs no CSRF token, and a browser's session cookie signs nothing in
   on it.
-- **Rate limit** per token, counted **per replica**; past it, `429` with `Retry-After`.
+- **Rate limit** per token, counted **per replica**; past it, `429` with `Retry-After`. The counts
+  are in each replica's memory, so with N replicas behind the Service a token may make up to N
+  times its rate before `429`: set a token's rate with that in mind, or limit at the ingress as
+  well. The same holds for `application.logoff.refused-per-minute` per client address.
 - **Audited**: `api.token-created` and `api.token-revoked` (with scopes, expiry and owner); each read
   as `data.exported` (`details.via` `api`, the actor the token); refused tokens as a failed
   `auth.login` (method `public-api-token`, with the reason); and a token's first request over its

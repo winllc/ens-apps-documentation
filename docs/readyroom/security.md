@@ -48,6 +48,10 @@ flowchart TD
   redirects, 1 MB OCSP and 20 MB CRL, never link-local or cloud-metadata addresses). With
   `ENS_X509_REVOCATION_FAIL=closed` (the default), a certificate whose status can't be determined is
   refused. A CRL directory (`ENS_X509_CRL_DIR`) or a local OCSP responder serves air-gapped sites.
+  **From the next release** revocation is on by default: with `ENS_X509_REVOCATION` unset,
+  `ocsp-then-crl`, soft-fail (a revoked certificate is refused; one no responder answers for signs
+  in with a WARN). A mode set explicitly fails closed unless `ENS_X509_REVOCATION_FAIL=open`. See
+  [Install → Revocation from the next release](install.md#revocation-from-the-next-release).
 - **Header mode** (`ENS_X509_SOURCE=header`): a TLS-terminating proxy forwards the certificate. It
   is accepted only from an address in `ENS_X509_TRUSTED_PROXIES` that sends the proxy secret in
   `X-ENS-Proxy-Secret` (compared in constant time), and only if it chains to
@@ -255,7 +259,9 @@ never limited.
   exactly one directory user by an LDAP filter, and grants `MANAGER` or `ADMIN` from the provider's
   groups only through `ENS_SSO_ROLE_MAPPING`. Every address given to the provider is built from
   `APPLICATION_BASE_URL`, never from request headers. No provider token is kept; no single logout.
-  See [Single sign-on](single-sign-on.md).
+  From the next release the OIDC issuer (with the endpoints and keys it names) and the SAML metadata
+  are read over `https://` only (or, for SAML, from a file), and SAML refuses to start without an
+  `https://` `APPLICATION_BASE_URL`. See [Single sign-on](single-sign-on.md).
 - **API tokens** are SHA-256 hashed, shown once, scoped per endpoint, expiring, rate-limited (per
   replica), and act for their creating administrator with that person's roles and account status
   re-checked live in the directory on every call, failing closed. The `/api/v1` chain accepts nothing
@@ -309,7 +315,11 @@ See [FIPS 140-3 and DISA STIG](fips-and-stig.md).
       `test/dev-ca/make-dev-certs.sh` makes a throw-away one for local testing, and the earlier
       "WINLLC DEV CA" must not be trusted anywhere, because its private keys were published.
 - [ ] With certificates in use: `ENS_X509_REVOCATION` other than `off`, and
-      `ENS_X509_ALLOWED_ISSUERS` if only some trusted CAs issue user certificates.
+      `ENS_X509_ALLOWED_ISSUERS` if only some trusted CAs issue user certificates. For DISA STIG,
+      set the mode explicitly with `ENS_X509_REVOCATION_FAIL=closed`: the next release's default
+      (mode unset) is soft-fail.
+- [ ] Never run demo mode (`demo.enabled`) against production data; from the next release it cannot
+      be combined with Windows sign-in.
 - [ ] For DoD systems: `ENS_CONSENT_BANNER_ENABLED=true`, and session limits as your policy requires
       (DISA STIG suggests `ENS_SESSION_ADMIN_IDLE_TIMEOUT=15m` and `ENS_SESSION_MAX_PER_USER=3`).
 - [ ] Keep the management port (`MANAGEMENT_SERVER_PORT`) off any ingress, route or published port.

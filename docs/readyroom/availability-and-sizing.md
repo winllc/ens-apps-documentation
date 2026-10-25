@@ -63,9 +63,11 @@ sends once and never retries, are not lost during an upgrade. For the suite-wide
 | License mode changes | Each replica notices; the change is recorded once |
 
 **Per replica**, by design: the access-denial summaries (each replica collapses and records its
-own), the limit on refused logoffs per client address (`application.logoff.refused-per-minute`, so
-with N replicas up to N times as many refusals a minute), and the caches of directory users and
-groups, revocation answers and CRLs.
+own), the rate limits, which are counted in each replica's memory (a public API token's requests a
+minute, and `application.logoff.refused-per-minute` per client address: with N replicas behind the
+Service a token may make up to N times its rate, and an address get up to N times as many refusals,
+before `429`; set a token's rate with that in mind, or limit at the ingress), and the caches of
+directory users and groups, revocation answers and CRLs.
 
 **Helm.** Several replicas need the license volume off, after the first start of this release has
 imported it into the database:

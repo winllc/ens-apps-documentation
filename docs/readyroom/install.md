@@ -115,7 +115,10 @@ Replace every `CHANGE_ME`:
 The template also lists optional blocks, commented out: the consent banner, session lifetimes,
 reverse-proxy settings, client certificates (`ENS_X509_*`), audit outputs (`ENS_AUDIT_*`), JSON
 logs, the management port, statuses that need approval, privacy and retention, reports, the public
-API and webhooks. See [Configuration](configuration.md).
+API and webhooks. From the next release it also has a *Single sign-on* block (`ENS_SSO_*`, OpenID
+Connect and SAML 2.0): the issuer and the SAML metadata must be `https://` (or the metadata a file in
+`tls/`), and SAML needs an `https://` `APPLICATION_BASE_URL`; see
+[Single sign-on](single-sign-on.md). See [Configuration](configuration.md).
 
 `.env` holds the database, directory and mail passwords. `install.sh` makes it mode 600; keep it
 private. List settings are numbered (`APPLICATION_SUPERUSERDNS_0`, `_1`, ...). Any other setting
@@ -268,6 +271,19 @@ and recreates the containers. The volumes are kept, and ReadyRoom migrates its s
 If `.env` has `SSL_ENABLED=true`, `COMPOSE_FILE` must include `docker-compose.tls.yml` and
 `tls/keystore.p12` and `tls/truststore.p12` must be your own: the image contains neither, and
 `upgrade.sh` stops otherwise.
+
+!!! note "Upgrading to the next release"
+    - **Revocation.** Client certificates are checked at sign-in when `.env` does not set
+      `ENS_X509_REVOCATION`: OCSP, then the CRL, soft-fail (a revoked certificate is refused; one no
+      responder answers for still signs in, with a warning). A `.env` that sets
+      `ENS_X509_REVOCATION` keeps it, `off` included. If your `.env` sets
+      `ENS_X509_REVOCATION_FAIL=closed` without a mode, that is honoured: make sure ReadyRoom reaches
+      your OCSP responders and CRLs, or set `ENS_X509_CRL_DIR`, or `ENS_X509_REVOCATION=off`. See
+      [Revocation from the next release](#revocation-from-the-next-release).
+    - **Single sign-on.** An `http://` `ENS_SSO_SAML_IDP_METADATA` or `ENS_SSO_OIDC_ISSUER_URI`, and
+      SAML with an `http://` `APPLICATION_BASE_URL`, stop startup.
+    - **`env.template`** has a *Single sign-on* block with the `ENS_SSO_*` settings; copy it into
+      an older `.env` to use single sign-on. `upgrade.sh` lists the new settings.
 
 !!! note "Upgrading to the release with Docker and Podman support"
     - `.env` is copied as it is, so an existing installation keeps its `READYROOM_BIND_ADDRESS` and
@@ -548,6 +564,14 @@ migration Job and the `migrations.enabled` value are gone.
       does not render without it.
     - **With `metrics.enabled`** (`true` by default): the probes move to the management port, 9090,
       and the log lines become JSON unless `logFormat: text`.
+    - **To the next release:** client-certificate revocation is checked unless
+      `x509.revocation.mode` is set. Empty, the new default, is `ocsp-then-crl`, soft-fail; values
+      that set `mode` (including `"off"`) keep it, and a release that relied on the chart's old
+      default `"off"` moves to checking. If your values set `x509.revocation.fail: closed` without a
+      mode, that is kept too: make sure the pods reach your OCSP responders and CRLs (with
+      `networkPolicy.enabled`, ports 80 and 443 are now opened for them) or set `crlConfigMap`.
+      Single sign-on refuses an `http://` `sso.saml.idpMetadataUrl` or `sso.oidc.issuerUri`, and
+      SAML an `http://` `publicUrl`, at startup.
 
 ### 7. Uninstall
 
@@ -609,6 +633,14 @@ role.
 !!! warning "Not for production"
     The demo's credentials are on its login page, so anything those accounts can see is readable by
     anyone who reaches it. Keep only the mock data in it.
+
+From the next release, demo mode (`demo.enabled`) does not run the scheduled jobs that write
+attendance data: the directory sync, auto check-out, absence alerts and scheduled reports (each logs
+once that it is skipping), and the retention purge. Webhooks have nothing to send. The jobs that
+look after the server's own state keep running: the audit trail (and its retention), the clean-up
+of ended browser sessions, the license mode check and the service heartbeat. Demo mode and Windows
+sign-in (`application.windows-auth.enabled`) cannot both be on: startup stops, naming both
+settings. Signing in still creates the account's `user_record` row on first request.
 
 1. Download an evaluation license for ReadyRoom from the ENS licensing portal and save it as
    `license/license.lic` in the checkout **before the first start**: the demo reads it then only. The
@@ -833,11 +865,38 @@ For example `(userPrincipalName={upn})` for Active Directory and CAC, or
 |---|---|---|---|
 | `ENS_X509_USER_FILTER` | none: the subject DN is the directory DN | `x509.userFilter` | The LDAP filter template that finds the user |
 | `ENS_X509_ALLOWED_ISSUERS` | none: any trusted CA | `x509.allowedIssuers` | Issuer DNs whose certificates may sign in, `;` separated; others are refused even when a trusted CA chains to them |
-| `ENS_X509_REVOCATION` | `off` | `x509.revocation.mode` | `off`, `ocsp`, `crl` or `ocsp-then-crl`. Off by default, for upgrades; with certificates in use and revocation off, startup logs that DISA STIG requires it |
+| `ENS_X509_REVOCATION` | `off`; from the next release unset, meaning `ocsp-then-crl`, soft-fail | `x509.revocation.mode` (`"off"`; from the next release `""`) | `off`, `ocsp`, `crl` or `ocsp-then-crl`. With certificates in use and revocation `off`, startup logs that DISA STIG requires it. See [Revocation from the next release](#revocation-from-the-next-release) |
 | `ENS_X509_OCSP_RESPONDER_URL` | the certificate's AIA | `x509.revocation.ocspResponderUrl` | A responder to ask instead, for example a local OCSP relay |
 | `ENS_X509_CRL_DIR` | none | `x509.revocation.crlConfigMap` | A directory of CRL files (DER or PEM), re-read when they change. With it set, distribution points are never fetched: the air-gapped option |
-| `ENS_X509_REVOCATION_FAIL` | `closed` | `x509.revocation.fail` | `closed` refuses a certificate whose status can't be determined; `open` allows it with a warning |
+| `ENS_X509_REVOCATION_FAIL` | `closed`; from the next release unset: `open` while `ENS_X509_REVOCATION` is unset, `closed` once a mode is set | `x509.revocation.fail` (`closed`; from the next release `""`) | `closed` refuses a certificate whose status can't be determined; `open` allows it with a warning |
 | `ENS_X509_REVOCATION_CACHE` | `10m` | `x509.revocation.cache` | How long a good or revoked answer is kept, per issuer and serial |
+
+#### Revocation from the next release
+
+From the next release, revocation is checked by default. With `ENS_X509_REVOCATION` unset (the Helm
+chart's `x509.revocation.mode` defaults to `""`, and the package's `env.template` leaves it commented
+out), ReadyRoom asks OCSP and then the CRL (`ocsp-then-crl`) for every certificate sign-in,
+**soft-fail**:
+
+- a certificate its CA has revoked is refused (audited as `certificate revoked`);
+- one that no OCSP responder or CRL answers for (an unreachable responder, an air-gapped site
+  without `ENS_X509_CRL_DIR`) still signs in, with a WARN naming it.
+
+Setting `ENS_X509_REVOCATION` explicitly keeps its meaning: `off` turns checking off (startup warns
+that STIG requires it), and a chosen mode **fails closed** unless `ENS_X509_REVOCATION_FAIL=open`.
+`ENS_X509_REVOCATION_FAIL` set to `closed` without a mode is honoured too. For DISA STIG, set
+`ENS_X509_REVOCATION=ocsp-then-crl` (or `ocsp`, `crl`) with `ENS_X509_REVOCATION_FAIL=closed`.
+
+!!! warning "Air-gapped sites"
+    Without a reachable responder or `ENS_X509_CRL_DIR`, the soft-fail default lets certificates
+    sign in unchecked, with a WARN each time. Where a firewall silently drops the traffic, a
+    certificate sign-in can also wait up to the 5 s connect timeout per responder and distribution
+    point before it is allowed (an unknown answer is not cached). Drop the CAs' CRLs into
+    `ENS_X509_CRL_DIR` (Helm `x509.revocation.crlConfigMap`), point `ENS_X509_OCSP_RESPONDER_URL`
+    at a local responder, or set `ENS_X509_REVOCATION=off` to avoid that.
+
+With the Helm chart's NetworkPolicy on and certificate sign-in on, egress to ports 80 and 443 is
+opened for OCSP and CRLs unless the mode is `off` (or `crl` with `crlConfigMap`).
 
 Network fetches for revocation time out after 5 s (connect) and 10 s (response), follow no
 redirects, are capped at 1 MB (OCSP) and 20 MB (CRL), and never go to a link-local or cloud metadata

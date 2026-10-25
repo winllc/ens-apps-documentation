@@ -100,8 +100,8 @@ on by default; these settings need a decision for a STIG deployment. Each is des
 | Administrator idle timeout | `ENS_SESSION_ADMIN_IDLE_TIMEOUT` | the idle timeout | `15m` is the suggested value |
 | Absolute session lifetime | `ENS_SESSION_ABSOLUTE_TIMEOUT` | `12h` | Your policy's value |
 | Concurrent sessions per user | `ENS_SESSION_MAX_PER_USER` | `0` (no limit) | `3` is the suggested value |
-| Certificate revocation | `ENS_X509_REVOCATION` | `off` | `ocsp`, `crl` or `ocsp-then-crl` whenever certificates sign in; `ENS_X509_CRL_DIR` on an air-gapped network |
-| Unknown revocation status | `ENS_X509_REVOCATION_FAIL` | `closed` | Keep `closed` |
+| Certificate revocation | `ENS_X509_REVOCATION` | `off`; from the next release unset, meaning `ocsp-then-crl`, soft-fail | Set `ocsp`, `crl` or `ocsp-then-crl` explicitly whenever certificates sign in; `ENS_X509_CRL_DIR` on an air-gapped network |
+| Unknown revocation status | `ENS_X509_REVOCATION_FAIL` | `closed`; from the next release `open` while `ENS_X509_REVOCATION` is unset, `closed` once it is set | Set `closed`. The next release's soft-fail default lets a certificate whose status is unknown sign in, which STIG does not allow |
 | Issuers allowed to sign in | `ENS_X509_ALLOWED_ISSUERS` | any trusted CA | The CAs that issue your users' certificates, if the trust store holds others |
 | Failed sign-ins | The directory's password policy | | ReadyRoom adds no lockout of its own: a password sign-in is a bind as the user, so the directory's lockout applies |
 | Secure session cookie | `ENS_COOKIE_SECURE` | the value of `SSL_ENABLED` | `true` whenever TLS ends at a proxy |

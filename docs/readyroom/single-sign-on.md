@@ -53,7 +53,7 @@ audience assertions must name), is built from it and never from a request's `Hos
 | `ENS_SSO_ROLE_MAPPING` | empty | Provider group to role, as above |
 | `ENS_SSO_CLOCK_SKEW` | `60s` | How far the provider's clock may be off for token and assertion times (at most 5 minutes) |
 | `ENS_SSO_OIDC_ENABLED` | `false` | OpenID Connect |
-| `ENS_SSO_OIDC_ISSUER_URI` | | The issuer. Its discovery document is read on first use, not at startup, so a provider outage does not stop ReadyRoom |
+| `ENS_SSO_OIDC_ISSUER_URI` | | The issuer. Its discovery document is read on first use, not at startup, so a provider outage does not stop ReadyRoom. From the next release `https://` only, and the endpoints and key set the discovery document names must be `https://` too; `http://` stops startup |
 | `ENS_SSO_OIDC_CLIENT_ID` | | Also the audience ID tokens must name |
 | `ENS_SSO_OIDC_CLIENT_SECRET`, `ENS_SSO_OIDC_CLIENT_SECRET_FILE` | empty | Empty: a public client (PKCE only). The file wins |
 | `ENS_SSO_OIDC_SCOPES` | `openid,profile,email` | |
@@ -61,7 +61,7 @@ audience assertions must name), is built from it and never from a request's `Hos
 | `ENS_SSO_OIDC_GROUPS_CLAIM` | `groups` | |
 | `ENS_SSO_OIDC_DISPLAY_NAME` | `Sign in with single sign-on` | The button |
 | `ENS_SSO_SAML_ENABLED` | `false` | SAML 2.0 |
-| `ENS_SSO_SAML_IDP_METADATA` | | The provider's metadata: `https://...` (read on first use and every 12 hours, keeping the last good copy) or `file:/path` |
+| `ENS_SSO_SAML_IDP_METADATA` | | The provider's metadata: `https://...` (read on first use and every 12 hours, keeping the last good copy) or `file:/path`. From the next release `http://` stops startup, and a redirect of the metadata may not leave https |
 | `ENS_SSO_SAML_ENTITY_ID` | `{baseUrl}/saml2/service-provider-metadata/saml` | This service provider's entity id |
 | `ENS_SSO_SAML_USER_FILTER` | required | `{nameid}` and attribute names, for example `(userPrincipalName={http://schemas.xmlsoap.org/ws/2005/05/identity/claims/upn})` |
 | `ENS_SSO_SAML_GROUPS_ATTRIBUTE` | `http://schemas.microsoft.com/ws/2008/06/identity/claims/groups` | |
@@ -71,9 +71,22 @@ audience assertions must name), is built from it and never from a request's `Hos
 A missing required setting, a filter with no placeholder, or a role mapping to anything but `MANAGER`
 or `ADMIN` stops startup with the setting's name.
 
+!!! info "From the next release: trust material over HTTPS only"
+    The OIDC issuer and the SAML metadata are what every ID token and assertion is verified against,
+    so they are read only over `https://` (or, for SAML, from a file), never `http://`, where anyone
+    on the network path could swap the keys. An `http://` value stops startup, naming the setting.
+    Serve the metadata over https, or download it to a file: with the release package, put it in
+    `tls/` (which `docker-compose.tls.yml` mounts at `/etc/in-n-out/tls`) and set
+    `ENS_SSO_SAML_IDP_METADATA=file:/etc/in-n-out/tls/<name>.xml`; with Helm, use
+    `sso.saml.metadataConfigMap`. And with SAML on, startup stops unless `APPLICATION_BASE_URL`
+    (Helm `publicUrl`) is `https://`: the browser-binding cookie is `SameSite=None; Secure` and is
+    never sent over HTTP, so SAML could not have worked there anyway.
+
 With Helm these are the `sso.*` values (`sso.roleMapping`, `sso.oidc.issuerUri`,
 `sso.oidc.existingSecret`, `sso.saml.idpMetadataUrl` or `sso.saml.metadataConfigMap`,
-`sso.saml.spKeySecret`, ...). With the release package, add the `ENS_SSO_*` variables to `.env`.
+`sso.saml.spKeySecret`, ...). With the release package, add the `ENS_SSO_*` variables to `.env`;
+from the next release the package's `env.template` has a commented *Single sign-on* block with all of
+them (copy it into an older `.env`), and its `README.md` a *Single sign-on* section.
 
 ## Provider walkthroughs
 
@@ -125,7 +138,8 @@ or *Group*); metadata `https://<adfs>/FederationMetadata/2007-06/FederationMetad
 - The SAML answer is a cross-site POST, on which browsers leave out the `SameSite=Lax` session
   cookie. The request it answers is kept in the database by its RelayState (`sso_saml_request`, ten
   minutes) and tied to the browser by a cookie of its own (`ENS_SAML_<relay state>`,
-  `SameSite=None; Secure`, sent only to the assertion consumer service). **SAML needs HTTPS.**
+  `SameSite=None; Secure`, sent only to the assertion consumer service). **SAML needs HTTPS.** From
+  the next release, startup stops when SAML is on and `APPLICATION_BASE_URL` is not `https://`.
 - ReadyRoom asks the provider's HTTP-Redirect sign-in endpoint (the POST binding would need a
   self-submitting form, which the Content-Security-Policy blocks).
 - The consent banner, when on, must be acknowledged before either method starts.
