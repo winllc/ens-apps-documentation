@@ -9,7 +9,7 @@ property.
 
 | Install method | Where | Notes |
 |---|---|---|
-| Release package | `.env` in the release directory | Made from `env.template` by `install.sh`. Add any setting below as its environment variable, then run `docker compose up -d`. |
+| Release package | `.env` in the release directory | Made from `env.template` by `install.sh`. Add any setting below as its environment variable, then run `./compose.sh up -d` (Docker or Podman). |
 | Helm chart | Your values file | Most settings have a named value (see [Installation](install.md#2-write-your-values) and the chart's `README.md`). Any other setting goes in `extraEnv` as its environment variable. Apply with `helm upgrade`. |
 
 | Form | Example | Notes |
@@ -34,7 +34,7 @@ is the value the code uses when the property is not set anywhere. A dash means t
 
 | Property | Env var | Packaged | Description |
 |---|---|---|---|
-| `server.port` | `SERVER_PORT` | `8181` | Listener port, for HTTP or, with TLS on, HTTPS. Leave it at 8181: the release package and the Helm chart expect it. The package publishes it on the host as `READYROOM_PORT`. |
+| `server.port` | `SERVER_PORT` | `8181` | Listener port, for HTTP or, with TLS on, HTTPS. Leave it at 8181: the release package and the Helm chart expect it. The package publishes it on the host as `READYROOM_BIND_ADDRESS:READYROOM_PORT` (default `0.0.0.0:8181`; see [Address and port](install.md#3-address-and-port)). |
 | `server.ssl.enabled` | `SSL_ENABLED` | `false` | Serve HTTPS. Client-certificate sign-in, and so the Windows client, needs it. Helm: `tls.enabled`. |
 | `server.ssl.key-store` | `SERVER_SSL_KEYSTORE` | – | Server keystore, for example `file:/path/server.p12`. Required with TLS on: none is packaged. The release package and the Helm chart set it for you. |
 | `server.ssl.key-store-password` | `SERVER_SSL_KEYSTOREPASSWORD` | – | Keystore password. |

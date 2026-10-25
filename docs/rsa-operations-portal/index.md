@@ -21,7 +21,7 @@ The **RSA Operations Portal** is a web application that simplifies the day-to-da
 
 ## Architecture at a glance
 
-The release package runs three Docker containers on one bridge network (`portal-net`), started with `docker compose`. The Helm chart runs the Portal and the Connector as two Deployments and uses your MySQL server.
+The release package runs three containers on one bridge network (`portal-net`), started with `docker compose` or `podman-compose`. The Helm chart runs the Portal and the Connector as two Deployments and uses your MySQL server.
 
 ```mermaid
 flowchart LR
@@ -30,7 +30,7 @@ flowchart LR
         TA[Trusted Agents / Help Desk / PMO]
     end
 
-    subgraph Host["Docker host (docker compose, network portal-net)"]
+    subgraph Host["Container host (Docker or Podman, network portal-net)"]
         P["portal<br/>Spring Boot 4 / Java 17<br/>:8080 / :8443"]
         C["connector<br/>Tomcat 9 WAR<br/>/app/connector (Hessian, HTTPS :8443)"]
         DB[("mysql 8.4 LTS<br/>schema RSAAPP")]
@@ -66,7 +66,7 @@ flowchart LR
 | Container images | Built on Red Hat UBI 9 (`ubi9/ubi`), with Java 17 (`java-17-openjdk-headless`) from the UBI repositories |
 | Front end | Bootstrap 4, jQuery 3 and jQuery UI, DataTables 1.x, Font Awesome, appointment-picker |
 | Database | MySQL 8.4 LTS (in the release package; your own server with Helm) |
-| Delivery | Container images `ghcr.io/winllc/rsa-operations-portal` and `ghcr.io/winllc/rsa-operations-portal-connector`, in a signed release package (Docker Compose) and a Helm chart |
+| Delivery | Container images `ghcr.io/winllc/rsa-operations-portal` and `ghcr.io/winllc/rsa-operations-portal-connector`, in a signed release package (Docker Compose or Podman) and a Helm chart |
 
 ## Documentation map
 
