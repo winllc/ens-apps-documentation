@@ -68,12 +68,15 @@ plugins:
   - search
 
 nav:
-  - Home: index.md
-  - Licensing: licensing.md
-  - Releases and downloads: releases.md
-  - Audit logging: audit-logging.md
-  - FIPS 140-3 and DISA STIG: fips-and-stig.md
-  - Sizing, availability and recovery: availability-and-sizing.md
+  # Tab labels are kept short so all five tabs fit on one line; each
+  # product's own pages carry its full name.
+  - Overview:
+      - index.md
+      - Licensing: licensing.md
+      - Releases and downloads: releases.md
+      - Audit logging: audit-logging.md
+      - FIPS 140-3 and DISA STIG: fips-and-stig.md
+      - Sizing, availability and recovery: availability-and-sizing.md
   - CertAlert:
       - cert-alert/index.md
       - Install guide: cert-alert/install.md
@@ -88,7 +91,7 @@ nav:
           - Sizing, availability and recovery: cert-alert/availability-and-sizing.md
           - API reference: cert-alert/api-reference.md
           - Troubleshooting: cert-alert/troubleshooting.md
-  - Directory Services Portal:
+  - Directory Portal:
       - directory-services-portal/index.md
       - Install guide: directory-services-portal/install.md
       - Configuration guide: directory-services-portal/configuration.md
@@ -116,7 +119,7 @@ nav:
           - Privacy, DPIA and works council: readyroom/privacy.md
           - API reference: readyroom/api-reference.md
           - Troubleshooting: readyroom/troubleshooting.md
-  - RSA Operations Portal:
+  - RSA Portal:
       - rsa-operations-portal/index.md
       - Install guide: rsa-operations-portal/install.md
       - Configuration guide: rsa-operations-portal/configuration.md
