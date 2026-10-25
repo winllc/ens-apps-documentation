@@ -2,13 +2,6 @@
 
 This page covers a new installation of the RSA Operations Portal, preparing RSA Authentication Manager (AM), the first start, verification and upgrades.
 
-There are two supported ways to install the Portal:
-
-* the **release package**, a signed download that runs the Portal with Docker Compose on one Linux server;
-* the **Helm chart**, for Kubernetes and OpenShift.
-
-Both run the same container images, which CI builds, tests and publishes for each release. Building the images yourself is not an installation method.
-
 Every installation has three components:
 
 | Component | Role |
@@ -16,6 +9,16 @@ Every installation has three components:
 | Portal | The web application: UI and business logic. |
 | Connector | The service the Portal calls for everything that involves RSA AM. It is the only component that connects to AM. |
 | MySQL 8.4 LTS | The Portal's database. |
+
+## At a glance
+
+| Method | Runs on | Use it for |
+|---|---|---|
+| [Release package](#install-from-the-release-package) | One Linux server with Docker or Podman | Production on one server, offline included: the images and MySQL are in the package. Settings in `.env`, `connector.env` and `mysql.env`; upgraded with `upgrade.sh`, which backs up the database first. |
+| [Helm chart](#install-with-helm) | Kubernetes or OpenShift | Production on a cluster, against your own MySQL 8.4. Settings in Helm values and Secrets; upgraded with `helm upgrade`. |
+| [Demo](#trying-it-out-the-demo) | A workstation with the Portal's source | A read-only look around against a mock AM, with sample data. Never for production. |
+
+Both installation methods run the same container images, which CI builds, tests and publishes for each release. Building the images yourself is not an installation method.
 
 ## Prerequisites
 
@@ -26,7 +29,7 @@ Every installation has three components:
 | Network: Connector → RSA AM | TCP 7002 (HTTPS command server and `t3s`) on the primary, plus the replica if it serves the read-only URL |
 | Network: Portal → SMTP relay | TCP 25 by default (`spring.mail.port`). The Portal checks the relay when it starts. |
 | Network: Portal → AD (optional) | The LDAP URL in `active-directory.properties[n].providerURL` |
-| Network: users → Portal | HTTP or HTTPS to the Portal's address (8080 and 8443 with the release package) |
+| Network: users → Portal | HTTP or HTTPS to the Portal's address (8080 and 8443 with the release package, unless you change them) |
 | ENS license | A `.lic` file for the RSA Operations Portal (`mfa-portal`) from the ENS licensing portal. See [Licensing](../licensing.md). You can install it after the first start. |
 
 You also need, from RSA AM:
@@ -42,8 +45,9 @@ You also need, from RSA AM:
 | Item | Requirement |
 |---|---|
 | Operating system | Linux on x86-64 |
-| Software | Docker Engine 23 or later and the Docker Compose plugin (`docker compose`). `install.sh` checks for both. |
-| Ports | 8080 (HTTP) and 8443 (HTTPS) free on the server |
+| Docker | Docker Engine 23 or later and the Docker Compose plugin (`docker compose`, v2) |
+| Podman (instead of Docker) | Podman 4.6 or later (RHEL 8.9+ or 9.3+), rootful or rootless, with podman-compose 1.4.0 or later (`pip install podman-compose` where the distribution's package is older), or `podman compose` with docker-compose v2 as its provider. The host needs systemd, which runs Podman's health checks. |
+| Ports | 8080 (HTTP) and 8443 (HTTPS) free on the server, or others set in `.env` ([Address and ports](#4-address-and-ports)) |
 | Image access | None. The images are in the package's `images/` folder. |
 | Tools | `sha256sum` and `gpg` to verify the download |
 
@@ -53,43 +57,35 @@ You also need, from RSA AM:
 |---|---|
 | Cluster | Kubernetes 1.25 or later, or OpenShift 4.12 or later |
 | Helm | Helm 3.8 or later (OCI registry support) |
-| Storage | A default StorageClass, or one you name: a 100Mi ReadWriteOnce volume for the license, and 8Gi for the embedded MySQL if you use it |
+| Storage | A default StorageClass, or one you name: a 100Mi ReadWriteOnce volume for the license volume while it is on ([License](#helm-license)), and 8Gi for the embedded MySQL if you use it |
 | Database | An external MySQL 8.4 server. The embedded MySQL is for evaluations only. |
 | Image access | Pull access to `ghcr.io/winllc/rsa-operations-portal` and `ghcr.io/winllc/rsa-operations-portal-connector`, or a mirror of them ([air-gapped](#air-gapped-clusters)) |
 | Ingress | An ingress controller or OpenShift Routes, to reach the Portal from outside the cluster |
 
-## Choosing a method
+## Get the release
 
-| | Release package | Helm chart |
-|---|---|---|
-| Runs on | One Linux server with Docker | Kubernetes or OpenShift |
-| Database | MySQL 8.4 container in the package | External MySQL 8.4 (embedded MySQL for evaluations only) |
-| Settings | `.env`, `connector.env` and `mysql.env`, created from their templates | Helm values; secrets in Kubernetes Secrets |
-| Offline install | Yes, the images are in the package | Yes, with the chart from the release download and mirrored images |
-| Upgrade | `upgrade.sh` | `helm upgrade` |
-| Backups | `upgrade.sh` backs up the database; `util/backupdb.sh` | Your database's own backups, or the chart's optional backup CronJob (`backup.enabled`) |
+1. Sign in to the ENS licensing portal and open **Downloads** (`/account/downloads`). It lists every version of the Portal, the latest highlighted, with each file's size and SHA-256 sum. Any account that holds an RSA Operations Portal license that is not revoked, evaluation licenses included, can download. The files come from ENS Solutions' own storage, never from GitHub Releases.
+2. Download, into one directory, the files you need:
+
+    | File | What it is |
+    |---|---|
+    | `rsa-operations-portal-<version>.tar.gz` | The release package |
+    | `rsa-operations-portal-<version>.tgz` | The Helm chart |
+    | `sbom-*.spdx.json` | Software bill of materials for each image |
+    | `SHA256SUMS`, `SHA256SUMS.asc` | Checksums and their signature |
+
+3. Verify them:
+
+    ```bash
+    sha256sum -c SHA256SUMS --ignore-missing   # every file you downloaded must say OK
+    gpg --verify SHA256SUMS.asc SHA256SUMS     # when the release is signed; needs the ENS release key
+    ```
+
+See [Releases and downloads](../releases.md) for the release key and the image signatures.
 
 ## Install from the release package
 
-### 1. Download and verify
-
-ENS Solutions sends you links to the release files. See [Releases and downloads](../releases.md). Verify them before you install:
-
-```bash
-gpg --verify SHA256SUMS.asc SHA256SUMS   # needs the ENS release signing key, imported once
-sha256sum -c SHA256SUMS                  # every file listed must say OK
-```
-
-The release files are:
-
-| File | What it is |
-|---|---|
-| `rsa-operations-portal-<version>.tar.gz` | The release package |
-| `rsa-operations-portal-<version>.tgz` | The Helm chart (not needed for this method) |
-| `sbom-*.spdx.json` | Software bill of materials for each image |
-| `SHA256SUMS`, `SHA256SUMS.asc` | Checksums and their signature |
-
-### 2. Unpack
+### 1. Unpack
 
 ```bash
 tar -xzf rsa-operations-portal-<version>.tar.gz
@@ -106,23 +102,33 @@ The package holds:
 | `env.template` | The Portal's settings, commented. `install.sh` copies it to `.env`. |
 | `connector.env.template` | The Connector's settings: the AM connection and credentials. `install.sh` copies it to `connector.env`. |
 | `mysql.env.template` | MySQL's settings: the root and application user passwords. `install.sh` copies it to `mysql.env`. |
-| `license/` | Where you can put `license.lic` for `install.sh` and `upgrade.sh` to copy into the Portal |
+| `license/` | Where you can put `license.lic` for `install.sh` and `upgrade.sh` to give to the Portal |
 | `default_build/` | Branding, page text and e-mail templates the Portal mounts. `ssl/` holds the trust store. |
-| `util/` | `check-env.sh` (checks `.env`, `connector.env` and `mysql.env`), `split-env.sh` (splits a `.env` from an older release), `move-connector-secrets.sh` (moves AM passwords out of an older `connector.env`'s `JAVA_OPTS`), `connector-tls.sh` (the certificates for HTTPS and mutual TLS between the Portal and the Connector), `helpdesk-code-key.sh` (the key for the help desk's e-mailed codes), `file-owners.sh` (gives the Portal and the Connector their files) and `backupdb.sh` (database backup) |
-| `images/` | The Portal, Connector and MySQL images (`docker save` archive) |
+| `util/` | `compose.sh` (the compose command, Docker or Podman), `systemd-unit.sh` (start at boot), `check-env.sh` (checks `.env`, `connector.env` and `mysql.env`), `split-env.sh` (splits a `.env` from an older release), `move-connector-secrets.sh` (moves AM passwords out of an older `connector.env`'s `JAVA_OPTS`), `connector-tls.sh` (the certificates for HTTPS and mutual TLS between the Portal and the Connector), `helpdesk-code-key.sh` (the key for the help desk's e-mailed codes), `file-owners.sh` (gives the Portal and the Connector their files) and `backupdb.sh` (database backup) |
+| `images/` | The Portal, Connector and MySQL images (`docker save` archive, which Podman loads too) |
 | `README.md`, `GUIDE.md` | The package's quick start and the full administration guide |
 
-### 3. Run install.sh
+### 2. Run install.sh
 
-```bash
-./install.sh /opt/rsa-operations-portal
-```
+`install.sh`, `upgrade.sh` and the `util/` scripts work with Docker or Podman. They choose the engine from `--engine docker|podman`, then `CONTAINER_ENGINE`, and otherwise use Docker if its daemon answers, else Podman; when both work and only Podman runs this installation, they stay with Podman. They print the engine and compose command they chose. `COMPOSE_COMMAND` names a compose command of your own, for example `COMPOSE_COMMAND="podman compose"`.
+
+=== "Docker"
+
+    ```bash
+    ./install.sh /opt/rsa-operations-portal
+    ```
+
+=== "Podman"
+
+    ```bash
+    ./install.sh --engine podman /opt/rsa-operations-portal
+    ```
 
 `install.sh` copies the package to the install folder, loads the images and creates `.env`, `connector.env` and `mysql.env` from their templates (each mode 600). Then it stops and tells you what to fill in; the certificates and keys come on the [second run](#7-first-start). Run `./install.sh` without a folder to install in the unpacked folder instead.
 
 The templates turn on mutual TLS between the Portal and the Connector: `connector.env` has `CONNECTOR_TLS_CLIENT_AUTH=required`, and `.env` names the Portal's certificate and key in `portal-tls/`. Leave those lines as they are.
 
-### 4. Fill in the settings
+### 3. Fill in the settings
 
 In `/opt/rsa-operations-portal`, replace every `CHANGE_ME` in the three settings files. Each service receives only its own file. [Configuration](configuration.md) describes every setting. At a minimum:
 
@@ -155,9 +161,43 @@ Put the AM trust store at `/opt/rsa-operations-portal/default_build/ssl/trust.jk
 
 Optionally, customise branding in `default_build/properties/messages.properties` and the images in `default_build/static/`. See [Configuration](configuration.md#branding-text-and-email-templates).
 
+### 4. Address and ports
+
+The compose file publishes the Portal's container ports 8080 and 8443 as set in `.env`. Each value is `[address:]port`:
+
+```bash
+PORTAL_HTTP_PUBLISH=8080      # the Portal's 8080 (HTTP, or HTTPS once server.ssl.* is set)
+PORTAL_HTTPS_PUBLISH=8443     # the container's 8443
+```
+
+| Value | Publishes on |
+|---|---|
+| `8080` (a bare port, the default) | Every interface, IPv4 and IPv6 |
+| `127.0.0.1:8080` | This server only, for a reverse proxy on it |
+| `0.0.0.0:8080` | Every IPv4 interface |
+| `[::1]:8080` | One IPv6 address, in brackets |
+
+Change them and run `./util/compose.sh up -d`. Rootless Podman cannot publish ports below 1024 (the defaults are above), unless `net.ipv4.ip_unprivileged_port_start` is lowered.
+
+!!! warning "Plain HTTP on every interface"
+    On anything but a loopback address, the Portal is reachable from the network over plain HTTP unless HTTPS is on (`server.ssl.*` in `.env`) or a TLS proxy is in front. `install.sh` and `upgrade.sh` warn about it.
+
+**Behind a reverse proxy on the compose network** (`rsa-operations-portal_portal-net`, reaching `portal:8080` itself), set both values to `127.0.0.1:<port>`, or publish nothing at all with a `docker-compose.override.yml` beside `docker-compose.yml`, which upgrades keep:
+
+```yaml
+services:
+  portal:
+    ports: !reset []
+```
+
+`!reset` needs Docker Compose 2.24 or podman-compose 1.4.0. See [Security → Behind a proxy](security.md#behind-a-proxy) for the forwarded headers.
+
 ### 5. License
 
-Optional at this point. Save the license as `/opt/rsa-operations-portal/license/license.lic`, and `install.sh` copies it into the Portal on the first start. Or upload it on the license screen afterwards. See [License](#license).
+Optional at this point. Choose one, or upload the license on the license screen after the first start (see [License](#license)):
+
+* **`license/license.lic`:** save the file there, and `install.sh` and `upgrade.sh` set `ENS_LICENSE` in `.env` from it (`util/license-env.sh`) before starting the Portal.
+* **`ENS_LICENSE` in `.env`:** the license's text, the token between its `BEGIN` and `END` lines or the whole file base64-encoded (`base64 -w0 license.lic`). It is installed when no usable license is installed yet, or when it is a newer revision of the installed one.
 
 ### 6. Database
 
@@ -169,7 +209,7 @@ MySQL reads the `MYSQL_*` settings only when its data volume is new. Without `MY
 
 ```bash
 cd /opt/rsa-operations-portal
-./install.sh
+./install.sh                      # with --engine podman if you chose Podman
 ```
 
 The second run:
@@ -178,20 +218,33 @@ The second run:
 2. moves AM passwords out of `JAVA_OPTS` in `connector.env`, if any are there;
 3. runs `util/connector-tls.sh`, which makes a CA of this installation's own, the Connector's certificate in `default_build/connector-tls/` and the Portal's client certificate in `portal-tls/` (see [RSA AM integration](rsa-integration.md#portal-to-connector));
 4. checks `.env`, `connector.env` and `mysql.env` with `util/check-env.sh`. Among its warnings: an AM URL whose host is an IP address or a name without a domain, which the Connector's [host name check](rsa-integration.md#transport) would refuse;
-5. runs `util/file-owners.sh`, which, among other things, makes `.env` and the Portal's key `portal-tls/portal-client.key` mode 640 with group 0, so that the Portal (uid 1001, group 0) can read them and no other user on the host can;
-6. starts the services with `docker compose up -d` and waits up to 300 seconds (`WAIT_SECONDS`) for the Portal to report healthy. It then copies `license/license.lic` into the Portal if there is one. Open `http://<server>:8080`.
+5. says where the Portal will listen, and warns about plain HTTP on the network;
+6. runs `util/file-owners.sh`, which, among other things, makes `.env` and the Portal's key `portal-tls/portal-client.key` mode 640 with group 0, so that the Portal (uid 1001, group 0) can read them and no other user on the host can;
+7. starts the services (`docker compose up -d` or `podman-compose up -d`) and waits up to 300 seconds (`WAIT_SECONDS`) for the Portal to report healthy. Before starting, it sets `ENS_LICENSE` in `.env` from `license/license.lic` if there is one, and the Portal installs it as it starts. Open `http://<server>:8080`.
 
 Startup order: `mysql` must pass its `mysqladmin ping` health check, and `connector` must have started, before `portal` starts. On start, the Connector signs in to AM with the service account (and the read-only account, if set) and looks up the configured realm and security domain. If AM can't be reached, the Connector starts anyway and tries again on the next request; until then its health check reports `DOWN`. If a lookup fails, the Connector's AM session check fails (see [Troubleshooting](troubleshooting.md)).
 
 Day to day, in the install folder:
 
 ```bash
-docker compose ps                  # status
-docker compose logs -f portal      # logs (also under logs/)
-docker compose stop                # stop; docker compose start to start again
+./util/compose.sh ps                  # status (docker compose ps, or podman-compose ps)
+./util/compose.sh logs -f portal      # logs (also under logs/)
+./util/compose.sh stop                # stop; ./util/compose.sh up -d to start again
 ```
 
-The database lives in the Docker volume `rsa-operations-portal_mysql_data` and the license in `rsa-operations-portal_ens-license`. `docker compose down -v` deletes both.
+| Volume | Holds |
+|---|---|
+| `rsa-operations-portal_mysql_data` | The database, which also holds the license and the installation id |
+| `rsa-operations-portal_ens-license` | The license files of release 1.5 and earlier, imported into the database on the first start |
+| `rsa-operations-portal_ens-audit` | The audit file, when `ENS_AUDIT_FILE` is set |
+
+`./util/compose.sh down -v` deletes them.
+
+### Podman
+
+* **Start at boot.** Podman has no daemon to start the containers again after a reboot. Run `./util/systemd-unit.sh` once after the install. As root it adds `/etc/systemd/system/rsa-operations-portal.service`; as another user (rootless), `~/.config/systemd/user/rsa-operations-portal.service`, and that user's services must outlive their sessions: `loginctl enable-linger <user>` (as root, once). The unit runs `util/compose.sh up -d` and `stop`. `podman generate systemd` and Quadlet units are alternatives.
+* **Rootless.** The containers run as their own users (the Portal uid 1001, the Connector 998, MySQL 999) inside your user namespace, and the volumes are kept in your home. `util/file-owners.sh` fixes the owners of `logs/`, `.env` and `portal-tls/` from inside a container, so no root is needed on the host; `podman unshare ls -ln logs` shows them as the containers see them. Rootless port forwarding may show the Portal every client as coming from one address, which affects the audit trail and the rate limits: run Podman as root, or put a proxy in front that sets `X-Forwarded-For` ([Security → Behind a proxy](security.md#behind-a-proxy)).
+* **SELinux** (RHEL, Fedora): the compose file labels the folders it mounts (`:z` where both the Portal and the Connector mount them, `:Z` where one does), so they work in enforcing mode.
 
 ### Upgrade with upgrade.sh
 
@@ -203,64 +256,73 @@ cd rsa-operations-portal-<new version>
 ./upgrade.sh /opt/rsa-operations-portal
 ```
 
-`upgrade.sh`:
+It stays with the engine that runs the installation (`--engine` to choose). `upgrade.sh`:
 
 1. loads the new images; nothing changes if they do not load;
 2. backs up the database to `backups/RSAAPP-before-<version>-<time>.sql.gz` in the install folder (skip with `--no-backup`);
-3. updates the release files: `docker-compose.yml`, `env.template`, `connector.env.template`, `mysql.env.template`, the scripts, `util/`, `default_build/portal/` and `default_build/log4j.xml`;
-4. splits a `.env` from a release that kept every setting in that one file (see below), and moves AM passwords out of `connector.env`'s `JAVA_OPTS` into `RSA_*` variables (`util/move-connector-secrets.sh`, keeping the original as `connector.env.before-secrets.<time>`);
-5. adds a key for the help desk's e-mailed codes to `.env` unless one is set (`util/helpdesk-code-key.sh`);
-6. makes the certificates for HTTPS between the Portal and the Connector if the installation has none (`util/connector-tls.sh`), adds `CONNECTOR_TLS_TRUSTSTORE` to `.env`, and rewrites an explicit `http://connector:8080` address to HTTPS. It moves the Portal's client certificate and key from `default_build/ssl`, which the Connector mounts too, to `portal-tls/`, and points the settings in `.env` that name them there. It leaves mutual TLS as the installation has it, and says when it is off;
-7. lists, for `.env`, `connector.env` and `mysql.env`, the settings that are new in the file's template and missing from it, except the three mutual TLS settings, which go together on both sides (below), and checks the three files with `util/check-env.sh`, which warns about an AM reached by an IP address or a short name;
-8. when the running MySQL is 8.0, prepares the move to 8.4 (below);
-9. gives the Portal and the Connector their files (`util/file-owners.sh`), restarts on the new version and waits for the Portal to report healthy.
+3. keeps where the Portal listens: if `.env` sets neither `PORTAL_HTTP_PUBLISH` nor `PORTAL_HTTPS_PUBLISH`, it writes there how the running Portal is published (else what the old `docker-compose.yml` published), and says so;
+4. updates the release files: `docker-compose.yml`, `env.template`, `connector.env.template`, `mysql.env.template`, the scripts, `util/`, `default_build/portal/` and `default_build/log4j.xml`;
+5. splits a `.env` from a release that kept every setting in that one file (see below), and moves AM passwords out of `connector.env`'s `JAVA_OPTS` into `RSA_*` variables (`util/move-connector-secrets.sh`, keeping the original as `connector.env.before-secrets.<time>`);
+6. adds a key for the help desk's e-mailed codes to `.env` unless one is set (`util/helpdesk-code-key.sh`);
+7. makes the certificates for HTTPS between the Portal and the Connector if the installation has none (`util/connector-tls.sh`), adds `CONNECTOR_TLS_TRUSTSTORE` to `.env`, and rewrites an explicit `http://connector:8080` address to HTTPS. It moves the Portal's client certificate and key from `default_build/ssl`, which the Connector mounts too, to `portal-tls/`, and points the settings in `.env` that name them there. It leaves mutual TLS as the installation has it, and says when it is off;
+8. lists, for `.env`, `connector.env` and `mysql.env`, the settings that are new in the file's template and missing from it, except the three mutual TLS settings, which go together on both sides (below), and checks the three files with `util/check-env.sh`, which warns about an AM reached by an IP address or a short name;
+9. when the running MySQL is 8.0, prepares the move to 8.4 (below);
+10. gives the Portal and the Connector their files (`util/file-owners.sh`), restarts on the new version and waits for the Portal to report healthy.
 
-It keeps `.env`, `connector.env`, `mysql.env`, `license/`, your branding in `default_build/` (`properties`, `static`, `email-templates`, `ssl`), the certificates for HTTPS to the Connector (`connector-tls-ca/`, `default_build/connector-tls/`, `portal-tls/`), the logs, the database and the installed license (the `ens-license` volume). An installation from before the `ens-license` volume kept its license in `license/license.lic`; `upgrade.sh` copies it into the volume.
+It keeps `.env`, `connector.env`, `mysql.env`, `license/`, a `docker-compose.override.yml`, your branding in `default_build/` (`properties`, `static`, `email-templates`, `ssl`), the certificates for HTTPS to the Connector (`connector-tls-ca/`, `default_build/connector-tls/`, `portal-tls/`), the logs, the database and the installed license. If `license/license.lic` is there, `upgrade.sh` sets `ENS_LICENSE` in `.env` from it, installed unless a different usable license, or a newer revision of it, is installed already.
 
 The Portal updates its database schema itself on the first start of the new version (Flyway migrations). A database from release 1.5 or earlier, whose tables Hibernate created, is taken over: its tables, data and ids are kept, and what is missing is added. On a large audit table that first start takes longer. To roll back, see [Rolling back an upgrade](availability-and-sizing.md#rolling-back-an-upgrade).
 
-**From a release with MySQL 8.0.** This release runs MySQL 8.4 LTS (8.0 reached its end of life in April 2026). MySQL upgrades the database in place on its first start, which takes a few minutes; there is no way back to 8.0 except the backup `upgrade.sh` takes first, so do not skip it. Before restarting anything, `upgrade.sh` moves root and the Portal's database user from `mysql_native_password`, which 8.4 no longer loads, to `caching_sha2_password`, keeping their passwords, and shuts MySQL 8.0 down cleanly. If another account still uses `mysql_native_password`, it stops and names it: move that account (`ALTER USER ... IDENTIFIED WITH caching_sha2_password BY '<its password>'`) or drop it, and run `upgrade.sh` again. A `my.cnf` of your own must not use options 8.4 removed, such as `default_authentication_plugin`.
+!!! note "To the release with Docker and Podman support"
+    An installation on Docker stays on Docker and needs nothing done. A Portal published without an address keeps a bare port and stays on IPv4 and IPv6; one on `127.0.0.1` (or `0.0.0.0`) keeps that address; one that published nothing gets `127.0.0.1`. New installations get `8080` and `8443`. The package's MySQL image is now named in full (`docker.io/library/mysql:<version>`), which Docker treats as the same image as before.
 
-**HTTPS to the Connector and the AM passwords.** Nothing needs editing: `upgrade.sh` makes the certificates and moves the passwords. Once the Connector runs, delete `connector.env.before-secrets.*`: it holds the old passwords. The Portal and the Connector must be upgraded together; the release package always does that.
+!!! note "To the release with sessions and the license in the database"
+    The first start copies the license, the installation id and the license history from the `ens-license` volume into the database (tables `ens_license_*`), and the installation keeps its id. The compose file keeps the volume mounted for that start; after it, the volume is not read, so back up the database instead. If the volume is not mounted for that start, the Portal stops and says so rather than take a new installation id. Sessions are now kept in the database too: sessions open during this upgrade end once, and later upgrades sign nobody out.
 
-**To the release with the hardened Connector and the help desk's code key.** Read this before upgrading production.
+??? note "From a release with MySQL 8.0"
+    This release runs MySQL 8.4 LTS (8.0 reached its end of life in April 2026). MySQL upgrades the database in place on its first start, which takes a few minutes; there is no way back to 8.0 except the backup `upgrade.sh` takes first, so do not skip it. Before restarting anything, `upgrade.sh` moves root and the Portal's database user from `mysql_native_password`, which 8.4 no longer loads, to `caching_sha2_password`, keeping their passwords, and shuts MySQL 8.0 down cleanly. If another account still uses `mysql_native_password`, it stops and names it: move that account (`ALTER USER ... IDENTIFIED WITH caching_sha2_password BY '<its password>'`) or drop it, and run `upgrade.sh` again. A `my.cnf` of your own must not use options 8.4 removed, such as `default_authentication_plugin`.
 
-* **Test against a staging AM first.** The Connector now reads AM's replies through a deserialization filter, an allow-list of the RSA SDK's classes built against the SDK and the mock AM. A real AM may send a class the list does not have, which fails that command. Upgrade a staging installation that reaches a staging AM, sign in, change a user, let the scheduled jobs run, and watch `docker compose logs connector` for `Refused a reply from Authentication Manager`. For an RSA class the warning names the `CONNECTOR_SERIAL_FILTER_ALLOW` setting to add to `connector.env`. If production refuses a reply all the same, `CONNECTOR_SERIAL_FILTER=off` in `connector.env` reads the replies without the filter, with a warning at every start, until that class is added; then remove it. See [What the Connector accepts](rsa-integration.md#what-the-connector-accepts).
-* **AM's host name is checked.** Besides the CA, the Connector now checks that AM's certificate names the host in the `ims.httpinvoker.*` URLs in `connector.env`. An installation that reaches AM by an IP address or a short name usually stops connecting, since the certificate names only the fully qualified name. `upgrade.sh` warns about such a URL (through `util/check-env.sh`). Before upgrading, put the name in the certificate in the URLs, or have the certificate reissued with the name you use. Where neither is possible, `RSA_TLS_VERIFY_HOSTNAME=false` in `connector.env` turns the name check off; the Connector then warns at every start.
-* **Mutual TLS stays as it was.** New installations have mutual TLS between the Portal and the Connector; an upgraded one keeps what it had. When it is off, `upgrade.sh` says so and the Connector warns at every start. To turn it on, run `./util/connector-tls.sh --mutual`, `./util/file-owners.sh` and `docker compose up -d` in the install folder ([Mutual TLS](rsa-integration.md#mutual-tls)).
-* **The Portal's client certificate moves.** An earlier release kept the Portal's certificate and key for mutual TLS in `default_build/ssl`, which the Connector mounts too. `upgrade.sh` moves them to `portal-tls/`, which only the Portal mounts, and changes `/ssl/portal-client.crt` and `.key` in `.env` to `/portal-tls/...`. A key of your own named elsewhere under `/ssl/` stays where it is, and `util/check-env.sh` warns: move it to `portal-tls/` and name it `/portal-tls/...` in `CONNECTOR_TLS_CLIENTKEY`.
-* **File modes.** `.env` and the Portal's client key are now mode 640 with group 0, which the Portal reads through (`util/file-owners.sh`). If you copy them into place yourself, run `./util/file-owners.sh` before starting the Portal.
-* **The help desk's e-mailed codes** are kept under a server key. `upgrade.sh` adds a random one to `.env` (`rsa.helpdesk.code-key`) unless one is set. A code e-mailed in the minutes before the upgrade no longer verifies (codes last 10 minutes): the operator sends a new one.
-* **`CONNECTOR_HTTPS_ADDRESS`** is new and optional: the Connector's HTTPS port still listens on every interface unless it names one.
-* **Logs.** Line breaks in log messages are written as `\r` and `\n` in the Portal's and the Connector's text logs. A `log4j2.xml` or `log4j.xml` of your own should keep `%enc{%m}{CRLF}` or `CrlfSafePatternLayout` ([Configuration → Logging](configuration.md#logging)).
+??? note "HTTPS to the Connector and the AM passwords"
+    Nothing needs editing: `upgrade.sh` makes the certificates and moves the passwords. Once the Connector runs, delete `connector.env.before-secrets.*`: it holds the old passwords. The Portal and the Connector must be upgraded together; the release package always does that.
 
-**To the release with help-desk requests and rate limits.**
+??? note "To the release with the hardened Connector and the help desk's code key"
+    Read this before upgrading production.
 
-* **Help-desk requests.** Resetting a PIN, issuing an emergency access code, marking a token lost, deprovisioning an assigned token and clearing a cached Windows password are now [help-desk requests](help-desk.md): a ticket and reason, a verified user, a second operator for privileged users, and an e-mail to the user. Unlocking an account stays one click. Tell your Trusted Agents and Help Desk staff before the upgrade. The settings are `rsa.helpdesk.*`.
-* **E-mails.** The help-desk notice replaces the PIN-reset and lost-token e-mails. Their templates, `user-token-pin-reset-notification.properties` and `user-token-lost-notification.properties`, are no longer used; a customized copy in `default_build/email-templates` can be removed. Customize the notice through the `helpdesk.notice.*` keys in `messages.properties` instead.
-* **Generic self-service messages.** Sign-in, Test My Token, the Windows-password PIN reset, registration and exemption requests now give one answer whatever the cause (see [Security](security.md#rate-limits-and-uniform-answers)). In `messages.properties`, the keys `user.exemption.request.confirmationSent` and `user.exemption.request.noEmail` are replaced by `user.exemption.request.received`: move a customized text to the new key.
-* **Rate limits** apply from the first start (`rsa.rate-limit.*`), counted in the database. The in-memory attempt limiter is gone: Test My Token's and the PIN reset link's limits, and the token swap's, are counted in the database too.
-* **Behind a proxy**, use `SERVER_FORWARD_HEADERS_STRATEGY=native`, never `framework`, and check `SERVER_TOMCAT_REMOTEIP_INTERNAL_PROXIES` ([Security → Behind a proxy](security.md#behind-a-proxy)). Without the right setting every visitor shares the proxy's per-address limit.
-* **Database.** Flyway runs `V2__helpdesk_requests`, `V3__rate_limits` and `V4__helpdesk_run_started` on the first start, adding `HelpDeskRequest`, `RateLimitWindow` and `RateLimitBackoff`.
+    * **Test against a staging AM first.** The Connector now reads AM's replies through a deserialization filter, an allow-list of the RSA SDK's classes built against the SDK and the mock AM. A real AM may send a class the list does not have, which fails that command. Upgrade a staging installation that reaches a staging AM, sign in, change a user, let the scheduled jobs run, and watch `./util/compose.sh logs connector` for `Refused a reply from Authentication Manager`. For an RSA class the warning names the `CONNECTOR_SERIAL_FILTER_ALLOW` setting to add to `connector.env`. If production refuses a reply all the same, `CONNECTOR_SERIAL_FILTER=off` in `connector.env` reads the replies without the filter, with a warning at every start, until that class is added; then remove it. See [What the Connector accepts](rsa-integration.md#what-the-connector-accepts).
+    * **AM's host name is checked.** Besides the CA, the Connector now checks that AM's certificate names the host in the `ims.httpinvoker.*` URLs in `connector.env`. An installation that reaches AM by an IP address or a short name usually stops connecting, since the certificate names only the fully qualified name. `upgrade.sh` warns about such a URL (through `util/check-env.sh`). Before upgrading, put the name in the certificate in the URLs, or have the certificate reissued with the name you use. Where neither is possible, `RSA_TLS_VERIFY_HOSTNAME=false` in `connector.env` turns the name check off; the Connector then warns at every start.
+    * **Mutual TLS stays as it was.** New installations have mutual TLS between the Portal and the Connector; an upgraded one keeps what it had. When it is off, `upgrade.sh` says so and the Connector warns at every start. To turn it on, run `./util/connector-tls.sh --mutual`, `./util/file-owners.sh` and `./util/compose.sh up -d` in the install folder ([Mutual TLS](rsa-integration.md#mutual-tls)).
+    * **The Portal's client certificate moves.** An earlier release kept the Portal's certificate and key for mutual TLS in `default_build/ssl`, which the Connector mounts too. `upgrade.sh` moves them to `portal-tls/`, which only the Portal mounts, and changes `/ssl/portal-client.crt` and `.key` in `.env` to `/portal-tls/...`. A key of your own named elsewhere under `/ssl/` stays where it is, and `util/check-env.sh` warns: move it to `portal-tls/` and name it `/portal-tls/...` in `CONNECTOR_TLS_CLIENTKEY`.
+    * **File modes.** `.env` and the Portal's client key are now mode 640 with group 0, which the Portal reads through (`util/file-owners.sh`). If you copy them into place yourself, run `./util/file-owners.sh` before starting the Portal.
+    * **The help desk's e-mailed codes** are kept under a server key. `upgrade.sh` adds a random one to `.env` (`rsa.helpdesk.code-key`) unless one is set. A code e-mailed in the minutes before the upgrade no longer verifies (codes last 10 minutes): the operator sends a new one.
+    * **AM permissions.** Operators' role grants and revokes, clearing cached Windows passwords and emergency access codes now run in the operator's own AM session. Before the upgrade, give the mapped AM roles the [additional permissions](rsa-integration.md#least-privilege-am-roles), or those actions fail for operators whose roles lack them.
+    * **`CONNECTOR_HTTPS_ADDRESS`** is new and optional: the Connector's HTTPS port still listens on every interface unless it names one.
+    * **Logs.** Line breaks in log messages are written as `\r` and `\n` in the Portal's and the Connector's text logs. A `log4j2.xml` or `log4j.xml` of your own should keep `%enc{%m}{CRLF}` or `CrlfSafePatternLayout` ([Configuration → Logging](configuration.md#logging)).
 
-**AM permissions.** Operators' role grants and revokes, clearing cached Windows passwords and emergency access codes now run in the operator's own AM session. Before the upgrade, give the mapped AM roles the [additional permissions](rsa-integration.md#least-privilege-am-roles), or those actions fail for operators whose roles lack them.
+??? note "To the release with help-desk requests and rate limits"
+    * **Help-desk requests.** Resetting a PIN, issuing an emergency access code, marking a token lost, deprovisioning an assigned token and clearing a cached Windows password are now [help-desk requests](help-desk.md): a ticket and reason, a verified user, a second operator for privileged users, and an e-mail to the user. Unlocking an account stays one click. Tell your Trusted Agents and Help Desk staff before the upgrade. The settings are `rsa.helpdesk.*`.
+    * **E-mails.** The help-desk notice replaces the PIN-reset and lost-token e-mails. Their templates, `user-token-pin-reset-notification.properties` and `user-token-lost-notification.properties`, are no longer used; a customized copy in `default_build/email-templates` can be removed. Customize the notice through the `helpdesk.notice.*` keys in `messages.properties` instead.
+    * **Generic self-service messages.** Sign-in, Test My Token, the Windows-password PIN reset, registration and exemption requests now give one answer whatever the cause (see [Security](security.md#rate-limits-and-uniform-answers)). In `messages.properties`, the keys `user.exemption.request.confirmationSent` and `user.exemption.request.noEmail` are replaced by `user.exemption.request.received`: move a customized text to the new key.
+    * **Rate limits** apply from the first start (`rsa.rate-limit.*`), counted in the database. The in-memory attempt limiter is gone: Test My Token's and the PIN reset link's limits, and the token swap's, are counted in the database too.
+    * **Behind a proxy**, use `SERVER_FORWARD_HEADERS_STRATEGY=native`, never `framework`, and check `SERVER_TOMCAT_REMOTEIP_INTERNAL_PROXIES` ([Security → Behind a proxy](security.md#behind-a-proxy)). Without the right setting every visitor shares the proxy's per-address limit.
+    * **Database.** Flyway runs `V2__helpdesk_requests`, `V3__rate_limits` and `V4__helpdesk_run_started` on the first start, adding `HelpDeskRequest`, `RateLimitWindow` and `RateLimitBackoff`.
 
-**From a release with a single `.env`.** Older releases kept every setting in `.env` and gave it to every container, so the Portal received the AM credentials and the MySQL root password. `upgrade.sh` splits it with `util/split-env.sh`, and nothing needs editing:
+??? note "From a release with a single `.env`"
+    Older releases kept every setting in `.env` and gave it to every container, so the Portal received the AM credentials and the MySQL root password. `upgrade.sh` splits it with `util/split-env.sh`, and nothing needs editing:
 
-* `JAVA_OPTS`, with the AM settings, and a copy of `CONNECTOR_AUTH_PASSWORD` move to `connector.env`. JVM options of your own in the old `JAVA_OPTS` (`-Xmx…`) are kept for the Portal too, in `.env`.
-* The `MYSQL_*` settings move to `mysql.env`.
-* The original is kept as `.env.before-split.<time>` (mode 600), and the script prints what it moved. Running it again changes nothing.
+    * `JAVA_OPTS`, with the AM settings, and a copy of `CONNECTOR_AUTH_PASSWORD` move to `connector.env`. JVM options of your own in the old `JAVA_OPTS` (`-Xmx…`) are kept for the Portal too, in `.env`.
+    * The `MYSQL_*` settings move to `mysql.env`.
+    * The original is kept as `.env.before-split.<time>` (mode 600), and the script prints what it moved. Running it again changes nothing.
 
-After such an upgrade:
+    After such an upgrade:
 
-1. Once the Portal runs, delete `.env.before-split.*`: it still holds every secret.
-2. The Portal held the Command Client and service-account passwords before the upgrade. If it may have been compromised, change them in AM, then in `connector.env`, and run `docker compose up -d`.
+    1. Once the Portal runs, delete `.env.before-split.*`: it still holds every secret.
+    2. The Portal held the Command Client and service-account passwords before the upgrade. If it may have been compromised, change them in AM, then in `connector.env`, and run `./util/compose.sh up -d`.
 
 ## Install with Helm
 
 The chart is `oci://ghcr.io/winllc/charts/rsa-operations-portal`, with the same version as the release. It is also in the release download as `rsa-operations-portal-<version>.tgz`. The chart installs:
 
-* the Portal as a Deployment with one replica, and a PVC for the license;
+* the Portal as a Deployment, one replica by default (see [Replicas](#replicas)), and a PVC for the license files of release 1.5 and earlier;
 * the Connector as a second Deployment, with its own settings, the AM trust store, its HTTPS certificate and a NetworkPolicy that admits only the Portal;
 * optionally, an embedded MySQL StatefulSet for evaluations.
 
@@ -381,7 +443,7 @@ helm test rsa-portal -n rsa-portal
 
 The first start creates the database tables and can take a few minutes; the startup probe allows 10. `helm test` calls the Portal's health endpoint. Until a license is installed, the Portal shows only its license screen.
 
-### 5. License
+### 5. License { #helm-license }
 
 Upload the license on the license screen after the first start, or give it to the chart:
 
@@ -390,9 +452,12 @@ helm upgrade --install rsa-portal oci://ghcr.io/winllc/charts/rsa-operations-por
   -n rsa-portal -f my-values.yaml --set-file license.file=./license.lic
 ```
 
-Or create a Secret with the key `license.lic` and set `license.existingSecret`. An init container copies the license into the license volume **only when no license is installed there yet**, as `install.sh` does. A license uploaded later on the license screen is never overwritten by `helm upgrade`.
+Or create a Secret with the key `license.lic` and set `license.existingSecret`. The chart passes the license as `ENS_LICENSE`: it is installed only when no usable license is installed yet, or when it is a newer revision of the installed one. A license uploaded later on the license screen is otherwise kept.
 
-The license, the installation id and the license history live on the PVC `<release>-rsa-operations-portal-license`, mounted at `/var/lib/ens/mfa-portal`. **Keep this PVC.** If it is lost, the installation gets a new id, and a license bound to the old id must be re-bound on the ENS licensing portal.
+The license, the installation id and the license history are kept in the database (tables `ens_license_*`), shared by every replica: **back up the database**. The PVC `<release>-rsa-operations-portal-license` (`persistence.license`, mounted at `/var/lib/ens/mfa-portal`) holds the license files of release 1.5 and earlier:
+
+* **An upgrade** keeps it mounted (`persistence.license.enabled` is `true` by default), and the first start copies its license, installation id and license history into the database. After that start the volume is not read: set `persistence.license.enabled=false` for rolling updates and more than one replica.
+* **Without the volume** the chart sets `ENS_LICENSE_EXPECT_INSTALLATION_ID=true`: the Portal never makes an installation id of its own, and does not start without one from the database or the volume. A new installation without the volume sets `license.allowNewInstallationId=true` for its first start only; it is honoured only while the database holds no license state, and logged as an error at every start until set back to `false`.
 
 ### 6. Ingress, OpenShift and client certificates
 
@@ -460,20 +525,22 @@ helm upgrade rsa-portal oci://ghcr.io/winllc/charts/rsa-operations-portal --vers
   -n rsa-portal -f my-values.yaml
 ```
 
-Back up the database first. The Portal updates its schema on the first start of the new version, and `helm rollback` restores the previous images and settings, not the previous database. The license PVC, and with it the installation id and an uploaded license, is kept.
+Back up the database first. The Portal updates its schema on the first start of the new version, and `helm rollback` restores the previous images and settings, not the previous database. The license PVC and the database are kept. The [release notes for the release package](#upgrade-with-upgradesh) apply to Helm too.
 
-An upgrade to the release with help-desk requests and rate limits brings the values `helpDesk.*`, `rateLimit.*` and `forwardedHeaders.internalProxies`, sets `SERVER_FORWARD_HEADERS_STRATEGY=native` (it was `framework`) behind a TLS-terminating ingress or route, and adds the `set-forwarded-headers: replace` annotation to the Route. Read the [release notes for the release package](#upgrade-with-upgradesh): they apply to Helm too.
+!!! note "To the release with sessions and the license in the database"
+    The license PVC stays mounted, and the first start copies the license and the installation id into the database; then you can turn the volume off ([License](#helm-license)). Sessions open during that upgrade end once; later upgrades sign nobody out.
 
-An upgrade to the release with the hardened Connector:
+??? note "To the release with help-desk requests and rate limits"
+    The upgrade brings the values `helpDesk.*`, `rateLimit.*` and `forwardedHeaders.internalProxies`, sets `SERVER_FORWARD_HEADERS_STRATEGY=native` (it was `framework`) behind a TLS-terminating ingress or route, and adds the `set-forwarded-headers: replace` annotation to the Route.
 
-* keeps mutual TLS as the release has it. A release from before this default has it off: the notes and the Connector warn, and `connector.tls.mutual=true` turns it on (with `connector.tls.existingSecret`, also `connector.tls.clientSecret`). The chart records the setting in the `rsa-operations-portal/connector-mutual-tls` annotation of its TLS Secret and ConfigMap; an upgrade that can read neither that nor the running Connector, such as `helm template --is-upgrade` or a changed name override, stops and asks for `connector.tls.mutual`;
-* checks AM's host name: if the notes warn that the Connector reaches AM by an IP address or a short name, use the certificate's name in `authManager.host`, have the certificate reissued, or set `RSA_TLS_VERIFY_HOSTNAME=false` in `connector.extraEnv`;
-* filters AM's replies: test it against a staging AM first and watch the Connector's log for `Refused a reply from Authentication Manager` (see the release package notes above, which apply to Helm too, with `connector.extraEnv` for the settings);
-* generates `helpDesk.emailCodeKey`: a help-desk e-mail code sent in the minutes before the upgrade no longer verifies, so the operator sends a new one.
+??? note "To the release with the hardened Connector"
+    * It keeps mutual TLS as the release has it. A release from before this default has it off: the notes and the Connector warn, and `connector.tls.mutual=true` turns it on (with `connector.tls.existingSecret`, also `connector.tls.clientSecret`). The chart records the setting in the `rsa-operations-portal/connector-mutual-tls` annotation of its TLS Secret and ConfigMap; an upgrade that can read neither that nor the running Connector, such as `helm template --is-upgrade` or a changed name override, stops and asks for `connector.tls.mutual`.
+    * It checks AM's host name: if the notes warn that the Connector reaches AM by an IP address or a short name, use the certificate's name in `authManager.host`, have the certificate reissued, or set `RSA_TLS_VERIFY_HOSTNAME=false` in `connector.extraEnv`.
+    * It filters AM's replies: test it against a staging AM first and watch the Connector's log for `Refused a reply from Authentication Manager` (see the release package notes, with `connector.extraEnv` for the settings).
+    * It generates `helpDesk.emailCodeKey`: a help-desk e-mail code sent in the minutes before the upgrade no longer verifies, so the operator sends a new one.
 
-An upgrade to the release with HTTPS between the Portal and the Connector creates the TLS Secret, switches the Portal's Connector address to `https://...:8443`, mounts the AM passwords as files and adds the Connector NetworkPolicy. Both pods roll once. On a cluster without NetworkPolicy support, set `networkPolicy.connector.enabled=false`. With `metrics.enabled` (the default), the probes move to the management port, and the Portal's log lines become JSON unless `logFormat: text`.
-
-Keep `replicaCount: 1`. The license volume is single-writer, and sign-in sessions are held in the Portal's memory. The Portal Deployment uses the `Recreate` strategy, so the old pod releases the volume before the new one starts.
+??? note "To the release with HTTPS between the Portal and the Connector"
+    The upgrade creates the TLS Secret, switches the Portal's Connector address to `https://...:8443`, mounts the AM passwords as files and adds the Connector NetworkPolicy. Both pods roll once. On a cluster without NetworkPolicy support, set `networkPolicy.connector.enabled=false`. With `metrics.enabled` (the default), the probes move to the management port, and the Portal's log lines become JSON unless `logFormat: text`.
 
 ### 8. Uninstall
 
@@ -481,7 +548,11 @@ Keep `replicaCount: 1`. The license volume is single-writer, and sign-in session
 helm uninstall rsa-portal -n rsa-portal
 ```
 
-This deletes the license PVC the chart created, and with it the installation id. It does not delete the embedded MySQL's data PVC (`data-rsa-portal-rsa-operations-portal-mysql-0`); delete that yourself. To keep the license volume independent of the release, create a PVC yourself and set `persistence.license.existingClaim`.
+This keeps the license PVC (`helm.sh/resource-policy: keep`) and the embedded MySQL's data PVC (`data-rsa-portal-rsa-operations-portal-mysql-0`); delete them yourself once you no longer need them. The license and the installation id are in the database, which uninstall does not touch.
+
+### Replicas
+
+Sessions, rate limits, scheduled-job locks and the license are kept in the database, so `replicaCount` can be more than 1 once the license volume is off (`persistence.license.enabled=false`) or is ReadWriteMany; the chart refuses otherwise. While a ReadWriteOnce license volume is mounted, the Portal is updated with the `Recreate` strategy; otherwise with a rolling update that is never without a ready Portal. With more than one replica, give the ingress cookie affinity (ingress-nginx: `nginx.ingress.kubernetes.io/affinity: cookie`): a help-desk emergency access code is shown only by the replica that made it. The Connector runs exactly one replica.
 
 ### Air-gapped clusters
 
@@ -504,7 +575,39 @@ helm install rsa-portal ./rsa-operations-portal-<version>.tgz -n rsa-portal -f m
   --set global.imageRegistry=registry.example.com
 ```
 
-The release package's `images/` archive holds the same images: `docker load` them, then `docker tag` and `docker push` them to your registry.
+The release package's `images/` archive holds the same images: `docker load` (or `podman load`) them, then tag and push them to your registry.
+
+## Trying it out: the demo
+
+The Portal's source repository has a `docker-compose.demo.yaml` at its root. It builds the Portal, the Connector and a mock AM from source and runs a read-only demo with sample sites, shipments, Trusted Agents, appointments and exemption requests. The sign-in credentials are on its login page. Nothing a visitor does changes the database or AM, and the scheduled jobs do not run.
+
+!!! warning "Not for production"
+    The demo's credentials are public, so anything those accounts can see is readable by anyone who reaches it. It runs against a mock AM only.
+
+1. Get a license. Without one the demo shows only the license screen, and the read-only demo takes no uploads. Download an evaluation license for the RSA Operations Portal from the ENS licensing portal and save it as `license/license.lic` beside the compose file.
+2. Start it, giving the license as `ENS_LICENSE`; the Portal installs it as it starts. Use `-p rsa-demo`: without it, the demo would share its project and volumes with the repository's other compose files.
+
+    ```bash
+    ENS_LICENSE="$(base64 -w0 license/license.lic)" \
+      docker compose -f docker-compose.demo.yaml -p rsa-demo up --build
+    ```
+
+3. Reach it. The demo **publishes no ports**: the Portal listens on 8080 inside the demo network only. Either attach a reverse proxy to the `rsa-demo_demo-net` network and forward to `portal:8080`, or write an override file bound to `127.0.0.1`:
+
+    ```yaml
+    # demo-ports.yaml
+    services:
+      portal:
+        ports: ["127.0.0.1:8080:8080"]
+    ```
+
+    ```bash
+    docker compose -f docker-compose.demo.yaml -f demo-ports.yaml -p rsa-demo up --build
+    ```
+
+    Then open <http://localhost:8080>.
+
+`docker compose -f docker-compose.demo.yaml -p rsa-demo down` resets the data, the license included: give `ENS_LICENSE` again on the next start. Every start loads the same sample data. The demo needs about 1 GB of memory once running; on a Mac, give the Docker or Podman VM 4 GB if you can, since the build compiles the code.
 
 ## RSA Authentication Manager setup
 
@@ -585,8 +688,8 @@ The Portal needs an ENS Solutions license. Download an evaluation or your organi
 
 * **License screen:** `/admin/license`, for PMO users (*PMO Activities > Open License*). Upload the `.lic` file there. It takes effect at once, without a restart. Until a license is installed, only sign-in and the license screen work.
 * **Installation id:** shown on the license screen. Enter it on the ENS licensing portal to bind a license to this installation.
-* **Where it is kept:** `/var/lib/ens/mfa-portal` in the Portal container: the Docker volume `rsa-operations-portal_ens-license` (release package) or the license PVC (Helm). Keep it; it holds the installation id.
-* **From the command line** (release package): `docker compose cp license/license.lic portal:/var/lib/ens/mfa-portal/license.lic`.
+* **At install time:** `license/license.lic` or `ENS_LICENSE` in `.env` (release package; see [step 5](#5-license)), or `license.file` or `license.existingSecret` (Helm; see [License](#helm-license)). `ENS_LICENSE` is installed when no usable license is installed yet, or when it is a newer revision.
+* **Where it is kept:** in the database, tables `ens_license_*`: back it up. Release 1.5 and earlier kept it in files, `ENS_LICENSE_FILE` (`/var/lib/ens/mfa-portal/license.lic`) and `ENS_LICENSE_STATE_DIR` (`/var/lib/ens/mfa-portal`), on the `ens-license` volume or the license PVC; the first start of a later release copies them into the database.
 
 ## First start checklist
 
@@ -597,18 +700,19 @@ The Portal needs an ENS Solutions license. Download an evaluation or your organi
 - [ ] The SMTP relay is reachable from the Portal.
 - [ ] `application.dns.name` (Helm: `publicUrl`) is the address users reach.
 - [ ] The license is installed, and you noted the installation id.
-- [ ] Release package: `.env`, `connector.env` and `mysql.env` are mode 600. Helm: the license PVC is bound and you know its name.
+- [ ] Release package: `.env`, `connector.env` and `mysql.env` are mode 600.
+- [ ] The database is in your backups: it holds the license and the installation id.
 
 ## Verification
 
 | Check | Command or action | Expected |
 |---|---|---|
-| Services running | `docker compose ps` / `kubectl -n rsa-portal get pods` | `portal`, `connector`, `mysql` up and `portal` healthy / both Deployments ready |
+| Services running | `./util/compose.sh ps` / `kubectl -n rsa-portal get pods` | `portal`, `connector`, `mysql` up and `portal` healthy / both Deployments ready |
 | Portal responds | `curl -I http://localhost:8080/login` (Helm: through `kubectl port-forward`) | `200` |
 | Health | `curl http://localhost:8080/actuator/health/readiness` (with `MANAGEMENT_SERVER_PORT` set, on that port; Helm: port 9090) | `{"status":"UP"}`. Readiness includes the database (`db`) and the Connector (`connector`), which is `DOWN` when the Connector can't be reached over HTTPS or can't open an AM admin session. |
-| Connector | `docker compose exec connector curl -s http://localhost:8080/app/health` | `UP` |
+| Connector | `./util/compose.sh exec connector curl -s http://localhost:8080/app/health` | `UP` |
 | Helm test | `helm test rsa-portal -n rsa-portal` | `Succeeded` |
-| Logs | `docker compose logs portal` or `logs/rsaapp-portal.log` / `kubectl -n rsa-portal logs deploy/rsa-portal-rsa-operations-portal` | No startup exceptions (datasource, Flyway, SMTP `test-connection`, Connector TLS), and a `License:` line. The Connector log has no warning that `rsa.readonly.user.id` is not set |
+| Logs | `./util/compose.sh logs portal` or `logs/rsaapp-portal.log` / `kubectl -n rsa-portal logs deploy/rsa-portal-rsa-operations-portal` | No startup exceptions (datasource, Flyway, SMTP `test-connection`, Connector TLS), and a `License:` line. The Connector log has no warning that `rsa.readonly.user.id` is not set |
 | License | `/admin/license` as a PMO user | The license state, licensee and features; the installation id |
 | Sign-in | Browse to `/login` and sign in with an AM user and SecurID passcode | Home page. Users holding a mapped admin role see the **Trusted Agent Activities**, **Token Management** or **PMO Activities** menus. |
 

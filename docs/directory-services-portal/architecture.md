@@ -48,9 +48,10 @@ flowchart TB
 | Metrics | Widget evaluation, paged scans shared between charts that read the same directory, transforms, caching, overviews | `metrics/*`, `service/DataSources` |
 | Analysis | Comparisons and quality checks, findings paging, stored latest results | `analysis/*` |
 | Jobs | Background execution, progress, cancellation, deduplication, retention | `jobs/*` |
-| Config store | Single JSON document with atomic writes | `store/ConfigStore`, `store/DemoConfigSeeder` |
-| Audit | The `ens-audit/1` store (hash-chained monthly JSON Lines files with a single synchronized writer), the `ens.audit` logger, delivery to Splunk HEC and syslog, retention, and searches over the files | `audit/*` |
+| Config store | Single JSON document with atomic writes; with a shared database, a versioned document in `dsp_document` | `store/ConfigStore`, `store/DemoConfigSeeder` |
+| Audit | The `ens-audit/1` store (hash-chained monthly JSON Lines files with a single synchronized writer, or `dsp_audit_event` with a shared database), the `ens.audit` logger, delivery to Splunk HEC and syslog, retention, and searches over the files | `audit/*` |
 | LDAP gateway | Pooled service-account connections (UnboundID SDK), TLS options, timeouts | `ldap/LdapDirectory` |
+| Shared database | Only with `DSP_DATABASE_URL`: the connection pool (Flyway migrations), Spring Session JDBC with an allow-list for session attributes, cluster locks (ShedLock on `dsp_shedlock`), the versioned shared documents, and the election of the one instance that runs the audit forwarders | `cluster/*`, `audit/JdbcAuditStore` |
 | Embedded directory | UnboundID in-memory server on a loopback port with demo schema and data | `ldap/EmbeddedDirectory`, `resources/demo/*` |
 
 ## Request flow: editing an entry
@@ -94,20 +95,22 @@ steps 1–4 with certificate validation and mapping. See [Security](security.md#
 
 ## Persistence
 
-| Data | Store | Lifetime |
-|---|---|---|
-| Directory entries | LDAP server | Permanent (the embedded demo server is in memory only) |
-| Forms, definitions, grants, custom schema, schema cache, dashboards, analyses | `DATA_DIR/portal-config.json` | Permanent |
-| Latest analysis results | `DATA_DIR/analysis-results/<id>.json` | Until the next run |
-| Audit events | `AUDIT_DIR` or `DATA_DIR/audit/audit-YYYY-MM.jsonl` | Append-only; kept until `ENS_AUDIT_RETENTION_DAYS` removes them (default: never) |
-| Sessions | API memory | `ENS_SESSION_IDLE_TIMEOUT` idle, `ENS_SESSION_ABSOLUTE_TIMEOUT` at most, or until restart |
-| Login throttle | API memory | `LOGIN_LOCKOUT_WINDOW` (15 minutes) |
-| Background tasks and results | API memory | `JOBS_RETAIN_MINUTES`, or until restart |
-| Metric cache | API memory | `METRICS_CACHE_SECONDS` |
-| Directory-search drop-down cache | API memory | per field, 30 s by default |
+| Data | Store | With a shared database (`DSP_DATABASE_URL`) | Lifetime |
+|---|---|---|---|
+| Directory entries | LDAP server | LDAP server | Permanent (the embedded demo server is in memory only) |
+| Forms, definitions, grants, custom schema, schema cache, dashboards, analyses | `DATA_DIR/portal-config.json` | `dsp_document`, a versioned document | Permanent |
+| Latest analysis results | `DATA_DIR/analysis-results/<id>.json` | `dsp_document` | Until the next run |
+| Audit events | `AUDIT_DIR` or `DATA_DIR/audit/audit-YYYY-MM.jsonl` | `dsp_audit_event`, the same hash chain | Append-only; kept until `ENS_AUDIT_RETENTION_DAYS` removes them (default: never) |
+| License and installation id | `ENS_LICENSE_STATE_DIR` (the license volume) | `ens_license_*` | Permanent |
+| Sessions | API memory | `spring_session` (Spring Session JDBC) | `ENS_SESSION_IDLE_TIMEOUT` idle, `ENS_SESSION_ABSOLUTE_TIMEOUT` at most, or (without a shared database) until restart |
+| Login throttle | API memory | `dsp_login_failure` | `LOGIN_LOCKOUT_WINDOW` (15 minutes) |
+| Background tasks and results | API memory | Progress and results in `dsp_job`; the task runs on the instance that started it | `JOBS_RETAIN_MINUTES`, or until restart |
+| Metric cache | API memory | Each instance's memory | `METRICS_CACHE_SECONDS` |
+| Directory-search drop-down cache | API memory | Each instance's memory | per field, 30 s by default |
 
-Because sessions, tasks and caches live in memory, and the configuration and audit stores have a
-single writer, run **one** API instance. See
+Without a shared database, sessions, tasks and caches live in memory, and the configuration and
+audit stores have a single writer, so run **one** API instance. With one, the API creates its
+tables itself (Flyway) and several instances can run. See
 [High availability](availability-and-sizing.md#high-availability).
 
 ## Background jobs

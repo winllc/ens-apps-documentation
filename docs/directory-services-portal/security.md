@@ -19,7 +19,7 @@ This page summarises the portal's security controls and the settings that affect
 | Password sign-in | Service-account search with `LDAP_USER_FILTER` (exactly one match), then an LDAP bind as the user |
 | Anonymous bind prevention | Empty passwords are rejected before any bind |
 | Username validation | Letters, digits and `. _ @ + -`, at most 128 characters; values are filter-escaped |
-| Brute-force throttling | `LOGIN_MAX_FAILURES` failures (default 8) per client address and username within `LOGIN_LOCKOUT_WINDOW` (default 15 minutes) → HTTP 429, audited as `auth.lockout` (severity alert). Relies on the real client address, so set `SERVER_FORWARD_HEADERS_STRATEGY=framework` behind a proxy. The counters are in memory, so a restart clears them |
+| Brute-force throttling | `LOGIN_MAX_FAILURES` failures (default 8) per client address and username within `LOGIN_LOCKOUT_WINDOW` (default 15 minutes) → HTTP 429, audited as `auth.lockout` (severity alert). Relies on the real client address, so set `SERVER_FORWARD_HEADERS_STRATEGY=framework` behind a proxy. Without a shared database the counters are in memory, so a restart clears them; with one (`DSP_DATABASE_URL`) they are in `dsp_login_failure` (keys stored as SHA-256), whichever instance a request reaches |
 | Notice and consent banner | `ENS_CONSENT_BANNER_ENABLED=true`: no sign-in of any kind succeeds until the browser session has acknowledged the DoD banner. Enforced by the API (403 `consent_required`), audited as `auth.consent-acknowledged`. See [Configuration](configuration.md#notice-and-consent-banner) |
 | Certificate-only mode | `PASSWORD_LOGIN_ENABLED=false` |
 | Administrator role | `ROLE_ADMIN` from `ADMIN_USERS` / `ADMIN_GROUPS`; required for `/api/admin/**`. Read again from the directory every `GROUP_REFRESH_INTERVAL` (default 5 minutes) |
@@ -50,7 +50,10 @@ This page summarises the portal's security controls and the settings that affect
   strict-origin-when-cross-origin`, `Permissions-Policy`). nginx sends them and hides the API's
   copies on `/api`; the API sends the same set to anyone who reaches it directly. See
   [Configuration → Security headers](configuration.md#security-headers).
-- Sessions are held in memory. Run a single API instance.
+- Without a shared database, sessions are held in memory: run a single API instance. With
+  `DSP_DATABASE_URL` they are Spring Session JDBC sessions in PostgreSQL (`spring_session`), with
+  the same cookie, timeouts and per-user limit across instances, and a restart signs nobody out.
+  See [High availability](availability-and-sizing.md#high-availability).
 
 ## Authorization
 

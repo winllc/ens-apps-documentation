@@ -32,15 +32,16 @@ configuration. CertAlert has no setting of its own for this.
 | CRL and OCSP fetches, and their signature checks | The nightly revocation check and, when on, the check at sign-in. OCSP answers are checked by the JDK's path validator. SHA-1 appears only in the OCSP request's CertID (RFC 6960), which names a certificate and is not a signature |
 | The endpoint probe | Opens a TLS connection to a server and reports the certificate it presents. It trusts every chain on purpose, because it relies on none of them |
 | SHA-256 | Certificate fingerprints (and with them certificate sign-in), the audit hash chain, and the stored hashes of audit API tokens |
-| Ed25519 | The license signature: see [The license check in FIPS mode](#the-license-check-in-fips-mode) |
+| Ed25519 or ECDSA P-256 | The license signature: see [The license check in FIPS mode](#the-license-check-in-fips-mode) |
 
 The jar also carries the UnboundID LDAP SDK, which only the read-only demo mode
 (`cert-alert.demo.enabled`, off by default) uses, for its generated directory and certificates.
 Leave demo mode off in production.
 
 !!! warning "Not tested in FIPS mode"
-    - **CertAlert itself** has no CI job that runs it on a Java runtime in FIPS mode. The license
-      library's own FIPS test is the only FIPS-mode test.
+    - **CertAlert itself.** None of its CI jobs runs it on a Java runtime in FIPS mode. Its copy
+      of the license library's tests simulates a runtime without Ed25519; for the library's checks
+      on real FIPS-mode runtimes, see [Licensing → FIPS 140-3](../licensing.md#fips-140-3).
     - **PostgreSQL.** The release package and the Helm chart's evaluation database run
       `postgres:17.11-alpine`, which is not built on UBI. For a FIPS deployment, use a PostgreSQL
       server you have configured for FIPS (with Helm, an external server), reached with
@@ -66,17 +67,27 @@ default", but its default in the code is `true`.
 
 ### The license check in FIPS mode
 
-!!! warning "Current state: the license can't be verified on a Java runtime in FIPS mode"
-    CertAlert checks its license file with the ENS license library 1.0.0, which verifies an
-    Ed25519 signature. Red Hat's OpenJDK in FIPS mode does not offer Ed25519 signatures, so every
-    license is refused ("The signature could not be checked: Ed25519 Signature not available")
-    and CertAlert stays **unlicensed**: only sign-in, the license screen and the audit log work.
+CertAlert carries ENS license library 1.2.0 and trusts two ENS production keys: Ed25519 (key id
+`dabdc531a28916c5`) and ECDSA P-256 (prime256v1, key id `e0a2e4ff9c4f5bfc`). A license file may
+carry the same license signed by both. CertAlert accepts it if any signature by a trusted key
+verifies with an algorithm the Java runtime provides, trying Ed25519 first. Red Hat's OpenJDK in
+FIPS mode has no Ed25519, so there the P-256 signature is the one that counts. On a host that is
+not in FIPS mode nothing changes: Ed25519-only licenses keep working.
 
-    Don't work around it with `-Dcom.redhat.fips=false`: that takes the whole JVM out of FIPS mode.
+!!! warning "Licenses issued before ENS enabled P-256 signing"
+    Such a license carries only an Ed25519 signature. On a FIPS host it is refused (`INVALID`, with
+    a message that the file is signed only with Ed25519, which the Java runtime does not provide),
+    and CertAlert runs **unlicensed**: only signing in and out and the license screen work.
 
-It changes when ENS Solutions both issues license files that also carry an ECDSA P-256 signature
-(which needs ENS's production P-256 key, not yet created) and ships a CertAlert release with
-license library 1.1.0. See [Licensing → FIPS 140-3](../licensing.md#fips-140-3).
+    Before moving CertAlert to a FIPS host, ask ENS Solutions for a re-signed file of the same
+    license (it carries a P-256 signature) and upload it on the license screen. The installation id
+    and revisions are unaffected.
+
+    Don't work around a refused license with `-Dcom.redhat.fips=false`: that takes the whole JVM
+    out of FIPS mode.
+
+See [Licensing → FIPS 140-3](../licensing.md#fips-140-3) for which runtimes provide which
+algorithm.
 
 ## DISA STIG settings
 

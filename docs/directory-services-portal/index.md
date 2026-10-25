@@ -42,8 +42,10 @@ flowchart LR
 - The **web** tier serves the static React build and forwards `/api` to the API. The browser
   therefore sees a single origin, so the `SameSite=Strict` session cookie and the CSRF header
   work without any CORS configuration.
-- The **API** serves only `/api/**`. It authenticates users by LDAP bind (or certificate), keeps
-  sessions in memory, and stores the portal's own configuration in a JSON file.
+- The **API** serves only `/api/**`. It authenticates users by LDAP bind (or certificate). By default
+  it keeps sessions in memory and stores the portal's own configuration in a JSON file; with a shared
+  PostgreSQL database (`DSP_DATABASE_URL`), sessions, configuration and the audit store are kept
+  there instead, and several API instances can run.
 - The **LDAP server** holds all directory data. The portal stores only its configuration,
   audit log and saved analysis results.
 
@@ -76,6 +78,6 @@ See [Architecture](architecture.md) for components, request flow and data storag
 | [API reference](api-reference.md) | Integrators | Every REST endpoint under `/api` |
 
 !!! tip "Try it with the demo directory"
-    Unpack the Docker package and run `./install.sh --demo --http 8080 --start`. Then open
+    Unpack the Docker package and run `./install.sh --demo --bind 127.0.0.1 --start`. Then open
     <http://localhost:8080>, sign in as `admin` / `password` and install your evaluation license.
-    See [Installation → Docker package](install.md#docker-package).
+    See [Installation → Trying it out: the demo](install.md#trying-it-out-the-demo).

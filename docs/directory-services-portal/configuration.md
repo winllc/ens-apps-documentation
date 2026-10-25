@@ -150,7 +150,8 @@ API through the same origin.
   shows the sign-in page with the reason. Each expiry is audited as `auth.session-expired` with the
   reason `idle`, `absolute`, `concurrent` or `account-removed`. A session ended by the concurrent
   limit gets a plain 401 on its next request.
-- **Lockout counters are held in memory.** A restart clears them.
+- **Lockout counters are held in memory** without a shared database, so a restart clears them.
+  With `DSP_DATABASE_URL` they are in the database and count across instances, like the sessions.
 
 !!! warning "The idle timeout default changed from 480 minutes to 30 minutes"
     - **New installs** get `30m`.
@@ -449,11 +450,12 @@ characters, `X509_PROXY_SECRET_FILE` cannot be read, `X509_HEADER` is not a head
 
 | Variable | Default (from installer) | Description |
 |---|---|---|
-| `COMPOSE_FILE` | `docker-compose.yml` plus overlays chosen by `install.sh` | `:`-separated compose files: `docker-compose.publish.yml`, `docker-compose.mtls.yml`, `docker-compose.openldap.yml` |
+| `COMPOSE_FILE` | `docker-compose.yml` plus overlays chosen by `install.sh` | `:`-separated compose files. First `docker-compose.yml` (HTTP published on `WEB_BIND:WEB_PORT`) or `docker-compose.no-publish.yml` (nothing published), then optionally `docker-compose.mtls.yml` and `docker-compose.openldap.yml` |
+| `CONTAINER_ENGINE` | The engine `install.sh` used | `docker` or `podman`. The `CONTAINER_ENGINE` environment variable wins |
 | `COMPOSE_PROJECT_NAME` | `directory-services-portal` | Compose project (and volume name prefix) |
 | `API_IMAGE`, `WEB_IMAGE`, `OPENLDAP_IMAGE` | Package image names | Images to run |
-| `WEB_BIND` | `0.0.0.0` | Host address to publish on |
-| `WEB_PORT` | `8080` | HTTP port (publish overlay) |
+| `WEB_BIND` | `0.0.0.0` | Host address to publish on (every interface). `127.0.0.1` keeps it to this host |
+| `WEB_PORT` | `8080` | HTTP port (`docker-compose.yml`) |
 | `HTTPS_PORT` | `8443` | HTTPS port (mTLS overlay) |
 | `HTTPS_PORT_SUFFIX` | `:<HTTPS_PORT>`, empty for 443 | Port shown in redirects |
 | `API_MEMORY_LIMIT` | `1536m` | Memory limit of the API container. The JVM's heap is 75% of it (`-XX:MaxRAMPercentage=75.0`) |
@@ -491,8 +493,10 @@ the UI, and it is persisted as one JSON document: `$DATA_DIR/portal-config.json`
 The API reads the file once, at startup, and keeps it in memory. Updates are serialized, applied to
 a copy, and written atomically (a temporary file plus rename). If the file can't be parsed at
 startup, the API fails with `Could not read .../portal-config.json`. Because the API never reads the
-file again while it runs, only one API process may use a data directory; see
-[High availability](availability-and-sizing.md#high-availability).
+file again while it runs, only one API process may use a data directory. With a shared database
+(`DSP_DATABASE_URL`) the configuration is a versioned document in PostgreSQL instead: the first
+start imports this file, which is then no longer read or written. See
+[High availability](availability-and-sizing.md#with-a-shared-database-several-api-instances).
 
 Other files in `DATA_DIR`:
 

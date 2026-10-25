@@ -2,9 +2,7 @@
 
 This page covers a full ReadyRoom deployment: the server and its PostgreSQL database, the LDAP
 connection, TLS and client certificates, email, Windows sign-in, and the Windows client on each
-workstation. You install the server in one of two ways: the **release package** (Docker Compose on
-one host) or the **Helm chart** (Kubernetes or OpenShift). Every setting mentioned here is described
-in [Configuration](configuration.md).
+workstation. Every setting mentioned here is described in [Configuration](configuration.md).
 
 !!! danger "Use your own key material"
     TLS is off by default. ReadyRoom contains no keystore or truststore: with TLS on, it refuses to
@@ -12,6 +10,14 @@ in [Configuration](configuration.md).
     (`client-auth: want`, the default), your own truststore. The Helm chart does not render with
     `tls.enabled` and no `tls.truststore.secretName`, unless `tls.clientAuth` is `none`. Put only the
     CAs that issue your users' certificates in the truststore. See [Certificates](#certificates).
+
+## At a glance
+
+| Method | Runs on | Use it for |
+|---|---|---|
+| [Release package](#install-from-the-release-package) | One Linux host with Docker or Podman | Production on one host, air-gapped sites included: the images and PostgreSQL 16 are in the package. Configured in `.env`; upgraded with `upgrade.sh`. |
+| [Helm chart](#install-with-helm) | Kubernetes or OpenShift | Production on a cluster, against your own PostgreSQL. Configured with Helm values; upgraded with `helm upgrade`. |
+| [Demo](#trying-it-out-the-demo) | A workstation with the ReadyRoom source | A read-only look around with seeded data. Never for production. |
 
 ## Prerequisites
 
@@ -29,55 +35,72 @@ in [Configuration](configuration.md).
 
 ### For the release package
 
-- A Linux host with Docker Engine 24 or later and the Docker Compose plugin (`docker compose`).
-- 2 CPUs, 4 GB RAM and 10 GB disk.
-- No internet access is needed: the container images are in the package.
+- A Linux host with 2 CPUs, 4 GB RAM and 10 GB disk, and one container engine:
+    - **Docker** Engine 24 or later with Docker Compose 2.24 or later (the `docker compose` plugin, or
+      a v2 `docker-compose`; the Python `docker-compose` v1 cannot read the package), or
+    - **Podman** 4.4 or later with **podman-compose 1.3 or later** (`pip install --user
+      podman-compose` where your distribution's package is older), or `podman compose`. Rootful or
+      rootless. Podman runs health checks from systemd timers, so the host needs systemd.
+- No internet access: the container images are in the package.
 
 ### For the Helm chart
 
 - Kubernetes 1.25 or later, or OpenShift 4, and Helm 3.
-- A storage class for a small `ReadWriteOnce` volume (the license, 100 Mi).
+- For an upgrade from a release that kept the license on a volume: a storage class for that small
+  `ReadWriteOnce` volume (100 Mi). See [License](#helm-license).
 - Access to `ghcr.io/winllc`, or a registry mirror (see [Air-gapped clusters](#air-gapped-clusters)).
 - For client certificates and the Windows client: an ingress controller that supports TLS
   passthrough (ingress-nginx with `--enable-ssl-passthrough`, or an OpenShift route), or a
   `LoadBalancer` Service.
 
-## Choosing a method
+## Get the release
 
-| | Release package | Helm chart |
-|---|---|---|
-| Runs on | One Linux host with Docker | Kubernetes or OpenShift |
-| Database | Bundled PostgreSQL 16 container | Your PostgreSQL (embedded one for evaluation only) |
-| Air-gapped | Yes, images included | Yes, with a registry mirror |
-| Configuration | `.env` file | Helm values |
-| Database scripts | Run by hand when release notes say so | Run by a Job on every install and upgrade |
-| Upgrade | `upgrade.sh` | `helm upgrade` |
+1. Sign in to the ENS licensing portal and open **Downloads** (`/account/downloads`). It lists every
+   ReadyRoom version, the latest highlighted, with each file's size and SHA-256 sum. Any account that
+   holds a ReadyRoom license that is not revoked, evaluation licenses included, can download. The
+   files come from ENS Solutions' own storage, never from GitHub Releases.
+2. Download, into one directory, `SHA256SUMS`, `SHA256SUMS.asc` and what you need:
+   `readyroom-<version>.tar.gz` (the release package) or `readyroom-helm-<version>.tgz` (the chart).
+3. Verify them:
+
+    ```bash
+    sha256sum -c SHA256SUMS --ignore-missing   # every file you downloaded must say OK
+    gpg --verify SHA256SUMS.asc SHA256SUMS     # when the release is signed; needs the ENS release key
+    ```
+
+See [Releases and downloads](../releases.md) for the release key and the image signatures.
 
 ## Install from the release package
 
-### 1. Download and verify
+### 1. Unpack and run `install.sh`
 
-ENS Solutions sends you links to the release files. Check the signature and checksums before you
-install, as described in [Releases and downloads](../releases.md):
+The package's scripts (`install.sh`, `upgrade.sh`, `backup.sh`, `restore.sh` and `compose.sh`) work
+with Docker or Podman. Each chooses the engine from `--engine docker|podman`, then
+`CONTAINER_ENGINE`, and otherwise uses Docker if its daemon answers, else Podman. It prints the
+engine and compose command it chose. `COMPOSE_COMMAND` overrides the compose command, for example
+`COMPOSE_COMMAND="podman compose"`.
 
-```bash
-gpg --verify SHA256SUMS.asc SHA256SUMS
-sha256sum -c SHA256SUMS --ignore-missing
-```
+=== "Docker"
 
-### 2. Unpack and run `install.sh`
+    ```bash
+    tar xzf readyroom-1.2.3.tar.gz
+    cd readyroom-1.2.3
+    ./install.sh
+    ```
 
-```bash
-tar xzf readyroom-1.2.3.tar.gz
-cd readyroom-1.2.3
-./install.sh
-```
+=== "Podman"
+
+    ```bash
+    tar xzf readyroom-1.2.3.tar.gz
+    cd readyroom-1.2.3
+    ./install.sh --engine podman
+    ```
 
 The first run loads the images from `images/`, creates `.env` from `env.template` with a generated
 database password, creates the `license/`, `tls/` and `kerberos/` directories, and lists the lines
 you must edit. It then stops.
 
-### 3. Fill in `.env`
+### 2. Fill in `.env`
 
 Replace every `CHANGE_ME`:
 
@@ -89,13 +112,10 @@ Replace every `CHANGE_ME`:
 | `APPLICATION_SUPERUSERDNS_0` | At least one administrator, by full DN. None is packaged; without one, startup logs a warning and nobody can administer ReadyRoom or reach the license screen. |
 | `SPRING_MAIL_*`, `APPLICATION_NOTIFICATIONSENDEREMAIL` | Your SMTP server and the From address. With `SPRING_MAIL_HOST` set, `APPLICATION_NOTIFICATIONSENDEREMAIL` is required, or startup fails. |
 
-The template also lists these optional blocks, commented out: the consent banner
-(`ENS_CONSENT_BANNER_*`), session lifetimes (`ENS_SESSION_*`), `ENS_COOKIE_SECURE`,
-`SERVER_FORWARD_HEADERS_STRATEGY`, `ENS_CSP_REPORT_ONLY`, client certificates (`ENS_X509_*`), JSON
-logs (`LOGGING_STRUCTURED_FORMAT_CONSOLE`), the management port (`MANAGEMENT_SERVER_PORT`), and
-the statuses that need approval, coworker visibility and retention (`APPLICATION_EVENTS_*`,
-`APPLICATION_PRIVACY_COWORKERVISIBILITY`, `APPLICATION_RETENTION_*`). See
-[Configuration](configuration.md).
+The template also lists optional blocks, commented out: the consent banner, session lifetimes,
+reverse-proxy settings, client certificates (`ENS_X509_*`), audit outputs (`ENS_AUDIT_*`), JSON
+logs, the management port, statuses that need approval, privacy and retention, reports, the public
+API and webhooks. See [Configuration](configuration.md).
 
 `.env` holds the database, directory and mail passwords. `install.sh` makes it mode 600; keep it
 private. List settings are numbered (`APPLICATION_SUPERUSERDNS_0`, `_1`, ...). Any other setting
@@ -114,56 +134,121 @@ The optional pieces are switched on with `COMPOSE_FILE` in `.env`:
 COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml:docker-compose.windows-auth.yml
 ```
 
+podman-compose does not read `COMPOSE_FILE` from `.env`, so run everyday commands through
+`./compose.sh`, which passes it on. The bind mounts carry `:Z`, so SELinux relabels them.
+
 The container runs as user 185, group 0. Make the files in `tls/` and `kerberos/` readable by
-group 0: `chgrp 0 <file> && chmod 0640 <file>`.
+group 0:
+
+=== "Docker"
+
+    ```bash
+    chgrp 0 tls/*.p12 kerberos/http.keytab && chmod 0640 tls/*.p12 kerberos/http.keytab
+    ```
+
+=== "Podman"
+
+    Rootful, as for Docker. Rootless, your own group is group 0 in the container, so `chmod` alone
+    is enough:
+
+    ```bash
+    chmod 0640 tls/*.p12 kerberos/http.keytab
+    ```
 
 `install.sh` and `upgrade.sh` stop if `SSL_ENABLED=true` but `docker-compose.tls.yml` is not in
 `COMPOSE_FILE`, or if it is and `tls/keystore.p12` or `tls/truststore.p12` is missing. When a reverse
 proxy terminates TLS for browsers and `SSL_ENABLED` stays `false`, set `ENS_COOKIE_SECURE=true`
 (the older name `SESSION_COOKIE_SECURE` still works) so the session cookie is only sent over HTTPS.
 
+### 3. Address and port
+
+ReadyRoom is published on the host at `READYROOM_BIND_ADDRESS:READYROOM_PORT` from `.env`. The
+container itself always listens on 8181; do not set `SERVER_PORT`.
+
+| `.env` | Default | Effect |
+|---|---|---|
+| `READYROOM_BIND_ADDRESS` | `0.0.0.0` | Every interface. `127.0.0.1` keeps it to this host, for a reverse proxy on the same host that terminates TLS (proxy to `http://127.0.0.1:8181`). One of the host's own addresses publishes it on that interface only. |
+| `READYROOM_PORT` | `8181` | The host port. Keep it at 1024 or above for rootless Podman, unless `net.ipv4.ip_unprivileged_port_start` is lowered. |
+
+After a change, run `./compose.sh up -d`.
+
+!!! warning "Plain HTTP on every interface"
+    Until TLS is on ([Certificates](#certificates)), the default `0.0.0.0:8181` serves plain HTTP to
+    the network, and `install.sh` warns about it. Turn TLS on, or put a TLS reverse proxy in front
+    and set `READYROOM_BIND_ADDRESS=127.0.0.1`.
+
 ### 4. License
 
-Optionally save the license as `license/license.lic`. `install.sh` copies it into the license volume
-when that volume holds no license yet. You can also upload it on the license screen after the first
-start.
+Supply the license in one of these ways. See [Licensing](../licensing.md) for the rest.
+
+- **Upload it** on the license screen after the first start: `<APPLICATION_BASE_URL>/app/admin/license`,
+  signed in as an administrator.
+- **`ENS_LICENSE` in `.env`:** the license itself, either the token between its `BEGIN` and `END`
+  lines or the whole file base64-encoded (`base64 -w0 license.lic`). It is installed at start if no
+  license is installed yet, or if it is a newer revision of the installed one.
+- **The `license/` drop-in:** save the file as `license/license.lic`. `install.sh` and `upgrade.sh`
+  set `ENS_LICENSE` in `.env` from it before starting ReadyRoom, which installs it as above. Without
+  one, they say where to upload it.
+
+ReadyRoom keeps the license, this installation's id and the highest revision seen of each license in
+its database (the `ens_license_*` tables), so the database backup covers them. Earlier releases kept
+them in files on the license volume: `ENS_LICENSE_FILE` (`/var/lib/ens/readyroom/license.lic`) and
+`ENS_LICENSE_STATE_DIR` (`/var/lib/ens/readyroom`). The first start of a release that keeps them in
+the database imports those files once, while the database holds no installation id yet.
 
 ### 5. First start
 
-Run `./install.sh` again. It starts ReadyRoom with `docker compose up -d`, and copies the license if
-you supplied one. The first start takes a minute or two while ReadyRoom creates its schema (Flyway;
-see [Prepare PostgreSQL](#prepare-postgresql)).
+Run `./install.sh` again (with `--engine podman` if you chose Podman). It starts ReadyRoom with the
+compose command (`docker compose up -d` or `podman-compose up -d`), after setting `ENS_LICENSE` from
+`license/license.lic` if you supplied one. The first start takes a minute or two while ReadyRoom creates its schema
+(Flyway; see [Prepare PostgreSQL](#prepare-postgresql)).
 
 ```bash
-docker compose ps                 # app becomes "healthy"
-docker compose logs -f app        # application log
+./compose.sh ps                   # app becomes "healthy"
+./compose.sh logs -f app          # application log
+./compose.sh up -d                # apply changes to .env
+./compose.sh down                 # stop; the volumes are kept
 ```
+
+With Docker, `docker compose ...` in the same directory does the same.
 
 The container's health check calls `/actuator/health` on port 8181, or on `MANAGEMENT_SERVER_PORT`
 when that is set in `.env`. It includes the mail server unless `MANAGEMENT_HEALTH_MAIL_ENABLED=false`
 (see [Configure email](#configure-email)).
 
-What is kept where:
-
-| Docker volume | Holds |
+| Volume | Holds |
 |---|---|
-| `readyroom_postgres_data` | The database |
-| `readyroom_ens-license` | The license, the installation id and the licensing state |
+| `readyroom_postgres_data` | The database, which also holds the license and the installation id |
+| `readyroom_ens-license` | An earlier release's license files, imported on the first start (see [License](#4-license)) |
+| `readyroom_ens-audit` | The audit log file, when `ENS_AUDIT_FILE` is set |
 
-!!! warning "Never run `docker compose down -v`"
-    It deletes both volumes. Without the license volume the installation gets a new id, and a license
-    bound to the old one stops working.
+The volumes have the same names under Docker and Podman. The containers are `readyroom-app-1` and
+`readyroom-postgres-1` with Docker, `readyroom_app_1` and `readyroom_postgres_1` with podman-compose.
+
+!!! warning "Never run `down -v`"
+    It deletes the volumes, the database with the license and the installation id among them. A
+    license bound to the old id then stops working.
 
 `install.sh` can be run again at any time. It never overwrites `.env`, the database or an installed
 license.
 
+### Podman
+
+- **Rootless:** the data is in named volumes, which need no ownership changes. Run
+  `loginctl enable-linger <user>` once, so the containers keep running after you log out, and
+  `systemctl --user enable podman-restart.service`, so the containers (`restart: unless-stopped`)
+  start again after a reboot.
+- **SELinux** (RHEL, Fedora): the bind mounts of `tls/` and `kerberos/` carry `:Z`. Docker on hosts
+  without SELinux ignores it.
+- **Starting at boot** without `podman-restart.service`: generate units with
+  `podman generate systemd --new --files --name readyroom_app_1` (and `readyroom_postgres_1`), or
+  write Quadlet `.container` files. Keep the volume names above either way.
+- **Moving from Docker to Podman** is a backup and restore, not an upgrade: the engines keep separate
+  volumes. Run `./backup.sh` with Docker, stop it (`docker compose down`), run
+  `./install.sh --engine podman` with the same `.env`, then `./restore.sh --engine podman ...`.
+
 ### 6. Upgrade
 
-Before upgrading:
-
-- If `.env` has `SSL_ENABLED=true`, make sure `COMPOSE_FILE` includes `docker-compose.tls.yml` and
-  that `tls/keystore.p12` and `tls/truststore.p12` are your own. The image contains no keystore or
-  truststore, and `upgrade.sh` stops otherwise.
 Back up first, from the current release's directory, then unpack the new release next to it and run
 its `upgrade.sh`, naming the current directory. `upgrade.sh` does not back up for you.
 
@@ -172,22 +257,39 @@ cd readyroom-1.2.3 && ./backup.sh && cd ..       # the database and the license 
 
 tar xzf readyroom-1.2.4.tar.gz
 cd readyroom-1.2.4
-./upgrade.sh ../readyroom-1.2.3
+./upgrade.sh ../readyroom-1.2.3                  # add --engine podman for a Podman installation
 ```
 
 `upgrade.sh` copies `.env`, `license/`, `tls/` and `kerberos/` across without overwriting anything,
 loads the new images, lists any new settings in `env.template` that your `.env` does not mention,
-and recreates the containers. The database and license volumes are kept, and ReadyRoom migrates its
-schema on start (Flyway). Run ReadyRoom from the new directory from then on.
+and recreates the containers. The volumes are kept, and ReadyRoom migrates its schema on start
+(Flyway). Run ReadyRoom from the new directory from then on.
 
-**The first upgrade to a release with Flyway.** Flyway finds tables but no `flyway_schema_history`,
-records the existing schema as version 0, and runs `V1`. `V1` adds the indexes and constraints that
-are missing and the audit trail's append-only trigger, merges user rows whose DNs differ only by
-letter case, and rebuilds an index an interrupted script left invalid. Where the old
-`001_indexes_and_unique_user_dn.sql` had run, it finishes in seconds; where it had not, building the
-indexes on a large check-in table can take minutes. The log shows
-`Migrating schema "public" to version "1 - baseline"` and `Successfully applied 1 migration`. The
-release no longer ships a `migrations/` directory, and there is nothing to run by hand.
+If `.env` has `SSL_ENABLED=true`, `COMPOSE_FILE` must include `docker-compose.tls.yml` and
+`tls/keystore.p12` and `tls/truststore.p12` must be your own: the image contains neither, and
+`upgrade.sh` stops otherwise.
+
+!!! note "Upgrading to the release with Docker and Podman support"
+    - `.env` is copied as it is, so an existing installation keeps its `READYROOM_BIND_ADDRESS` and
+      `READYROOM_PORT`: one published on `127.0.0.1` stays so. A `.env` without
+      `READYROOM_BIND_ADDRESS` publishes on `0.0.0.0`, as earlier releases did. `upgrade.sh` prints
+      the address in use.
+    - An existing Docker installation needs no changes: the scripts find Docker, and the project,
+      container and volume names are the same. The PostgreSQL image is now named
+      `docker.io/library/postgres:16`, the same image as `postgres:16`.
+
+!!! note "Upgrading to the release with the license in the database"
+    Keep the license volume mounted for the first start (the package's compose file always mounts
+    it): that start imports the license and the installation id into the database. Everyone signs
+    in again once.
+
+!!! note "The first upgrade to a release with Flyway"
+    Flyway finds tables but no `flyway_schema_history`, records the existing schema as version 0, and
+    runs `V1`. `V1` adds the missing indexes and constraints and the audit trail's append-only
+    trigger, merges user rows whose DNs differ only by letter case, and rebuilds an index an
+    interrupted script left invalid. On a large check-in table where the old
+    `001_indexes_and_unique_user_dn.sql` never ran, building the indexes can take minutes. The log
+    shows `Successfully applied 1 migration`. There is nothing to run by hand.
 
 Then re-run `Install-InOutWorker.ps1` from the new `windows-client/` on every workstation (see
 [Deploy the Windows client](#deploy-the-windows-client)).
@@ -292,10 +394,12 @@ The first start takes a minute or two while ReadyRoom creates its schema with Fl
 [Prepare PostgreSQL](#prepare-postgresql). The startup probe allows up to 10 minutes. Check the
 release with `helm test readyroom -n readyroom`.
 
-The chart runs one replica. ReadyRoom's license volume and its scheduled jobs (directory sync,
-auto check-out, absence emails) are single-writer, so more replicas are not supported.
+The chart runs one replica (`replicaCount: 1`) by default. Sessions, scheduled-job locks and the
+license are kept in the database, so several replicas can run once the license volume is off (see
+[License](#helm-license)); the chart's README, "Several replicas", has the values. While the volume is
+mounted, the chart refuses more than one replica and updates with the `Recreate` strategy.
 
-### 4. License
+### 4. License { #helm-license }
 
 Either upload the license on the license screen after the first start, or supply it at install
 time:
@@ -307,14 +411,21 @@ kubectl -n readyroom create secret generic readyroom-license --from-file=license
 helm install ... --set license.existingSecret=readyroom-license
 ```
 
-An init container copies it into the license volume **only when no license is installed there
-yet**. A license you upload later on the license screen is never overwritten by `helm upgrade`.
+The chart passes it to ReadyRoom as `ENS_LICENSE`, which is installed only when no usable license
+is installed yet, or when it is a newer revision. A license you upload later on the license screen
+is never overwritten by `helm upgrade`.
 
-The license, the installation id and the licensing state live on a PersistentVolumeClaim
-(`readyroom-license`, mounted at `/var/lib/ens`). **Keep it.** Without it the installation gets a
-new id, and a license bound to the old one stops working. `helm uninstall` deletes the claim with the
-release. To keep it independent of the release, create the claim yourself and set
-`persistence.license.existingClaim`.
+ReadyRoom keeps the license and the installation id in its database: **back up the database**. The
+license PersistentVolumeClaim (`readyroom-license`, mounted at `/var/lib/ens`, `persistence.license`)
+is read only on the first start of a release that keeps them in the database, to import what an
+earlier release kept there:
+
+- **An upgrade** keeps the claim mounted for that start. After it, set
+  `persistence.license.enabled: false` and `persistence.license.imported: true`; without `imported`,
+  the chart refuses to turn the volume off while the claim exists.
+- **A new installation** can start with the volume off, and set `license.newInstallationId: true`
+  for its first start only. Without the volume the chart sets `ENS_LICENSE_EXPECT_INSTALLATION_ID=true`,
+  so ReadyRoom never makes up a new installation id behind an existing installation's back.
 
 ### 5. Expose ReadyRoom
 
@@ -429,9 +540,14 @@ The license claim and the database are kept. The new pod migrates the schema as 
 see the release package's [Upgrade](#6-upgrade) for the first upgrade to a release with Flyway). The
 migration Job and the `migrations.enabled` value are gone.
 
-Before upgrading with `tls.enabled`, set `tls.truststore.secretName` (or `tls.clientAuth: none`):
-the chart does not render without it. With `metrics.enabled` (now `true` by default), the probes
-move to the management port, 9090, and the log lines become JSON unless `logFormat: text`.
+!!! note "Notes for upgrades"
+    - **To the release with the license in the database:** keep your values. The first start
+      imports the license claim; then see [License](#helm-license) to turn it off. Everyone signs in
+      again once.
+    - **With `tls.enabled`:** set `tls.truststore.secretName` (or `tls.clientAuth: none`); the chart
+      does not render without it.
+    - **With `metrics.enabled`** (`true` by default): the probes move to the management port, 9090,
+      and the log lines become JSON unless `logFormat: text`.
 
 ### 7. Uninstall
 
@@ -439,9 +555,9 @@ move to the management port, 9090, and the log lines become JSON unless `logForm
 helm uninstall readyroom -n readyroom
 ```
 
-This deletes the license claim, and with it the installation id, unless you used
-`persistence.license.existingClaim`. Your PostgreSQL database is not touched. With the embedded
-database, its claim (`data-readyroom-postgresql-0`) is kept until you delete it.
+The license claim is kept (`helm.sh/resource-policy: keep`); delete it yourself once you no longer
+want it. Your PostgreSQL database, which holds the license and the installation id, is not touched.
+With the embedded database, its claim (`data-readyroom-postgresql-0`) is kept until you delete it.
 
 ### Air-gapped clusters
 
@@ -459,8 +575,8 @@ Mirror the images into your registry, keeping their paths:
 | `postgres:16` (the embedded database and the backup CronJob) | `<registry>/postgres:16` |
 | `busybox:1.36.1` (license init container) | `<registry>/busybox:1.36.1` |
 
-The release package's `images/` archive holds the ReadyRoom and PostgreSQL images (`docker load`,
-then tag and push). Then point the chart at your registry:
+The release package's `images/` archive holds the ReadyRoom and PostgreSQL images (`docker load` or
+`podman load`, then tag and push). Then point the chart at your registry:
 
 ```yaml
 global:
@@ -482,6 +598,57 @@ This runs PostgreSQL 16 in the release, with a generated password and a volume o
 !!! warning "Evaluation only"
     The embedded database is one pod with no backups. Use your own PostgreSQL server for
     production.
+
+## Trying it out: the demo
+
+The ReadyRoom source repository has a `docker-compose.demo.yml` at its root. It builds ReadyRoom from
+source and runs it in read-only demo mode, with its own PostgreSQL and OpenLDAP, seeded mock users
+and groups, and check-in history. The login page lists the seeded accounts to sign in as, one per
+role.
+
+!!! warning "Not for production"
+    The demo's credentials are on its login page, so anything those accounts can see is readable by
+    anyone who reaches it. Keep only the mock data in it.
+
+1. Download an evaluation license for ReadyRoom from the ENS licensing portal and save it as
+   `license/license.lic` in the checkout **before the first start**: the demo reads it then only. The
+   demo is read-only, so its license screen refuses uploads; for a license added later, reset the demo
+   with `down -v` and start it again.
+2. Start it. Use `-p readyroom-demo`: without it, the demo would share its project, network and
+   volumes with the repository's other compose file.
+
+    === "Docker"
+
+        ```bash
+        docker compose -f docker-compose.demo.yml -p readyroom-demo up --build
+        ```
+
+    === "Podman"
+
+        ```bash
+        podman-compose -f docker-compose.demo.yml -p readyroom-demo up --build
+        ```
+
+3. Reach it. The demo **publishes no ports**: ReadyRoom listens on 8181 inside the demo network
+   only. Either attach a reverse proxy to the `readyroom-demo_demo` network and point it at
+   `app:8181`, or write an override file bound to `127.0.0.1`:
+
+    ```yaml
+    # demo-ports.yml
+    services:
+      app:
+        ports: ["127.0.0.1:8181:8181"]
+    ```
+
+    ```bash
+    docker compose -f docker-compose.demo.yml -f demo-ports.yml -p readyroom-demo up --build
+    ```
+
+    Then open <http://localhost:8181>.
+
+To reset it, `docker compose -f docker-compose.demo.yml -p readyroom-demo down -v` deletes its
+volumes, and the next `up` seeds from scratch. If it comes up with no data, read the seeders' logs:
+`docker compose -f docker-compose.demo.yml -p readyroom-demo logs demo-seed-ldap demo-seed-db`.
 
 ## Prepare PostgreSQL
 
@@ -603,7 +770,7 @@ with it. One that does not is sent to the login form.
     === "Release package"
 
         Copy them to `tls/keystore.p12` and `tls/truststore.p12`, make them readable by group 0
-        (`chgrp 0 tls/*.p12 && chmod 0640 tls/*.p12`), and set in `.env`:
+        (see [Fill in `.env`](#2-fill-in-env)), and set in `.env`:
 
         ```bash
         COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml
@@ -613,7 +780,7 @@ with it. One that does not is sent to the login form.
         APPLICATION_BASE_URL=https://readyroom.example.com:8181
         ```
 
-        Then `docker compose up -d`.
+        Then `./compose.sh up -d`.
 
     === "Helm"
 
@@ -754,7 +921,7 @@ bake it into an image or put it in a ConfigMap.
 
 === "Release package"
 
-    Put `krb5.conf` and `http.keytab` in `kerberos/` (keytab: `chgrp 0`, `chmod 0640`), and set in
+    Put `krb5.conf` and `http.keytab` in `kerberos/` (the keytab readable by group 0, as in [Fill in `.env`](#2-fill-in-env)), and set in
     `.env`:
 
     ```bash
@@ -781,7 +948,7 @@ bake it into an image or put it in a ConfigMap.
     ```
 
 Check the keytab inside the container with `klist -kte /etc/in-n-out/http.keytab`
-(`docker compose exec app ...` or `kubectl -n readyroom exec deploy/readyroom -- ...`). The server's
+(`./compose.sh exec app ...` or `kubectl -n readyroom exec deploy/readyroom -- ...`). The server's
 clock must be within 5 minutes of the domain controllers'.
 
 ## Deploy the Windows client
@@ -821,8 +988,7 @@ For mass deployment, configuration files, parameters and what each task does, se
       administrator (`superUserDns` / `APPLICATION_SUPERUSERDNS_*`) to open it. It also shows this
       installation's id (for example `RR-7F3K-29QD`), which you enter on the ENS licensing portal to
       bind a license. See [Licensing](../licensing.md).
-- [ ] You know where the license volume is (`readyroom_ens-license`, or the `readyroom-license`
-      claim) and it is in your backups, together with the database.
+- [ ] The database is in your backups: it holds the license and the installation id.
 - [ ] The schema is migrated: the log shows `Successfully applied 1 migration` on the first start
       (or `Schema "public" is up to date` later).
 - [ ] Backups are scheduled: `./backup.sh` from cron (release package), or `backup.enabled` and
@@ -839,7 +1005,7 @@ For mass deployment, configuration files, parameters and what each task does, se
       `kubectl port-forward`). For example
       `curl -k https://readyroom.example.com:8181/actuator/health/readiness`, or
       `helm test readyroom -n readyroom` (Helm).
-- [ ] The startup log (`docker compose logs app`, or `kubectl -n readyroom logs deploy/readyroom`)
+- [ ] The startup log (`./compose.sh logs app`, or `kubectl -n readyroom logs deploy/readyroom`)
       shows `Default time zone set to ...` with the zone you expect, and
       `LDAP connection pooling enabled`.
 - [ ] Browsing to ReadyRoom with a client certificate opens **Home**. Without one, the **Sign in**

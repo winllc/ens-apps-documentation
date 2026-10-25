@@ -12,7 +12,24 @@ ways to install it:
 
 ## For customers: downloading and verifying a release
 
-ENS Solutions sends you time-limited links to these files:
+### Downloading
+
+1. Sign in to the ENS licensing portal and open **Downloads** (`/account/downloads`).
+2. Pick the product. The latest version is at the top; every earlier version is listed below it,
+   newest first, with pre-releases marked. Expand a version to see its files, with each file's size
+   and SHA-256.
+3. Download the files you need, including `SHA256SUMS` (and `SHA256SUMS.asc` when the release is
+   signed).
+
+Any account that holds a license for the product can download it, an evaluation license
+included, so taking the free evaluation is enough to get the software. A product you have no
+license for shows the evaluation button instead. Each link works for a few minutes only (five
+by default); it is a fresh, short-lived link to ENS Solutions' private storage, made each time you
+click, and each download is recorded in your account's history. If your site cannot reach the
+portal, ENS Solutions can send you links instead (see
+[below](#sending-a-customer-links-directly)).
+
+Each version holds these files:
 
 | File | What it is |
 |---|---|
@@ -30,6 +47,8 @@ ENS Solutions sends you time-limited links to these files:
 | ReadyRoom | `readyroom` | `oci://ghcr.io/winllc/charts/readyroom` |
 | RSA Operations Portal | `rsa-operations-portal` | `oci://ghcr.io/winllc/charts/rsa-operations-portal` |
 
+### Verifying
+
 Check the download before installing it:
 
 ```bash
@@ -41,7 +60,8 @@ gpg --verify SHA256SUMS.asc SHA256SUMS
 sha256sum -c SHA256SUMS --ignore-missing   # checks the files you downloaded
 ```
 
-Both must succeed. `gpg` should report a good signature from the ENS Solutions release key. Check
+Both must succeed. The downloads page links to ENS Solutions' public key when the portal is
+configured with it. `gpg` should report a good signature from the ENS Solutions release key. Check
 its fingerprint against the one ENS Solutions gave you separately, not against anything in the
 download itself.
 
@@ -82,6 +102,8 @@ For the other products, use their names and repository from the table. By defaul
 contacts Sigstore's public services to verify a keyless signature, so on an air-gapped network,
 verify on a connected machine before you mirror the images.
 
+### Installing
+
 Then install it in one of two ways.
 
 === "Release package"
@@ -92,7 +114,7 @@ Then install it in one of two ways.
     ./install.sh            # first install: loads the images, creates .env from the template
     ```
 
-    `install.sh` tells you which settings in `.env` to fill in and where the license file goes
+    The scripts work with Docker or Podman. `install.sh` tells you which settings in `.env` to fill in and where the license file goes
     (`license/license.lic`; see [Licensing](licensing.md)). To upgrade, unpack the new bundle and
     run its `./upgrade.sh`, pointing it at the current installation. It carries your `.env` and
     license across. Each bundle's `README.md` has the details for that product.
@@ -126,8 +148,14 @@ CI then runs the tests, builds and smoke-tests the images, and publishes them to
 `ghcr.io/winllc/...:1.4.0`. From those same tested images it builds the bundle (and, for the Directory
 Services Portal, the native package), packages the Helm chart and publishes it to
 `oci://ghcr.io/winllc/charts/<chart>`, makes the SBOMs and `SHA256SUMS`, signs the checksums, signs the images and the chart with
-cosign, and uploads everything to the release bucket under
+cosign, and uploads everything to the private release bucket under
 `<product>/<version>/`. A release without a pre-release suffix also updates `<product>/latest.txt`.
+The licensing portal's **Downloads** page lists the new version within a few minutes (its listing
+cache, `RELEASES_LISTING_TTL`, five minutes by default).
+
+A release reaches customers from the bucket only. On a release tag the image job first checks that
+the bucket is configured (`RELEASE_S3_BUCKET` and the AWS credentials below) and fails, before
+anything is built or published, when it is not.
 Every pull request builds a dry-run bundle (`0.0.0-pr<n>`) as a workflow artifact, without signing
 or uploading, so packaging problems show up before a release.
 
@@ -145,11 +173,34 @@ whole organization:
 | `RELEASE_GPG_PRIVATE_KEY` | secret | ASCII-armored private signing key |
 | `RELEASE_GPG_PASSPHRASE` | secret | Its passphrase, if it has one |
 
-Until the bucket is configured, CI keeps each release bundle as a workflow artifact for 30 days
-instead. Until the signing key is configured, bundles are unsigned. The job summary says which.
+Without the bucket settings a release tag fails (see above). The signing key is optional: without
+it, releases are unsigned (no `SHA256SUMS.asc`), and the job summary says so.
 
 Keep the bucket **private**: no public access and no website hosting. Customers only ever get
 pre-signed links.
+
+### Customer downloads in the licensing portal
+
+The licensing portal serves the **Downloads** page from the same bucket, read-only. It never
+streams the files: each download is a `302` redirect to a presigned link, and entitlement is
+checked again on every download. Configure it on the licensing service:
+
+| Setting | Value |
+|---|---|
+| `RELEASES_S3_BUCKET` | The release bucket. Unset, the page says downloads aren't available yet |
+| `RELEASES_S3_REGION` | Defaults to `us-east-1`; `auto` for R2 |
+| `RELEASES_S3_ENDPOINT` | Only for R2 or MinIO |
+| `RELEASES_S3_FORCE_PATH_STYLE` | `true` for MinIO |
+| `RELEASES_URL_TTL` | Seconds a download link works. Default `300` |
+| `RELEASES_LISTING_TTL` | Seconds a bucket listing is cached. Default `300` |
+| `RELEASES_GPG_PUBLIC_KEY_URL` | Optional: where customers get the release signing key |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | Read-only credentials, or an instance or task role |
+
+Give the portal its own credentials, separate from CI's write credentials:
+`s3:ListBucket` on the bucket and `s3:GetObject` on its objects, nothing else (on R2, an API
+token with *Object Read* on the bucket). The licensing portal's README has the full policy. Each
+download is audited as `release.downloaded`, and a download without a license for the product is
+refused and audited as `access.denied`.
 
 Create the signing key once, offline, and publish only its public half:
 
@@ -163,9 +214,10 @@ gpg --fingerprint releases@ens-solutions.com                   # send separately
 This key signs downloads. It is separate from the license signing key the licensing portal uses
 (see [Licensing](licensing.md)), and the two should never be the same key.
 
-### Sending a customer their download
+### Sending a customer links directly
 
-`tools/release/presign.sh` prints a link for every file in a release, valid for up to seven days:
+The portal is the normal way. For a customer who cannot use it, `tools/release/presign.sh`
+prints a link for every file in a release, valid for up to seven days:
 
 ```bash
 export RELEASE_S3_BUCKET=ens-releases          # plus RELEASE_S3_ENDPOINT for R2/MinIO

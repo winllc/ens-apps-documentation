@@ -58,14 +58,14 @@ Symptoms, likely causes and fixes. Start with the application log (stdout) and
 ## Signing in
 
 ??? failure "Nobody can trigger the first sync / no Admin menu"
-    `cert-alert.security.admin-identifiers` is empty (the default) or does not match an identifier
-    the directory publishes for you. Add your address or uid (or your entry's DN, as a YAML list
-    item) and restart. A `cn` does not count. See [Security → Roles](security.md#roles).
+    `cert-alert.security.admin-identifiers` is empty (the default) or does not name your `uid` or
+    your entry's DN. Add your uid (or your entry's DN, as a YAML list item) and restart. An e-mail
+    address and a `cn` do not count. See [Security → Roles](security.md#roles).
 
 ??? failure "I lost the Admin menu after upgrading"
-    `admin-identifiers` named you by something that no longer grants the role: a `cn`, display
-    name or preferred name, or an address added in CertAlert. Replace it with an address the
-    directory publishes for you, your `uid` or your entry's DN, and restart.
+    `admin-identifiers` named you by something that no longer grants the role: an e-mail address
+    (the startup log warns about each one and names the uid to use), a `cn`, display name or
+    preferred name. Replace it with your `uid` or your entry's DN, and restart.
 
 ??? failure "Client certificate is ignored; I always get the password form"
     - TLS must be enabled with a trust store containing the issuing CA and `client-auth: want`,

@@ -177,17 +177,24 @@ Each application checks its license signature with the Java runtime's own provid
 library has no cryptography of its own and needs no secret on your system. Whether that check works
 on a Java runtime in FIPS mode depends on the signature algorithm.
 
-!!! warning "Current state: licenses can't be verified on a Java runtime in FIPS mode"
-    Every application released so far carries license library 1.0.0, which checks only the
-    license's Ed25519 signature. Red Hat's OpenJDK in FIPS mode (on a FIPS-enabled RHEL host or
-    OpenShift cluster) does not offer Ed25519 signatures, so every license is refused with
-    "The signature could not be checked: Ed25519 Signature not available", and the application
-    is **unlicensed** (see [What the license controls](#what-the-license-controls)).
+Every application on its current code carries license library 1.2.0 and trusts two ENS production
+keys: Ed25519 and ECDSA P-256 (prime256v1). A license file can carry the same license signed by
+both. An application accepts it if any signature by a trusted key verifies with an algorithm the
+runtime provides, trying Ed25519 first. Red Hat's OpenJDK in FIPS mode (on a FIPS-enabled RHEL host
+or OpenShift cluster) has no Ed25519, so there the P-256 signature is the one that counts. A Java
+runtime that is not in FIPS mode checks Ed25519 as before.
+
+!!! warning "Moving to FIPS mode: get a re-signed license first"
+    Licenses issued before ENS enabled P-256 signing carry only the Ed25519 signature. On a Java
+    runtime in FIPS mode such a file is refused, with a message that it is signed only with
+    Ed25519, and the application is **unlicensed** (see
+    [What the license controls](#what-the-license-controls)). Before you move an installation to a
+    FIPS host, ask ENS Solutions for a re-signed file of the same license and upload it on the
+    license screen. The installation id and the license's revisions are unaffected. **Check a
+    file** on your licensing-portal account says whether a file has an ECDSA P-256 signature.
 
     Don't work around it with `-Dcom.redhat.fips=false`. It brings Ed25519 back by taking the
     whole JVM out of FIPS mode.
-
-    A Java runtime that is not in FIPS mode is not affected.
 
 | Runtime | Ed25519 | ECDSA P-256 (`SHA256withECDSA`) |
 |---|---|---|
@@ -200,39 +207,20 @@ These are the results of the license library's FIPS checks in the products-page 
 (job `licensing-fips`, using `NSS_FIPS=1` for Red Hat's FIPS mode). They are tests, not a
 certification.
 
-### What changes, and when
-
-Two things are needed, and neither has happened yet:
-
-1. **ENS issues dual-signed license files.** Once ENS has created its production ECDSA P-256
-   signing key and set it on the licensing portal, every license and re-issue carries two
-   signatures over the same content: Ed25519, and ECDSA P-256 with SHA-256. The production P-256
-   key has not been created yet.
-2. **Application releases with license library 1.1.0.** They trust ENS's P-256 public key next to
-   the Ed25519 key. When the runtime can't check Ed25519, they check the P-256 signature through
-   the runtime's FIPS provider instead. If no signature can be checked, the license screen says
-   so and tells the administrator to ask ENS Solutions for a file with an ECDSA P-256 signature.
-
-Dual-signed files also work with releases that carry library 1.0.0, outside FIPS mode, because
-that library reads only the first (Ed25519) signature. Licenses issued before step 1 carry only
-the Ed25519 signature. To run in FIPS mode you will then need a re-issued file from ENS Solutions.
-**Check a file** on your licensing-portal account says whether a file has an ECDSA P-256
-signature.
-
 ## For ENS: keys and issuing
 
 - **Signing keys.** The portal signs licenses with an Ed25519 key passed in `LICENSE_SIGNING_KEY`
   or `LICENSE_SIGNING_KEY_FILE`. Generate one with `npm run license -- keygen` in the products-page
   repository. Keep the private key in a secret store, back it up, and never commit it.
-- **The ECDSA P-256 key, for FIPS mode.** Optional, and not yet created for production. Generate it
-  with `npm run license -- keygen --alg p256` on a trusted machine, and set it in
-  `LICENSE_SIGNING_KEY_P256` or `LICENSE_SIGNING_KEY_P256_FILE`. From then on every license and
-  re-issue is signed with both keys, and `/api/licensing/keys` lists both public keys. Then:
-  1. add the P-256 public key to each application's `EnsKeys`, next to the Ed25519 key, with
-     license library 1.1.0, and release;
-  2. for a customer running in FIPS mode, open their license in `/admin` and use **Re-sign**. It
-     issues the same license as the next revision, signed with both keys. The action appears only
-     on a revision that lacks one of the current keys' signatures.
+- **The ECDSA P-256 key, for FIPS mode.** The production key exists, and every application trusts
+  its public key from license library 1.2.0. Keep the private key with the Ed25519 one. Set it on
+  the portal in `LICENSE_SIGNING_KEY_P256` or `LICENSE_SIGNING_KEY_P256_FILE`. From then on every
+  license and re-issue is signed with both keys, and `/api/licensing/keys` lists both public keys.
+  For a customer running in FIPS mode, or moving to it, open their license in `/admin` and use
+  **Re-sign**. It issues the same license as the next revision, signed with both keys. The action
+  appears only on a revision that lacks one of the current keys' signatures. (A new key of either
+  kind is made with `npm run license -- keygen`, adding `--alg p256` for P-256, on a trusted
+  machine.)
 - **Public keys.** Each application has the public key built in, as `EnsKeys`, by key id. Licenses
   name the key that signed them, so keys can be rotated:
   1. add the new public key to every application and release;

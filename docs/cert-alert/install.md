@@ -1,14 +1,15 @@
 # Installation
 
-You can install CertAlert in two ways:
+## At a glance
 
-- **The release package.** A signed download that runs CertAlert and its PostgreSQL with Docker
-  Compose. The container images are inside it, so it installs on a host with no internet access.
-- **The Helm chart.** For Kubernetes and OpenShift. It is published with every release, at the
-  same version as the application.
+| Method | Use it for | You run |
+|---|---|---|
+| [Release package](#install-with-docker-or-podman) | One host with Docker or Podman, including hosts with no internet access. CertAlert and its PostgreSQL run with Compose | `install.sh`, `upgrade.sh` |
+| [Helm chart](#install-with-helm) | Kubernetes and OpenShift, with your own PostgreSQL | `helm install`, `helm upgrade` |
+| [Demo](#trying-it-out-the-demo) | A read-only look at CertAlert with invented data. **Not for production** | `docker compose -f docker-compose.demo.yml` |
 
-Both run the same tested image, `ghcr.io/winllc/cert-alert:<version>`. For every setting
-referenced here, see [Configuration](configuration.md).
+The package and the chart run the same tested image, `ghcr.io/winllc/cert-alert:<version>`.
+For every setting referenced here, see [Configuration](configuration.md).
 
 ## Prerequisites
 
@@ -18,7 +19,7 @@ referenced here, see [Configuration](configuration.md).
 |---|---|
 | **LDAP directory** | Publishing `icOrgPerson` / `icOrgServer` entries, or equivalents with the attribute names mapped in configuration. Use `ldaps://` for anything but a lab. |
 | **Service account** | A read-only account is enough: it reads people, servers and their certificates. It needs write access only if you enable certificate clean-up or editable attributes. |
-| **An administrator** | At least one person to name in the admin identifiers: an address the directory publishes for them, or their uid. Not a common name. |
+| **An administrator** | At least one person to name in the admin identifiers, by **uid** (or entry DN). An e-mail address there is ignored. |
 | **An ENS license** | An evaluation, or the license issued against your order, from the ENS licensing portal. See [Licensing](../licensing.md). |
 | **SMTP server** *(optional)* | For the email round-up and the email alert channel. |
 | **Keystores** *(optional)* | A PKCS#12 key store and trust store, if users will sign in with X.509 client certificates. |
@@ -28,9 +29,9 @@ referenced here, see [Configuration](configuration.md).
 
 | Requirement | Notes |
 |---|---|
-| **Docker Engine 24+** | With the Compose plugin (`docker compose version`). |
+| **Docker or Podman** | Docker Engine 24+ with Compose v2 (`docker compose`, or a standalone `docker-compose` v2; v1 is refused). Or Podman 4.0+ with podman-compose 1.3.0+ (`podman compose` is used when podman-compose is not installed). |
 | **Disk** | About 3 GB for the images, plus the database. |
-| **gpg and sha256sum** | To verify the download. |
+| **sha256sum, gpg** | To verify the download. |
 
 The package includes PostgreSQL (`postgres:17.11-alpine`). You do not need your own.
 
@@ -44,33 +45,34 @@ The package includes PostgreSQL (`postgres:17.11-alpine`). You do not need your 
 | **A default StorageClass** | Or one you name, for the license PVC (100Mi, `ReadWriteOnce`). |
 | **An Ingress controller or Route** | To reach the UI from outside the cluster. For client-certificate sign-in, one that supports TLS passthrough, or a LoadBalancer Service. |
 
-## Choosing a method
+## Getting the release
 
-| | Release package | Helm chart |
-|---|---|---|
-| Runs on | One Docker host | Kubernetes or OpenShift |
-| Database | Included (PostgreSQL in the bundle) | Your PostgreSQL; evaluation-only one included |
-| Air-gapped | Yes: the images are in the download | Yes: mirror the images, set `global.imageRegistry` |
-| Settings | `.env` (from `env.template`) | Helm values |
-| Upgrade | `./upgrade.sh --from <old dir>` | `helm upgrade` |
+1. Sign in to the **ENS licensing portal** and open **Downloads** (`/account/downloads`). Any
+   account with a non-revoked CertAlert license, evaluation licenses included, can download. The
+   page lists every version, with the latest highlighted, and each file's size and SHA-256.
+2. Download, into one directory:
 
-## Install from the release package
+    | File | What it is |
+    |---|---|
+    | `cert-alert-<version>.tar.gz` | The release package, with the images |
+    | `cert-alert-<version>.tgz` | The Helm chart (also at `oci://ghcr.io/winllc/charts/cert-alert`) |
+    | `sbom-cert-alert.spdx.json`, `sbom-postgres.spdx.json` | SBOMs of the two images |
+    | `SHA256SUMS`, `SHA256SUMS.asc` | Checksums, and ENS Solutions' signature over them when the release is signed |
 
-### 1. Download and verify
+3. Verify them before you unpack anything:
 
-ENS Solutions sends you links to `cert-alert-<version>.tar.gz`, the SBOMs, `SHA256SUMS` and
-`SHA256SUMS.asc`. Verify them before you unpack anything, as described in
-[Releases and downloads](../releases.md):
+    ```bash
+    sha256sum -c SHA256SUMS --ignore-missing     # each file you downloaded
+    gpg --verify SHA256SUMS.asc SHA256SUMS       # when signed, with the ENS release key imported
+    ```
 
-```bash
-gpg --verify SHA256SUMS.asc SHA256SUMS
-sha256sum -c SHA256SUMS --ignore-missing
-```
+The files are delivered from ENS Solutions' own storage, not from GitHub Releases. Importing the
+release key and verifying the cosign signatures of the image and the chart are described in
+[Releases and downloads](../releases.md).
 
-Release images and the Helm chart are also signed with cosign; see
-[Releases → Verifying the images and the chart](../releases.md#verifying-the-images-and-the-chart).
+## Install with Docker or Podman
 
-### 2. Unpack and run install.sh
+### 1. Unpack and run install.sh
 
 ```bash
 tar xzf cert-alert-<version>.tar.gz
@@ -78,10 +80,16 @@ cd cert-alert-<version>
 ./install.sh
 ```
 
-The first run loads the images, creates `.env` from `env.template` with a random database
-password, and lists what you must fill in. It does not start anything yet.
+The first run picks the container engine, loads the images, creates `.env` from `env.template`
+with a random database password, and lists what you must fill in. It does not start anything
+yet.
 
-### 3. Fill in .env
+The engine is, in order: `--engine docker|podman`, the `CONTAINER_ENGINE` environment variable,
+`CONTAINER_ENGINE` in `.env`, and otherwise Docker if its daemon answers, else Podman. The
+scripts print which engine and compose command they use, and the first run records the engine
+in `.env`, so later runs and upgrades keep it.
+
+### 2. Fill in .env
 
 Edit `.env`. Set at least:
 
@@ -90,14 +98,15 @@ Edit `.env`. Set at least:
 | `CERT_ALERT_LDAP_URL` | `ldaps://directory.example.gov:636` |
 | `CERT_ALERT_LDAP_BASE` | `dc=example,dc=gov` |
 | `CERT_ALERT_LDAP_USER` / `CERT_ALERT_LDAP_PASSWORD` | the service account it binds as |
-| `CERT_ALERT_SECURITY_ADMIN_IDENTIFIERS` | `pki-admin@example.gov,jdoe` |
+| `CERT_ALERT_SECURITY_ADMIN_IDENTIFIERS` | `pki-admin,jdoe` (uids, comma-separated) |
+
+A DN has commas of its own: list it as `CERT_ALERT_SECURITY_ADMIN_IDENTIFIERS_0`, `_1`, … instead.
 
 Then, if you use them:
 
 - SMTP (`SPRING_MAIL_*`) and its timeouts (`CERT_ALERT_MAIL_*_TIMEOUT_MS`);
 - TLS (`CERT_ALERT_TLS_*`, with the keystores in `tls/`);
-- where the UI is published (`CERT_ALERT_BIND_ADDRESS`, `CERT_ALERT_PORT`), and behind a reverse
-  proxy `SERVER_FORWARD_HEADERS_STRATEGY=framework` and `ENS_COOKIE_SECURE`;
+- where the UI is published (see [step 4](#4-choose-where-it-listens));
 - sessions (`ENS_SESSION_*`) and the notice-and-consent banner (`ENS_CONSENT_BANNER_*`);
 - client certificates (`ENS_X509_*`): revocation at sign-in, allowed issuers, mapping, and
   header mode;
@@ -114,52 +123,75 @@ added as its environment variable: `cert-alert.ldap.page-size` is `CERT_ALERT_LD
     `.env` holds passwords. `install.sh` makes it readable by its owner only (`0600`). Values that
     contain spaces, `#` or `$` go in single quotes.
 
-### 4. The license
+### 3. Add the license
 
-Put your license at `license/license.lic`. When CertAlert has started, `install.sh` copies it into
-the `ens-license` volume. It never replaces a different license already installed there, which
-may be a newer one uploaded on the license screen.
+Choose one:
 
-Or skip this and upload the license on the license screen after the first start.
+- **The drop-in.** Put the file at `license/license.lic`. Before starting CertAlert, `install.sh`
+  sets `ENS_LICENSE` in `.env` from it, which CertAlert installs as below. A different license
+  already installed, which may be a newer one uploaded on the license screen, is kept.
+- **`ENS_LICENSE` in `.env`.** The license text itself: the token between the file's `BEGIN` and
+  `END` lines, or the whole file base64-encoded (`base64 -w0 license.lic`). It is installed at
+  start if no license is installed yet, or if it is a newer revision of the installed one.
+- **The license screen.** Upload it at **Administration → License** (`/admin/license`) after the
+  first start.
 
-### 5. First start
+The image sets `ENS_LICENSE_FILE` and `ENS_LICENSE_STATE_DIR` to `/var/lib/ens/certalert`, the
+`ens-license` volume; leave them as they are. See [Licensing](../licensing.md) for binding,
+expiry and the rest.
+
+### 4. Choose where it listens
+
+A new install publishes the UI on **every interface** (`CERT_ALERT_BIND_ADDRESS=0.0.0.0`), port
+8080 (`CERT_ALERT_PORT`). With `CERT_ALERT_TLS_ENABLED=true` it is `https://` on the same port.
+
+| You want | Set |
+|---|---|
+| TLS in CertAlert, reachable from the network | `CERT_ALERT_TLS_ENABLED=true`, keystore and trust store in `tls/` |
+| A reverse proxy on this host | `CERT_ALERT_BIND_ADDRESS=127.0.0.1`, `SERVER_FORWARD_HEADERS_STRATEGY=framework`, `ENS_COOKIE_SECURE=true`. Point the proxy at `http://127.0.0.1:8080` |
+| A reverse proxy container on the compose network | `cp docker-compose.no-ports.yml docker-compose.override.yml`. Nothing is published; the proxy joins `cert-alert_default` and forwards to `http://cert-alert:8080`. Needs Docker Compose 2.24+ or podman-compose 1.4.0+ |
+| Another port | `CERT_ALERT_PORT`. Rootless Podman needs 1024 or above |
+
+!!! warning "Plain HTTP on 0.0.0.0"
+    With TLS off and the UI on any address other than `127.0.0.1`, CertAlert is reachable over
+    plain HTTP: directory passwords and session cookies cross the network in clear text.
+    `install.sh` and `upgrade.sh` warn every time they run. Turn TLS on, or put a
+    TLS-terminating proxy in front and bind to `127.0.0.1`.
+
+### 5. Start it
 
 ```bash
 ./install.sh
 ```
 
-This time it checks `.env`, starts PostgreSQL and CertAlert, installs `license/license.lic`, and
+This time it checks `.env`, sets `ENS_LICENSE` from `license/license.lic`, starts PostgreSQL and CertAlert, and
 waits for CertAlert to report healthy. It prints the URL and the license screen's address.
-
-The UI is on port 8080 of the host. `CERT_ALERT_PORT` moves it, and
-`CERT_ALERT_BIND_ADDRESS=127.0.0.1` keeps it to the host, behind a reverse proxy of your own.
-With `CERT_ALERT_TLS_ENABLED=true` it is `https://` on the same port.
-
-!!! warning "Plain HTTP on every interface"
-    With TLS off and the UI published on every interface (the default bind address, `0.0.0.0`),
-    `install.sh` and `upgrade.sh` print a warning: directory passwords and session cookies would
-    cross the network in clear text. Either put a TLS-terminating reverse proxy in front and set
-    `CERT_ALERT_BIND_ADDRESS=127.0.0.1`, `SERVER_FORWARD_HEADERS_STRATEGY=framework` and
-    `ENS_COOKIE_SECURE=true`, or turn TLS on in CertAlert.
 
 Day to day:
 
-```bash
-docker compose ps                      # status and health
-docker compose logs -f cert-alert      # application log
-docker compose up -d                   # after editing .env (restart alone does not re-read it)
-docker compose down                    # stop (data kept)
-```
+=== "Docker"
 
-!!! danger "`docker compose down -v` deletes your data"
+    ```bash
+    docker compose ps                      # status and health
+    docker compose logs -f cert-alert      # application log
+    docker compose up -d                   # after editing .env (restart alone does not re-read it)
+    docker compose down                    # stop (data kept)
+    ```
+
+=== "Podman"
+
+    ```bash
+    podman-compose ps                      # status and health
+    podman-compose logs -f cert-alert      # application log
+    podman-compose up -d                   # after editing .env (restart alone does not re-read it)
+    podman-compose down                    # stop (data kept)
+    ```
+
+!!! danger "`down -v` deletes your data"
     It deletes the database volume and the `ens-license` volume. The license volume holds the
     installation id, so the installation gets a new id and a bound license must be re-bound.
 
 ### 6. Upgrade with upgrade.sh
-
-Before upgrading, check that `CERT_ALERT_SECURITY_ADMIN_IDENTIFIERS` in the old `.env` names each
-administrator by an address the directory publishes for them or by their uid. A common name,
-display name or preferred name, or an address added in CertAlert, does not grant `ROLE_ADMIN`.
 
 Unpack the new release next to the old one and point it at the old directory:
 
@@ -169,11 +201,54 @@ cd cert-alert-<new>
 ./upgrade.sh --from ../cert-alert-<old>
 ```
 
-It copies `.env`, `license/`, `tls/` and `email-templates/` across without overwriting anything,
-lists settings that are new in this release, backs up the database to `backups/`, loads the new
-images and restarts on them. The database and license volumes are kept. The schema is migrated
-on start. Migrations are not undone, so going back to an older release means restoring that
-backup.
+It copies `.env`, `license/`, `tls/`, `email-templates/` and a `docker-compose.override.yml` across
+without overwriting anything, lists settings that are new in this release, backs up the database
+to `backups/`, loads the new images and restarts on them. The database and license volumes are
+kept, and the schema is migrated on start. Migrations are not undone, so going back to an older
+release means restoring that backup.
+
+!!! note "What an upgrade keeps, and what changes"
+    - **Engine.** It uses `CONTAINER_ENGINE` from `.env`. An `.env` without it uses Docker if its
+      daemon answers, so an existing Docker install needs nothing new.
+    - **Address and port.** It keeps `CERT_ALERT_BIND_ADDRESS` and `CERT_ALERT_PORT` from `.env`.
+      An install on `127.0.0.1` stays there. If `.env` was written for the release that listened
+      on `127.0.0.1` by default and does not set the address, the upgrade adds
+      `CERT_ALERT_BIND_ADDRESS=127.0.0.1`. `CERT_ALERT_ALLOW_PLAIN_HTTP` is no longer read.
+    - **Administrators.** `CERT_ALERT_SECURITY_ADMIN_IDENTIFIERS` now matches uids and entry DNs
+      only. Replace any e-mail address with the uid that the startup warning names.
+    - **License.** The license, the installation id and the revisions seen are now kept in the
+      database. The first start imports them from the license volume, so the id is unchanged.
+    - **Sessions** are kept in the database, and the cookie is now `SESSION`: everybody signs in
+      once more.
+    - **Revocation.** With `ENS_X509_REVOCATION` unset, client certificates are now checked at
+      sign-in, soft-fail. `ENS_X509_REVOCATION=off` restores the old behaviour.
+
+    Read the upgrade notes in the package's `README.md` before upgrading.
+
+### Podman: rootless and boot
+
+The same files work with Podman, rootful (`sudo`) or rootless. The compose file names its images
+fully, because Podman has no default registry.
+
+- **Health checks need systemd.** Podman runs them from systemd timers, and PostgreSQL must be
+  healthy before CertAlert starts. Rootless, log in normally (not with `su`) so that your user
+  has a systemd session.
+- **Ports from 1024.** Rootless Podman cannot publish 80 or 443 unless
+  `net.ipv4.ip_unprivileged_port_start` is lowered. Keep `CERT_ALERT_PORT` at 8080 and put a
+  proxy on 443. `install.sh` checks this.
+- **Keep it running after logout:** `sudo loginctl enable-linger $USER`.
+- **Start at boot.** Podman has no daemon to restart containers. Run `podman-compose up -d` in the
+  package directory from a systemd unit (a user unit, with linger, when rootless), or generate
+  units with `podman generate systemd --new --files --name <container>`, or write Quadlet
+  `.container` files (Podman 4.4+).
+- **SELinux.** The `tls/` and `email-templates/` mounts carry `:Z`, so Podman relabels them. The
+  database, license and audit data are named volumes and need no labels.
+- **File ownership.** CertAlert runs as uid 185. Rootless, files in `tls/` and
+  `email-templates/` appear as owned by root inside the container: run
+  `chmod -R a+rX tls email-templates`, or `podman unshare chown -R 185:0 tls email-templates`.
+
+Moving an install from Docker to Podman is a new install plus a database restore (each engine
+has its own volumes), not an upgrade.
 
 ## Install with Helm
 
@@ -191,7 +266,7 @@ database:
   host: postgres.example.gov
   existingSecret: cert-alert-secrets        # key db-password
 security:
-  adminIdentifiers: [pki-admin@example.gov]
+  adminIdentifiers: [pki-admin]            # uids (or entry DNs)
 ```
 
 Create the Secret, then install:
@@ -214,7 +289,8 @@ one is missing.
 | Value | What it sets |
 |---|---|
 | `ldap.url`, `ldap.base`, `ldap.bindDn` | The directory and the service account |
-| `security.adminIdentifiers` | Who administers CertAlert |
+| `security.adminIdentifiers` | Who administers CertAlert: uids or entry DNs. An address is ignored |
+| `replicaCount` | `1`. More than one needs the license state in the database: see [Upgrade](#6-upgrade) |
 | `security.ldap.userSearchBase`, `.userSearchFilter`, `.userDnPatterns` | How password sign-in finds a user |
 | `database.host`, `.port`, `.name`, `.username`, `.params` | The external PostgreSQL |
 | `mail.host`, `.port`, `.username` | SMTP |
@@ -265,17 +341,19 @@ helm upgrade --install cert-alert ... --set license.existingSecret=cert-alert-li
 ```
 
 An init container copies it into the license volume **only if no license is installed there
-yet**, the same as the package's `install.sh`. A license uploaded later on the license screen is
+yet**, the same as the package's `install.sh`, and the chart also passes it to CertAlert as
+`ENS_LICENSE`, which installs it into the database if none is there or it is a newer revision. A license uploaded later on the license screen is
 never overwritten by a `helm upgrade`. To replace an installed license, upload the new one on the
 license screen.
 
 Or give the chart no license, and upload it on the license screen after the first start.
 
 !!! warning "Keep the license PVC"
-    The chart stores the license, the installation id and the license revisions seen in a PVC,
-    `cert-alert-license` for a release named `cert-alert`, mounted at `/var/lib/ens`. `helm upgrade` keeps it.
-    `helm uninstall` deletes it, and a reinstall then gets a new installation id. To keep it
-    across uninstalls, create the PVC yourself and set `persistence.license.existingClaim`.
+    The license PVC (`cert-alert-license` for a release named `cert-alert`, mounted at
+    `/var/lib/ens`) holds the license, the installation id and the revisions seen, until an
+    upgraded installation has imported them into the database. `helm upgrade`, `helm uninstall`
+    and an Argo CD prune all keep it (`helm.sh/resource-policy: keep`). Delete it yourself only
+    once you are sure the installation id is in the database or no longer wanted.
 
 ### 5. Reaching it: Ingress, OpenShift and mTLS
 
@@ -396,18 +474,24 @@ helm upgrade cert-alert oci://ghcr.io/winllc/charts/cert-alert --version X.Y.Z \
   --namespace cert-alert -f cert-alert-values.yaml
 ```
 
-Back up the database first, and check that `security.adminIdentifiers` names each administrator
-by an address the directory publishes for them or by their uid, not by a common name. The pod is
-replaced (only one replica runs), the schema is migrated on start, and the license PVC is kept with the installed license and the installation id.
+Back up the database first. With one replica the pod is replaced (`Recreate`); with more, they
+are rolled one at a time. The schema is migrated on start, and the license PVC is kept.
 Migrations are not undone by `helm rollback`: going back means restoring the backup.
 
-!!! note "Upgrading to the platform-baseline release"
-    - `metrics.enabled` is `true` by default: the actuator moves to port `9090` (plain HTTP), the
-      probes move with it, and the Service gets a `metrics` port. Set `metrics.enabled: false` to
-      keep the actuator on the application's port.
-    - `logFormat` is `json` by default.
-    - `x509.revocation` is `off` by default, so revocation at sign-in stays off until you turn it
-      on; startup logs a warning while certificate sign-in is on without it.
+!!! note "Before you upgrade"
+    - **Administrators.** `security.adminIdentifiers` now matches a uid or an entry DN only. An
+      e-mail address there is ignored; the NOTES and the startup log name the uid to use.
+    - **Revocation.** `x509.revocation` and `x509.revocationFail` now default to `""`: client
+      certificates are checked live at sign-in, soft-fail. Set `revocation: "off"` to keep the
+      check off.
+    - **Sessions** are kept in the database: everybody signs in once more after the upgrade.
+    - **`strategy`** defaults to `{}`: `Recreate` for one replica, `RollingUpdate` above one.
+    - **Several replicas.** The license state moves into the database on the first start,
+      imported from the license PVC. Upgrade with one replica first, then set
+      `persistence.license.imported: true` and raise `replicaCount`. The chart refuses more than
+      one replica without it (or a ReadWriteMany license volume).
+    - **Metrics and logs.** `metrics.enabled` is `true` (the actuator and the probes on port
+      `9090`, plain HTTP) and `logFormat` is `json`.
 
 ### 7. Uninstall
 
@@ -415,9 +499,9 @@ Migrations are not undone by `helm rollback`: going back means restoring the bac
 helm uninstall cert-alert --namespace cert-alert
 ```
 
-This deletes the license PVC the chart created, and with it the installation id. It does not
-delete a PVC you supplied with `persistence.license.existingClaim`, or the evaluation database's
-PVC (`data-cert-alert-postgresql-0`). Delete those yourself if you mean to.
+This keeps the license PVC the chart created, a PVC you supplied with
+`persistence.license.existingClaim`, and the evaluation database's PVC
+(`data-cert-alert-postgresql-0`). Delete them yourself with `kubectl delete pvc` if you mean to.
 
 ### Evaluation database
 
@@ -452,6 +536,49 @@ The chart then uses `registry.example.gov/winllc/cert-alert:X.Y.Z` (and
 `registry.example.gov/library/postgres:17.11-alpine`). Add `imagePullSecrets` if your registry
 needs them. The `helm test` pod and the license init container use the application image, so
 nothing else needs mirroring.
+
+## Trying it out: the demo
+
+!!! danger "Not for production"
+    The demo is for showing CertAlert, never for running it. Its sign-in page prints working
+    credentials, and it must never be pointed at a real directory.
+
+The CertAlert source repository has a `docker-compose.demo.yml` at its root. It builds the image
+from source and runs it in the `demo` profile: one container that generates a directory of
+invented people and servers, serves it from memory, and indexes it. Nothing can be changed,
+whoever signs in. The sign-in page lists one account per role (`demo.admin`, `demo.project`,
+`demo.contact`, `demo.reader`), all with the password `password`.
+
+1. Download an evaluation license for CertAlert from the ENS licensing portal, and save it as
+   `license/license.lic` in the repository. Or skip this and upload it later as `demo.admin`.
+2. Start it, always with `-p cert-alert-demo` so it never shares volumes with another stack:
+
+    === "Docker"
+
+        ```bash
+        docker compose -f docker-compose.demo.yml -p cert-alert-demo up --build
+        ```
+
+    === "Podman"
+
+        ```bash
+        podman-compose -f docker-compose.demo.yml -p cert-alert-demo up --build
+        ```
+
+3. Reach it. **The demo publishes no port.** It listens on 8080 inside its own network,
+   `cert-alert-demo_demo`. Either attach a reverse proxy to that network and point it at
+   `cert-alert:8080`, or write an override file of your own that binds it to this host only:
+
+    ```yaml
+    # demo-ports.yml
+    services:
+      cert-alert:
+        ports: ["127.0.0.1:8080:8080"]
+    ```
+
+    Add `-f demo-ports.yml` after `-f docker-compose.demo.yml` and open <http://localhost:8080>.
+
+4. Reset it, license included, with `down -v` and the same `-f` and `-p` options.
 
 ## Setup for both methods
 
@@ -510,8 +637,9 @@ nothing else needs mirroring.
   follows the container's memory limit. Setting `JAVA_OPTS` replaces the default, so keep those
   two options.
 - The JVM is PID 1, receives `SIGTERM` directly and shuts down gracefully.
-- The license lives in `/var/lib/ens/certalert` (`ENS_LICENSE_STATE_DIR`, `ENS_LICENSE_FILE`),
-  which must be persistent and writable.
+- The license volume is `/var/lib/ens/certalert` (`ENS_LICENSE_STATE_DIR`, `ENS_LICENSE_FILE`),
+  which must be persistent and writable. The license state itself is kept in the database, imported
+  from there on the first start after an upgrade.
 - Probe `/actuator/health/liveness` and `/actuator/health/readiness` (or `/livez` and `/readyz`
   on the application's port), not the aggregate `/actuator/health`, which turns `DOWN` when the
   directory is unreachable. The image's own `HEALTHCHECK` calls `/livez`. See
@@ -522,13 +650,13 @@ nothing else needs mirroring.
 
 ## First start checklist
 
-1. **Database**: the log shows Flyway applying migrations `V1` … `V20` on an empty database.
+1. **Database**: the log shows Flyway applying its migrations to an empty database.
 2. **Liveness**: `curl -fsS http://<host>:8080/livez` returns `{"status":"UP"}`. With Helm,
    `helm test cert-alert -n cert-alert` checks it through the Service.
 3. **Directory**: `/actuator/health` includes the LDAP indicator. It reports `DOWN` if the
    directory is unreachable (details are shown only to administrators). Readiness does not
    include the directory.
-4. **Sign in** with a directory password as one of the admin identifiers. The account menu should
+4. **Sign in** with a directory password as one of the admin identifiers (by uid). The account menu should
    read *Administrator*.
 
     !!! warning "Name at least one administrator"

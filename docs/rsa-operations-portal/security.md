@@ -28,6 +28,8 @@ release implements them, and the settings that change them.
 
 An ended session's next request goes to the sign-in page ("Your session has ended"); an AJAX call gets 401. Each end is audited as `auth.session-expired` with `details.reason` `idle`, `absolute` or `concurrent`. The older setting `server.servlet.session.timeout` is still read when `ENS_SESSION_IDLE_TIMEOUT` is not set. Release 1.5 shipped `server.servlet.session.timeout=480`, which Spring reads as 480 seconds, so its sessions ended after 8 minutes idle; they now last 30 minutes unless you set `ENS_SESSION_IDLE_TIMEOUT`.
 
+Sessions are kept in the Portal database (`ENS_SESSION_STORE=jdbc`, the default: Spring Session JDBC, tables `SPRING_SESSION` and `SPRING_SESSION_ATTRIBUTES`), shared by every Portal replica and kept across restarts and upgrades; `memory` keeps them in the Portal's memory, as releases up to 1.5 did. Session attributes are read back only through an allow-list of the classes the Portal keeps in a session, with depth and size limits, and the refused class is named in the log; an attribute that cannot be read counts as absent, so the user is at worst signed out. No passcode, PIN or emergency access code is written to the session table: emergency access codes stay in the memory of the replica that made them (see [High availability](availability-and-sizing.md#high-availability)).
+
 ## Authorization
 
 ### Roles
