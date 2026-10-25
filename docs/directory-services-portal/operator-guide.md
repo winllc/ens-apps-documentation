@@ -8,15 +8,18 @@ reading logs, backing up its data, monitoring, upgrading, and troubleshooting.
 | Process | Docker package | Native package | Helm chart | Listens on |
 |---|---|---|---|---|
 | Web tier (nginx + static client) | `web` container (uid 1001) | Host nginx, site `directory-services-portal.conf` | Deployment `<release>-directory-services-portal-web` | 8080 (HTTP); 8443 with HTTPS |
-| API (Spring Boot) | `api` container (uid 185) | systemd unit `directory-services-portal` as user `dsp` | Deployment `<release>-directory-services-portal-api` (one replica) | 3001 (never published by the compose files or the chart; `127.0.0.1` in the native package). The management port (`MANAGEMENT_SERVER_PORT`, 9090 in the Helm chart) when set |
+| API (Spring Boot) | `api` container (uid 185) | systemd unit `directory-services-portal` as user `dsp` | Deployment `<release>-directory-services-portal-api` (one replica; more with a shared database) | 3001 (never published by the compose files or the chart; `127.0.0.1` in the native package). The management port (`MANAGEMENT_SERVER_PORT`, 9090 in the Helm chart) when set |
 | Demo OpenLDAP (optional) | `openldap` container (`install.sh --demo-openldap`) | n/a | n/a | 389 (not published) |
 
-!!! warning "Run exactly one API instance"
-    The API is the single writer of its data directory: the configuration store, the hash-chained
-    audit store and the license state are files, and sessions, lockout counters and background
-    tasks are held in memory. A second API process on the same data would fork the audit chain and
-    lose configuration changes. The Helm chart allows `api.replicaCount` of 0 or 1 only. See
-    [High availability](availability-and-sizing.md#high-availability) for what to do instead.
+!!! warning "One API instance unless it has a shared database"
+    Without `DSP_DATABASE_URL`, the API is the single writer of its data directory: the
+    configuration store, the hash-chained audit store and the license state are files, and
+    sessions, lockout counters and background tasks are held in memory. A second API process on the
+    same data would fork the audit chain and lose configuration changes, so the Helm chart refuses
+    `api.replicaCount` above 1 without `database.url`. With a shared PostgreSQL database, that state
+    moves into it and several API instances can run. See
+    [Without a shared database](availability-and-sizing.md#without-a-shared-database-one-api-instance)
+    and [With a shared database](availability-and-sizing.md#with-a-shared-database-several-api-instances).
 
 ## Start, stop and status
 
@@ -133,8 +136,11 @@ Useful API log messages:
 
 ## Data and backups
 
-All portal state outside LDAP lives in `DATA_DIR`. The license and the installation id live in a
-separate directory or volume.
+Without a shared database, all portal state outside LDAP lives in `DATA_DIR`, and the license and
+the installation id live in a separate directory or volume, as below. With `DSP_DATABASE_URL`, the
+first start imports these files into PostgreSQL and then no longer reads or writes them: back up
+the database instead (it holds the configuration, the audit store, the license and the
+installation id).
 
 | Path | Content | Notes |
 |---|---|---|
@@ -294,7 +300,8 @@ To go back to the previous release, see
 
 !!! note
     A restart cancels running background tasks (analyses and slow metrics). Saved analysis
-    results on disk are kept. Users are signed out, because sessions are held in memory.
+    results are kept. Without a shared database, users are signed out, because sessions are held
+    in memory; with one, sessions are in the database and a restart signs nobody out.
 
 ## Troubleshooting runbook
 
@@ -314,7 +321,7 @@ To go back to the previous release, see
 | Login page shows **Directory unreachable** / `/api/info` has `connected:false` | LDAP server down, firewall, wrong URL, TLS failure, bad service account | Sign in as an administrator and read `error` from `/api/info`, or read the API log. Test with `ldapsearch` from the API host. Check `LDAP_BIND_DN` and the bind password (`LDAP_BIND_PASSWORD_FILE` or `LDAP_BIND_PASSWORD`) |
 | LDAPS fails with a certificate error | Private CA not in the JVM trust store, or host name mismatch | Add a trust store (see [LDAPS with a private CA](configuration.md#ldaps-with-a-private-ca); with Helm, `ldap.truststore`). Use `LDAP_TLS_REJECT_UNAUTHORIZED=false` only for testing |
 | "Invalid username or password" for valid users | `LDAP_USER_FILTER`/`LDAP_USER_SEARCH_BASE` finds zero or more than one entry, or the login name contains disallowed characters | Check the audit log: `Unknown user` versus `Wrong password`. Test the filter with `ldapsearch` |
-| HTTP 429 "Too many failed login attempts" | `LOGIN_MAX_FAILURES` failures (8 by default) for the same client address and username within `LOGIN_LOCKOUT_WINDOW` (15 minutes) | Wait for the window to end, or restart the API (the counters are in memory). Make sure `SERVER_FORWARD_HEADERS_STRATEGY` is set behind a proxy, so the API doesn't see every user as the proxy's address |
+| HTTP 429 "Too many failed login attempts" | `LOGIN_MAX_FAILURES` failures (8 by default) for the same client address and username within `LOGIN_LOCKOUT_WINDOW` (15 minutes) | Wait for the window to end, or, without a shared database, restart the API (the counters are in memory; with one they are in `dsp_login_failure`). Make sure `SERVER_FORWARD_HEADERS_STRATEGY` is set behind a proxy, so the API doesn't see every user as the proxy's address |
 | Signed in but immediately signed out, or a 401 loop over HTTP | `ENS_COOKIE_SECURE=true` while users reach the portal over plain HTTP | Use HTTPS, or set `ENS_COOKIE_SECURE=false` |
 | Users are signed out sooner than before | The idle timeout default is now `30m`; administrators may have a shorter `ENS_SESSION_ADMIN_IDLE_TIMEOUT`; `ENS_SESSION_ABSOLUTE_TIMEOUT` ends every session 12 hours after sign-in | Set the session values you want (see [Configuration](configuration.md#sessions-and-sign-in-lockout)). The audit log's `auth.session-expired` gives the reason |
 | 403 `consent_required` on sign-in | The consent banner is enabled and this browser session has not acknowledged it | Users click **I agree**. A script must `POST /api/auth/consent` first |
@@ -332,6 +339,6 @@ To go back to the previous release, see
 | A chart or analysis is marked partial (truncated) | Directory larger than `METRICS_MAX_ENTRIES` | Narrow with a filter, or raise the limit (watch heap) |
 | HTTP 429 "You already have N computations running" | `JOBS_MAX_ACTIVE_PER_USER` reached | Wait or cancel tasks from the bell menu, or raise the limit |
 | Demo OpenLDAP is missing entries you expected | The demo LDIF is loaded only into an empty database | `./portal.sh down`, `docker volume rm directory-services-portal_ldap-data`, then `./portal.sh up` (destroys the demo directory's data) |
-| Users lose sessions after a deploy | Sessions are in memory | Expected. Schedule restarts outside working hours |
+| Users lose sessions after a deploy | Without a shared database, sessions are in memory | Expected. Schedule restarts outside working hours, or give the API a shared database (`DSP_DATABASE_URL`), which keeps sessions across restarts |
 | No `/actuator/prometheus` | `MANAGEMENT_SERVER_PORT` is not set, or you are asking the main port | Set it, and scrape that port |
 | SELinux denies nginx → API (native) | `httpd_can_network_connect` is off | `setsebool -P httpd_can_network_connect 1` |

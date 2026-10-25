@@ -150,7 +150,8 @@ API through the same origin.
   shows the sign-in page with the reason. Each expiry is audited as `auth.session-expired` with the
   reason `idle`, `absolute`, `concurrent` or `account-removed`. A session ended by the concurrent
   limit gets a plain 401 on its next request.
-- **Lockout counters are held in memory.** A restart clears them.
+- **Lockout counters are held in memory** without a shared database, so a restart clears them.
+  With `DSP_DATABASE_URL` they are in the database and count across instances, like the sessions.
 
 !!! warning "The idle timeout default changed from 480 minutes to 30 minutes"
     - **New installs** get `30m`.
@@ -492,8 +493,10 @@ the UI, and it is persisted as one JSON document: `$DATA_DIR/portal-config.json`
 The API reads the file once, at startup, and keeps it in memory. Updates are serialized, applied to
 a copy, and written atomically (a temporary file plus rename). If the file can't be parsed at
 startup, the API fails with `Could not read .../portal-config.json`. Because the API never reads the
-file again while it runs, only one API process may use a data directory; see
-[High availability](availability-and-sizing.md#high-availability).
+file again while it runs, only one API process may use a data directory. With a shared database
+(`DSP_DATABASE_URL`) the configuration is a versioned document in PostgreSQL instead: the first
+start imports this file, which is then no longer read or written. See
+[High availability](availability-and-sizing.md#with-a-shared-database-several-api-instances).
 
 Other files in `DATA_DIR`:
 

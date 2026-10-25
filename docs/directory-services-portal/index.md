@@ -42,8 +42,10 @@ flowchart LR
 - The **web** tier serves the static React build and forwards `/api` to the API. The browser
   therefore sees a single origin, so the `SameSite=Strict` session cookie and the CSRF header
   work without any CORS configuration.
-- The **API** serves only `/api/**`. It authenticates users by LDAP bind (or certificate), keeps
-  sessions in memory, and stores the portal's own configuration in a JSON file.
+- The **API** serves only `/api/**`. It authenticates users by LDAP bind (or certificate). By default
+  it keeps sessions in memory and stores the portal's own configuration in a JSON file; with a shared
+  PostgreSQL database (`DSP_DATABASE_URL`), sessions, configuration and the audit store are kept
+  there instead, and several API instances can run.
 - The **LDAP server** holds all directory data. The portal stores only its configuration,
   audit log and saved analysis results.
 
