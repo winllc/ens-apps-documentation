@@ -139,7 +139,7 @@ address; a logout with a usable `sessionId` never is.
 | Observability | Micrometer with Prometheus, on a separate management port; ECS JSON logs |
 | Directory | Any LDAP v3 server. People are `inetOrgPerson` by default; groups are `groupOfUniqueNames`. |
 | Caching | Caffeine |
-| Delivery | Signed release package (Docker Compose) and Helm chart |
+| Delivery | Signed release package (Docker Compose or Podman) and Helm chart |
 | Container | Red Hat UBI 9 `openjdk-21-runtime` with `krb5-workstation` |
 | Client | Windows PowerShell 5.1 and Windows Task Scheduler |
 
