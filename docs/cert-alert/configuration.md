@@ -424,10 +424,10 @@ in with certificates. They add to `cert-alert.security.x509` above. See
 
 | Env var | Default | Helm | Description |
 |---|---|---|---|
-| `ENS_X509_REVOCATION` | `off` | `x509.revocation` | `off`, `ocsp`, `crl` or `ocsp-then-crl`: checked live for every certificate presented, before it is matched to anybody. Off by default so an upgrade changes nothing; with certificate sign-in on and revocation off, startup logs a warning that DISA STIG requires it |
+| `ENS_X509_REVOCATION` | unset (`ocsp-then-crl`, soft-fail) | `x509.revocation` | `off`, `ocsp`, `crl` or `ocsp-then-crl`: checked live for every certificate presented, before it is matched to anybody. Unset means `ocsp-then-crl`: a certificate found revoked is refused, and one no responder or CRL answers for signs in with a warning. With certificate sign-in on and revocation `off`, startup logs a warning that DISA STIG requires it |
 | `ENS_X509_OCSP_RESPONDER_URL` | none | `x509.ocspResponderUrl` | Ask this responder instead of the one the certificate names, for example a local OCSP relay |
 | `ENS_X509_CRL_DIR` | none | (`extraEnv`, with `extraVolumes`) | A directory of CRL files (DER or PEM), re-read when they change. With it set, no distribution point is fetched: the air-gapped option |
-| `ENS_X509_REVOCATION_FAIL` | `closed` | `x509.revocationFail` | `closed` refuses a certificate whose status cannot be found; `open` allows it, with a warning (and a startup warning) |
+| `ENS_X509_REVOCATION_FAIL` | `open` while `ENS_X509_REVOCATION` is unset, otherwise `closed` | `x509.revocationFail` | `closed` refuses a certificate whose status cannot be found; `open` allows it, with a warning (and a startup warning when set explicitly) |
 | `ENS_X509_REVOCATION_CACHE` | `10m` | `x509.revocationCache` | How long a good or revoked answer is reused, per issuer and serial number. No answer is reused for 30 seconds |
 | `ENS_X509_ALLOWED_ISSUERS` | none: any issuer the trust store accepts | `x509.allowedIssuers` | Issuer DNs separated by `;`. A certificate from any other issuer is refused. Compared as names, so spacing and case don't matter |
 | `ENS_X509_USER_FILTER` | none | `x509.userFilter` | An LDAP filter that finds the holder of a certificate the directory does not publish, with `{upn}`, `{edipi}`, `{email}` and `{uuid}` filled in, for example `(uid={edipi})`. Used only with `cert-alert.security.x509.require-known-certificate: false`, instead of the uid and address matching |

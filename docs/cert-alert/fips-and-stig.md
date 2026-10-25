@@ -57,7 +57,7 @@ Leave demo mode off in production.
 | `ldap://` directory URLs | | Passwords and directory data in plain text | `ldaps://` |
 | SMTP without STARTTLS | | Mail, and its credentials, in plain text | `SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_ENABLE=true` |
 | A PostgreSQL URL without `sslmode=verify-full` | | Unencrypted, or encrypted without checking the server | `sslmode=verify-full` |
-| `ENS_X509_REVOCATION=off`, `ENS_X509_REVOCATION_FAIL=open` | `off`, `closed` | Revoked or unchecked certificates sign in (STIG) | `ocsp`, `crl` or `ocsp-then-crl`, with `closed` |
+| `ENS_X509_REVOCATION=off`, or `ENS_X509_REVOCATION_FAIL=open` (the soft-fail default while the mode is unset) | unset: `ocsp-then-crl`, soft-fail | Revoked or unchecked certificates sign in (STIG) | `ocsp`, `crl` or `ocsp-then-crl`, with `ENS_X509_REVOCATION_FAIL=closed` |
 | `ENS_X509_SOURCE=header`, or a Helm ingress or edge or reencrypt Route that terminates TLS | | The browser's TLS ends at the proxy, so it is the proxy's cryptographic module that has to be validated | Terminate TLS in CertAlert, or validate the proxy |
 | Key stores and trust stores in a format or with algorithms the FIPS provider does not accept | | They fail to load in FIPS mode | PKCS#12 files made with approved algorithms (AES, SHA-256), or as your provider requires |
 
@@ -103,8 +103,8 @@ certificates, in [Configuration → Client certificates](configuration.md#client
 | Administrator idle timeout | `ENS_SESSION_ADMIN_IDLE_TIMEOUT` | the idle timeout | `15m` is the suggested value |
 | Absolute session lifetime | `ENS_SESSION_ABSOLUTE_TIMEOUT` | `12h` | Your policy's value |
 | Concurrent sessions per user | `ENS_SESSION_MAX_PER_USER` | `0` (no limit) | `3` is the suggested value |
-| Certificate revocation at sign-in | `ENS_X509_REVOCATION` | `off` | `ocsp`, `crl` or `ocsp-then-crl` whenever certificates sign in; `ENS_X509_CRL_DIR` on an air-gapped network |
-| Unknown revocation status | `ENS_X509_REVOCATION_FAIL` | `closed` | Keep `closed` |
+| Certificate revocation at sign-in | `ENS_X509_REVOCATION` | unset (`ocsp-then-crl`, soft-fail) | `ocsp`, `crl` or `ocsp-then-crl` set explicitly whenever certificates sign in; `ENS_X509_CRL_DIR` on an air-gapped network |
+| Unknown revocation status | `ENS_X509_REVOCATION_FAIL` | `open` while the mode is unset, otherwise `closed` | `closed` |
 | Issuers allowed to sign in | `ENS_X509_ALLOWED_ISSUERS` | any trusted CA | Your issuing CAs, if the trust store holds others |
 | Certificate-only sign-in | `cert-alert.security.ldap.enabled` | `true` | `false` where only CAC/PIV sign-in is allowed |
 | Failed password sign-ins | The directory's password policy | | CertAlert adds no lockout of its own: a password sign-in is a bind as the user, so the directory's lockout applies. Repeated failures for one name are audited at `alert` severity |
