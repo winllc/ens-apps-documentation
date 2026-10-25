@@ -149,7 +149,13 @@ the SIEM pull API (`/api/audit/**`, bearer tokens).
   `auth.session-expired` with its reason, `idle`, `absolute` or `concurrent`.
 - For someone signing in with a certificate, an ended session means a new one on the next request
   (and, with the consent banner on, agreeing to it again).
-- Sessions, and the register of who holds which, are in memory: one instance only.
+- With `cert-alert.session.store=jdbc`, the default with PostgreSQL that the chart and the release
+  package use, sessions are kept in the database (`spring_session`): any replica serves any
+  request, the session controls are enforced across replicas, and a restart or rolling update signs
+  nobody out. Stored attributes are read back through an allow-list of the types CertAlert keeps;
+  anything else (a deserialization gadget such as `java.util.PriorityQueue`) is refused, logged,
+  and reads as absent. A client certificate's authentication is kept without the certificate.
+  `memory` keeps sessions in the process, for one instance only.
 - Unauthenticated calls under `/api/**` get **401** (not a redirect); pages redirect to `/login`.
 - CSRF protection is on; the pages send the token from the `_csrf` meta tags, and the tables send
   it with their own requests.
@@ -178,16 +184,18 @@ the SIEM pull API (`/api/audit/**`, bearer tokens).
 | `ROLE_USER` | Everyone who authenticates | Read tables, details, metrics, notifications; contextual rights below |
 | `ROLE_ADMIN` | People matching `cert-alert.security.admin-identifiers` | Everything |
 
-`admin-identifiers` is matched against the person's entry DN, their `uid`, and the addresses the
-directory publishes for them: the five schema addresses (`mail`, `icEmail`, `internetEmail`,
-`niprnetEmail`, `siprnetEmail`) and any in `cert-alert.ldap.user.additional-email-attributes`. It is
-never matched against `cn`, `displayName` or `preferredName`, which two people can share, nor
-against addresses added in CertAlert. A DN contains commas, so name one as a YAML list item rather
-than in the comma-separated `CERT_ALERT_SECURITY_ADMIN_IDENTIFIERS`.
+`admin-identifiers` is matched against two things only: the person's `uid` and their entry DN.
+An address is never matched, not even one the directory publishes: many directories let people
+edit their own `mail`, so matching it would let anybody take an administrator's address and the
+role with it. An address in the list is ignored, and startup logs a warning naming the uid or DN
+to list instead (see [Configuration](configuration.md#security-cert-alertsecurity)). It is never
+matched against `cn`, `displayName` or `preferredName` either, which two people can share. A DN
+contains commas, so name one as a YAML list item rather than in the comma-separated
+`CERT_ALERT_SECURITY_ADMIN_IDENTIFIERS`.
 
-On an empty cache, roles for a password sign-in are resolved from the username typed and the
-directory entry just bound against (its DN, `uid` and addresses), so an administrator can run the
-first sync.
+On an empty cache, roles for a password sign-in are resolved from the directory entry just bound
+against (its DN and `uid`, never its addresses or the username typed), so an administrator can run
+the first sync.
 
 Two further, **per-server** rights derive from data rather than configuration:
 

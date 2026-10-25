@@ -104,7 +104,7 @@ Log lines worth knowing:
 
 | Log message (abridged) | Meaning |
 |---|---|
-| `Skipping the scheduled <JOB> job: the previous run has not finished` | Overlap guard: a run outlasted its interval |
+| `Skipping the scheduled <JOB> job: it is running, or has just run, on this replica or another` | Overlap guard: the job's lock is held, by a run that outlasted its interval or by another replica |
 | `Scheduled <JOB> job failed` | A job threw; the scheduler stays alive for the next firing |
 | `The expiry digest failed` | The round-up threw |
 | `Expiry digest: more than N certificate(s) expire in the next D day(s); ...` | The read of certificates about to expire stopped at `digest.scan-limit`; the rest wait for a later run |
@@ -129,7 +129,8 @@ Log lines worth knowing:
 ## Scheduled jobs
 
 All jobs run inside the application process, in UTC, and are guarded against overlapping
-themselves. Directory jobs are recorded in the `sync_run` table and readable at
+themselves by a lock in the database (`shedlock`), which a run started by hand takes too, on this
+replica or another. Directory jobs are recorded in the `sync_run` table and readable at
 `GET /api/v1/sync/runs`.
 
 | Job | Default cron | Config | Default state | What it does |
@@ -187,6 +188,7 @@ When `cert-alert.ldap.changelog.enabled: true`:
   the directory's latest change (`start-from: LATEST`). Later restarts resume from the stored
   position.
 - It re-reads each changed entry rather than replaying the LDIF; applying is idempotent.
+- Each poll takes a lock in the database, so with several replicas one polls at a time.
 - If the directory has trimmed changes past the stored position, it triggers a full sweep
   (`full-sync-on-gap`) and counts it in `gapsDetected`.
 - Status: `GET /api/v1/changelog` (position, lag, counters, last error). Pages show a header
@@ -196,9 +198,9 @@ When `cert-alert.ldap.changelog.enabled: true`:
 
 ## Backups
 
-All state CertAlert owns is in the database, apart from the license and the installation id, which
-are in the license volume. The directory remains the source of truth for people, servers and
-certificates, but the following exist **only** in CertAlert's database:
+All state CertAlert owns is in the database, the license and the installation id included. The
+directory remains the source of truth for people, servers and certificates, but the following
+exist **only** in CertAlert's database:
 
 | Table | Content |
 |---|---|
@@ -212,6 +214,7 @@ certificates, but the following exist **only** in CertAlert's database:
 | `server_attribute_definition`, `server_attribute_option` | Editable-attribute definitions (the values themselves live in the directory) |
 | `changelog_cursor` | Changelog position |
 | `sync_run` | Job run log |
+| `ens_license_installation`, `ens_license_file`, `ens_license_revision` | The installation id, the license and the license revisions seen |
 
 Everything else (`directory_user`, `directory_server`, `cached_certificate`, identifiers, POCs)
 can be rebuilt by a sweep.
@@ -244,9 +247,10 @@ can be rebuilt by a sweep.
     `backups/cert-alert-before-<version>-<time>.sql.gz` (mode 600) before it upgrades, unless
     you pass `--no-backup`. It is a plain SQL dump, restored with `psql` (below).
 
-    **The license volume** (`cert-alert_ens-license`, mounted at `/var/lib/ens/certalert`) holds the
-    license and this installation's id. Copy it with your volume backup tool, and keep the `.lic`
-    file you received. Also back up the configuration: `.env`, `license/`, `tls/` and
+    **The license volume** (`cert-alert_ens-license`, mounted at `/var/lib/ens/certalert`) is read
+    only on the first start of the release that moved the license and the installation id into
+    the database, which imports them from it; after that the database dump holds them. Keep the
+    `.lic` file you received. Also back up the configuration: `.env`, `license/`, `tls/` and
     `email-templates/`.
 
 === "Helm"
@@ -257,8 +261,9 @@ can be rebuilt by a sweep.
     pg_dump -h postgres.example.gov -U certalert -Fc certalert > cert-alert-$(date +%F).dump
     ```
 
-    Also keep your values file and the Secrets it names. The license PVC holds the installation
-    id; snapshot it, see [Install with Helm](install.md#4-license).
+    Also keep your values file and the Secrets it names. The license and the installation id are
+    in the database; the license PVC is only the import source for the first start of the release
+    that moved them there, see [Install with Helm](install.md#4-license).
 
     The chart's evaluation database (`database.embedded.enabled`) is not backed up. Do not keep
     data you need in it.
@@ -405,11 +410,12 @@ the upgrade; see [Rolling back an upgrade](availability-and-sizing.md#rolling-ba
 
 ## Scaling
 
-- **One instance.** The scheduled jobs and the changelog connector run inside the process, and
-  the overlap guard on jobs is per process; there is no distributed lock. A second instance would
-  run every job twice. The release package runs one container, and the Helm chart supports only
-  `replicaCount: 1` (with the `Recreate` strategy, so the old pod stops before the new one
-  starts). Scale up, not out.
+- **Replicas.** Each scheduled job, the same job started by hand, and each changelog poll takes
+  a lock in the database (`shedlock`), so it runs on one replica at a time, and sessions are kept
+  in the database. The Helm chart can run more than one replica (`replicaCount`, default 1:
+  `Recreate` with one, `RollingUpdate` and a PodDisruptionBudget above one, once the license is
+  imported). The release package runs one container. See
+  [High availability](availability-and-sizing.md#high-availability).
 - **Directory size**: sweeps are paged (`page-size`), streamed, and written in batches
   (`batch-size`), so memory does not grow with the directory. They have not been load-tested at
   100,000 certificates; see [Sizing](availability-and-sizing.md#sizing) for starting figures. Raise

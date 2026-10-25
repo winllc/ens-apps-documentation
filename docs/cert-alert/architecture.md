@@ -9,6 +9,7 @@ certificates into a relational database and serves a server-rendered UI and a JS
 src/main/java/com/winllc/certalert/
 ├── alert/          AlertNotifier SPI, AlertDispatcher, log / email / notification channels
 ├── audit/          the ens-audit/1 trail: store, outputs (stdout, file, Splunk, syslog), pull API, audit page
+├── cluster/        job locks in the database (ShedLock) and jobs started by hand (job_run)
 ├── config/         properties classes, clock, DataTables repository factory, email templates
 ├── demo/           the read-only demo mode
 ├── domain/         JPA entities and enums
@@ -22,9 +23,10 @@ src/main/java/com/winllc/certalert/
 ├── security/       X.509 (servlet and header mode) and LDAP-bind authentication, consent banner,
 │                   session limits, security headers, roles, ServerAccessPolicy
 ├── service/        parsing, status evaluation, sync, notifications, mail outbox, probe, projects…
+├── session/        sessions in the database (Spring Session JDBC), attribute allow-list, expiry sweep
 └── web/            page controllers, REST API, DataTables endpoints, error handling
 src/main/resources/
-├── db/migration/   Flyway migrations V1–V20
+├── db/migration/   Flyway migrations V1–V28
 ├── static/         css, js (table wiring), img (logo, favicons)
 ├── templates/      Thymeleaf pages, email templates, layout fragments, icon sprite
 └── dev-directory.ldif   sample directory used by the developers' tests (not shipped)
@@ -83,7 +85,7 @@ flowchart TB
 ## The sync pipeline
 
 ```text
-DirectoryJobScheduler  (crons, each guarded against overlap)
+DirectoryJobScheduler  (crons, each guarded against overlap by a database lock)
         |
 DirectorySyncService        streams LDAP pages, outside any transaction
         |

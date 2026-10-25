@@ -24,7 +24,7 @@ and integrations.
 
 | Method | Path | Access | Purpose |
 |---|---|---|---|
-| `POST` | `/api/v1/sync` | admin | Run both sweeps (users, then servers); returns a list of results |
+| `POST` | `/api/v1/sync` | admin | Run both sweeps (users, then servers); the run's `result` is a list of results |
 | `POST` | `/api/v1/sync/users` | admin | Sweep IC Persons |
 | `POST` | `/api/v1/sync/servers` | admin | Sweep IC Non-Person Entities |
 | `POST` | `/api/v1/sync/refresh` | admin | Re-evaluate cached expiry (no LDAP) |
@@ -34,9 +34,27 @@ and integrations.
 | `GET` | `/api/v1/sync/certificate-cleanup/preview` | user | What that would delete |
 | `GET` | `/api/v1/sync/runs?limit=20` | user | Run log, newest first (`limit` 1–100) |
 | `GET` | `/api/v1/changelog` | user | Connector status |
-| `POST` | `/api/v1/changelog/poll` | admin | Read one changelog batch now; returns status |
+| `POST` | `/api/v1/changelog/poll` | admin | Read one changelog batch now; the run's `result` is the status |
+| `GET` | `/api/v1/jobs/{id}` | admin | A job started by hand: `state` and, once finished, `result` or `error` |
+| `GET` | `/api/v1/jobs` | admin | Recent runs started by hand |
 
-Sync result (`SyncResponse`):
+The `POST` job endpoints (and `POST /api/v1/notifications/digest` without `dryRun`) answer
+**202 Accepted** at once with a run, and the job runs in the background:
+
+```json
+{"id":"7c0e…","job":"directory sync","state":"QUEUED","finished":false,
+ "requestedAt":"…","statusUrl":"/api/v1/jobs/7c0e…"}
+```
+
+`GET /api/v1/jobs/{id}` (also in the `Location` header) gives `state`: `QUEUED`, `RUNNING`,
+`SUCCEEDED` with `result` (what the endpoint answered before this release), `FAILED` with
+`error`, or `SKIPPED` when the same job was already running, scheduled or by hand, on this replica
+or another. Runs are kept in `job_run` for `cert-alert.cluster.run-retention` (7 days), so any
+replica can answer; a run whose replica stops is marked `FAILED` within
+`cert-alert.cluster.stale-run-after` (5 minutes). A script that read the counts from the `POST`
+response must now poll `statusUrl` and read `result`.
+
+Sync result (`SyncResponse`, a run's `result`):
 
 ```json
 {

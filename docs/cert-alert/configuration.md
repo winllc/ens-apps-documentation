@@ -193,7 +193,7 @@ The only job that **writes to the directory**: it deletes finished certificates 
 | Property | Default | Description |
 |---|---|---|
 | `enabled` | `false` | Follow the directory's changelog continuously |
-| `auto-start` | `true` | Start the polling loop with the application. Set `false` on all but one instance |
+| `auto-start` | `true` | Start the polling loop with the application. Each poll takes a lock in the database, so with several replicas it runs on one at a time |
 | `base-dn` | `cn=changelog` | Changelog suffix |
 | `filter` | `(&(objectClass=changeLogEntry)(changeNumber>={0}))` | Search filter; `{0}` is the next change number |
 | `poll-interval` | `10s` | Wait after a poll that found nothing |
