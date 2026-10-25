@@ -183,8 +183,11 @@ characters (for example `openssl rand -hex 32`) and run `./portal.sh up`.
 Choose one:
 
 - **The drop-in.** Put the file at `license/license.lic` before you run `./install.sh`. The
-  installer copies it into the `ens-license` volume if that has no license yet. To install or
-  replace a license later, run `./portal.sh license /path/to/license.lic`.
+  installer sets `ENS_LICENSE` in `.env` from it (below). To install a license later, run
+  `./portal.sh license /path/to/license.lic`: it sets `ENS_LICENSE` too and applies it at once.
+  Without the shared database it also writes the file into the `ens-license` volume, replacing any
+  license there; with it, it restarts the API, and a different license already installed is kept
+  (upload that one on the license screen).
 - **`ENS_LICENSE` in `.env`.** The license text itself: the token between the file's `BEGIN` and
   `END` lines, or the whole file base64-encoded (`base64 -w0 license.lic`). It is installed at
   start if no license is installed yet, or if it is a newer revision of the installed one.
@@ -322,6 +325,8 @@ The installer verifies `SHA256SUMS`, creates the system user `dsp` and installs:
 - **License:** sign in as an administrator and upload it under *Administration > License*, or
   copy it in with
   `sudo install -m 640 -o dsp -g dsp license.lic /var/lib/ens/directory-portal/license.lic`.
+  With the shared database (`DSP_DATABASE_URL`) that file is read only on the first start; after
+  that, upload the license or set `ENS_LICENSE` (the file, base64) in `portal.env` and restart.
 - **Logs:** `journalctl -u directory-services-portal -f`.
 - **HTTPS:** terminate TLS in nginx (add a `listen 443 ssl` server, or put a proxy in front) and
   set `ENS_COOKIE_SECURE=true`.
