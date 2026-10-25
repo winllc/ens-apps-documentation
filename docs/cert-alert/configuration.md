@@ -361,7 +361,7 @@ See [Security](security.md) for how these interact.
 | Property | Default | Description |
 |---|---|---|
 | `enabled` | `true` | `false` removes the application's security configuration. Local development only |
-| `admin-identifiers` | `[]` | Values granting `ROLE_ADMIN`, matched against a person's entry DN, `uid`, or an address the directory publishes for them. Never matched against `cn`, `displayName`, `preferredName` or addresses added in CertAlert. A DN contains commas: name it as a YAML list item, or as `CERT_ALERT_SECURITY_ADMIN_IDENTIFIERS_0`, `_1`, … with `CERT_ALERT_SECURITY_ADMIN_IDENTIFIERS` itself unset |
+| `admin-identifiers` | `[]` | Values granting `ROLE_ADMIN`, matched against a person's `uid` and entry DN only. An e-mail address is ignored, with a startup warning naming the uid to use, and `cn`, `displayName` and `preferredName` never match. A DN contains commas: name it as a YAML list item, or as `CERT_ALERT_SECURITY_ADMIN_IDENTIFIERS_0`, `_1`, … with `CERT_ALERT_SECURITY_ADMIN_IDENTIFIERS` itself unset |
 | `contact-editors` | `ADMIN` | `ADMIN` or `AUTHENTICATED`. Who may edit a person's added addresses and create/edit projects; also lets anyone signed in manage any server's contacts when `AUTHENTICATED` |
 | `x509.enabled` | `true` | Accept client certificates |
 | `x509.require-known-certificate` | `true` | Match the client certificate by SHA-256 fingerprint against the cache. A published certificate is still refused when revoked or outside its validity dates. `false` falls back to matching the subject's `uid` and email address and its `rfc822Name` SANs against a person's `uid` and published addresses (never the CN) |
@@ -516,7 +516,7 @@ database, and **Export** takes up to 100,000 events of the current filter.
         text: "UNCLASSIFIED//FOUO"
         background: "#006400"
       security:
-        admin-identifiers: [alice@example.gov, bob@example.gov]
+        admin-identifiers: [alice, bob]
         ldap:
           user-search-base: ou=people
       ldap:
@@ -552,7 +552,7 @@ database, and **Export** takes up to 100,000 events of the current filter.
     CERT_ALERT_LDAP_BASE=dc=example,dc=gov
     CERT_ALERT_LDAP_USER=cn=cert-alert,ou=services,dc=example,dc=gov
     CERT_ALERT_LDAP_PASSWORD=...
-    CERT_ALERT_SECURITY_ADMIN_IDENTIFIERS=alice@example.gov
+    CERT_ALERT_SECURITY_ADMIN_IDENTIFIERS=alice
     CERT_ALERT_SECURITY_LDAP_USER_SEARCH_BASE=ou=people
     CERT_ALERT_LDAP_CHANGELOG_ENABLED=true
     CERT_ALERT_TLS_ENABLED=true

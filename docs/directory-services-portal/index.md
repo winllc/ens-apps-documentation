@@ -76,6 +76,6 @@ See [Architecture](architecture.md) for components, request flow and data storag
 | [API reference](api-reference.md) | Integrators | Every REST endpoint under `/api` |
 
 !!! tip "Try it with the demo directory"
-    Unpack the Docker package and run `./install.sh --demo --http 8080 --start`. Then open
+    Unpack the Docker package and run `./install.sh --demo --bind 127.0.0.1 --start`. Then open
     <http://localhost:8080>, sign in as `admin` / `password` and install your evaluation license.
-    See [Installation → Docker package](install.md#docker-package).
+    See [Installation → Trying it out: the demo](install.md#trying-it-out-the-demo).

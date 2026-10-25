@@ -1,15 +1,17 @@
 # Installation
 
-You install the Directory Services Portal from a release, in one of two ways:
+## At a glance
 
-- **The release package.** A signed download for a single host: the Docker package (images,
-  compose files, settings template and scripts), or the native package for a Linux host without
-  containers.
-- **The Helm chart.** For Kubernetes and OpenShift, published with every release.
+| Method | Use it for | You run |
+|---|---|---|
+| [Docker or Podman package](#docker-package) | One host with Docker or Podman, including hosts with no internet access | `install.sh`, `portal.sh`, `upgrade.sh` |
+| [Native package](#install-the-native-package) | One Linux host with systemd and no containers | `install.sh`, `systemctl` |
+| [Helm chart](#install-with-helm) | Kubernetes and OpenShift | `helm install`, `helm upgrade` |
+| [Demo](#trying-it-out-the-demo) | A look at the portal with its built-in demo directory. **Not for production** | `docker compose -f docker-compose.demo.yml` |
 
-Both run the same two components: the **API** (Spring Boot, port 3001) and the **web tier**
-(nginx serving the web client and forwarding `/api` to the API). Browsers only talk to the web
-tier.
+Every method runs the same two components: the **API** (Spring Boot, port 3001) and the **web
+tier** (nginx serving the web client and forwarding `/api` to the API). Browsers only talk to the
+web tier.
 
 ## Prerequisites
 
@@ -21,7 +23,6 @@ tier.
 | Service account | An LDAP account that can read the schema (root DSE `subschemaSubentry`) and the namespaces you expose, and write wherever portal users should be able to edit |
 | Administrators | The users (`ADMIN_USERS`) or groups (`ADMIN_GROUPS`) who will administer the portal |
 | License | An ENS license file (`.lic`). For a trial, download an evaluation license from the ENS licensing portal. See [Licensing](../licensing.md) |
-| Release | The release download from ENS Solutions, verified as described in [Releases](../releases.md) |
 
 ### Directory servers: what is tested
 
@@ -43,188 +44,177 @@ If you run the portal against a directory that isn't tested, try it on a test in
 directory first: sign-in with your user and group filters, schema pull, and one create, update,
 rename and delete through a form.
 
-### For the release package
+### For each method
 
-| Package | Requirement |
+| Method | Requirement |
 |---|---|
-| Docker | Linux with Docker Engine 20.10+ and Docker Compose v2 (or Podman with Compose v2), and about 2 GB of disk |
+| Docker | Linux with Docker Engine 20.10+ and Docker Compose v2 (`docker compose`; `docker-compose` 1.29 is used, best effort, when v2 is missing), and about 2 GB of disk |
+| Podman | Linux with Podman 4.0+ and podman-compose 1.1+ (`podman compose` is used when podman-compose is not installed), rootful or rootless, and about 2 GB of disk |
 | Native | Linux with systemd and Java 21 or later; nginx is optional (the installer configures it if it is installed) |
+| Helm | Kubernetes 1.25+ or OpenShift 4, Helm 3.8+ (OCI registries), a StorageClass for the license (100 Mi) and data (2 Gi) volumes, and access to `ghcr.io/winllc` or a mirror. PostgreSQL 13+ only for [several API replicas](#several-api-replicas) |
 
-### For Helm
+## Getting the release
 
-| Component | Requirement |
-|---|---|
-| Cluster | Kubernetes 1.25 or later, or OpenShift 4 |
-| Helm | Helm 3.8 or later (OCI registries) |
-| Storage | A StorageClass for two small ReadWriteOnce volumes (license: 100 Mi, data: 2 Gi by default) |
-| Images | Access to `ghcr.io/winllc`, or a registry mirror for an air-gapped cluster |
+1. Sign in to the **ENS licensing portal** and open **Downloads** (`/account/downloads`). Any
+   account with a non-revoked license for the portal, evaluation licenses included, can
+   download. The page lists every version, with the latest highlighted, and each file's size and
+   SHA-256.
+2. Download what you need, into one directory:
 
-## Choosing a method
+    | File | What it is |
+    |---|---|
+    | `directory-services-portal-<version>.tar.gz` | The Docker/Podman package, with the images |
+    | `directory-services-portal-<version>-native.tar.gz` | The native (systemd) package |
+    | `directory-services-portal-<version>.tgz` | The Helm chart |
+    | `sbom-*.spdx.json` | SBOMs of the two images |
+    | `SHA256SUMS`, `SHA256SUMS.asc` | Checksums, and ENS Solutions' signature over them when the release is signed |
 
-| Method | Use it for | You run |
-|---|---|---|
-| [Docker package](#install-from-the-release-package) | One host with Docker, including sites without internet access | `install.sh`, `portal.sh`, `upgrade.sh` |
-| [Native package](#native-package) | One Linux host without containers | `install.sh`, `systemctl` |
-| [Helm chart](#install-with-helm) | Kubernetes and OpenShift | `helm install`, `helm upgrade` |
+3. Verify them before you unpack anything:
 
-## Install from the release package
+    ```bash
+    sha256sum -c SHA256SUMS --ignore-missing     # each file you downloaded
+    gpg --verify SHA256SUMS.asc SHA256SUMS       # when signed, with the ENS release key imported
+    ```
 
-### Download and verify
+The files are delivered from ENS Solutions' own storage, not from GitHub Releases. Importing the
+release key and verifying the image signatures are described in
+[Releases and downloads](../releases.md).
 
-Each release comes as these files (see [Releases](../releases.md)):
+## Install with Docker or Podman { #docker-package }
 
-| File | What it is |
-|---|---|
-| `directory-services-portal-<version>.tar.gz` | The Docker package, with the images |
-| `directory-services-portal-<version>-native.tar.gz` | The native (systemd) package |
-| `directory-services-portal-<version>.tgz` | The Helm chart |
-| `sbom-*.spdx.json` | SBOMs of the two images |
-| `SHA256SUMS`, `SHA256SUMS.asc` | Checksums, and ENS Solutions' signature over them |
-
-Verify the download before you unpack it:
-
-```bash
-gpg --verify SHA256SUMS.asc SHA256SUMS
-sha256sum -c --ignore-missing SHA256SUMS
-```
-
-### Docker package
-
-Unpack the package and run the installer:
+### 1. Unpack and run install.sh
 
 ```bash
 tar xzf directory-services-portal-<version>.tar.gz
 cd directory-services-portal-<version>
-./install.sh --http 8080          # plain HTTP on port 8080, e.g. behind your TLS proxy
-vi .env                           # LDAP connection and administrators
-./portal.sh up
+./install.sh                      # plain HTTP on 0.0.0.0:8080
 ```
 
-Choose how the portal is published:
+The installer picks the container engine, verifies `SHA256SUMS`, loads the images from
+`images/`, writes `.env` (mode `600`) with a random `X509_PROXY_SECRET`, and validates the
+compose configuration. It **never overwrites an existing `.env`** unless you pass `--force-env`.
+
+The engine is, in order: `--engine docker|podman`, the `CONTAINER_ENGINE` environment variable,
+`CONTAINER_ENGINE` in `.env`, and otherwise Docker if its daemon answers, else Podman. The
+installer records the engine in `.env`, and `portal.sh` and `upgrade.sh` keep using it. Each
+engine has its own containers and volumes: to move an installed portal to the other one, use
+`./portal.sh backup` and `./portal.sh restore`.
+
+### 2. Choose how it is published
+
+By default the web tier is published over plain HTTP on **every interface**
+(`WEB_BIND=0.0.0.0`), port 8080 (`WEB_PORT`). Choose another way with the installer's options:
 
 === "Plain HTTP"
 
     ```bash
-    ./install.sh --http 8080
+    ./install.sh                      # 0.0.0.0:8080
+    ./install.sh --bind 127.0.0.1     # this host only, for a TLS proxy on the same host
+    ./install.sh --http 8081          # another port
     ```
-    Adds `docker-compose.publish.yml`, which publishes the web tier on `WEB_BIND:WEB_PORT`. Put a
-    TLS-terminating proxy in front of it, and set `ENS_COOKIE_SECURE=true` in `.env`.
+    Put a TLS-terminating proxy in front, and set `ENS_COOKIE_SECURE=true` in `.env`.
 
 === "HTTPS + X.509"
 
     ```bash
-    ./install.sh --https 443
+    ./install.sh --https 8443          # HTTPS only
+    ./install.sh --https 8443 --http   # HTTPS, and HTTP on 8080 redirecting to it
     ```
-    Adds `docker-compose.mtls.yml`: nginx serves HTTPS on `HTTPS_PORT` with
-    `certs/server.pem`, `certs/server.key` and `certs/ca.pem`, and the installer sets
-    `X509_ENABLED=true` and `ENS_COOKIE_SECURE=true`. Plain HTTP on 8080 redirects to HTTPS. nginx
-    forwards a verified certificate to the API together with `X509_PROXY_SECRET` from `.env`; the
-    API accepts a forwarded certificate only with that secret, and checks it against
-    `certs/ca.pem` too.
+    Adds `docker-compose.mtls.yml`: nginx serves HTTPS on `WEB_BIND:HTTPS_PORT` with
+    `certs/server.pem`, `certs/server.key` and `certs/ca.pem`, and asks browsers for an optional
+    client certificate. The installer sets `X509_ENABLED=true` and `ENS_COOKIE_SECURE=true`. nginx
+    forwards a verified certificate to the API together with `X509_PROXY_SECRET`; the API accepts
+    a forwarded certificate only with that secret, and checks it against `certs/ca.pem` too.
 
 === "Nothing published"
 
     ```bash
-    ./install.sh
+    ./install.sh --no-publish
     ```
-    Only `docker-compose.yml`. Attach your own reverse proxy to the compose network and route it
-    to `web:8080`.
+    Uses `docker-compose.no-publish.yml` instead of `docker-compose.yml`: the same services with
+    no published port. Attach your reverse proxy to the `directory-services-portal_default`
+    network and forward to `http://web:8080`.
 
-=== "Demo"
-
-    ```bash
-    ./install.sh --demo --http            # built-in in-memory demo directory
-    ```
-    The demo directory needs no LDAP server. It has demo users (`admin`, `alice`, `bob`, `erin`,
-    `dave`, `frank`, password `password`) and example forms, directories and dashboards. Entries
-    are lost when the API stops. The demo needs a license too.
+!!! warning "Plain HTTP on 0.0.0.0"
+    With the default bind, anyone who can reach the host can reach the portal, and passwords and
+    session cookies cross the network in clear text. The installer warns about it. Put a TLS
+    proxy in front, use `--https`, or set `WEB_BIND=127.0.0.1` in `.env` and run `./portal.sh up`.
 
 `install.sh` options:
 
 | Option | Meaning |
 |---|---|
-| `--http [PORT]` | Publish plain HTTP on PORT (default 8080) |
-| `--https [PORT]` | Publish HTTPS on PORT (default 8443), X.509 sign-in available; needs `./certs` |
-| `--demo` | Built-in demo directory (no LDAP server), demo users and dashboards |
-| `--demo-openldap` | A demo OpenLDAP container (`docker-compose.openldap.yml`) loaded with the demo organisation, when the package includes its image |
+| `--http [PORT]` | Plain HTTP on PORT (default 8080, the default). With `--https` too, it redirects to HTTPS |
+| `--https [PORT]` | HTTPS on PORT (default 8443), X.509 sign-in available; needs `./certs`. Without `--http`, only HTTPS is published |
+| `--bind ADDRESS` | Host address to publish on (default `0.0.0.0`; `127.0.0.1` for this host only) |
+| `--no-publish` | Publish nothing; route your own proxy on the compose network to `web:8080` |
+| `--engine ENGINE` | `docker` or `podman` |
+| `--demo` | The built-in demo directory (no LDAP server), demo users and dashboards. It is published like any install, so add `--bind 127.0.0.1` |
+| `--demo-openldap` | A demo OpenLDAP container (`docker-compose.openldap.yml`), when the package includes its image |
 | `--force-env` | Rewrite `.env` (the old one is kept as `.env.bak-<time>`) |
 | `--start` | Run `./portal.sh up` afterwards |
 | `--skip-verify` | Don't check `SHA256SUMS` |
-
-The installer checks for Docker and Compose v2, verifies the checksums, and loads the images
-from `images/`. It writes `.env` with mode `600`, generates a random `X509_PROXY_SECRET` in it
-(also into an existing `.env` that has none), and validates the result with
-`docker compose config`. It **never overwrites an existing `.env`** unless you pass
-`--force-env`.
 
 !!! tip "Certificate files for `--https`"
     | File | Content |
     |---|---|
     | `certs/server.pem` | Server certificate (with chain) |
-    | `certs/server.key` | Its private key, readable by uid 1001 (`chmod 644`, or `chgrp 0` + `chmod 640`) |
+    | `certs/server.key` | Its private key, readable by uid 1001 (`chmod 644`, or `chgrp 0` + `chmod 640`; rootless Podman: `podman unshare chown 1001:0 certs/server.key` + `chmod 640`) |
     | `certs/ca.pem` | CA(s) that issue user certificates |
 
     For a test, run `scripts/generate-dev-certs.sh certs` from the package. It creates a
     throw-away CA, a server certificate for `localhost`, and user certificates (`certs/alice.p12`,
     password `password`).
 
-#### Fill in `.env`
+### 3. Fill in .env
 
 Every setting is in `.env`, with comments. After a change, run `./portal.sh up`. The first
-section chooses the compose files (`COMPOSE_FILE`) and ports. Set at least the directory
-connection and the administrators (see [Connecting to your directory](#connecting-to-your-directory)).
-All settings are described in [Configuration](configuration.md).
+section chooses the compose files (`COMPOSE_FILE`), the engine and the ports. Set at least the
+directory connection and the administrators (see
+[Connecting to your directory](#connecting-to-your-directory)). All settings are described in
+[Configuration](configuration.md).
 
 `.env` holds the bind password and the generated `X509_PROXY_SECRET`, so keep it private (mode
 `600`). Leave `X509_PROXY_SECRET` as generated; to change it, set a new value of at least 32
 characters (for example `openssl rand -hex 32`) and run `./portal.sh up`.
 
-The `.env` written by this release also has these sections; they are described in
-[Configuration](configuration.md):
+### 4. Add the license
 
-| Section | Settings |
-|---|---|
-| Sessions and lockout | `ENS_SESSION_IDLE_TIMEOUT` (`30m`), `ENS_SESSION_ADMIN_IDLE_TIMEOUT`, `ENS_SESSION_ABSOLUTE_TIMEOUT` (`12h`), `ENS_SESSION_MAX_PER_USER` (`0`), `GROUP_REFRESH_INTERVAL` (`5m`), `LOGIN_MAX_FAILURES` (`8`), `LOGIN_LOCKOUT_WINDOW` (`15m`) |
-| Headers and cookies | `ENS_COOKIE_SECURE`, `ENS_CSP_REPORT_ONLY` |
-| Consent banner | `ENS_CONSENT_BANNER_ENABLED`, `_TITLE`, `_TEXT`, `_FILE` |
-| X.509 revocation | `ENS_X509_REVOCATION`, `ENS_X509_OCSP_RESPONDER_URL`, `ENS_X509_CRL_DIR`, `ENS_X509_REVOCATION_FAIL`, `ENS_X509_REVOCATION_CACHE`, `ENS_X509_ALLOWED_ISSUERS` |
-| Logs and monitoring | `LOGGING_STRUCTURED_FORMAT_CONSOLE` and `MANAGEMENT_SERVER_PORT`, both commented out |
-| Memory | `API_MEMORY_LIMIT` (`1536m`), `WEB_MEMORY_LIMIT` (`256m`) |
+Choose one:
 
-An `.env` carried over from an earlier release keeps its old settings and lacks these lines; the
-defaults then apply, except that an old `SESSION_TTL_MINUTES` keeps setting the idle timeout.
-
-#### License
-
-Install the license in either of these ways:
-
-- **License screen.** Start the portal and sign in as an administrator. You land on
+- **The drop-in.** Put the file at `license/license.lic` before you run `./install.sh`. The
+  installer copies it into the `ens-license` volume if that has no license yet. To install or
+  replace a license later, run `./portal.sh license /path/to/license.lic`.
+- **`ENS_LICENSE` in `.env`.** The license text itself: the token between the file's `BEGIN` and
+  `END` lines, or the whole file base64-encoded (`base64 -w0 license.lic`). It is installed at
+  start if no license is installed yet, or if it is a newer revision of the installed one.
+- **The license screen.** Start the portal and sign in as an administrator. You land on
   *Administration > License* (`/admin/license`). Upload the file there.
-- **Command line.** Put the file at `license/license.lic` before you run `./install.sh`. The
-  installer copies it into the license volume if that has no license yet. To install or replace
-  a license later, run `./portal.sh license /path/to/license.lic`.
 
-The license is kept in the `ens-license` volume, together with this installation's id. **Keep
-that volume.** `docker compose down -v` deletes it, and a new installation id means re-binding
-the license on the ENS licensing portal.
+The license is kept in the `ens-license` volume (`/var/lib/ens/directory-portal` in the API
+container), together with this installation's id. The image sets `ENS_LICENSE_FILE` and
+`ENS_LICENSE_STATE_DIR` there; don't change them. **Keep that volume.** `down -v` deletes it,
+and a new installation id means re-binding the license on the ENS licensing portal. See
+[Licensing](../licensing.md) for the rest.
 
-#### First start
+### 5. Start it
 
 ```bash
 ./portal.sh up
 ./portal.sh status                # containers, health, URL
 ```
 
-Other commands:
+`portal.sh` uses the engine in `.env`, so the same commands work with Docker and Podman:
 
 ```bash
 ./portal.sh logs api              # follow the API log
 ./portal.sh backup                # portal-backup-<date>.tar.gz: configuration, audit log, analysis results
 ./portal.sh restore <file>
+./portal.sh license <file.lic>    # install or replace the license
 ./portal.sh down                  # stop (data is kept in the portal-data volume)
 ```
 
-#### Upgrade
+### 6. Upgrade { #upgrade }
 
 Unpack the new package next to the running one and run its `upgrade.sh` with the old
 directory:
@@ -237,12 +227,67 @@ cd directory-services-portal-<new-version>
 
 `upgrade.sh` copies `.env`, `license/` and `certs/` across (it never overwrites), verifies the
 package and loads its images, generates `X509_PROXY_SECRET` if the old `.env` has none, and backs
-up the portal data to `backups/`. It then points `.env`
-at the new images (keeping a `.env.bak-<time>`) and restarts with `./portal.sh up`. The data
-volume and the license volume are reused. To go back, run `./portal.sh up` in the old directory
-and, if needed, `./portal.sh restore` the backup.
+up the portal data to `backups/`. It then points `.env` at the new images (keeping a
+`.env.bak-<time>`) and restarts with `./portal.sh up`. The data volume and the license volume are
+reused. To go back, run `./portal.sh up` in the old directory and, if needed,
+`./portal.sh restore` the backup. Options: `--no-backup`, `--no-start`, `--skip-verify`,
+`--engine`.
 
-### Native package
+!!! note "What an upgrade keeps"
+    - **Ports and addresses.** `WEB_BIND`, `WEB_PORT` and `HTTPS_PORT` are not changed, so an
+      installation bound to `127.0.0.1` stays local. Only new installations get the `0.0.0.0`
+      default.
+    - **From a package before Podman support.** There, `docker-compose.yml` published nothing and
+      `docker-compose.publish.yml` published `WEB_PORT`. `upgrade.sh` rewrites `COMPOSE_FILE`:
+      without `docker-compose.publish.yml` it uses `docker-compose.no-publish.yml` (still nothing
+      published); with it, the file is dropped (the same `WEB_BIND:WEB_PORT`). It also adds
+      `CONTAINER_ENGINE=docker`. Nothing needs doing by hand.
+    - **New settings** are not written into an existing `.env` (except `X509_PROXY_SECRET`): they
+      take their defaults, and older names keep working (`SESSION_TTL_MINUTES`, `COOKIE_SECURE`,
+      `X509_CHECK_REVOCATION`). Compare your `.env` with the package's `env.template` to adopt
+      them.
+    - **Revocation.** An `.env` from an earlier package sets `ENS_X509_REVOCATION=off` and
+      `ENS_X509_REVOCATION_FAIL=closed`, which keep revocation checking off; the installer says
+      so. Empty both for the default live, soft-fail check.
+
+### Podman: rootless and boot
+
+- **Ports from 1024.** Rootless Podman can't publish ports below 1024; the defaults, 8080 and
+  8443, are fine. For 443, run `sudo sysctl net.ipv4.ip_unprivileged_port_start=443` (persist it
+  in `/etc/sysctl.d/`), or use a proxy. The installer warns about it.
+- **Keep it running after logout** (rootless): `sudo loginctl enable-linger $USER`.
+- **Start at boot.** Podman has no daemon to restart the containers. Run `./portal.sh up` from a
+  systemd unit (for rootless, a user unit, `systemctl --user`, with `WantedBy=default.target`):
+
+    ```ini
+    [Unit]
+    Description=Directory Services Portal
+    Wants=network-online.target
+    After=network-online.target
+
+    [Service]
+    Type=oneshot
+    RemainAfterExit=yes
+    WorkingDirectory=/opt/directory-services-portal
+    ExecStart=/opt/directory-services-portal/portal.sh up
+    ExecStop=/opt/directory-services-portal/portal.sh down
+
+    [Install]
+    WantedBy=multi-user.target
+    ```
+
+    `podman generate systemd --new` or Quadlet units work too, but then systemd, not
+    `./portal.sh`, owns the containers.
+- **SELinux** (RHEL, Fedora): the certificate files in `./certs` are mounted with `:Z`/`:z`, so
+  Podman relabels them. Nothing else is bind-mounted.
+- **Health checks** run from systemd timers; `./portal.sh up` also runs the API's check itself
+  while it waits, so hosts without systemd work as well.
+- **cgroups v1.** On a host still on cgroups v1, rootless Podman ignores the memory limits, and
+  says so.
+
+## Install the native package
+
+### 1. Install
 
 For a Linux host with systemd, Java 21+ and, optionally, nginx:
 
@@ -254,6 +299,8 @@ sudo vi /etc/directory-services-portal/portal.env
 printf '%s' 'the-password' | sudo tee /etc/directory-services-portal/ldap-bind-password >/dev/null
 sudo systemctl restart directory-services-portal
 ```
+
+### 2. What it installs
 
 The installer verifies `SHA256SUMS`, creates the system user `dsp` and installs:
 
@@ -269,6 +316,8 @@ The installer verifies `SHA256SUMS`, creates the system user `dsp` and installs:
 | `/var/lib/ens/directory-portal` | The ENS license and this installation's id; keep it |
 | `/etc/systemd/system/directory-services-portal.service` | The systemd unit, hardened: `ProtectSystem=strict` with `ReadWritePaths` limited to the data and license directories, no capabilities, a system-call filter, `UMask=0077` and more (see [Security](security.md#network-exposure)) |
 | `/etc/nginx/conf.d/directory-services-portal.conf` (or `sites-enabled/`) | Serves the client on port 8080 and proxies `/api` to `127.0.0.1:3001` (only when nginx is installed) |
+
+### 3. License, HTTPS and the rest
 
 - **License:** sign in as an administrator and upload it under *Administration > License*, or
   copy it in with
@@ -295,19 +344,21 @@ The installer verifies `SHA256SUMS`, creates the system user `dsp` and installs:
     nginx's copy and reloads nginx), and restart the API. See
     [Configuration](configuration.md#x509-client-certificate-sign-in).
 
-- **Upgrade:** run the new package's `install.sh`. Settings and data are kept. It generates the
-  X.509 proxy secret if there is none yet; restart the API afterwards
-  (`systemctl restart directory-services-portal`).
+### 4. Upgrade
+
+Run the new package's `sudo ./install.sh`. Settings and data are kept. It generates the X.509
+proxy secret if there is none yet; restart the API afterwards
+(`systemctl restart directory-services-portal`).
 
 ## Install with Helm
 
-The chart installs two Deployments: the API (one replica, `Recreate` strategy) and the web tier.
-The web tier's Service, `<release>-directory-services-portal`, is what users reach. The API keeps
-two PersistentVolumeClaims: the **license volume** (`/var/lib/ens`) and the **data volume**
-(`/data`: forms, definitions, grants, dashboards, analyses and the audit store). There is no
-database.
+The chart installs two Deployments: the API (one replica by default) and the web tier. The web
+tier's Service, `<release>-directory-services-portal`, is what users reach. The API keeps two
+PersistentVolumeClaims: the **license volume** (`/var/lib/ens`) and the **data volume** (`/data`:
+forms, definitions, grants, dashboards, analyses and the audit store). It needs no database
+unless you run [several API replicas](#several-api-replicas).
 
-### Install
+### 1. Install
 
 Write a values file with your directory connection:
 
@@ -341,7 +392,7 @@ The chart version is the release version, and by default the chart runs the imag
 same version. The chart's README lists every value. Run
 `helm show readme oci://ghcr.io/winllc/charts/directory-services-portal --version X.Y.Z`.
 
-### Key values
+### 2. Key values { #key-values }
 
 | Value | Purpose |
 |---|---|
@@ -357,7 +408,8 @@ same version. The chart's README lists every value. Run
 | `metrics.maxEntries` and the rest of `metrics.*`, `analysis.*`, `jobs.*` | Metrics, analysis and background-task limits |
 | `audit.*` | Audit outputs: stdout, a rolling file, Splunk HEC, syslog, retention (see [Audit logging](../audit-logging.md)) |
 | `x509.*`, `tls.*` | Certificate sign-in, and HTTPS in the web pod |
-| `x509.revocation.*`, `x509.allowedIssuers` | `mode` (`off`), `ocspResponderUrl`, `crlDir`, `fail` (`closed`), `cache` (`10m`), and `egress` (ports 80 and 443) for OCSP and CRL fetches under a NetworkPolicy |
+| `x509.revocation.*`, `x509.allowedIssuers` | `mode` and `fail` (empty: OCSP, then the CRL, soft-fail), `ocspResponderUrl`, `crlDir`, `cache` (`10m`), and `egress` (ports 80 and 443) for OCSP and CRL fetches under a NetworkPolicy |
+| `api.replicaCount`, `database.*` | `1`; more needs the shared PostgreSQL (`database.url`). See [Several API replicas](#several-api-replicas) |
 | `persistence.license`, `persistence.data` | The two volumes: `size`, `storageClass`, `accessModes`, `existingClaim` |
 | `ingress.*`, `route.*`, `service.*` | How users reach the portal |
 | `networkPolicy.*` | Optional NetworkPolicies for both workloads; required for edge-terminated X.509 sign-in |
@@ -368,12 +420,7 @@ Every setting from the Docker package's `env.template` has a value; the
 [Configuration](configuration.md) page describes what each one does. Anything else goes in
 `api.extraEnv`.
 
-!!! note "One API replica"
-    The API is the single writer of its configuration, audit store and license state, and keeps
-    sessions in memory. Run one replica (`api.replicaCount` accepts only 0 or 1). The web tier is
-    stateless and can run more replicas.
-
-### Secrets
+### 3. Secrets { #secrets }
 
 Secrets are never put in a ConfigMap. Each one is either inline in your values (the chart
 stores it in its own Secret) or taken from a Secret you create:
@@ -415,7 +462,7 @@ ldap:
       existingSecretKey: truststore-password
 ```
 
-### License
+### 4. License
 
 Without a license, only sign-in and the license screen work. You can:
 
@@ -424,7 +471,8 @@ Without a license, only sign-in and the license screen work. You can:
 - **Give it to the chart.** Use `--set-file license.file=./license.lic`, or a Secret with the key
   `license.lic` in `license.existingSecret`. An init container copies it into the license volume
   **only if no license is installed there yet**. A later `helm upgrade` therefore never
-  overwrites a newer license uploaded on the license screen.
+  overwrites a newer license uploaded on the license screen. Pods without the license volume
+  (several replicas) get it as `ENS_LICENSE` instead.
 
 The license screen shows the **installation id**, which you enter on the ENS licensing portal to
 bind a license to this installation. It is also in the API's startup log:
@@ -434,12 +482,13 @@ kubectl logs -n dsp deploy/dsp-directory-services-portal-api -c api | grep Licen
 ```
 
 !!! warning "Keep the license volume"
-    The license PVC (`<release>-directory-services-portal-license`) holds the installation id.
-    `helm upgrade` keeps it. If it is lost, the installation gets a new id and bound licenses
-    must be re-bound. For installations you might reinstall, create the PVCs yourself and set
+    The license PVC (`<release>-directory-services-portal-license`) holds the installation id. It
+    carries `helm.sh/resource-policy: keep`, so neither `helm upgrade` nor `helm uninstall`
+    deletes it. If it is lost, the installation gets a new id and bound licenses must be
+    re-bound. For installations you might reinstall, create the PVCs yourself and set
     `persistence.license.existingClaim` and `persistence.data.existingClaim`.
 
-### Ingress, OpenShift and HTTPS
+### 5. Ingress, OpenShift and HTTPS
 
 === "Ingress"
 
@@ -479,7 +528,7 @@ kubectl logs -n dsp deploy/dsp-directory-services-portal-api -c api | grep Licen
       externalTrafficPolicy: Local    # keeps client addresses
     ```
 
-### X.509 smart-card sign-in
+### 6. X.509 smart-card sign-in
 
 The API takes the user's certificate from a header set by a trusted proxy. The license must
 include `smart-card-sign-in`. Two setups are supported. In both, the API accepts that header only
@@ -554,6 +603,72 @@ networkPolicy:
     header itself and replaces any copy a client sends. Use `optional`, never `optional_no_ca`.
     An OpenShift Route can't forward client certificates, so use passthrough there.
 
+### 7. Upgrade { #upgrade_1 }
+
+```bash
+helm upgrade dsp oci://ghcr.io/winllc/charts/directory-services-portal --version X.Y.Z -n dsp -f my-values.yaml
+```
+
+With one replica, the old API pod stops before the new one starts (`Recreate`). The PVCs, and
+with them the license, the installation id and the data, are kept. Back up the data volume
+before you upgrade.
+
+With `x509.enabled`, the upgrade generates the X.509 proxy secret if the release has none yet,
+and restarts both workloads. Before upgrading an edge-terminated setup (`x509.enabled` without
+`tls.enabled`), set `x509.trustedCa`, `networkPolicy.enabled` and `networkPolicy.webIngressFrom`
+(or `x509.allowUnrestrictedWebIngress`): otherwise the upgrade stops with a message saying so.
+
+!!! note "Defaults that changed"
+    - `x509.revocation.mode` and `.fail` now default to empty: with `x509.enabled`, client
+      certificates are checked live at sign-in, soft-fail. Set `fail: closed` for DISA STIG, or
+      `mode: "off"` to keep the check off. `helm upgrade --reuse-values` keeps the old `off`.
+    - The license PVC is now kept on `helm uninstall`.
+    - Nothing changes for single sign-on or the database until you set `sso.*` or `database.*`.
+
+### 8. Uninstall
+
+```bash
+helm uninstall dsp -n dsp
+```
+
+This deletes the data and audit-file PVCs the chart created; back them up first if you may
+reinstall. The license PVC is kept: delete it with `kubectl delete pvc` when you mean to. PVCs
+given with `existingClaim` are never touched.
+
+### Several API replicas
+
+More than one API pod needs a shared PostgreSQL (13 or later), which holds sessions, the
+sign-in lockout, configuration, the audit store, background jobs and the license state. Move an
+existing installation in two steps, so that the first start can import the data and license
+volumes:
+
+1. Keep one replica and the data volume, and add the database:
+
+    ```yaml
+    database:
+      url: jdbc:postgresql://postgres.db.svc:5432/dsp
+      username: dsp
+      password:
+        existingSecret: dsp-database      # key: database-password
+    ```
+
+    Check the API log for its `Imported ...` lines.
+
+2. Drop the data volume and scale out:
+
+    ```yaml
+    api:
+      replicaCount: 3
+    persistence:
+      data:
+        enabled: false
+    ```
+
+The chart refuses `replicaCount` above 1 without `database.url`, or with a ReadWriteOnce data or
+audit-file volume. Pods without the license volume refuse to start while the database has no
+installation id, so always start with one replica first. Don't turn the database off again
+afterwards. The chart's README has the details.
+
 ### Air-gapped clusters
 
 1. Get the chart: the release download includes `directory-services-portal-<version>.tgz`, or
@@ -577,29 +692,53 @@ networkPolicy:
 The license init container and the `helm test` pod use the same two images, so nothing else
 needs to be mirrored.
 
-### Upgrade
+## Trying it out: the demo
 
-```bash
-helm upgrade dsp oci://ghcr.io/winllc/charts/directory-services-portal --version X.Y.Z -n dsp -f my-values.yaml
-```
+!!! danger "Not for production"
+    The demo's credentials are public, printed on its sign-in page, and `admin` can change
+    everything in the portal. Use it to look around, never to run the portal.
 
-The old API pod stops before the new one starts. The PVCs, and with them the license, the
-installation id and the data, are kept. Back up the data volume before you upgrade.
+The portal's source repository has a `docker-compose.demo.yml` at its root. It builds the web tier
+and the API from source and runs the API in memory mode (`DIRECTORY_MODE=memory`,
+`SEED_DEMO_CONFIG=true`): an embedded demo directory, with example forms, directories and
+permissions. Sign in as `admin` (administrator), or `alice`, `bob`, `erin`, `dave` or `frank`,
+all with the password `password`.
 
-With `x509.enabled`, the upgrade generates the X.509 proxy secret if the release has none yet,
-and restarts both workloads. Before upgrading an edge-terminated setup (`x509.enabled` without
-`tls.enabled`), set `x509.trustedCa`, `networkPolicy.enabled` and `networkPolicy.webIngressFrom`
-(or `x509.allowUnrestrictedWebIngress`): otherwise the upgrade stops with a message saying so.
+1. Download an evaluation license for the portal from the ENS licensing portal, and save it as
+   `license/license.lic` in the repository. Or skip this and upload it later as `admin`.
+2. Start it, always with `-p dsp-demo` so it never shares volumes with another stack:
 
-### Uninstall
+    === "Docker"
 
-```bash
-helm uninstall dsp -n dsp
-```
+        ```bash
+        docker compose -f docker-compose.demo.yml -p dsp-demo up --build
+        ```
 
-This deletes the PVCs the chart created: the license (with the installation id), the data and
-the optional audit file volume. Back them up first if you may reinstall. PVCs given with
-`existingClaim` are never touched.
+    === "Podman"
+
+        ```bash
+        podman-compose -f docker-compose.demo.yml -p dsp-demo up --build
+        ```
+
+3. Reach it. **The demo publishes no port.** The web tier listens on 8080 inside the
+   `dsp-demo_demo` network. Either attach a reverse proxy to that network and point it at
+   `web:8080`, or write an override file of your own that binds it to this host only:
+
+    ```yaml
+    # demo-ports.yml
+    services:
+      web:
+        ports: ["127.0.0.1:8080:8080"]
+    ```
+
+    Add `-f demo-ports.yml` after `-f docker-compose.demo.yml` and open <http://localhost:8080>.
+
+4. Reset it, license included, with `down -v` and the same `-f` and `-p` options. A restart
+   alone brings back the demo directory as shipped, and keeps forms, permissions and the audit
+   trail.
+
+From a release, `./install.sh --demo --bind 127.0.0.1` runs the same demo directory with the
+Docker or Podman package.
 
 ## Connecting to your directory
 
