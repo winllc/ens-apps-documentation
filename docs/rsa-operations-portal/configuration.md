@@ -92,6 +92,7 @@ With Helm, the Portal and the Connector are two Deployments, the license is in t
 |---|---|---|
 | `server.port` | `8080` | HTTP port inside the container. |
 | `server.servlet.session.timeout` | not set | The setting up to release 1.5, still read as the idle timeout when `ENS_SESSION_IDLE_TIMEOUT` is not set. Use [`ENS_SESSION_IDLE_TIMEOUT`](#security-headers-banner-and-sessions). |
+| `ENS_SESSION_STORE` | `jdbc` | `jdbc`: sessions in the Portal database (Spring Session JDBC), shared by every replica and kept across restarts and upgrades; `memory`: in each Portal's memory, as up to release 1.5. See [Security → Sessions](security.md#sessions). |
 | `server.servlet.session.cookie.same-site` | `lax` | The session cookie is `HttpOnly` and `SameSite=Lax`. |
 | `spring.servlet.multipart.max-file-size` | `5MB` | Largest file accepted (Trusted Agent CSV upload, group-email attachment). |
 | `spring.servlet.multipart.max-request-size` | `5MB` | Largest multipart request. |
@@ -158,7 +159,6 @@ These are the ENS platform settings: every ENS application has them, with the sa
 | `ENS_SESSION_ADMIN_IDLE_TIMEOUT` | the idle timeout | Idle timeout for users with an administrative role (PMO, Trusted Agent, Help Desk). DISA STIG suggests `15m` |
 | `ENS_SESSION_ABSOLUTE_TIMEOUT` | `12h` | A session ends this long after sign-in, whatever its activity |
 | `ENS_SESSION_MAX_PER_USER` | `0` (no limit) | Sessions one user may have at once; a sign-in over the limit ends that user's oldest session. DISA STIG suggests `3` |
-| `ENS_SESSION_STORE` | `jdbc` | `jdbc`: sessions in the Portal database, shared by every replica and kept across restarts and upgrades; `memory`: in each Portal's memory, as up to release 1.5 |
 | `security-banner.text`, `security-banner.background-color`, `security-banner.text-color` | `UNCLASSIFIED // FOR OFFICIAL USE ONLY`, `#007A33`, `#FFFFFF` | Classification banner at the top and bottom of every page. Empty text turns it off; the read-only demo never shows it. Helm: `securityBanner.*` |
 | `user.token.test.maxAttempts`, `user.token.test.windowMinutes` | `5`, `15` | *Test My Token* attempts allowed per user ID in the window. Counted in the database, and held even with `rsa.rate-limit.enabled=false` |
 
