@@ -90,8 +90,8 @@ disaster recovery and rollback across the suite.
 | **User guide** | use the application day to day |
 
 Most sections also include **Architecture**, **Security**, **API reference** and
-**Troubleshooting** pages. Every section has a **Sizing, availability and recovery** page and a **FIPS 140-3 and DISA
-STIG** page. The RSA Operations Portal adds an **RSA AM integration** page. ReadyRoom adds a
+**Troubleshooting** pages. Every section has **Single sign-on**, **Webhooks**, **Accessibility**,
+**Sizing, availability and recovery** and **FIPS 140-3 and DISA STIG** pages. The RSA Operations Portal adds an **RSA AM integration** page. ReadyRoom adds a
 **Windows client** page.
 
 ## At a glance
@@ -103,6 +103,10 @@ STIG** page. The RSA Operations Portal adds an **RSA AM integration** page. Read
 | Directory | LDAP (IC FSD schema) | LDAP (any schema) | LDAP | RSA Authentication Manager |
 | Sign-in | X.509, directory password, or single sign-on (OIDC, SAML) | X.509, directory password, or single sign-on (OIDC, SAML) | X.509, LDAP password, single sign-on (OIDC, SAML), Kerberos (client) | RSA AM user ID + SecurID passcode; operators can start with single sign-on (OIDC, SAML) |
 | Install | Release package (Docker or Podman Compose) or Helm chart | Release package (Docker or Podman Compose, or native systemd) or Helm chart | Release package (Docker or Podman Compose) or Helm chart, plus the Windows agent | Release package (Docker or Podman Compose) or Helm chart |
+| Public API | `/api/v1` with scoped API tokens, OpenAPI document | `/api/v1` with scoped API tokens, OpenAPI document | Read-only `/api/v1` with scoped API tokens, OpenAPI document | `/api/v1` with scoped API tokens; changes are help-desk requests |
+| Webhooks | Expiry alerts and job results (JSON, Slack, Teams), HMAC-signed | Entry, membership and form events, HMAC-signed | Absence alerts and status changes, HMAC-signed | Help-desk, token and account events, HMAC-signed |
+| Exports | Certificate inventory as CSV or Excel, saved views, scheduled reports | Entries and group members as CSV or LDIF, import with a dry run | Group reports and people lists as CSV or Excel, scheduled reports | Trusted Agent and site reports; the audit log as CSV or NDJSON |
+| Accessibility | WCAG 2.1 AA target, draft VPAT | WCAG 2.1 A/AA checks, draft VPAT | WCAG 2.1 AA target, draft VPAT | WCAG A/AA checks, draft VPAT |
 | Demo | `docker-compose.demo.yml` | `docker-compose.demo.yml` | `docker-compose.demo.yml` | `docker-compose.demo.yaml` |
 
 !!! note "Source of truth"
