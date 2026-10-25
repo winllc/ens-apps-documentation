@@ -16,15 +16,15 @@ the directory:
 | *Project administrator* | Granted per project, in the UI, by an administrator (see [Projects](#projects-and-project-administrators)) |
 | *Point of contact* | Derived from the directory's `serverPOC` and contacts added in CertAlert; grants rights over that server |
 
-`admin-identifiers` is matched against any address the directory publishes for a person, their
-`uid`, or their entry's DN. Common, display and preferred names, and addresses added in CertAlert,
-never count. A DN contains commas, so give it its own YAML list item:
+`admin-identifiers` is matched against a person's `uid` or their entry's DN, and nothing else.
+An e-mail address, even one the directory publishes, is ignored, with a startup warning naming the
+uid to list instead; common, display and preferred names never count. A DN contains commas, so
+give it its own YAML list item:
 
 ```yaml
 cert-alert:
   security:
     admin-identifiers:
-      - alice@intelink.ic.gov
       - bob
       - "uid=carol,ou=people,dc=example,dc=gov"
 ```
