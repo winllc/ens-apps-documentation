@@ -36,6 +36,16 @@ Symptoms, likely causes and fixes. Start with the application log (stdout) and
     `ENS_CONSENT_BANNER_FILE` names a file CertAlert can't read. In the release package, put it in
     `tls/` and name it as `/etc/cert-alert/tls/<file>`; with Helm, mount it with `extraVolumes`.
 
+??? failure "`install.sh` refuses to start: plain HTTP to other hosts (next release)"
+    TLS is off and `CERT_ALERT_BIND_ADDRESS` is not `127.0.0.1`, and `.env` says
+    `CERT_ALERT_ALLOW_PLAIN_HTTP=false` (as every new `.env` from the next release does). Turn TLS
+    on, bind to `127.0.0.1` behind your own TLS-terminating proxy, or, for a lab, set
+    `CERT_ALERT_ALLOW_PLAIN_HTTP=true`. See [Install → Choose where it listens](install.md#4-choose-where-it-listens).
+
+??? failure "Startup stops: `cert-alert.security.enabled=false` ... allowed only with the 'dev' profile (next release)"
+    `cert-alert.security.enabled=false` leaves every page and API open to anybody, and from the next
+    release it is refused outside the `dev` profile. Remove the setting, or set it to `true`.
+
 ## Health
 
 ??? warning "`/actuator/health` is DOWN but the UI works"
@@ -56,6 +66,13 @@ Symptoms, likely causes and fixes. Start with the application log (stdout) and
     add it to `docker-compose.yml`, bound to an interface only your Prometheus reaches.
 
 ## Signing in
+
+??? failure "Single sign-on is refused: the provider left your groups out (`sso_error=groups`, next release)"
+    The person is in more groups than Entra ID puts in a token (group overage), so the roles their
+    groups grant cannot be known and the sign-in is refused, recorded as a failed `auth.login`. In
+    the app registration's **Token configuration**, send only the groups assigned to the
+    application (`groupMembershipClaims: ApplicationGroup`). See
+    [Single sign-on → Microsoft Entra ID](single-sign-on.md#microsoft-entra-id-oidc).
 
 ??? failure "Nobody can trigger the first sync / no Admin menu"
     `cert-alert.security.admin-identifiers` is empty (the default) or does not name your `uid` or

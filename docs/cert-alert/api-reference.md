@@ -136,7 +136,8 @@ The full list of which method and path needs which scope is in the OpenAPI docum
 - **CSRF**: with a session, `POST`, `PUT` and `DELETE` require Spring Security's CSRF token in the
   header named by the page's `_csrf_header` meta tag (value in `_csrf`). Token calls need none.
 - **Auditors**: a session with `ROLE_AUDITOR` is refused (`403`) on every `POST`, `PUT` and `DELETE`
-  except the DataTables queries, audit-chain verification and their own saved views. See
+  except the DataTables queries, audit-chain verification and their own saved views (and, from the
+  next release, the inventory export). See
   [Single sign-on and roles](single-sign-on.md#the-auditor-changes-nothing).
 - **Unauthenticated** API calls get `401`; **forbidden** ones get `403`.
 - **Errors** are RFC 7807 problem details (`application/problem+json`) with a `detail` message.
@@ -151,7 +152,7 @@ The full list of which method and path needs which scope is in the OpenAPI docum
 | Method | Path | Access | Purpose |
 |---|---|---|---|
 | `GET` | `/api/v1/certificates`, `/api/v1/certificates/{id}` | user | The inventory, filtered and paged, or one certificate |
-| `POST` | `/api/v1/certificates/export?format=csv\|xlsx` | user | Download the filtered inventory; audited as `inventory.exported` |
+| `POST` | `/api/v1/certificates/export?format=csv\|xlsx` | user (auditors from the next release) | Download the filtered inventory; audited as `inventory.exported` |
 | `GET` | `/api/v1/summary/expiry` | user | Counts over the same filters |
 | `GET` | `/api/v1/servers`, `/api/v1/servers/{id}` | user | Servers with their certificate state |
 | `GET` | `/api/v1/people`, `/api/v1/people/{id}` | user | People with their certificate state |

@@ -23,7 +23,9 @@ string or a form body.
 - **A `POST`, because it is audited.** Each export is recorded as `inventory.exported`, with the
   format, the filters and the row count, before a byte is sent. The buttons submit a form carrying
   the CSRF token, so another site cannot make a signed-in browser export. Exporting works in a
-  read-only license and in the demo: it changes nothing but the audit trail.
+  read-only license and in the demo: it changes nothing but the audit trail. From the next
+  release an auditor may export too, like the rows the export contains; up to now an auditor is
+  refused (`403`).
 - **Always a file**: `text/csv` or the Excel type, `Content-Disposition: attachment` and
   `X-Content-Type-Options: nosniff`.
 - **Streamed** from a database cursor, so a large export does not sit in memory. Capped at

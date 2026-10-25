@@ -100,10 +100,38 @@ after the commit by one replica (claimed in the database, under a lock), with a 
 - The post goes to the address that was checked, with TLS SNI and certificate host-name verification
   against the URL's host and the JVM's trust store. A name that later resolves somewhere internal
   (DNS rebinding) is refused at the send.
-- Narrow it further with `cert-alert.webhooks.allowed-hosts` (names, `*.suffix`, CIDR ranges) and
-  `cert-alert.webhooks.block-private-networks: true`.
+- **Private addresses** (10/8, 172.16/12, 192.168/16, 100.64/10, fc00::/7) are governed by
+  `cert-alert.webhooks.block-private-networks` and `allowed-hosts`; see
+  [Private networks](#private-networks) below.
+- Narrow it further with `cert-alert.webhooks.allowed-hosts` (names, `*.suffix`, CIDR ranges):
+  once set, a webhook may go only to the hosts it lists.
 - **Webhooks connect directly.** An outbound HTTP proxy is not used. With the Helm chart's
   NetworkPolicy on, `networkPolicy.egress.web` must reach the receivers.
+
+### Private networks
+
+!!! info "From the next release"
+    Releases up to now allow private addresses unless `block-private-networks: true` is set. The
+    next release changes the default as described here.
+
+`cert-alert.webhooks.block-private-networks` (`CERT_ALERT_WEBHOOKS_BLOCK_PRIVATE_NETWORKS`, Helm
+`webhooks.blockPrivateNetworks`) has three states:
+
+| Setting | Private addresses |
+|---|---|
+| Unset (the default from the next release) | Refused for webhooks saved from now on. A webhook that existed at the upgrade keeps its address until its URL is changed, and is named in a warning at every start |
+| `true` | Refused for every webhook |
+| `false` | Allowed for every webhook, as releases before the next one did. A warning is logged at every start |
+
+Which webhooks keep their address is recorded by migration `V29`
+(`webhook_endpoint.private_networks_allowed`), which marks every webhook that exists when the next
+release first starts. Once such a webhook's URL is changed, the new address is checked like any new
+webhook's. Nothing stops working on the upgrade.
+
+A receiver inside your network, such as a chat bridge or a ticketing relay, is let in by
+`allowed-hosts`: a host it names, or an address in a CIDR range it lists, may be private whatever
+`block-private-networks` says. This is the way to keep an internal receiver for good. Loopback,
+link-local and the metadata addresses stay refused whatever `allowed-hosts` says.
 
 ## Secrets at rest
 
@@ -113,6 +141,14 @@ AES-GCM encrypted. Without one they are stored as they are, and a warning is log
 
 - Helm: `webhooks.secretKey`, or `webhooks.existingSecret` / `webhooks.existingSecretKey`.
   Release package: `CERT_ALERT_WEBHOOKS_SECRET_KEY` in `.env`.
+- **New installations get a key (from the next release).** The release package's `install.sh`
+  writes a random key into a new `.env`. The Helm chart generates one into its own Secret on a new
+  install (`webhooks.generateSecretKey`, default `true`) and keeps it across upgrades by `lookup`.
+  It cannot do so under `helm template` or Argo CD, which render without cluster access: give the
+  key yourself there. An upgraded installation without a key is unchanged: it keeps storing
+  secrets unencrypted, with the warning, until you set one.
+- **Back the key up** with `.env` or your values. The database backups do not contain it, and
+  without it the stored secrets and URLs cannot be read.
 - Secrets and URLs saved before the key was set are encrypted at the next start (once, under the job
   lock, safe with several replicas).
 - **Changing the key** makes the stored secrets unreadable: press **New secret** and save the URL
@@ -125,9 +161,9 @@ AES-GCM encrypted. Without one they are stored as they are, and a warning is log
 | Property (`cert-alert.webhooks.`) | Env var | Default | Description |
 |---|---|---|---|
 | `enabled` | `CERT_ALERT_WEBHOOKS_ENABLED` | `true` | `false` queues and posts nothing |
-| `allowed-hosts` | `CERT_ALERT_WEBHOOKS_ALLOWED_HOSTS` | empty | Hosts a webhook may go to: names, `*.suffix` or CIDR ranges. Empty: any host the address rules allow |
-| `block-private-networks` | `CERT_ALERT_WEBHOOKS_BLOCK_PRIVATE_NETWORKS` | `false` | Refuse private addresses as well |
-| `secret-key` | `CERT_ALERT_WEBHOOKS_SECRET_KEY` | none | Base64 AES key that encrypts signing secrets and URLs in the database |
+| `allowed-hosts` | `CERT_ALERT_WEBHOOKS_ALLOWED_HOSTS` | empty | Hosts a webhook may go to: names, `*.suffix` or CIDR ranges. Empty: any host the address rules allow. From the next release, a host listed here may be on a private network |
+| `block-private-networks` | `CERT_ALERT_WEBHOOKS_BLOCK_PRIVATE_NETWORKS` | `false`; unset from the next release | Unset: private addresses refused for webhooks saved from now on, existing ones keep theirs. `true`: refused for all. `false`: allowed for all. See [Private networks](#private-networks) |
+| `secret-key` | `CERT_ALERT_WEBHOOKS_SECRET_KEY` | none (generated on new installs from the next release) | Base64 AES key that encrypts signing secrets and URLs in the database |
 | `connect-timeout`, `read-timeout` | | `5s`, `10s` | Per try |
 | `delivery-timeout` | | `30s` | All of one delivery; the connection is closed at it |
 | `poll-interval` | | `30s` | How often the sender looks for due deliveries |
@@ -136,7 +172,11 @@ AES-GCM encrypted. Without one they are stored as they are, and a warning is log
 | `keep` | | `14d` | How long delivered and failed rows are kept |
 
 The Helm chart sets the first four from `webhooks.enabled`, `webhooks.allowedHosts`,
-`webhooks.blockPrivateNetworks` and `webhooks.secretKey`.
+`webhooks.blockPrivateNetworks` and `webhooks.secretKey`. From the next release,
+`webhooks.blockPrivateNetworks` defaults to `""` (unset), and `webhooks.generateSecretKey`
+(`true`) generates a key on a new install when neither `secretKey` nor `existingSecret` is given.
+A release whose own values set `false` keeps it; one that relied on the chart's old default
+(`false`) moves to unset.
 
 ## Audit
 

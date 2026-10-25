@@ -360,7 +360,7 @@ See [Security](security.md) for how these interact.
 
 | Property | Default | Description |
 |---|---|---|
-| `enabled` | `true` | `false` removes the application's security configuration. Local development only |
+| `enabled` | `true` | `false` removes the application's security configuration. Local development only: from the next release the application refuses to start with `false` unless the `dev` profile is active |
 | `admin-identifiers` | `[]` | Values granting `ROLE_ADMIN`, matched against a person's `uid` and entry DN only. An e-mail address is ignored, with a startup warning naming the uid to use, and `cn`, `displayName` and `preferredName` never match. A DN contains commas: name it as a YAML list item, or as `CERT_ALERT_SECURITY_ADMIN_IDENTIFIERS_0`, `_1`, … with `CERT_ALERT_SECURITY_ADMIN_IDENTIFIERS` itself unset |
 | `contact-editors` | `ADMIN` | `ADMIN` or `AUTHENTICATED`. Who may edit a person's added addresses and create/edit projects; also lets anyone signed in manage any server's contacts when `AUTHENTICATED` |
 | `x509.enabled` | `true` | Accept client certificates |
@@ -412,9 +412,11 @@ directory does not say; see [API reference → API tokens](api-reference.md#api-
 
 ## Webhooks (`cert-alert.webhooks`)
 
-`enabled` (`true`), `allowed-hosts` (empty), `block-private-networks` (`false`) and `secret-key`
-(unset; set it before creating webhooks), plus timeouts, retry and retention settings. All of them
-are in [Webhooks → Settings](webhooks.md#settings).
+`enabled` (`true`), `allowed-hosts` (empty), `block-private-networks` (`false`; unset from the
+next release, which refuses private addresses for webhooks saved from then on) and `secret-key`
+(unset; set it before creating webhooks; generated on new installs from the next release), plus
+timeouts, retry and retention settings. All of them are in [Webhooks → Settings](webhooks.md#settings)
+and [Webhooks → Private networks](webhooks.md#private-networks).
 
 ## Client certificates (`ens.x509`)
 
@@ -468,6 +470,7 @@ without `ENS_X509_TRUSTED_CA_FILE`, or with `SERVER_FORWARD_HEADERS_STRATEGY=nat
 | `server.ssl.trust-store-password` | `CERT_ALERT_TRUSTSTORE_PASSWORD` | empty | |
 | `server.ssl.trust-store-type` | `CERT_ALERT_TRUSTSTORE_TYPE` | `PKCS12` | |
 | (release package) | `CERT_ALERT_BIND_ADDRESS`, `CERT_ALERT_PORT` | `0.0.0.0`, `8080` | The host interface and port the UI is published on. `127.0.0.1` keeps it to the host, behind a reverse proxy of your own. With TLS off and every interface published, `install.sh` and `upgrade.sh` warn that passwords and cookies would cross the network in clear text |
+| (release package, next release) | `CERT_ALERT_ALLOW_PLAIN_HTTP` | `false` in a new `.env`; absent in an upgraded one | With TLS off on an address other than `127.0.0.1`, `install.sh` refuses to start CertAlert unless this is `true` (and warns every run when it is). An `.env` that does not mention it (written before the next release) is only warned about. See [Install → Choose where it listens](install.md#4-choose-where-it-listens) |
 | `server.forward-headers-strategy` | `SERVER_FORWARD_HEADERS_STRATEGY` | unset | `framework` behind a proxy that terminates TLS and sets `X-Forwarded-*` itself: redirects stay on https, HSTS and the `Secure` cookie follow the browser's request, and the audit trail records the client's address. The Helm chart sets it whenever its ingress or an edge or reencrypt Route terminates TLS. Never `native` with header mode |
 
 ## Security headers, banner and sessions

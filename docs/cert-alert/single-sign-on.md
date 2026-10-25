@@ -37,6 +37,13 @@ the person or a tenant administrator.
     - The provider's discovery document is read when first needed, so a provider that is down does
       not stop CertAlert starting.
     - No access or refresh token is kept.
+    - **Entra ID group overage (next release).** For somebody in more groups than fit in a token
+      (200 in a JWT), Entra ID leaves the groups claim out and points at Microsoft Graph instead
+      (`_claim_names.groups`). Signing them in without it would quietly leave out the
+      administrator or auditor role a group grants, so such a sign-in is refused, recorded as a
+      failed `auth.login` saying why, and sent to `/login?sso_error=groups`, where the sign-in page
+      says to ask the provider's administrator. See the
+      [Entra ID walkthrough](#microsoft-entra-id-oidc) for how to avoid it.
 
 === "SAML 2.0"
 
@@ -54,12 +61,29 @@ the person or a tenant administrator.
 Sign-ins and refusals are recorded in the audit trail as `auth.login` with method `oidc` or `saml`,
 and the reason for a refusal. The account menu shows **via OIDC** or **via SAML**.
 
-!!! note "No single logout"
-    Signing out ends the CertAlert session only. It does not sign the person out of the identity
-    provider, and signing out at the provider does not end the CertAlert session.
-
 With the [notice and consent banner](security.md#notice-and-consent-banner) on, a single sign-on is
 held at the banner like any other sign-in.
+
+### Signing out
+
+Signing out ends the CertAlert session. Up to the current release it does not sign the person out
+of the identity provider, and signing out at the provider does not end the CertAlert session.
+
+From the next release, with OpenID Connect and `cert-alert.sso.oidc.provider-logout: true`
+(`CERT_ALERT_SSO_OIDC_PROVIDER_LOGOUT`, Helm `sso.oidc.providerLogout`), signing out also signs the
+person out at the provider: the browser is sent to the `end_session_endpoint` the provider's
+discovery document names, with the ID token as `id_token_hint` and `<public-url>/login?logout` as
+`post_logout_redirect_uri`. Register that address with the provider first (Entra ID: a redirect
+URI of the app registration, and its front-channel logout URL; Okta: a sign-out redirect URI). A
+provider that names no `end_session_endpoint` is skipped.
+
+- **Upgrades** keep signing out as before (off), with a startup warning while OIDC is on.
+- **New installations** turn it on: the release package's `env.template` sets it, and the chart's
+  empty `sso.oidc.providerLogout` means `true` on a new install and keeps what the release had on
+  an upgrade (`false` for a release from before the setting, or when rendered without cluster
+  access, as Argo CD does).
+- Signing out at the provider does not end CertAlert sessions in other browsers, and **SAML single
+  logout is not supported**.
 
 ## The public address
 
@@ -127,6 +151,7 @@ cert-alert:
 | `oidc.username-claim` | `preferred_username` | The claim matched to the directory |
 | `oidc.groups-claim` | empty | The claim listing the person's groups at the provider |
 | `oidc.jws-algorithm` | `RS256` | The ID token's signature algorithm |
+| `oidc.provider-logout` | `false` (next release; `true` in new installations' settings) | Signing out signs out at the provider too, back to `<public-url>/login?logout`. See [Signing out](#signing-out) |
 | `saml.metadata-location` | none | The identity provider's metadata: an `https://` URL or `file:/path` |
 | `saml.entity-id` | empty | This service provider's entity id, an absolute URI; empty uses the metadata address above |
 | `saml.signing-key-location`, `saml.signing-certificate-location` | none | PEM (PKCS#8) key and certificate, for a provider that requires signed requests |
@@ -156,6 +181,13 @@ come from `sso.oidc.existingSecret`, and the SAML signing pair from `sso.saml.si
    the user principal name: use it with `match: UID` only where your directory's uids are the UPNs.
    Otherwise add a claim carrying the on-premises `samAccountName` or DN (directory extension
    attributes, or claims mapping) and name it in `username-claim`.
+4. **Groups for everybody (next release).** Somebody in more than 200 groups gets no groups claim
+   (group overage), and from the next release their sign-in is refused. Under **Token
+   configuration**, send only the groups assigned to the application
+   (`groupMembershipClaims: ApplicationGroup` in the manifest), and assign the groups that grant
+   roles to the enterprise application.
+5. **Sign-out (next release).** To use `provider-logout`, add `https://<host>/login?logout` as a
+   redirect URI and as the front-channel logout URL.
 
 ### Okta (OIDC)
 
@@ -217,7 +249,9 @@ marking a notification read.
 
 The only exceptions read or concern the session: the search tables (which `POST` their query),
 verifying the audit chain, saved views (an auditor keeps views of their own), signing in and out, and
-agreeing to the consent banner. The pages hide what an auditor cannot use, and the account menu reads
+agreeing to the consent banner. From the next release the inventory export is one of them too (a
+`POST` for its CSRF token, audited as `inventory.exported`): an auditor may export the rows they can
+already read. The pages hide what an auditor cannot use, and the account menu reads
 **Auditor**.
 
 ### Roles from directory groups
@@ -265,3 +299,12 @@ the provider, named like a directory group's DN, grants nothing.
 Nothing changes until `cert-alert.sso.*`, `auditor-identifiers` or `security.groups` is set;
 certificate and password sign-in work as before. Turning single sign-on on needs
 `CERT_ALERT_SSO_PUBLIC_URL`; SAML needs HTTPS.
+
+From the next release:
+
+- An Entra ID sign-in with group overage is refused (`sso_error=groups`); see
+  [What is checked](#what-is-checked).
+- `CERT_ALERT_SSO_OIDC_PROVIDER_LOGOUT` signs out at the provider. It stays off on an upgrade (a
+  startup warning says so) and is on for new installations; register `<public-url>/login?logout`
+  before turning it on. See [Signing out](#signing-out).
+- An auditor may export the inventory (a `POST`, audited as `inventory.exported`).
