@@ -127,9 +127,9 @@ added as its environment variable: `cert-alert.ldap.page-size` is `CERT_ALERT_LD
 
 Choose one:
 
-- **The drop-in.** Put the file at `license/license.lic`. Once CertAlert has started,
-  `install.sh` copies it into the `ens-license` volume. It never replaces a different license
-  already installed, which may be a newer one uploaded on the license screen.
+- **The drop-in.** Put the file at `license/license.lic`. Before starting CertAlert, `install.sh`
+  sets `ENS_LICENSE` in `.env` from it, which CertAlert installs as below. A different license
+  already installed, which may be a newer one uploaded on the license screen, is kept.
 - **`ENS_LICENSE` in `.env`.** The license text itself: the token between the file's `BEGIN` and
   `END` lines, or the whole file base64-encoded (`base64 -w0 license.lic`). It is installed at
   start if no license is installed yet, or if it is a newer revision of the installed one.
@@ -164,7 +164,7 @@ A new install publishes the UI on **every interface** (`CERT_ALERT_BIND_ADDRESS=
 ./install.sh
 ```
 
-This time it checks `.env`, starts PostgreSQL and CertAlert, installs `license/license.lic`, and
+This time it checks `.env`, sets `ENS_LICENSE` from `license/license.lic`, starts PostgreSQL and CertAlert, and
 waits for CertAlert to report healthy. It prints the URL and the license screen's address.
 
 Day to day:

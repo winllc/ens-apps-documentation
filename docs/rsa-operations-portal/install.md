@@ -102,7 +102,7 @@ The package holds:
 | `env.template` | The Portal's settings, commented. `install.sh` copies it to `.env`. |
 | `connector.env.template` | The Connector's settings: the AM connection and credentials. `install.sh` copies it to `connector.env`. |
 | `mysql.env.template` | MySQL's settings: the root and application user passwords. `install.sh` copies it to `mysql.env`. |
-| `license/` | Where you can put `license.lic` for `install.sh` and `upgrade.sh` to copy into the Portal |
+| `license/` | Where you can put `license.lic` for `install.sh` and `upgrade.sh` to give to the Portal |
 | `default_build/` | Branding, page text and e-mail templates the Portal mounts. `ssl/` holds the trust store. |
 | `util/` | `compose.sh` (the compose command, Docker or Podman), `systemd-unit.sh` (start at boot), `check-env.sh` (checks `.env`, `connector.env` and `mysql.env`), `split-env.sh` (splits a `.env` from an older release), `move-connector-secrets.sh` (moves AM passwords out of an older `connector.env`'s `JAVA_OPTS`), `connector-tls.sh` (the certificates for HTTPS and mutual TLS between the Portal and the Connector), `helpdesk-code-key.sh` (the key for the help desk's e-mailed codes), `file-owners.sh` (gives the Portal and the Connector their files) and `backupdb.sh` (database backup) |
 | `images/` | The Portal, Connector and MySQL images (`docker save` archive, which Podman loads too) |
@@ -196,7 +196,7 @@ services:
 
 Optional at this point. Choose one, or upload the license on the license screen after the first start (see [License](#license)):
 
-* **`license/license.lic`:** save the file there, and `install.sh` copies it into the Portal on the first start.
+* **`license/license.lic`:** save the file there, and `install.sh` and `upgrade.sh` set `ENS_LICENSE` in `.env` from it (`util/license-env.sh`) before starting the Portal.
 * **`ENS_LICENSE` in `.env`:** the license's text, the token between its `BEGIN` and `END` lines or the whole file base64-encoded (`base64 -w0 license.lic`). It is installed when no usable license is installed yet, or when it is a newer revision of the installed one.
 
 ### 6. Database
@@ -220,7 +220,7 @@ The second run:
 4. checks `.env`, `connector.env` and `mysql.env` with `util/check-env.sh`. Among its warnings: an AM URL whose host is an IP address or a name without a domain, which the Connector's [host name check](rsa-integration.md#transport) would refuse;
 5. says where the Portal will listen, and warns about plain HTTP on the network;
 6. runs `util/file-owners.sh`, which, among other things, makes `.env` and the Portal's key `portal-tls/portal-client.key` mode 640 with group 0, so that the Portal (uid 1001, group 0) can read them and no other user on the host can;
-7. starts the services (`docker compose up -d` or `podman-compose up -d`) and waits up to 300 seconds (`WAIT_SECONDS`) for the Portal to report healthy. It then copies `license/license.lic` into the Portal if there is one. Open `http://<server>:8080`.
+7. starts the services (`docker compose up -d` or `podman-compose up -d`) and waits up to 300 seconds (`WAIT_SECONDS`) for the Portal to report healthy. Before starting, it sets `ENS_LICENSE` in `.env` from `license/license.lic` if there is one, and the Portal installs it as it starts. Open `http://<server>:8080`.
 
 Startup order: `mysql` must pass its `mysqladmin ping` health check, and `connector` must have started, before `portal` starts. On start, the Connector signs in to AM with the service account (and the read-only account, if set) and looks up the configured realm and security domain. If AM can't be reached, the Connector starts anyway and tries again on the next request; until then its health check reports `DOWN`. If a lookup fails, the Connector's AM session check fails (see [Troubleshooting](troubleshooting.md)).
 
@@ -269,7 +269,7 @@ It stays with the engine that runs the installation (`--engine` to choose). `upg
 9. when the running MySQL is 8.0, prepares the move to 8.4 (below);
 10. gives the Portal and the Connector their files (`util/file-owners.sh`), restarts on the new version and waits for the Portal to report healthy.
 
-It keeps `.env`, `connector.env`, `mysql.env`, `license/`, a `docker-compose.override.yml`, your branding in `default_build/` (`properties`, `static`, `email-templates`, `ssl`), the certificates for HTTPS to the Connector (`connector-tls-ca/`, `default_build/connector-tls/`, `portal-tls/`), the logs, the database and the installed license. An installation from before the `ens-license` volume kept its license in `license/license.lic`; `upgrade.sh` copies it into the volume.
+It keeps `.env`, `connector.env`, `mysql.env`, `license/`, a `docker-compose.override.yml`, your branding in `default_build/` (`properties`, `static`, `email-templates`, `ssl`), the certificates for HTTPS to the Connector (`connector-tls-ca/`, `default_build/connector-tls/`, `portal-tls/`), the logs, the database and the installed license. If `license/license.lic` is there, `upgrade.sh` sets `ENS_LICENSE` in `.env` from it, installed unless a different usable license, or a newer revision of it, is installed already.
 
 The Portal updates its database schema itself on the first start of the new version (Flyway migrations). A database from release 1.5 or earlier, whose tables Hibernate created, is taken over: its tables, data and ids are kept, and what is missing is added. On a large audit table that first start takes longer. To roll back, see [Rolling back an upgrade](availability-and-sizing.md#rolling-back-an-upgrade).
 
@@ -584,13 +584,15 @@ The Portal's source repository has a `docker-compose.demo.yaml` at its root. It 
 !!! warning "Not for production"
     The demo's credentials are public, so anything those accounts can see is readable by anyone who reaches it. It runs against a mock AM only.
 
-1. Start it. Use `-p rsa-demo`: without it, the demo would share its project and volumes with the repository's other compose files.
+1. Get a license. Without one the demo shows only the license screen, and the read-only demo takes no uploads. Download an evaluation license for the RSA Operations Portal from the ENS licensing portal and save it as `license/license.lic` beside the compose file.
+2. Start it, giving the license as `ENS_LICENSE`; the Portal installs it as it starts. Use `-p rsa-demo`: without it, the demo would share its project and volumes with the repository's other compose files.
 
     ```bash
-    docker compose -f docker-compose.demo.yaml -p rsa-demo up --build
+    ENS_LICENSE="$(base64 -w0 license/license.lic)" \
+      docker compose -f docker-compose.demo.yaml -p rsa-demo up --build
     ```
 
-2. Reach it. The demo **publishes no ports**: the Portal listens on 8080 inside the demo network only. Either attach a reverse proxy to the `rsa-demo_demo-net` network and forward to `portal:8080`, or write an override file bound to `127.0.0.1`:
+3. Reach it. The demo **publishes no ports**: the Portal listens on 8080 inside the demo network only. Either attach a reverse proxy to the `rsa-demo_demo-net` network and forward to `portal:8080`, or write an override file bound to `127.0.0.1`:
 
     ```yaml
     # demo-ports.yaml
@@ -605,13 +607,7 @@ The Portal's source repository has a `docker-compose.demo.yaml` at its root. It 
 
     Then open <http://localhost:8080>.
 
-3. License it. Without a license it shows only the license screen, and the read-only demo takes no uploads. Download an evaluation license for the RSA Operations Portal from the ENS licensing portal, save it as `license/license.lic` beside the compose file, and copy it in:
-
-    ```bash
-    docker compose -f docker-compose.demo.yaml -p rsa-demo cp license/license.lic portal:/var/lib/ens/mfa-portal/license.lic
-    ```
-
-`docker compose -f docker-compose.demo.yaml -p rsa-demo down` resets the data; every start loads the same sample data. `down -v` also removes the license. The demo needs about 1 GB of memory once running; on a Mac, give the Docker or Podman VM 4 GB if you can, since the build compiles the code.
+`docker compose -f docker-compose.demo.yaml -p rsa-demo down` resets the data, the license included: give `ENS_LICENSE` again on the next start. Every start loads the same sample data. The demo needs about 1 GB of memory once running; on a Mac, give the Docker or Podman VM 4 GB if you can, since the build compiles the code.
 
 ## RSA Authentication Manager setup
 

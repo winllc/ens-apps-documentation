@@ -187,8 +187,8 @@ Supply the license in one of these ways. See [Licensing](../licensing.md) for th
   lines or the whole file base64-encoded (`base64 -w0 license.lic`). It is installed at start if no
   license is installed yet, or if it is a newer revision of the installed one.
 - **The `license/` drop-in:** save the file as `license/license.lic`. `install.sh` and `upgrade.sh`
-  copy it into the license volume when that holds no license yet, and otherwise say where to upload
-  it.
+  set `ENS_LICENSE` in `.env` from it before starting ReadyRoom, which installs it as above. Without
+  one, they say where to upload it.
 
 ReadyRoom keeps the license, this installation's id and the highest revision seen of each license in
 its database (the `ens_license_*` tables), so the database backup covers them. Earlier releases kept
@@ -199,8 +199,8 @@ the database imports those files once, while the database holds no installation 
 ### 5. First start
 
 Run `./install.sh` again (with `--engine podman` if you chose Podman). It starts ReadyRoom with the
-compose command (`docker compose up -d` or `podman-compose up -d`), and copies the license if you
-supplied one in `license/`. The first start takes a minute or two while ReadyRoom creates its schema
+compose command (`docker compose up -d` or `podman-compose up -d`), after setting `ENS_LICENSE` from
+`license/license.lic` if you supplied one. The first start takes a minute or two while ReadyRoom creates its schema
 (Flyway; see [Prepare PostgreSQL](#prepare-postgresql)).
 
 ```bash
@@ -611,8 +611,9 @@ role.
     anyone who reaches it. Keep only the mock data in it.
 
 1. Download an evaluation license for ReadyRoom from the ENS licensing portal and save it as
-   `license/license.lic` in the checkout. The demo is read-only, so its license screen refuses
-   uploads.
+   `license/license.lic` in the checkout **before the first start**: the demo reads it then only. The
+   demo is read-only, so its license screen refuses uploads; for a license added later, reset the demo
+   with `down -v` and start it again.
 2. Start it. Use `-p readyroom-demo`: without it, the demo would share its project, network and
    volumes with the repository's other compose file.
 
