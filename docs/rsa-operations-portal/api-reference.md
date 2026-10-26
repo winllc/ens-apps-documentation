@@ -131,7 +131,8 @@ The POSTs anyone can reach without signing in (sign-in, Test My Token, the PIN r
 | GET/POST | `/login` | Public | Login page |
 | POST | `/perform_login` | Public | Spring Security login processing (`username`, `password`) |
 | POST/GET | `/perform_logout` | Auth | Logout (also ends the AM session) |
-| GET | `/signed-out` | Public (next release) | After sign-out with `ENS_SSO_OIDC_END_SESSION=true`: says the operator is signed out of the Portal and goes on to the OpenID Connect provider's `end_session_endpoint` (a page refresh and a **Continue** button). See [Single sign-on → Signing out](single-sign-on.md#signing-out) |
+| GET | `/signed-out` | Public (next release) | After sign-out with `ENS_SSO_OIDC_END_SESSION=true` or `ENS_SSO_SAML_SINGLE_LOGOUT=true`: says the operator is signed out of the Portal and goes on to the OpenID Connect provider's `end_session_endpoint`, or to the SAML asserting party with a signed LogoutRequest (a page refresh and a **Continue** button). See [Single sign-on → Signing out](single-sign-on.md#signing-out) |
+| GET | `/logout/saml2/slo` | Public (next release) | SAML SingleLogoutService (HTTP-Redirect), with `ENS_SSO_SAML_SINGLE_LOGOUT=true`: the asserting party's LogoutResponse, and its signed LogoutRequests, which end the matching operator's session. See [SAML single logout](single-sign-on.md#saml-single-logout-next-release) |
 | GET | `/additionalParameterLoginHandler` | Public | Additional RSA login prompts |
 | POST | `/additionalParameterLoginHandler/submit` | Public | Answer the prompts |
 | GET | `/message` | Public | Shows `messages`/`errors` keys |

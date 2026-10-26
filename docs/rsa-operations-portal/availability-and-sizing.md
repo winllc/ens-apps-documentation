@@ -58,6 +58,7 @@ suite-wide picture, see [Sizing, availability and recovery](../availability-and-
 | Scheduled jobs, including data retention and audit pruning | Each run takes a lock row (`CronLock`) first, so a job runs on one replica at a time. The help-desk request expiry and the purges of expired rows are safe to run on every replica |
 | License, installation id, license history | `ens_license_*` |
 | SAML requests in progress | `SsoSamlRequest`; OpenID Connect sign-ins in progress are in the session |
+| SAML logout requests in progress (next release) | `SsoSamlLogoutRequest` (Flyway `V9`), so the asserting party's LogoutResponse may reach any replica |
 
 **Two things stay on one machine:**
 

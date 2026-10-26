@@ -103,7 +103,7 @@ With Helm, the Portal and the Connector are two Deployments, the license is in t
 
 | Name | Default | Description |
 |---|---|---|
-| `spring.datasource.url` | `jdbc:mysql://database.winllc-dev.com/RSAAPP` | JDBC URL. The release package's template sets `jdbc:mysql://mysql:3306/RSAAPP?sslMode=REQUIRED`. The Helm chart builds it from `database.*` (with `sslMode=REQUIRED` by default). |
+| `spring.datasource.url` | `jdbc:mysql://database.winllc-dev.com/RSAAPP`; from the next release `jdbc:mysql://localhost:3306/RSAAPP` | JDBC URL. The release package's template sets `jdbc:mysql://mysql:3306/RSAAPP?sslMode=REQUIRED`. The Helm chart builds it from `database.*` (with `sslMode=REQUIRED` by default). |
 | `spring.datasource.username` | `appuser` | Database user. The release package's MySQL creates `appuser` (`MYSQL_USER`). |
 | `spring.datasource.password` | empty | Database password. |
 | `spring.datasource.driver-class-name` | `com.mysql.cj.jdbc.Driver` | JDBC driver. |
@@ -117,12 +117,12 @@ With Helm, the Portal and the Connector are two Deployments, the license is in t
 
 | Name | Default | Description |
 |---|---|---|
-| `spring.mail.host` | `email.winllc-dev.com` | SMTP relay used by `JavaMailSender`. |
+| `spring.mail.host` | `email.winllc-dev.com`; from the next release `localhost` | SMTP relay used by `JavaMailSender`. |
 | `spring.mail.port` | `25` | SMTP port. |
 | `spring.mail.test-connection` | `true` | Spring Boot checks the SMTP connection at startup. |
-| `mail.default.from` | `noreply@winllc-dev.com` | The From address on every email the portal sends. |
-| `mail.smtp.host` / `mail.smtp.port` | `email.winllc-dev.com` / `25` | Present in `application.properties`. The portal code does not read them; `spring.mail.*` controls delivery. |
-| `mfa.group.email` | `postmaster@winllc-dev.com` | MFA/PMO team mailbox. It receives the lost-token-threshold report and appears in user emails as the contact address. (`GUIDE.md` calls it "the from address", but the From header comes from `mail.default.from`.) |
+| `mail.default.from` | `noreply@winllc-dev.com`; from the next release none | The From address on every email the portal sends. From the next release, not set: `noreply@<the host of application.dns.name>`, with a warning at every start (Helm `mail.from`, whose default `""` gets this too). Set an address your relay accepts |
+| `mail.smtp.host` / `mail.smtp.port` | `email.winllc-dev.com` (from the next release `localhost`) / `25` | Present in `application.properties`. The portal code does not read them; `spring.mail.*` controls delivery. |
+| `mfa.group.email` | `postmaster@winllc-dev.com`; from the next release none | MFA/PMO team mailbox. It receives the lost-token-threshold report and appears in user emails as the contact address. From the next release, not set: the lost-token report goes to nobody (the users are only logged, and reported once it is set) and e-mails to users name "your help desk" as their contact, with a warning at every start. Set it (Helm `mail.mfaGroupEmail`) (`GUIDE.md` calls it "the from address", but the From header comes from `mail.default.from`.) |
 | `group.email` | empty | Present in `application.properties`. Not read by the code. |
 
 ### RSA AM settings used by the portal
@@ -170,7 +170,7 @@ These are the ENS platform settings: every ENS application has them, with the sa
 | Name | Default | Description |
 |---|---|---|
 | `MANAGEMENT_SERVER_PORT` | unset | Spring Boot's setting: a port of its own for the actuator. There, without sign-in, are `/actuator/prometheus` and the health endpoints; the Portal's own port then has no actuator. Without it, Prometheus is not exposed at all. Never publish this port to users. The Helm chart sets it (`metrics.enabled`, `metrics.port: 9090`) |
-| `LOGGING_STRUCTURED_FORMAT_CONSOLE` | unset (text) | Spring Boot's setting: `ecs` writes one JSON object per console log line (Elastic Common Schema), with the request id as `requestId`. The Helm chart does that by default (`logFormat: json`) |
+| `LOGGING_STRUCTURED_FORMAT_CONSOLE` | unset (text) | Spring Boot's setting: `ecs` writes one JSON object per console log line (Elastic Common Schema), with the request id as `requestId`. The Helm chart does that by default (`logFormat: json`). From the next release the same setting in `connector.env` does it for the Connector (Helm `connector.logFormat: json`); see [Logging](#logging) |
 | `management.endpoint.health.group.readiness.include` | `readinessState,db,connector` | What readiness waits for: the database and the Connector |
 
 Each log line carries the request id: the caller's `X-Request-Id` if it is a plain token, otherwise a new one, returned in the response's `X-Request-Id` and recorded in the request's audit events. The metrics are listed in the [Operator Guide](operator-guide.md#health-and-monitoring).
@@ -202,12 +202,12 @@ AD integration adds a user to the "RSA enabled" group when they complete enrollm
 | `active-directory.connections-allowed` | `false` | Master switch. When `false`, add and remove operations are logged and skipped. |
 | `active-directory.properties[i].rsaSecurityDomainGuid` | sample | RSA AM security domain GUID whose users live in this AD. The user's domain selects the AD connection. |
 | `active-directory.properties[i].contextFactory` | `com.sun.jndi.ldap.LdapCtxFactory` | JNDI context factory class. |
-| `active-directory.properties[i].providerURL` | `ldap://ad.winllc-dev.com:389` | LDAP URL. |
+| `active-directory.properties[i].providerURL` | `ldap://ad.winllc-dev.com:389` for `[0]`; from the next release empty | LDAP URL. |
 | `active-directory.properties[i].security.authType` | `simple` | Bind type. |
-| `active-directory.properties[i].security.username` | sample DN | Bind DN. |
+| `active-directory.properties[i].security.username` | sample DN for `[0]`; from the next release empty | Bind DN. |
 | `active-directory.properties[i].security.password` | empty | Bind password. |
-| `active-directory.properties[i].rsaEnabledGroup` | sample DN | DN of the group whose members must use RSA to sign in to their workstation. |
-| `active-directory.properties[i].userSearchBase` | sample DN | Base for `samAccountName` lookups. |
+| `active-directory.properties[i].rsaEnabledGroup` | sample DN for `[0]`; from the next release empty | DN of the group whose members must use RSA to sign in to their workstation. |
+| `active-directory.properties[i].userSearchBase` | sample DN for `[0]`; from the next release empty | Base for `samAccountName` lookups. |
 | `active-directory.properties[i].trust-store`, `.trust-store-password` | not set | A JKS or PKCS12 file with the AD CA, for `ldaps://` with a private CA. One store must hold the CAs of every AD instance. Without it, the JVM's default trust store is used. Either way the domain controller's certificate and host name are checked |
 | `active-directory.properties[i].connect-timeout-millis`, `.read-timeout-millis` | `5000`, `15000` | Give up on an unreachable or stalled domain controller |
 | `active-directory.properties[i].page-size` | `500` | Large searches are paged; keep it at or below AD's `MaxPageSize` (1000) |
@@ -243,7 +243,7 @@ For every job `<name>` in `expiring`, `appointmentupcoming`, `resyncta`, `lostTo
 | `cron.appointmentupcoming.remindDaysBefore` | `1` |
 | `cron.appointmentupcoming.taDigestDays` | `7` |
 | `cron.resyncta.enabled` / `.debug` / `.cron` | `true` / `false` / `0 30 0 ? * *` |
-| `cron.lostTokenThresholdMonitor.enabled` / `.debug` / `.cron` | `true` / **`true`** / `0 35 0 ? * *`. With `debug=true` the report of users over the lost-token threshold is only logged, never sent to `mfa.group.email`. From the next release the Portal logs a warning at every start while it only logs, and the package's `env.template` of new installations sets `cron.lostTokenThresholdMonitor.debug=false`. An upgrade does not turn it on (the report would go to `mfa.group.email`, whose built-in default is not your address): add that line to `.env` (Helm: under `config`) once `mfa.group.email` is the MFA team's address |
+| `cron.lostTokenThresholdMonitor.enabled` / `.debug` / `.cron` | `true` / **`true`** (from the next release `false`) / `0 35 0 ? * *`. With `debug=true` the report of users over the lost-token threshold is only logged, never sent to `mfa.group.email`. **From the next release the report is on by default** (`debug=false` in `application.properties`), now that `mfa.group.email` has no built-in address: an installation with `mfa.group.email` set, upgraded ones included, gets the nightly report after the upgrade; without it the report goes to nobody (the users are logged). `cron.lostTokenThresholdMonitor.debug=true` (Helm: under `config`) keeps it off, with a warning at every start |
 | `cron.lostTokenThresholdMonitor.window.inDays` | `30` |
 | `cron.lostTokenThresholdMonitor.tokens.lost` | `3` |
 | `cron.sendDelayedTokenRegistrationEmails.enabled` / `.debug` / `.cron` | `true` / `false` / `0 32 0 ? * *` |
@@ -374,6 +374,18 @@ adds: the pattern in the packaged `log4j.xml` and in `default_build/log4j.xml` (
 replaces) begins with `%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX}`. A log shipper that parsed the old
 `LEVEL, message` lines needs the new leading field.
 
+**Connector JSON logs (next release).** `LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs` in `connector.env`
+(Helm `connector.logFormat: json`; default `text`) makes the Connector's console write one JSON object
+per line instead, in the Elastic Common Schema like the Portal's: `@timestamp` (UTC), `log.level`,
+`log.logger`, `process.thread.name`, `message`, `service.name` (`rsa-operations-portal-connector`),
+`ecs.version`, and during a call from the Portal its `requestId` and `actor` (the same field names as
+on the Portal's lines, so the two join on `requestId`). An exception goes in `error.type`,
+`error.message` and `error.stack_trace`, inside the object; every value is JSON-escaped. Not set, or
+`text`, keeps the timestamped text lines. Log4j 1 has no JSON layout of its own: the console layout
+in `log4j.xml` is `com.winllc.rsaapp.connector.logging.ConsoleLayout`, which chooses between the text
+pattern and `EcsJsonLayout`; a `log4j.xml` of your own uses it the same way. Tomcat's own start-up
+lines (catalina) stay text.
+
 In the text logs of both, CR and LF in a message are written as the two characters `\r` and `\n`, so request data in a message (a user ID someone typed) cannot start a line that looks like another entry. A stack trace still follows its message on lines of its own. The Portal's JSON format escapes them anyway. A configuration of your own should keep `%enc{%m}{CRLF}` (Portal) or `CrlfSafePatternLayout` (Connector).
 
 ## Connector (RSA Authentication Manager) settings
@@ -410,10 +422,10 @@ The other settings:
 |---|---|---|
 | `config.properties.location` | none (system property) | URL (`file:` or `classpath:`) of the properties file to load. |
 | `java.naming.factory.initial` | `weblogic.jndi.WLInitialContextFactory` | JNDI factory for the RSA SDK. |
-| `java.naming.provider.url` | dev host | `t3s://<AM primary FQDN>:7002` |
-| `ims.httpinvoker.client.provider.url` | dev host | `https://<AM primary FQDN>:7002/ims-ws/httpinvoker/CommandServer`, used for admin (write) commands. Use the name in AM's certificate: the Connector checks it. (`GUIDE.md` spells it `ims.httpinvokder…`, but the code uses `httpinvoker`.) |
-| `ims.httpinvoker.client.provider.readonly.url` | dev host | `https://<AM primary or replica FQDN>:7002/ims-ws/httpinvoker/CommandServer`, used for read-only searches. |
-| `ims.soap.client.provider.url` | dev host | `https://<AM primary FQDN>:7002/ims-ws/services/CommandServer` (SOAP target in the SDK context). |
+| `java.naming.provider.url` | dev host; from the next release `t3s://am-primary.invalid:7002`, which never resolves | `t3s://<AM primary FQDN>:7002` |
+| `ims.httpinvoker.client.provider.url` | dev host; from the next release `am-primary.invalid` | `https://<AM primary FQDN>:7002/ims-ws/httpinvoker/CommandServer`, used for admin (write) commands. Use the name in AM's certificate: the Connector checks it. (`GUIDE.md` spells it `ims.httpinvokder…`, but the code uses `httpinvoker`.) |
+| `ims.httpinvoker.client.provider.readonly.url` | dev host; from the next release `am-primary.invalid` | `https://<AM primary or replica FQDN>:7002/ims-ws/httpinvoker/CommandServer`, used for read-only searches. |
+| `ims.soap.client.provider.url` | dev host; from the next release `am-primary.invalid` | `https://<AM primary FQDN>:7002/ims-ws/services/CommandServer` (SOAP target in the SDK context). |
 | `ims.ssl.client.trust.keystore.filename` | developer workstation path | Path to the trust store holding the AM root CA. With the compose mounts, `default_build/ssl/trust.jks` is visible to the connector as `/custom/ssl/trust.jks`. |
 | `com.rsa.ssl.client.id.store.password`, `com.rsa.ssl.client.id.key.password` | empty | Two-way SSL identity keystore and key passwords (only for client-certificate command targets, which the connector does not use). |
 | `ims.ssl.client.provider.url` | `t3s://local1:7022` | Two-way SSL provider URL. |

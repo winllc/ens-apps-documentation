@@ -141,8 +141,9 @@ In `/opt/rsa-operations-portal`, replace every `CHANGE_ME` in the three settings
 - [ ] `spring.datasource.password`, the same as `MYSQL_PASSWORD` in `mysql.env`
 - [ ] `CONNECTOR_AUTH_PASSWORD`, any long random value: the Portal uses it to authenticate to the Connector
 - [ ] `role.mapped.1.rsaSecurityGuid` (TRUSTED_AGENT), `role.mapped.2.rsaSecurityGuid` (PMO), `role.mapped.3.rsaSecurityGuid` (HELP_DESK)
-- [ ] `spring.mail.host`, `mail.smtp.host`, `mail.default.from`, `mfa.group.email` (from the next release, a new `.env` has `cron.lostTokenThresholdMonitor.debug=false`, so the nightly lost-token report goes to `mfa.group.email`: set it to the MFA team's address)
+- [ ] `spring.mail.host`, `mail.smtp.host`, `mail.default.from`, `mfa.group.email`. The nightly lost-token report goes to `mfa.group.email` (a new `.env` has `cron.lostTokenThresholdMonitor.debug=false`; from the next release that is the built-in default): set it to the MFA team's address. From the next release none of these has a built-in address: without `mail.default.from` e-mails go out from `noreply@<the host of application.dns.name>`, and without `mfa.group.email` the report goes to nobody and e-mails name "your help desk" (a warning at every start for each)
 - [ ] With an OpenID Connect provider (next release): the new `.env` has `ENS_SSO_OIDC_END_SESSION=true`, so allow `<application.dns.name>/` as a post-logout redirect URI at the provider, or set it to `false`
+- [ ] With a SAML asserting party (next release): the new `.env` has `ENS_SSO_SAML_SINGLE_LOGOUT=true`; give the Portal a signing key (the commented `..._SIGNING_CREDENTIALS_0_*` lines) and give the asserting party the Portal's metadata, or set it to `false`
 - [ ] `application.dns.name`: the URL users will reach
 
 `connector.env` (the Connector):
@@ -279,7 +280,10 @@ The Portal updates its database schema itself on the first start of the new vers
 
     - **Single sign-on and administrative roles.** With an identity provider configured, a role `ENS_SSO_ROLES_*` maps a group to now comes only through the provider; a passcode sign-in alone no longer gets it. `ENS_SSO_REQUIRE_FOR_ADMIN_ROLES=false` keeps the old behaviour. See [Single sign-on](single-sign-on.md#how-a-sign-in-goes).
     - **`ENS_SSO_OIDC_END_SESSION`** is off for an existing installation (a warning at every start while OpenID Connect is configured). Allow `<APPLICATION_DNS_NAME>/` as a post-logout redirect URI at the provider, then set it to `true`.
-    - **`cron.lostTokenThresholdMonitor.debug=false`** is in new installations' `.env` only. The report still only logs on an upgraded one, with a warning at every start; add the line once `mfa.group.email` is right.
+    - **The lost-token report.** **From the next release the lost-token report is on by default** (`cron.lostTokenThresholdMonitor.debug=false` built in): an installation with `mfa.group.email` set, upgraded ones included, starts getting the nightly report of users over the lost-token threshold after the upgrade; `cron.lostTokenThresholdMonitor.debug=true` (Helm: under `config`) keeps it off, with a warning at every start. Check `mfa.group.email` before upgrading.
+    - **No built-in addresses.** `mfa.group.email`, `mail.default.from`, the database and SMTP hosts, the Active Directory example and the Connector's Authentication Manager URLs no longer default to vendor test addresses. A working installation sets them all, so nothing changes; one that never set `mfa.group.email` or `mail.default.from` gets the behaviour in [Configuration → Mail](configuration.md#mail), with a warning at every start.
+    - **`ENS_SSO_SAML_SINGLE_LOGOUT`** is new and off for an existing installation. Give the Portal a signing key and refresh the relying party at the asserting party, then set it to `true`. See [SAML single logout](single-sign-on.md#saml-single-logout-next-release). Flyway `V9` adds the table `SsoSamlLogoutRequest`.
+    - **Connector JSON logs.** `LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs` in `connector.env` makes the Connector write ECS JSON lines; the timestamped text lines stay the default. See [Configuration → Logging](configuration.md#logging).
     - **Site details** need the trusted agent role; the **audit CSV export** neutralises formulas; the **Connector's console lines** start with a timestamp (`upgrade.sh` replaces `default_build/log4j.xml`).
 
 !!! note "To the release with Docker and Podman support"
@@ -424,7 +428,7 @@ The key values:
 | `database.migration.*` | `spring.flyway.user`, `spring.flyway.password` |
 | `authManager.realm`, `.securityDomain` | `rsa.authmanager.realm.name`, `rsa.authmanager.securityDomain.name` (default `SystemDomain`) |
 | `roles.trustedAgentGuid`, `.pmoGuid`, `.helpDeskGuid` | `role.mapped.1-3.rsaSecurityGuid` |
-| `mail.host`, `.port`, `.from`, `.mfaGroupEmail` | `spring.mail.host`, `mail.smtp.host`, `mail.default.from`, `mfa.group.email` |
+| `mail.host`, `.port`, `.from`, `.mfaGroupEmail` | `spring.mail.host`, `mail.smtp.host`, `mail.default.from`, `mfa.group.email`. From the next release an empty `from` means `noreply@<publicUrl host>`, and an empty `mfaGroupEmail` sends the lost-token report to nobody (a warning at every start for each) |
 | `publicUrl` | `application.dns.name` (default: the first ingress or route host) |
 | `activeDirectory.*` | `active-directory.*` |
 | `cronTimezone`, `securityBanner.*` | `cron.timezone`, `security-banner.*` |
@@ -435,6 +439,7 @@ The key values:
 | `forwardedHeaders.internalProxies` | `SERVER_TOMCAT_REMOTEIP_INTERNAL_PROXIES`: CIDR ranges, each with its prefix length; the chart's schema refuses others. Empty: the private ranges |
 | `metrics.enabled` (`true`), `metrics.port` (`9090`), `metrics.serviceMonitor.*`, `metrics.allowFrom` | `MANAGEMENT_SERVER_PORT`: Prometheus and the probes on a port of their own, the `metrics` port of the Service |
 | `logFormat` (`json`) | `LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs`; `text` for plain lines |
+| `connector.logFormat` (`text`; next release) | The Connector's `LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs` with `json` |
 | `backup.*` | A database backup CronJob (off by default; see [Operator Guide](operator-guide.md#database-backups)) |
 | `audit.*` | `ENS_AUDIT_*` (see [Audit logging](../audit-logging.md)) |
 | `config` | Any other Portal setting, for example `cron.expiring.notification.daysBefore` |
@@ -537,7 +542,7 @@ helm upgrade rsa-portal oci://ghcr.io/winllc/charts/rsa-operations-portal --vers
 Back up the database first. The Portal updates its schema on the first start of the new version, and `helm rollback` restores the previous images and settings, not the previous database. The license PVC and the database are kept. The [release notes for the release package](#upgrade-with-upgradesh) apply to Helm too.
 
 !!! note "To the next release"
-    With single sign-on configured, a role `sso.roles` maps a group to now comes only through the identity provider, because `sso.requireForAdminRoles` defaults to `null` (unset); a release that set `requireForAdminRoles: false` explicitly keeps the old behaviour. `sso.oidcEndSession` (default `false`) signs operators out of the OpenID Connect provider too; allow `<publicUrl>/` as a post-logout redirect URI first. The lost-token report still only logs unless `config` sets `cron.lostTokenThresholdMonitor.debug=false`.
+    With single sign-on configured, a role `sso.roles` maps a group to now comes only through the identity provider, because `sso.requireForAdminRoles` defaults to `null` (unset); a release that set `requireForAdminRoles: false` explicitly keeps the old behaviour. `sso.oidcEndSession` (default `false`) signs operators out of the OpenID Connect provider too; allow `<publicUrl>/` as a post-logout redirect URI first. `sso.samlSingleLogout` (default `false`) does SAML single logout for each `sso.saml` entry with a `signingSecret` and a SingleLogoutService (in its metadata, or `singleLogoutUrl`); refresh the relying party at the asserting party first. From the next release the lost-token report is on by default (`cron.lostTokenThresholdMonitor.debug=false` built in): an installation with `mfa.group.email` set, upgraded ones included, starts getting the nightly report of users over the lost-token threshold after the upgrade; `cron.lostTokenThresholdMonitor.debug=true` (Helm: under `config`) keeps it off, with a warning at every start; `mail.mfaGroupEmail` is that address, and with `mail.from` empty (its default) e-mails now go out from `noreply@<publicUrl host>`. `connector.logFormat: json` makes the Connector write ECS JSON lines (default `text`).
 
 !!! note "To the release with sessions and the license in the database"
     The license PVC stays mounted, and the first start copies the license and the installation id into the database; then you can turn the volume off ([License](#helm-license)). Sessions open during that upgrade end once; later upgrades sign nobody out.
