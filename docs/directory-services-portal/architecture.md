@@ -114,8 +114,9 @@ and the call runs as the token's creator, with their rights read again from the 
 | Metric cache | API memory | Each instance's memory | `METRICS_CACHE_SECONDS` |
 | Directory-search drop-down cache | API memory | Each instance's memory | per field, 30 s by default |
 | API tokens (SHA-256 hashes) | `DATA_DIR/api-tokens.json` | The shared database | Until revoked or expired |
-| Webhooks (with signing secrets) and the delivery outbox and log | `DATA_DIR/webhooks.json`, `webhook-deliveries.json` | `dsp_document` and `dsp_webhook_delivery` | `WEBHOOK_LOG_RETENTION` for finished deliveries |
+| Webhooks (with signing secrets, encrypted with `DSP_SECRETS_KEY` from the next release) and the delivery outbox and log | `DATA_DIR/webhooks.json`, `webhook-deliveries.json` | `dsp_document` and `dsp_webhook_delivery` | `WEBHOOK_LOG_RETENTION` for finished deliveries |
 | Single sign-on requests in flight | API memory | `dsp_sso_request` | Ten minutes |
+| Per-address limits: failed API tokens, single sign-on starts (next release) | API memory | `dsp_rate_limit` (Flyway V4); a replica counts in its own memory while the database fails | A minute |
 
 Without a shared database, sessions, tasks and caches live in memory, and the configuration and
 audit stores have a single writer, so run **one** API instance. With one, the API creates its

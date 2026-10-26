@@ -29,7 +29,8 @@ can't sign in until you do. You see it again before each sign-in.
     If your organisation has set it up, the login page shows a button such as **Sign in with single
     sign-on**. You sign in at your organisation's identity provider and come back signed in, as long
     as the directory holds exactly one account for you. **Sign out** ends your portal session only,
-    not your session at the identity provider.
+    not your session at the identity provider, unless your organisation has set the portal to sign
+    you out there too (from the next release); you then come back to the sign-in page.
 
 === "Certificate (smart card)"
 

@@ -146,7 +146,8 @@ issuer.
 - The compose files never publish the API. Only the web proxy can reach it, which is why
   `FORWARD_HEADERS_STRATEGY=framework` is safe there. Behind a proxy, `none` would make every
   request seem to come from the proxy, so the per-address limits (sign-in lockout, bad API tokens,
-  single sign-on starts) would let one client get everybody refused; from the next release the API
+  single sign-on starts; from the next release the last two are counted across replicas with the
+  shared database) would let one client get everybody refused; from the next release the API
   warns at startup when it is evidently behind a proxy (`X509_SOURCE=header`, or `SERVER_ADDRESS`
   on loopback) with `none`.
 - **Plain HTTP stays on the host by default (next release).** The Docker package's `install.sh`
@@ -188,9 +189,12 @@ link-local, carrier-grade NAT, reserved and documentation ranges, and IPv6 forms
 refused) unless the host is listed in `WEBHOOK_ALLOWED_HOSTS`, and cloud metadata addresses are
 refused regardless. The check runs when a webhook is saved and again at every delivery, which
 connects to exactly the address it checked, with no redirects and an overall deadline. Requests are
-signed with HMAC-SHA256 over a timestamp and the body. **Signing secrets are stored unencrypted**,
-readable only by the portal's user (in `DATA_DIR/webhooks.json` or the shared database): protect
-backups accordingly. See [Webhooks](webhooks.md).
+signed with HMAC-SHA256 over a timestamp and the body. **Signing secrets are stored unencrypted**
+up to the current release, readable only by the portal's user (in `DATA_DIR/webhooks.json` or the
+shared database): protect backups accordingly. From the next release, with `DSP_SECRETS_KEY` (generated
+for new installations) they are stored encrypted (AES-256-GCM, each with its own key wrapped by
+`DSP_SECRETS_KEY`); keep the key apart from the backups. See
+[Webhooks → Encrypted signing secrets](webhooks.md#encrypted-signing-secrets-next-release).
 
 ## Supply chain
 
