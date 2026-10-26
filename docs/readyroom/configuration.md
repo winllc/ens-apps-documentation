@@ -234,7 +234,7 @@ needs an `https://` `APPLICATION_BASE_URL`, and the release package's `env.templ
 
 | Area | Settings | Details |
 |---|---|---|
-| Public API (`application.api.*`) | `APPLICATION_API_MAXTOKENDAYS` (`366`), `_DEFAULTRATEPERMINUTE` (`120`), `_MAXRATEPERMINUTE` (`1200`), `_MAXRANGEDAYS` (`366`), `_MAXPAGESIZE` (`500`). Rates are counted per replica: with N replicas a token may make up to N times its rate | [API reference → Settings](api-reference.md#settings) |
+| Public API (`application.api.*`) | `APPLICATION_API_MAXTOKENDAYS` (`366`), `_DEFAULTRATEPERMINUTE` (`120`), `_MAXRATEPERMINUTE` (`1200`), `_MAXRANGEDAYS` (`366`), `_MAXPAGESIZE` (`500`). From the next release rates are counted in the database for all replicas together (up to the current release per replica: with N replicas a token may make up to N times its rate) | [API reference → Settings](api-reference.md#settings) |
 | Live account check (`application.ldap.account-status.*`) | `APPLICATION_LDAP_ACCOUNTSTATUS_FILTER`, `_LOCKOUTDURATION`, `_CACHESECONDS` (`60`), `_BUILTINCHECKS` (`true`), `_ACTIVEDIRECTORY` (`auto`) | Applies to API token, webhook and scheduled report owners; [API reference → Tokens](api-reference.md#tokens) |
 | Webhooks (`application.webhooks.*`) | `APPLICATION_WEBHOOKS_SECRETKEY` (unset: webhooks off), `_ALLOWEDCIDRS`, `_MAXATTEMPTS` (`8`), `_DELIVERYLOGDAYS` (`30`), timeouts and run limits | [Webhooks → Settings](webhooks.md#settings) |
 | Reports and time zones (`application.reports.*`) | `APPLICATION_REPORTS_SITETIMEZONES`, `_MAXRANGEDAYS` (`366`), `_MAXATTACHMENTBYTES` (`10485760`), `_MAXRECIPIENTS` (`20`) | [Reports, exports and time zones](exports.md#settings) |

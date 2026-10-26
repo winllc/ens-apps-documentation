@@ -67,9 +67,12 @@ Member changes are value-level adds and deletes, never a replace of the list (se
   event); a missing scope gets `403 insufficient_scope`.
 - **Rate limit**: `API_RATE_LIMIT_PER_MINUTE` (120) per token unless the token sets its own; over it,
   `429` with `Retry-After`. The count is kept in each API replica's memory, so with several replicas
-  a token can make up to the limit on each. An address that presents more than
-  `API_FAILED_TOKEN_LIMIT_PER_MINUTE` (30) unknown, expired or revoked tokens a minute gets `429`
-  instead of `401` for further bad ones; a request with a valid token is never refused by it.
+  a token can make up to the limit on each (also from the next release). An address that presents
+  more than `API_FAILED_TOKEN_LIMIT_PER_MINUTE` (30) unknown, expired or revoked tokens a minute gets
+  `429` instead of `401` for further bad ones; a request with a valid token is never refused by it.
+  From the next release, with the shared database, that per-address count is kept in the database
+  (`dsp_rate_limit`, Flyway V4), so it holds across replicas; should the database fail, a replica
+  counts in its own memory meanwhile (a warning at most once a minute).
 - **Audited**: `api.token-created`, `api.token-revoked`; a token's changes name it
   (`details.apiClientId`, `authMethod: api-token`).
 - **Storage**: `DATA_DIR/api-tokens.json`, or the shared database.
@@ -78,7 +81,7 @@ Member changes are value-level adds and deletes, never a replace of the list (se
 |---|---|---|---|
 | `API_TOKEN_MAX_DAYS` | `365` | `integrations.api.maxTokenDays` | The longest lifetime an administrator may give a token |
 | `API_RATE_LIMIT_PER_MINUTE` | `120` | `integrations.api.rateLimitPerMinute` | Requests per minute per token, unless the token sets its own (per replica) |
-| `API_FAILED_TOKEN_LIMIT_PER_MINUTE` | `30` | | Bad tokens one address may present a minute before `429` |
+| `API_FAILED_TOKEN_LIMIT_PER_MINUTE` | `30` | | Bad tokens one address may present a minute before `429` (from the next release, across replicas with the shared database) |
 
 Token administration (session, administrator, `X-DSP-Request: 1`):
 
@@ -134,7 +137,7 @@ curl -b jar https://portal.example.com/api/definitions
 | POST | `/api/auth/consent` | — | Acknowledge the notice-and-consent banner for this browser session. Returns `{"consentRequired": false}`. Reachable without signing in |
 | POST | `/api/auth/login` | `{"username", "password"}` | Password sign-in. Returns `{"user": SessionUser}`. 401 for bad credentials, 429 when throttled, 403 when password sign-in is disabled, 403 `consent_required` when the consent banner has not been acknowledged |
 | POST | `/api/auth/x509` | — | Sign in with the presented client certificate. 403 `consent_required` as above |
-| POST | `/api/auth/logout` | — | Sign out and invalidate the session. Returns `{"ok": true, "consentRequired": ...}`: whether the banner must be acknowledged again before the next sign-in |
+| POST | `/api/auth/logout` | — | Sign out and invalidate the session. Returns `{"ok": true, "consentRequired": ...}`: whether the banner must be acknowledged again before the next sign-in. From the next release, when signing out at the identity provider applies (`SSO_OIDC_PROVIDER_LOGOUT`, `SSO_SAML_SINGLE_LOGOUT`), also `redirect`: the address the web client goes to next. See [Single sign-on → Signing out](single-sign-on.md#signing-out) |
 | GET | `/api/auth/me` | — | `{"user": SessionUser or null, "consentRequired": ...}`. With X.509 auto-login enabled, it may sign the user in (only once the banner, if enabled, has been acknowledged), or return `certificateError` |
 
 | GET | `/api/auth/sso/authorize/oidc` | — | Start an OpenID Connect sign-on (a browser redirect); the provider returns to `/api/auth/sso/callback/oidc` |

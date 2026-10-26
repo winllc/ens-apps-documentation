@@ -81,6 +81,13 @@ creates and upgrades its tables itself; the role needs `CREATE` on its schema.
 - **Background tasks' progress and results**, so the task list, results, cancelling and dismissing
   work from any instance.
 - **Single sign-on** requests in flight and used SAML assertion ids.
+- **Per-address limits** (next release): failed API tokens and single sign-on starts are counted in
+  `dsp_rate_limit` (Flyway V4, applied at start), so a client gets the limit once, not once per
+  instance. Should the database fail, an instance counts in its own memory meanwhile (a warning at
+  most once a minute). The per-token request limit stays per instance.
+- **Webhooks** and their outbox. From the next release an entry change's deliveries are written in
+  its audit event's transaction, so an instance stopping loses none, and the signing secrets are
+  encrypted with `DSP_SECRETS_KEY`, which every instance needs, the same.
 - **The license**, the installation id and the revisions seen (`ens_license_*`): an upload on the
   license screen reaches every instance.
 
@@ -129,7 +136,7 @@ availability is yours to provide: run PostgreSQL with your own high-availability
 | The shared PostgreSQL database, if you use one | Configuration, the audit store, sessions, background task results, the license and **this installation's id** | Your database's backups. `./portal.sh backup` and `upgrade.sh` don't include it |
 | Data directory (`/data`, the `portal-data` volume, `/var/lib/directory-services-portal`, or the data PVC) | Without the database: configuration, audit store, analysis results. With it: only what the first start imported | `./portal.sh backup`, `tar`, or volume snapshots ([Operator guide](operator-guide.md#data-and-backups)) |
 | License directory (`ens-license` volume, `/var/lib/ens/directory-portal`, or the license PVC) | Without the database: the license file and **this installation's id**. With it: only what the first start imported | A copy of the directory or a snapshot. Keep the `.lic` file you received as well |
-| Settings | `.env` and `certs/` (Docker); `portal.env`, `ldap-bind-password`, `proxy-secret` and any TLS files (native); your values file and the Secrets it names (Helm) | Your configuration management. They hold secrets: keep the copies private |
+| Settings | `.env` and `certs/` (Docker); `portal.env`, `ldap-bind-password`, `proxy-secret`, `secrets-key` (next release) and any TLS files (native); your values file and the Secrets it names, and the chart's Secret with `secrets-key` (Helm) | Your configuration management. They hold secrets: keep the copies private. From the next release `DSP_SECRETS_KEY` is needed to read the webhook signing secrets in the data backups: keep it apart from them |
 | The release | The package you installed, or the image digests and chart version | Keep the download, or mirror the images |
 | Directory data | Entries | Your LDAP server's own backups. The portal holds none |
 

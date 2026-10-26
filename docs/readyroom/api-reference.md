@@ -74,10 +74,14 @@ Administrators create and revoke tokens on *Administration → Integrations*
 - **Bearer tokens only.** The API's security chain accepts bearer tokens and nothing else: it reads
   and creates no session, so it needs no CSRF token, and a browser's session cookie signs nothing in
   on it.
-- **Rate limit** per token, counted **per replica**; past it, `429` with `Retry-After`. The counts
-  are in each replica's memory, so with N replicas behind the Service a token may make up to N
-  times its rate before `429`: set a token's rate with that in mind, or limit at the ingress as
-  well. The same holds for `application.logoff.refused-per-minute` per client address.
+- **Rate limit** per token; past it, `429` with `Retry-After`. From the next release the counts are
+  kept in the database (table `rate_limit_windows`, Flyway `V11`), once for all replicas: with N
+  replicas behind the Service a token gets its rate, not N times it, and the one request that goes
+  over is audited once. Window times are the database's clock. If the database cannot count for a
+  moment, each replica counts in its own memory meanwhile (a WARN at most once a minute) rather than
+  refuse requests. The same holds for `application.logoff.refused-per-minute` per client address.
+  Up to the current release the counts are in each replica's memory, so a token may make up to N
+  times its rate.
 - **Audited**: `api.token-created` and `api.token-revoked` (with scopes, expiry and owner); each read
   as `data.exported` (`details.via` `api`, the actor the token); refused tokens as a failed
   `auth.login` (method `public-api-token`, with the reason); and a token's first request over its
@@ -314,6 +318,8 @@ A manager, delegate or administrator can record any of them for someone else, at
 |---|---|---|
 | `/`, `/app` | – | Redirect to `/app/home` |
 | `/login` | Open | Sign-in form (`POST /login` processes it; `POST /logout` signs out) |
+| `/signed-out` (next release) | Open | After signing out with `ENS_SSO_OIDC_END_SESSION` or `ENS_SSO_SAML_SINGLE_LOGOUT`: continues to the identity provider (and shows a **Continue** button); also the OIDC post-logout redirect URI. See [Single sign-on → Signing out](single-sign-on.md#signing-out) |
+| `/logout/saml2/slo` (next release) | Open | SAML single logout service (HTTP-Redirect): the provider's `LogoutResponse` and `LogoutRequest` |
 | `/oauth2/authorization/oidc`, `/login/oauth2/code/oidc` | Open, with OIDC on | Start a single sign-on, and its redirect URI. See [Single sign-on](single-sign-on.md) |
 | `/saml2/authenticate/saml`, `/login/saml2/sso/saml`, `/saml2/service-provider-metadata/saml` | Open, with SAML on | Start a single sign-on, the assertion consumer service, and this service provider's metadata |
 | `/api/v1/openapi`, `/api/v1/openapi.yaml` | Open | The public API's OpenAPI document |

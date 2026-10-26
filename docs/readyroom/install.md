@@ -284,6 +284,16 @@ If `.env` has `SSL_ENABLED=true`, `COMPOSE_FILE` must include `docker-compose.tl
       SAML with an `http://` `APPLICATION_BASE_URL`, stop startup.
     - **`env.template`** has a *Single sign-on* block with the `ENS_SSO_*` settings; copy it into
       an older `.env` to use single sign-on. `upgrade.sh` lists the new settings.
+    - **Signing out of the identity provider.** A new `.env` sets `ENS_SSO_OIDC_END_SESSION=true`
+      and `ENS_SSO_SAML_SINGLE_LOGOUT=true`; an upgraded `.env` keeps signing out as before until you
+      add them (register `<base>/signed-out` at the OIDC provider; for SAML set the SP key and
+      certificate and re-import the SP metadata). See
+      [Single sign-on → Signing out](single-sign-on.md#signing-out).
+    - **Rate limits** are counted in the database (Flyway `V11`, a new table), once for all
+      replicas.
+    - **Webhook proxy.** `APPLICATION_WEBHOOKS_PROXY` (with `APPLICATION_WEBHOOKS_PROXYCREDENTIALS`
+      or `_PROXYCREDENTIALSFILE`) is new; unset, webhooks connect directly as before. See
+      [Webhooks → Through an egress proxy](webhooks.md#through-an-egress-proxy).
 
 !!! note "Upgrading to the release with Docker and Podman support"
     - `.env` is copied as it is, so an existing installation keeps its `READYROOM_BIND_ADDRESS` and
@@ -571,7 +581,11 @@ migration Job and the `migrations.enabled` value are gone.
       mode, that is kept too: make sure the pods reach your OCSP responders and CRLs (with
       `networkPolicy.enabled`, ports 80 and 443 are now opened for them) or set `crlConfigMap`.
       Single sign-on refuses an `http://` `sso.saml.idpMetadataUrl` or `sso.oidc.issuerUri`, and
-      SAML an `http://` `publicUrl`, at startup.
+      SAML an `http://` `publicUrl`, at startup. Rate limits are counted in the database (Flyway
+      `V11`), so with `replicaCount` N a token gets its rate, not N times it.
+      `webhooks.proxy.address` (with `webhooks.proxy.credentials`) sends webhooks through an egress
+      proxy; unset, they connect directly. `sso.oidc.endSession` and `sso.saml.singleLogout` default
+      to `false`, so signing out is unchanged until you turn them on.
 
 ### 7. Uninstall
 

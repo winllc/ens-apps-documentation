@@ -43,6 +43,8 @@ audience assertions must name), is built from it and never from a request's `Hos
 | OIDC redirect URI | `<base>/login/oauth2/code/oidc` |
 | SAML entity id and metadata | `<base>/saml2/service-provider-metadata/saml` (download it for the provider) |
 | SAML assertion consumer service (HTTP-POST) | `<base>/login/saml2/sso/saml` |
+| OIDC post-logout redirect URI (next release, with `ENS_SSO_OIDC_END_SESSION`) | `<base>/signed-out` |
+| SAML single logout service (next release, HTTP-Redirect, with `ENS_SSO_SAML_SINGLE_LOGOUT`; named in the SP metadata) | `<base>/logout/saml2/slo` |
 
 `ENS_SSO_SAML_ENTITY_ID`, when set, must be an absolute URI.
 
@@ -60,13 +62,15 @@ audience assertions must name), is built from it and never from a request's `Hos
 | `ENS_SSO_OIDC_USER_FILTER` | required | For example `(userPrincipalName={upn})` |
 | `ENS_SSO_OIDC_GROUPS_CLAIM` | `groups` | |
 | `ENS_SSO_OIDC_DISPLAY_NAME` | `Sign in with single sign-on` | The button |
+| `ENS_SSO_OIDC_END_SESSION` (next release) | `false` (the bundle's `env.template` sets `true` for new installs) | Signing out also ends the provider's session (RP-initiated logout). See [Signing out](#signing-out) |
 | `ENS_SSO_SAML_ENABLED` | `false` | SAML 2.0 |
 | `ENS_SSO_SAML_IDP_METADATA` | | The provider's metadata: `https://...` (read on first use and every 12 hours, keeping the last good copy) or `file:/path`. From the next release `http://` stops startup, and a redirect of the metadata may not leave https |
 | `ENS_SSO_SAML_ENTITY_ID` | `{baseUrl}/saml2/service-provider-metadata/saml` | This service provider's entity id |
 | `ENS_SSO_SAML_USER_FILTER` | required | `{nameid}` and attribute names, for example `(userPrincipalName={http://schemas.xmlsoap.org/ws/2005/05/identity/claims/upn})` |
 | `ENS_SSO_SAML_GROUPS_ATTRIBUTE` | `http://schemas.microsoft.com/ws/2008/06/identity/claims/groups` | |
-| `ENS_SSO_SAML_SP_KEY_FILE`, `ENS_SSO_SAML_SP_CERT_FILE` | empty | PEM, PKCS#8 RSA key and certificate: signs requests and decrypts encrypted assertions, if the provider wants either |
+| `ENS_SSO_SAML_SP_KEY_FILE`, `ENS_SSO_SAML_SP_CERT_FILE` | empty | PEM, PKCS#8 RSA key and certificate: signs requests and decrypts encrypted assertions, if the provider wants either; from the next release, also signs single logout messages |
 | `ENS_SSO_SAML_DISPLAY_NAME` | `Sign in with SAML single sign-on` | The button |
+| `ENS_SSO_SAML_SINGLE_LOGOUT` (next release) | `false` (the bundle's `env.template` sets `true` for new installs) | SAML single logout; needs the SP key and certificate. See [Signing out](#signing-out) |
 
 A missing required setting, a filter with no placeholder, or a role mapping to anything but `MANAGER`
 or `ADMIN` stops startup with the setting's name.
@@ -84,7 +88,8 @@ or `ADMIN` stops startup with the setting's name.
 
 With Helm these are the `sso.*` values (`sso.roleMapping`, `sso.oidc.issuerUri`,
 `sso.oidc.existingSecret`, `sso.saml.idpMetadataUrl` or `sso.saml.metadataConfigMap`,
-`sso.saml.spKeySecret`, ...). With the release package, add the `ENS_SSO_*` variables to `.env`;
+`sso.saml.spKeySecret`, and from the next release `sso.oidc.endSession` and `sso.saml.singleLogout`,
+...). With the release package, add the `ENS_SSO_*` variables to `.env`;
 from the next release the package's `env.template` has a commented *Single sign-on* block with all of
 them (copy it into an older `.env`), and its `README.md` a *Single sign-on* section.
 
@@ -150,6 +155,43 @@ Every sign-in is `auth.login` with `method` `oidc` or `saml2` and `idpRoles`, th
 groups granted through `ENS_SSO_ROLE_MAPPING`. Every refusal is a failed `auth.login` with the reason
 (the provider's error, the check that failed, `no single directory user matches`, ...).
 
+## Signing out
+
+Up to the current release, signing out ends the ReadyRoom session only, and the identity provider's
+stays open: on a shared desk, the next person pressing the single sign-on button is signed in as the
+last one. From the next release two settings end it too. Both are off unless set, so an upgrade
+changes nothing; the release bundle's `env.template` turns them on for new installs.
+
+- **OpenID Connect**, `ENS_SSO_OIDC_END_SESSION=true` (Helm `sso.oidc.endSession`): after
+  ReadyRoom's own sign-out, the browser goes on to the provider's `end_session_endpoint` (from its
+  discovery document; `https://` only) with `id_token_hint`, `client_id` and
+  `post_logout_redirect_uri` `<base>/signed-out`, which you register at the provider (Entra ID: add
+  it to the app's redirect URIs; Okta: *Sign-out redirect URIs*). The provider then sends the browser
+  back to the sign-in page. A provider with no `end_session_endpoint` is logged once (WARN) and
+  signing out stays local.
+- **SAML**, `ENS_SSO_SAML_SINGLE_LOGOUT=true` (Helm `sso.saml.singleLogout`), with
+  `ENS_SSO_SAML_SP_KEY_FILE` and `ENS_SSO_SAML_SP_CERT_FILE` (Helm `sso.saml.spKeySecret`; the
+  `LogoutRequest` must be signed) and an identity provider whose metadata names an HTTP-Redirect
+  `SingleLogoutService`:
+    - signing out sends the provider a signed `LogoutRequest` naming the sign-in's NameID (with its
+      format and qualifiers) and session index, kept from the sign-in for this; the provider's signed
+      `LogoutResponse` comes back to `<base>/logout/saml2/slo` and is checked against the request
+      this browser sent before landing on the sign-in page;
+    - a `LogoutRequest` the provider starts (the person signed out of another application) is
+      accepted there too, signature and NameID checked, and signs this browser out.
+
+    The SP metadata then names that endpoint (HTTP-Redirect only), so **re-import the SP metadata at
+    the provider**. Without the key, or with a provider offering no HTTP-Redirect single logout,
+    startup logs a WARN and signing out stays local. Sessions signed in before the upgrade kept no
+    NameID and sign out locally.
+
+The sign-out form is a POST, and the Content-Security-Policy's `form-action 'self'` also applies to
+the redirects that follow it, so ReadyRoom does not redirect the form to the provider: it signs out,
+then sends the browser to its own page `<base>/signed-out`, which continues to the provider by a
+plain navigation (and shows a **Continue** button). The provider's address waits for that page in
+the new, signed-out session, for one use; the page never takes an address from the request. Both are
+audited as `auth.logout`, as before.
+
 ## Not included
 
-Sign-out ends the ReadyRoom session only, not the one at the identity provider (no single logout).
+Demo mode does not offer single sign-on.

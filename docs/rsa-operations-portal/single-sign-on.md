@@ -60,12 +60,15 @@ before the change) applies exactly as to a passcode sign-in.
   Content-Security-Policy forbids the self-submitting form of HTTP-POST).
 - **No single logout** (up to the current release): signing out of the Portal ends the Portal
   session and the operator's Authentication Manager session, not the identity provider's. From the
-  next release, see [Signing out](#signing-out).
+  next release, see [Signing out](#signing-out) (OpenID Connect and SAML single logout).
 
 ## Signing out
 
 Signing out of the Portal ends the Portal session and the operator's Authentication Manager
-session. From the next release, OpenID Connect can also sign the operator out of the provider:
+session. From the next release, the operator can also be signed out of the identity provider: by
+OpenID Connect RP-initiated logout, or by SAML single logout.
+
+### OpenID Connect
 
 - With `ENS_SSO_OIDC_END_SESSION=true` (Helm `sso.oidcEndSession`), an operator who signed in by
   OpenID Connect is sent on, after the Portal's sign-out, to the provider's `end_session_endpoint`
@@ -81,8 +84,38 @@ session. From the next release, OpenID Connect can also sign the operator out of
 - A provider without an `end_session_endpoint` is logged as a warning at startup.
 - It is off for an existing installation; the env template of new installations turns it on. While
   OpenID Connect is configured and it is off, the Portal logs a warning at every start.
-- SAML single logout is not supported: signing out ends the Portal session and the operator's
-  Authentication Manager session only.
+
+### SAML single logout (next release)
+
+With `ENS_SSO_SAML_SINGLE_LOGOUT=true` (Helm `sso.samlSingleLogout`), for an asserting party whose
+metadata has a SingleLogoutService by HTTP-Redirect (or, without metadata,
+`SPRING_SECURITY_SAML2_RELYINGPARTY_REGISTRATION_<ID>_ASSERTINGPARTY_SINGLELOGOUT_URL` with
+`_ASSERTINGPARTY_SINGLELOGOUT_BINDING=REDIRECT`; Helm `sso.saml[].singleLogoutUrl`) and for which the
+Portal has a signing key (`..._SIGNING_CREDENTIALS_0_PRIVATE_KEY_LOCATION` and
+`_CERTIFICATE_LOCATION`; Helm `sso.saml[].signingSecret`, a TLS Secret):
+
+- **Signing out of the Portal** sends an operator who signed in through that asserting party on,
+  from the same `/signed-out` page, with a signed LogoutRequest naming the NameID (its Format and
+  qualifiers as issued) and session index of the sign-in. The asserting party's LogoutResponse comes
+  back to `<APPLICATION_DNS_NAME>/logout/saml2/slo`, is checked (signature, issuer, destination, the
+  request it answers, once) and lands on the home page.
+- **Signing out at the asserting party** (or of another application): a signed LogoutRequest from it
+  to that address ends the operator's Portal and Authentication Manager sessions when the session
+  came from that asserting party with that NameID (audited as `auth.logout` with
+  `details.by=identity-provider`), and is answered with a signed LogoutResponse. Any other session is
+  left alone.
+- The Portal's SingleLogoutService, `<APPLICATION_DNS_NAME>/logout/saml2/slo` (HTTP-Redirect), is
+  then in its metadata: **refresh the relying party at the asserting party** (ADFS: update from
+  metadata, or add the SAML logout endpoint by hand).
+- POST-only SingleLogoutServices are not used (the Content-Security-Policy forbids the
+  self-submitting form).
+- Without the setting, the key or the asserting party's SingleLogoutService, signing out ends the
+  Portal session and the operator's Authentication Manager session only, and the Portal says which
+  is missing at every start.
+- It is off for an existing installation; the env template of new installations
+  (`ENS_SSO_SAML_SINGLE_LOGOUT=true`, with commented signing-key lines) turns it on. The Helm chart's
+  `sso.samlSingleLogout` defaults to `false`.
+- Logout requests in flight are kept in a new table, `SsoSamlLogoutRequest` (Flyway `V9`).
 
 ## Settings
 
@@ -96,13 +129,15 @@ part of the URLs to register with the provider.
 | `SPRING_SECURITY_OAUTH2_CLIENT_PROVIDER_<ID>_ISSUER_URI` | Required: the provider's issuer; its discovery document is read at startup |
 | `SPRING_SECURITY_SAML2_RELYINGPARTY_REGISTRATION_<ID>_ASSERTINGPARTY_METADATA_URI` | A SAML asserting party by its metadata (read at startup). Or `_ASSERTINGPARTY_ENTITY_ID`, `_ASSERTINGPARTY_SINGLESIGNON_URL` and `_ASSERTINGPARTY_VERIFICATION_CREDENTIALS_0_CERTIFICATE_LOCATION=file:/path/idp.crt` |
 | `SPRING_SECURITY_SAML2_RELYINGPARTY_REGISTRATION_<ID>_ASSERTINGPARTY_SINGLESIGNON_BINDING` | `REDIRECT` (required when the metadata lists POST first) |
-| `SPRING_SECURITY_SAML2_RELYINGPARTY_REGISTRATION_<ID>_SIGNING_CREDENTIALS_0_PRIVATE_KEY_LOCATION`, `_CERTIFICATE_LOCATION` | Optional: sign the requests (`_ASSERTINGPARTY_SINGLESIGNON_SIGN_REQUEST=true`) |
+| `SPRING_SECURITY_SAML2_RELYINGPARTY_REGISTRATION_<ID>_SIGNING_CREDENTIALS_0_PRIVATE_KEY_LOCATION`, `_CERTIFICATE_LOCATION` | Optional: the Portal's signing key and certificate (PEM, for example `file:/ssl/saml-sp.key` and `.crt` from `default_build/ssl`). Sign the requests (`_ASSERTINGPARTY_SINGLESIGNON_SIGN_REQUEST=true`); from the next release, SAML single logout needs them |
+| `SPRING_SECURITY_SAML2_RELYINGPARTY_REGISTRATION_<ID>_ASSERTINGPARTY_SINGLELOGOUT_URL`, `_ASSERTINGPARTY_SINGLELOGOUT_BINDING` (next release) | Without metadata: the asserting party's SingleLogoutService, with binding `REDIRECT` |
 | `ENS_SSO_ROLES_PMO_0`, `_1`, ...; `ENS_SSO_ROLES_TRUSTED_AGENT_n`; `ENS_SSO_ROLES_HELP_DESK_n` | The groups (exact values, one per variable: a DN with commas is one group) that grant each role |
 | `ENS_SSO_OIDC_USER_ID_CLAIM`, `ENS_SSO_OIDC_GROUPS_CLAIM` | `preferred_username`, `groups`: the claims with the Authentication Manager user ID and the groups |
 | `ENS_SSO_SAML_USER_ID_ATTRIBUTE`, `ENS_SSO_SAML_GROUPS_ATTRIBUTE` | Empty (the NameID), `groups` |
 | `ENS_SSO_LABELS_<ID>` | The button's label (default: the client name, or the id) |
 | `ENS_SSO_REQUIRE_FOR_ADMIN_ROLES` | `false`. `true`: administrative roles only through single sign-on; a passcode sign-in alone gets the user role only. From the next release unset by default: each administrative role `ENS_SSO_ROLES_*` maps a group to comes only through single sign-on; `false` keeps the old behaviour (warning at every start). See [above](#how-a-sign-in-goes) |
 | `ENS_SSO_OIDC_END_SESSION` (next release) | `false`; the env template of new installations sets `true`. `true`: signing out continues to the OpenID Connect provider's `end_session_endpoint`. See [Signing out](#signing-out) |
+| `ENS_SSO_SAML_SINGLE_LOGOUT` (next release) | `false`; the env template of new installations sets `true`. `true`: SAML single logout where the asserting party and the Portal's key allow it. See [SAML single logout](#saml-single-logout-next-release) |
 | `ENS_SSO_PENDING_TIMEOUT`, `ENS_SSO_CLOCK_SKEW` | `5m`, `60s` |
 
 Addresses for the identity provider, where `<id>` is the registration id:
@@ -112,6 +147,7 @@ Addresses for the identity provider, where `<id>` is the registration id:
 | OIDC redirect URI | `<APPLICATION_DNS_NAME>/login/oauth2/code/<id>` |
 | SAML service provider metadata (also its entity id) | `<APPLICATION_DNS_NAME>/saml2/service-provider-metadata/<id>` |
 | SAML Assertion Consumer Service | `<APPLICATION_DNS_NAME>/login/saml2/sso/<id>` (Spring Boot's `_ENTITY_ID` and `_ACS_LOCATION` override them) |
+| SAML SingleLogoutService (next release, HTTP-Redirect, with `ENS_SSO_SAML_SINGLE_LOGOUT`) | `<APPLICATION_DNS_NAME>/logout/saml2/slo`, named in the metadata |
 
 ### Helm
 
@@ -131,16 +167,21 @@ sso:
     - id: adfs
       label: Agency ADFS
       metadataUri: https://adfs.example.com/FederationMetadata/2007-06/FederationMetadata.xml
+      # or entityId, singleSignOnUrl (and, next release, singleLogoutUrl) and certificateSecret
+      signingSecret: rsa-portal-saml-signing   # a TLS Secret (tls.key, tls.crt); single logout needs it
   roles:
     pmo: ["CN=RSA PMO,OU=Groups,DC=example,DC=com"]
     trustedAgent: []
     helpDesk: []
   requireForAdminRoles: false        # next release: null (unset) by default; see above
   oidcEndSession: false              # next release: true signs out of the OIDC provider too
+  samlSingleLogout: false            # next release: true for SAML single logout
 ```
 
-From the next release, `sso.requireForAdminRoles` defaults to `null` and `sso.oidcEndSession` to
-`false`. A release whose values set `requireForAdminRoles: false` explicitly keeps the old
+From the next release, `sso.requireForAdminRoles` defaults to `null`, and `sso.oidcEndSession` and
+`sso.samlSingleLogout` to `false`. `sso.samlSingleLogout: true` applies to each entry in `sso.saml`
+with a `signingSecret` and a SingleLogoutService by HTTP-Redirect (in its metadata, or
+`singleLogoutUrl`). A release whose values set `requireForAdminRoles: false` explicitly keeps the old
 behaviour; one that relied on the chart's old default moves to the new rule.
 
 ## Identity providers
@@ -175,3 +216,7 @@ From the next release, with single sign-on configured:
   the old behaviour.
 - `ENS_SSO_OIDC_END_SESSION` is new and off for an existing installation. Allow
   `<APPLICATION_DNS_NAME>/` as a post-logout redirect URI at the provider before turning it on.
+- `ENS_SSO_SAML_SINGLE_LOGOUT` is new and off for an existing installation; new installations' env
+  template turns it on. Give the Portal a signing key, then refresh the relying party at the asserting
+  party so it learns `<APPLICATION_DNS_NAME>/logout/saml2/slo`. Flyway `V9` adds
+  `SsoSamlLogoutRequest` at the first start.

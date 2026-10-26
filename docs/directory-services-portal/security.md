@@ -23,7 +23,7 @@ This page summarises the portal's security controls and the settings that affect
 | Notice and consent banner | `ENS_CONSENT_BANNER_ENABLED=true`: no sign-in of any kind succeeds until the browser session has acknowledged the DoD banner. Enforced by the API (403 `consent_required`), audited as `auth.consent-acknowledged`. See [Configuration](configuration.md#notice-and-consent-banner) |
 | Certificate-only mode | `PASSWORD_LOGIN_ENABLED=false` |
 | Administrator role | `ROLE_ADMIN` from `ADMIN_USERS` / `ADMIN_GROUPS`; required for `/api/admin/**`. Read again from the directory every `GROUP_REFRESH_INTERVAL` (default 5 minutes) |
-| Single sign-on | OIDC (authorization code with PKCE, state, nonce; ID token signature, issuer, audience, expiry) and SAML 2.0 (signed response or assertions, issuer, audience, recipient, times, `InResponseTo`; IdP-initiated responses and replayed assertions refused). The asserted identity must match exactly one directory entry through `SSO_*_USER_FILTER`; unverified e-mail claims are not used. Roles come from the directory, plus administrator through `SSO_*_ADMIN_GROUPS` only, bounded by `SSO_IDP_ADMIN_SESSION_LIFETIME`. Every address given to the provider is built from `PORTAL_PUBLIC_URL`. No provider token is kept; no single logout. See [Single sign-on](single-sign-on.md) |
+| Single sign-on | OIDC (authorization code with PKCE, state, nonce; ID token signature, issuer, audience, expiry) and SAML 2.0 (signed response or assertions, issuer, audience, recipient, times, `InResponseTo`; IdP-initiated responses and replayed assertions refused). The asserted identity must match exactly one directory entry through `SSO_*_USER_FILTER`; unverified e-mail claims are not used. Roles come from the directory, plus administrator through `SSO_*_ADMIN_GROUPS` only, bounded by `SSO_IDP_ADMIN_SESSION_LIFETIME`. Every address given to the provider is built from `PORTAL_PUBLIC_URL`. No provider token is kept. From the next release signing out can also end the provider's session (`SSO_OIDC_PROVIDER_LOGOUT`, without `id_token_hint`; `SSO_SAML_SINGLE_LOGOUT`, signed, HTTP-Redirect). See [Single sign-on → Signing out](single-sign-on.md#signing-out) |
 | API tokens | `dspat_` and 32 random bytes, kept as SHA-256 and compared in constant time; scoped, expiring, optionally limited to some directories; act as their creator with the creator's rights re-read from the directory, refused when the creator is disabled or locked. Accepted on `/api/v1` only, which accepts nothing else. See [API reference → API tokens](api-reference.md#api-tokens) |
 
 ## Sessions and CSRF
@@ -146,7 +146,8 @@ issuer.
 - The compose files never publish the API. Only the web proxy can reach it, which is why
   `FORWARD_HEADERS_STRATEGY=framework` is safe there. Behind a proxy, `none` would make every
   request seem to come from the proxy, so the per-address limits (sign-in lockout, bad API tokens,
-  single sign-on starts) would let one client get everybody refused; from the next release the API
+  single sign-on starts; from the next release the last two are counted across replicas with the
+  shared database) would let one client get everybody refused; from the next release the API
   warns at startup when it is evidently behind a proxy (`X509_SOURCE=header`, or `SERVER_ADDRESS`
   on loopback) with `none`.
 - **Plain HTTP stays on the host by default (next release).** The Docker package's `install.sh`
@@ -188,9 +189,12 @@ link-local, carrier-grade NAT, reserved and documentation ranges, and IPv6 forms
 refused) unless the host is listed in `WEBHOOK_ALLOWED_HOSTS`, and cloud metadata addresses are
 refused regardless. The check runs when a webhook is saved and again at every delivery, which
 connects to exactly the address it checked, with no redirects and an overall deadline. Requests are
-signed with HMAC-SHA256 over a timestamp and the body. **Signing secrets are stored unencrypted**,
-readable only by the portal's user (in `DATA_DIR/webhooks.json` or the shared database): protect
-backups accordingly. See [Webhooks](webhooks.md).
+signed with HMAC-SHA256 over a timestamp and the body. **Signing secrets are stored unencrypted**
+up to the current release, readable only by the portal's user (in `DATA_DIR/webhooks.json` or the
+shared database): protect backups accordingly. From the next release, with `DSP_SECRETS_KEY` (generated
+for new installations) they are stored encrypted (AES-256-GCM, each with its own key wrapped by
+`DSP_SECRETS_KEY`); keep the key apart from the backups. See
+[Webhooks → Encrypted signing secrets](webhooks.md#encrypted-signing-secrets-next-release).
 
 ## Supply chain
 

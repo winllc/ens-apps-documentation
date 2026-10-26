@@ -82,8 +82,48 @@ provider that names no `end_session_endpoint` is skipped.
   empty `sso.oidc.providerLogout` means `true` on a new install and keeps what the release had on
   an upgrade (`false` for a release from before the setting, or when rendered without cluster
   access, as Argo CD does).
-- Signing out at the provider does not end CertAlert sessions in other browsers, and **SAML single
-  logout is not supported**.
+- Signing out at the provider does not end CertAlert sessions in other browsers.
+
+#### SAML single logout (next release)
+
+From the next release, with SAML and `cert-alert.sso.saml.single-logout: true`
+(`CERT_ALERT_SSO_SAML_SINGLE_LOGOUT`, Helm `sso.saml.singleLogout`), CertAlert does SAML single logout,
+both ways, at `<public-url>/logout/saml2/slo` (HTTP-Redirect binding, named in the service provider
+metadata):
+
+- **Signing out of CertAlert** ends the session here and sends the browser to the identity
+  provider's `SingleLogoutService` with a `LogoutRequest` signed with the service provider's key,
+  naming the NameID and `SessionIndex` the person signed in with. The provider's signed
+  `LogoutResponse` comes back to `/logout/saml2/slo`, is checked (its signature by a key in the
+  provider's metadata, the issuer, the destination, and that it answers the request this browser
+  sent) and lands on `/login?logout`.
+- **Signing out at the provider** (or of another application): a `LogoutRequest` signed by a key in
+  the provider's metadata, addressed to this service provider and naming the NameID this browser's
+  session signed in with, ends that session, with the same audit as signing out here, and is answered
+  with a signed `LogoutResponse`. One that is unsigned, signed by another key, addressed elsewhere or
+  naming somebody else ends nothing.
+
+What it needs:
+
+- **The service provider's signing key and certificate**: `signing-key-location` and
+  `signing-certificate-location` (`CERT_ALERT_SSO_SAML_SIGNING_KEY_LOCATION` and
+  `_CERTIFICATE_LOCATION`, PEM files mounted at run time, never in the image; Helm
+  `sso.saml.signingSecret`).
+- **An identity provider whose metadata names a `SingleLogoutService`.** With the setting on and the
+  key or the provider's `SingleLogoutService` missing, signing out stays local, with a startup
+  warning.
+- **The service provider metadata given to the provider again** after turning it on
+  (`<public-url>/saml2/service-provider-metadata/saml`): it now names the logout service and the
+  signing certificate.
+
+Only the redirect binding is offered: the provider's redirect is a top-level navigation that brings
+the session cookie (`SameSite=Lax`) with it, where a cross-site POST would not.
+
+- **Upgrades** keep signing out as before (off), with a startup warning while SAML is on.
+- **New installations** turn it on: the release package's `env.template` sets
+  `CERT_ALERT_SSO_SAML_SINGLE_LOGOUT=true`, and the chart's empty `sso.saml.singleLogout` means `true`
+  on a new install and keeps what the release had on an upgrade (`false` for a release from before
+  the setting, or when rendered without cluster access).
 
 ## The public address
 
@@ -105,6 +145,7 @@ Addresses to give the provider:
 | Redirect URI / assertion consumer | `<public-url>/login/oauth2/code/oidc` | `<public-url>/login/saml2/sso/saml` (HTTP-POST) |
 | Service provider metadata | | `<public-url>/saml2/service-provider-metadata/saml` |
 | Entity id | | `<public-url>/saml2/service-provider-metadata/saml`, unless `entity-id` is set |
+| Sign-out (next release) | `<public-url>/login?logout`, the post-logout redirect URI (with `provider-logout`) | `<public-url>/logout/saml2/slo`, single logout service, HTTP-Redirect (with `single-logout`) |
 
 ## Settings
 
@@ -154,7 +195,8 @@ cert-alert:
 | `oidc.provider-logout` | `false` (next release; `true` in new installations' settings) | Signing out signs out at the provider too, back to `<public-url>/login?logout`. See [Signing out](#signing-out) |
 | `saml.metadata-location` | none | The identity provider's metadata: an `https://` URL or `file:/path` |
 | `saml.entity-id` | empty | This service provider's entity id, an absolute URI; empty uses the metadata address above |
-| `saml.signing-key-location`, `saml.signing-certificate-location` | none | PEM (PKCS#8) key and certificate, for a provider that requires signed requests |
+| `saml.signing-key-location`, `saml.signing-certificate-location` | none | PEM (PKCS#8) key and certificate, for a provider that requires signed requests, and for single logout |
+| `saml.single-logout` | `false` (next release; `true` in new installations' settings) | SAML single logout, both ways, at `<public-url>/logout/saml2/slo`. Needs the signing key and a provider with a `SingleLogoutService`. See [SAML single logout](#saml-single-logout-next-release) |
 | `saml.username-attribute` | empty (the NameID) | The attribute matched to the directory |
 | `saml.groups-attribute` | empty | The attribute listing the person's groups |
 | `*.match` | `UID` | `UID` or `DN`: what the value is matched against |
@@ -215,6 +257,10 @@ come from `sso.oidc.existingSecret`, and the SAML signing pair from `sso.saml.si
    requests, set `signing-key-location` and `signing-certificate-location`.
 4. For an ADFS CertAlert cannot reach, save the metadata and use
    `metadata-location: file:/path/to/metadata.xml` (Helm: `sso.saml.metadataConfigMap`).
+5. **Single logout (next release).** Set `signing-key-location` and `signing-certificate-location`
+   and `single-logout: true`, then update the relying party trust from the metadata again (or, by
+   hand: **Endpoints → Add SAML → SAML Logout**, binding **Redirect**, URL
+   `https://<host>/logout/saml2/slo`, and the signing certificate on the **Signature** tab).
 
 ## Roles
 
@@ -307,4 +353,10 @@ From the next release:
 - `CERT_ALERT_SSO_OIDC_PROVIDER_LOGOUT` signs out at the provider. It stays off on an upgrade (a
   startup warning says so) and is on for new installations; register `<public-url>/login?logout`
   before turning it on. See [Signing out](#signing-out).
+- `CERT_ALERT_SSO_SAML_SINGLE_LOGOUT` does SAML single logout. It stays off on an upgrade (a startup
+  warning says so while SAML is on) and is on for new installations. It needs the signing key and
+  certificate, and the identity provider must be given the service provider metadata again. With it
+  on, a SAML sign-in's session also keeps the NameID and `SessionIndex`, and signing out keeps the
+  `LogoutRequest` in the new session until the provider answers. See
+  [SAML single logout](#saml-single-logout-next-release).
 - An auditor may export the inventory (a `POST`, audited as `inventory.exported`).

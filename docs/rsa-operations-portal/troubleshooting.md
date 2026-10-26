@@ -116,6 +116,9 @@ Start with `docker compose ps`, `docker compose logs -f` and `logs/rsaapp-portal
 ??? warning "Signing out ends at the identity provider with an error about the redirect URI (next release)"
     `ENS_SSO_OIDC_END_SESSION=true`, but the provider does not allow `<APPLICATION_DNS_NAME>/` as a post-logout redirect URI, or it requires `id_token_hint`, which the Portal cannot send (Okta). Allow the URI at the provider, or set `ENS_SSO_OIDC_END_SESSION=false`. The Portal session and the Authentication Manager session have already ended at that point. See [Signing out](single-sign-on.md#signing-out).
 
+??? warning "With SAML, signing out ends only the Portal session although `ENS_SSO_SAML_SINGLE_LOGOUT=true` (next release)"
+    The Portal says at every start which part is missing: its signing key (`SPRING_SECURITY_SAML2_RELYINGPARTY_REGISTRATION_<ID>_SIGNING_CREDENTIALS_0_*`, Helm `sso.saml[].signingSecret`), or the asserting party's SingleLogoutService by HTTP-Redirect (in its metadata, or `..._ASSERTINGPARTY_SINGLELOGOUT_URL` with `_BINDING=REDIRECT`, Helm `sso.saml[].singleLogoutUrl`). A POST-only SingleLogoutService is not used. Once both are there, refresh the relying party at the asserting party so it knows `<APPLICATION_DNS_NAME>/logout/saml2/slo`. See [SAML single logout](single-sign-on.md#saml-single-logout-next-release).
+
 ## Help-desk requests
 
 ??? failure "*None of the verification methods set for this Portal can verify the user for this change*"
@@ -152,7 +155,7 @@ Start with `docker compose ps`, `docker compose logs -f` and `logs/rsaapp-portal
 ??? failure "No emails arrive"
     * Look for `Could not send email`, `Email not sent to:` or `Could not send … email` in the portal log.
     * Check `spring.mail.host` and `spring.mail.port` and the relay's acceptance of `mail.default.from`.
-    * For job emails, check that the job's `cron.<name>.debug` is `false`. `lostTokenThresholdMonitor` ships with **debug on** (from the next release, new installations' `.env` sets `cron.lostTokenThresholdMonitor.debug=false`, and the startup log warns while it is on).
+    * For job emails, check that the job's `cron.<name>.debug` is `false`. `lostTokenThresholdMonitor` ships with **debug on** (from the next release with debug off, and the startup log warns while it is on). From the next release, check also that `mfa.group.email` is set: without it the report goes to nobody, and the startup log says so.
     * Users without an email address in AM are skipped.
 
 ??? failure "Links in emails point to `http://localhost:8080`"

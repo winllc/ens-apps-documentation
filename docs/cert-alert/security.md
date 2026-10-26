@@ -141,8 +141,9 @@ requires a signed response or assertion that answers a request this browser star
 address given to the provider is built from `cert-alert.sso.public-url`, never from request headers.
 From the next release, an Entra ID sign-in whose groups were left out of the token (group overage)
 is refused rather than signed in without the roles its groups grant, and
-`cert-alert.sso.oidc.provider-logout` also signs the person out at an OIDC provider. SAML single
-logout is not supported. See [Single sign-on and roles](single-sign-on.md).
+`cert-alert.sso.oidc.provider-logout` also signs the person out at an OIDC provider, and
+`cert-alert.sso.saml.single-logout` does SAML single logout both ways (signed messages, a
+`LogoutRequest` from the provider honoured only for the NameID the session signed in with). See [Single sign-on and roles](single-sign-on.md).
 
 ### API tokens
 
@@ -352,7 +353,8 @@ See [FIPS 140-3 and DISA STIG](fips-and-stig.md).
   their destinations with `allowed-hosts`. Leave `block-private-networks` unset or `true`, and
   name internal receivers in `allowed-hosts` instead of setting it to `false`.
 - With OIDC single sign-on, turn on `cert-alert.sso.oidc.provider-logout` (next release) so signing
-  out also ends the session at the provider.
+  out also ends the session at the provider; with SAML, `cert-alert.sso.saml.single-logout` with a
+  signing key.
 - Give API tokens the fewest scopes and the shortest expiry that serve the integration; revoke the
   ones nobody uses (the Integrations page shows each token's last use).
 - The container runs as non-root uid 185.

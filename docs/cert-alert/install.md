@@ -252,6 +252,12 @@ release means restoring that backup.
       unencrypted: add one (`openssl rand -base64 32`) to encrypt them.
     - **OpenID Connect.** `CERT_ALERT_SSO_OIDC_PROVIDER_LOGOUT=true` signs out at the provider too
       (register `<public URL>/login?logout` there first); off unless you set it.
+    - **SAML.** `CERT_ALERT_SSO_SAML_SINGLE_LOGOUT=true` does SAML single logout, with the signing key
+      (`CERT_ALERT_SSO_SAML_SIGNING_KEY_LOCATION`, `_CERTIFICATE_LOCATION`) and an identity provider
+      that offers it; give the provider the service provider metadata again first. Off unless you
+      set it; a new `.env` sets it.
+    - **Webhook proxy.** `CERT_ALERT_WEBHOOKS_PROXY_HOST` and `_PORT` (with optional credentials)
+      send webhooks through an HTTP forward proxy; unset, they connect directly as before.
 
     Read the upgrade notes in the package's `README.md` before upgrading.
 
@@ -535,8 +541,11 @@ Migrations are not undone by `helm rollback`: going back means restoring the bac
     - **Webhook key.** `webhooks.generateSecretKey` gives new installations a key; an upgraded
       release without one is unchanged. Set `webhooks.secretKey` to start encrypting. A key is
       never generated under `helm template` or Argo CD: give it yourself there.
-    - **Sign-out.** `sso.oidc.providerLogout` is on for new installations only; an upgrade signs
-      out as before.
+    - **Sign-out.** `sso.oidc.providerLogout` and `sso.saml.singleLogout` are on for new
+      installations only; an upgrade signs out as before. SAML single logout also needs
+      `sso.saml.signingSecret`.
+    - **Webhook proxy.** `webhooks.proxy` is new and empty: webhooks keep connecting directly until
+      `webhooks.proxy.host` is set (let the pod reach it with `networkPolicy.egress.extra`).
 
 ### 7. Uninstall
 

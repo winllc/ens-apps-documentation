@@ -274,8 +274,11 @@ OpenID Connect and SAML 2.0, each off until configured: OIDC turns on with `SSO_
 Every `SSO_*` variable, the addresses to register and provider walkthroughs are in
 [Single sign-on](single-sign-on.md#settings). The next release adds `SSO_START_LIMIT_PER_MINUTE`
 (`30`) and `SSO_MAX_PENDING_REQUESTS` (`10000`), and warns at startup about an
-`SSO_OIDC_USERNAME_CLAIM` that a provider lets be changed; see
-[Single sign-on → Settings](single-sign-on.md#settings).
+`SSO_OIDC_USERNAME_CLAIM` that a provider lets be changed; with the shared database the start
+limit is counted across replicas. It also adds `SSO_OIDC_PROVIDER_LOGOUT` and
+`SSO_SAML_SINGLE_LOGOUT` (sign out at the provider too; `false` unless set, `true` in new
+installations); see [Single sign-on → Settings](single-sign-on.md#settings) and
+[Signing out](single-sign-on.md#signing-out).
 
 ## Integration API, webhooks, import and export
 
@@ -283,7 +286,8 @@ Every `SSO_*` variable, the addresses to register and provider walkthroughs are 
 |---|---|---|---|
 | `API_TOKEN_MAX_DAYS` | `portal.integration.api.max-token-days` | `365` | The longest lifetime an administrator may give an API token |
 | `API_RATE_LIMIT_PER_MINUTE` | `portal.integration.api.rate-limit-per-minute` | `120` | Requests per minute per token, unless the token sets its own; counted per API replica |
-| `API_FAILED_TOKEN_LIMIT_PER_MINUTE` | `portal.integration.api.failed-token-limit-per-minute` | `30` | Bad tokens one client address may present a minute before getting 429 |
+| `API_FAILED_TOKEN_LIMIT_PER_MINUTE` | `portal.integration.api.failed-token-limit-per-minute` | `30` | Bad tokens one client address may present a minute before getting 429. From the next release counted across replicas with the shared database (`dsp_rate_limit`) |
+| `DSP_SECRETS_KEY`, `DSP_SECRETS_KEY_FILE` (next release) | `portal.secrets.key`, `portal.secrets.key-file` | empty; new installations get one | The key webhook signing secrets are stored encrypted with: 32 random bytes in base64 (`openssl rand -base64 32`). Every replica needs the same key; keep a copy apart from your backups. See [Webhooks → Encrypted signing secrets](webhooks.md#encrypted-signing-secrets-next-release) |
 | `WEBHOOKS_ENABLED` | `portal.integration.webhooks.enabled` | `true` | `false` stops sending (deliveries stay queued) and creating webhooks |
 | `WEBHOOK_ALLOWED_HOSTS` | `portal.integration.webhooks.allowed-hosts` | *(empty)* | Host names (or `*.example.com`, `;`-separated) whose webhooks may reach internal addresses |
 | `WEBHOOK_MAX_ATTEMPTS` | `portal.integration.webhooks.max-attempts` | `8` | Attempts per delivery |

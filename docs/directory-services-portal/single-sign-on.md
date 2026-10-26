@@ -74,13 +74,50 @@ only the portal user.
   acknowledged before a sign-on starts.
 - Every sign-on and refusal is audited as `auth.login` with `method` `oidc` or `saml` (refusals with
   a `reasonCode`); the user is sent back to `/login?sso_error=<code>` with a message.
-- **Sign-out ends the portal session only**, not the provider's.
+- **Sign-out ends the portal session only**, not the provider's, unless signing out at the provider
+  is turned on (next release; see [Signing out](#signing-out)).
 - Administrator rights granted by `SSO_*_ADMIN_GROUPS` are not re-checked with the provider during a
   session. Such a session ends after `SSO_IDP_ADMIN_SESSION_LIFETIME` (or the absolute timeout, if
   shorter), so a removal at the provider takes effect by then. Rights from the directory are read
   again every `GROUP_REFRESH_INTERVAL` as usual.
 - The web tier drops `Forwarded`, `X-Forwarded-Prefix` and `X-Forwarded-Port` from clients and sends
   `PUBLIC_HOST` as `X-Forwarded-Host` when set.
+
+## Signing out
+
+Signing out of the portal always ends the portal's session first. Up to the current release that is
+all, and the provider's session stays: the next sign-on on that browser needs no password.
+
+From the next release, two settings also sign out at the provider. `POST /api/auth/logout` then
+answers `{ok, consentRequired}` with a `redirect`: the web client goes there next (a plain
+navigation), and the provider sends the browser back to `/login?signed_out`.
+
+- **OpenID Connect**, `SSO_OIDC_PROVIDER_LOGOUT=true` (Helm `sso.oidc.providerLogout`):
+  RP-initiated logout at the provider's `end_session_endpoint` (from its discovery document; none,
+  no redirect), with `client_id` and, when `PORTAL_PUBLIC_URL` is set,
+  `post_logout_redirect_uri=<PORTAL_PUBLIC_URL>/login?signed_out`. Register that address at the
+  provider: Entra ID *Redirect URIs*, Keycloak *Valid post logout redirect URIs*. The portal keeps no
+  token from the provider, so it sends `client_id`, not `id_token_hint`: **providers that require
+  `id_token_hint`, such as Okta, refuse the request**; keep the setting `false` there.
+- **SAML**, `SSO_SAML_SINGLE_LOGOUT=true` (Helm `sso.saml.singleLogout`) with
+  `SSO_SAML_SIGNING_KEY_FILE` and `SSO_SAML_SIGNING_CERT_FILE` (Helm
+  `sso.saml.signing.existingSecret`): when the identity provider's metadata offers a
+  `SingleLogoutService` by HTTP-Redirect, the portal's service provider metadata lists its own,
+  `https://<portal>/api/auth/sso/saml/logout`, so **give the provider the metadata again**. Signing
+  out then sends a signed `LogoutRequest` (HTTP-Redirect) naming the assertion's NameID and session
+  indexes, which a SAML sign-in keeps in the session for this (identifiers only). The provider's
+  answer returns the browser to `/api/auth/sso/saml/logout`, which goes on to `/login?signed_out`.
+  A provider offering single logout by HTTP-POST first, or none, or a missing signing key or
+  certificate, leaves signing out local (logged at startup or first use).
+- **Only the portal starts it (SP-initiated).** A logout the identity provider starts, because the
+  person signed out of another application, is not acted on: the portal's session then ends at its
+  idle or absolute timeout.
+
+| Installation | `SSO_OIDC_PROVIDER_LOGOUT`, `SSO_SAML_SINGLE_LOGOUT` |
+|---|---|
+| Upgraded (any package, Helm) | `false`, the API's default: signing out as before. While OIDC is on and its setting is `false`, a WARN at every start |
+| New Docker package `.env` (and the native package's new `portal.env`, made from the same template) | `true`. The template also lists `SSO_SAML_SIGNING_KEY_FILE` and `SSO_SAML_SIGNING_CERT_FILE` |
+| Helm | `sso.oidc.providerLogout` and `sso.saml.singleLogout` are empty: `true` on a new installation, and what the release had on an upgrade (`false` for one from before the settings). Rendering without cluster access (`helm template`, Argo CD) sets neither: give them explicitly there |
 
 ## Endpoints to register with the provider
 
@@ -91,6 +128,8 @@ only the portal user.
 | OIDC redirect URI | `https://<portal>/api/auth/sso/callback/oidc` |
 | SAML entity id and service provider metadata | `https://<portal>/api/auth/sso/saml/metadata` |
 | SAML assertion consumer service (HTTP-POST) | `https://<portal>/api/auth/sso/saml/acs/saml` |
+| OIDC post-logout redirect URI (next release, with `SSO_OIDC_PROVIDER_LOGOUT`) | `https://<portal>/login?signed_out` |
+| SAML single logout service (next release, HTTP-Redirect, with `SSO_SAML_SINGLE_LOGOUT`; listed in the service provider metadata) | `https://<portal>/api/auth/sso/saml/logout` |
 
 The web tier already forwards `/api/`, so nothing changes in nginx.
 
@@ -100,7 +139,7 @@ The web tier already forwards `/api/`, so nothing changes in nginx.
 |---|---|---|
 | `PORTAL_PUBLIC_URL` | empty | The address users open, e.g. `https://portal.example.com`. The redirect URI, SAML entity id and assertion consumer are built from it, never from the request's `Host`. **Required for SAML** (unless `SSO_SAML_ENTITY_ID` is set), recommended for OIDC. Give the web tier `PUBLIC_HOST` (its host[:port]) too |
 | `SSO_IDP_ADMIN_SESSION_LIFETIME` | `1h` | A session whose administrator rights come only from the provider's groups ends this long after sign-in |
-| `SSO_START_LIMIT_PER_MINUTE` (next release) | `30` | Sign-ons one client address may start per minute, per API replica, the address as resolved with `SERVER_FORWARD_HEADERS_STRATEGY`. Each start keeps a sign-in request for 10 minutes; further starts are sent back to `/login?sso_error=busy` with `Retry-After`, and the login page says to wait a minute |
+| `SSO_START_LIMIT_PER_MINUTE` (next release) | `30` | Sign-ons one client address may start per minute, counted across replicas with the shared database (else per API replica), the address as resolved with `SERVER_FORWARD_HEADERS_STRATEGY`. Each start keeps a sign-in request for 10 minutes; further starts are sent back to `/login?sso_error=busy` with `Retry-After`, and the login page says to wait a minute |
 | `SSO_MAX_PENDING_REQUESTS` (next release) | `10000` | Sign-in requests in flight kept in memory at most, without the shared database (with it they are rows, and expired ones are deleted every minute). When full, new starts get `sso_error=busy`. Expired requests are now removed every minute (was five) |
 | `SSO_OIDC_ISSUER_URI` | empty | The issuer |
 | `SSO_OIDC_CLIENT_ID` | empty | With the issuer, turns OpenID Connect on |
@@ -111,6 +150,7 @@ The web tier already forwards `/api/`, so nothing changes in nginx.
 | `SSO_OIDC_GROUPS_CLAIM` | `groups` | The claim listing the person's groups |
 | `SSO_OIDC_ADMIN_GROUPS` | empty | Provider groups that grant administrator (`;`-separated) |
 | `SSO_OIDC_LABEL` | `Sign in with single sign-on` | Button text |
+| `SSO_OIDC_PROVIDER_LOGOUT` (next release) | `false` (new installs: `true`) | Signing out also signs out at the provider. See [Signing out](#signing-out) |
 | `SSO_SAML_METADATA` | empty | The identity provider's metadata: an `https://` URL or a file. Turns SAML on |
 | `SSO_SAML_ENTITY_ID` | `https://<portal>/api/auth/sso/saml/metadata` | This service provider's entity id |
 | `SSO_SAML_USERNAME_ATTRIBUTE` | empty (the NameID) | The attribute mapped through the user filter |
@@ -119,7 +159,8 @@ The web tier already forwards `/api/`, so nothing changes in nginx.
 | `SSO_SAML_ADMIN_GROUPS` | empty | Provider groups that grant administrator |
 | `SSO_SAML_LABEL` | `Sign in with SAML single sign-on` | Button text |
 | `SSO_SAML_CLOCK_SKEW` | `2m` | Tolerated clock difference (at most `10m`) |
-| `SSO_SAML_SIGNING_KEY_FILE` / `SSO_SAML_SIGNING_CERT_FILE` | empty | PKCS#8 PEM key and certificate, for providers that require signed requests |
+| `SSO_SAML_SIGNING_KEY_FILE` / `SSO_SAML_SIGNING_CERT_FILE` | empty | PKCS#8 PEM key and certificate, for providers that require signed requests, and for single logout |
+| `SSO_SAML_SINGLE_LOGOUT` (next release) | `false` (new installs: `true`) | SAML single logout when signing out; needs the signing key and certificate. See [Signing out](#signing-out) |
 
 In the Helm chart these are `server.publicUrl` and the `sso.*` values (`sso.oidc.issuerUri`,
 `sso.oidc.clientSecret.existingSecret`, `sso.saml.metadataUrl` or `sso.saml.metadataXml`,
@@ -189,9 +230,14 @@ Nothing changes until `SSO_*` is set. The login page gets a button per provider,
 
 From the next release:
 
-- Single sign-on starts are limited per client address (`SSO_START_LIMIT_PER_MINUTE`, `30` per
-  replica), and in-memory sign-in requests are capped (`SSO_MAX_PENDING_REQUESTS`, `10000`). A
-  refused start lands on the login page with "wait a minute". Behind a proxy, keep
+- Single sign-on starts are limited per client address (`SSO_START_LIMIT_PER_MINUTE`, `30`; with the
+  shared database counted across replicas in `dsp_rate_limit`, Flyway V4, otherwise per replica),
+  and in-memory sign-in requests are capped (`SSO_MAX_PENDING_REQUESTS`, `10000`). A refused start lands on the login page with "wait a minute". Behind a proxy, keep
   `SERVER_FORWARD_HEADERS_STRATEGY=framework` so the limit sees each client's address.
 - A startup WARN for an `SSO_OIDC_USERNAME_CLAIM` that can be changed. Nothing stops; move to an
   immutable claim when you can.
+- `SSO_OIDC_PROVIDER_LOGOUT` and `SSO_SAML_SINGLE_LOGOUT` sign out at the provider too. Both stay
+  `false` on an upgrade (a startup WARN while OIDC is on and its setting is `false`) and are on for new
+  installations. Register `https://<portal>/login?signed_out` at an OIDC provider first (not Okta);
+  for SAML set the signing key and certificate and give the provider the metadata again. See
+  [Signing out](#signing-out).
