@@ -105,8 +105,41 @@ after the commit by one replica (claimed in the database, under a lock), with a 
   [Private networks](#private-networks) below.
 - Narrow it further with `cert-alert.webhooks.allowed-hosts` (names, `*.suffix`, CIDR ranges):
   once set, a webhook may go only to the hosts it lists.
-- **Webhooks connect directly.** An outbound HTTP proxy is not used. With the Helm chart's
-  NetworkPolicy on, `networkPolicy.egress.web` must reach the receivers.
+- **Webhooks connect directly**, unless an [egress proxy](#through-an-egress-proxy) is set (from
+  the next release). The JVM's `https.proxyHost` and `HTTPS_PROXY` are not used. With the Helm
+  chart's NetworkPolicy on, `networkPolicy.egress.web` must reach the receivers.
+
+### Through an egress proxy
+
+!!! info "From the next release"
+    Releases up to now always connect directly. The proxy settings are new, and unset: webhooks keep
+    connecting directly until you set them.
+
+Where the only way out is an HTTP forward proxy, set `cert-alert.webhooks.proxy.host` and
+`cert-alert.webhooks.proxy.port` (`CERT_ALERT_WEBHOOKS_PROXY_HOST` and `_PORT`; Helm
+`webhooks.proxy.host` and `.port`, port default `3128`). The address rules above still hold through it:
+
+- CertAlert still resolves the receiver's name itself and checks every address, then asks the proxy
+  for a tunnel to the address it checked, as an address literal (`CONNECT 203.0.113.10:443`), never
+  to the name, so the proxy has nothing to resolve again. TLS, with SNI and certificate verification
+  against the URL's host, runs end to end through the tunnel.
+- **So the CertAlert host still needs DNS for the receivers' names**, and a proxy whose rules allow
+  only names (Squid `dstdomain`) must allow the receivers' addresses instead (`dst`).
+- Anything but a 2xx answer to `CONNECT` (a 407, a 403, a redirect) is a failed delivery, retried
+  like any other.
+- The proxy itself is yours and is not held to the address rules. With the Helm chart's
+  NetworkPolicy on, let the pod reach it with `networkPolicy.egress.extra`.
+
+If the proxy wants credentials (HTTP Basic): `cert-alert.webhooks.proxy.username`
+(`CERT_ALERT_WEBHOOKS_PROXY_USERNAME`) with either `cert-alert.webhooks.proxy.password-file`
+(`CERT_ALERT_WEBHOOKS_PROXY_PASSWORD_FILE`, a file holding the password, read at each connection so it
+can be rotated) or `cert-alert.webhooks.proxy.password` (`CERT_ALERT_WEBHOOKS_PROXY_PASSWORD`). Helm:
+`webhooks.proxy.username` and `webhooks.proxy.password`, or `webhooks.proxy.existingSecret` with
+`.existingSecretKey` (default key `webhooks-proxy-password`); the chart's default values carry no
+password. The credentials are never logged, and reach the proxy in clear, as with any HTTP proxy.
+
+A proxy setting that cannot work stops CertAlert starting: a host without a port, a password
+without a user, both a password and a password file, or an unreadable password file.
 
 ### Private networks
 
@@ -164,6 +197,8 @@ AES-GCM encrypted. Without one they are stored as they are, and a warning is log
 | `allowed-hosts` | `CERT_ALERT_WEBHOOKS_ALLOWED_HOSTS` | empty | Hosts a webhook may go to: names, `*.suffix` or CIDR ranges. Empty: any host the address rules allow. From the next release, a host listed here may be on a private network |
 | `block-private-networks` | `CERT_ALERT_WEBHOOKS_BLOCK_PRIVATE_NETWORKS` | `false`; unset from the next release | Unset: private addresses refused for webhooks saved from now on, existing ones keep theirs. `true`: refused for all. `false`: allowed for all. See [Private networks](#private-networks) |
 | `secret-key` | `CERT_ALERT_WEBHOOKS_SECRET_KEY` | none (generated on new installs from the next release) | Base64 AES key that encrypts signing secrets and URLs in the database |
+| `proxy.host`, `proxy.port` (next release) | `CERT_ALERT_WEBHOOKS_PROXY_HOST`, `_PORT` | none (direct) | An HTTP forward proxy webhooks go through with `CONNECT`. See [Through an egress proxy](#through-an-egress-proxy) |
+| `proxy.username`, `proxy.password-file`, `proxy.password` (next release) | `CERT_ALERT_WEBHOOKS_PROXY_USERNAME`, `_PASSWORD_FILE`, `_PASSWORD` | none | HTTP Basic credentials for the proxy: a user with a password file or a password, never both |
 | `connect-timeout`, `read-timeout` | | `5s`, `10s` | Per try |
 | `delivery-timeout` | | `30s` | All of one delivery; the connection is closed at it |
 | `poll-interval` | | `30s` | How often the sender looks for due deliveries |
@@ -177,6 +212,9 @@ The Helm chart sets the first four from `webhooks.enabled`, `webhooks.allowedHos
 (`true`) generates a key on a new install when neither `secretKey` nor `existingSecret` is given.
 A release whose own values set `false` keeps it; one that relied on the chart's old default
 (`false`) moves to unset.
+From the next release, `webhooks.proxy.host`, `.port`, `.username`, `.password`,
+`.existingSecret` and `.existingSecretKey` set the proxy settings; `webhooks.proxy` is empty, so an
+upgrade keeps connecting directly.
 
 ## Audit
 

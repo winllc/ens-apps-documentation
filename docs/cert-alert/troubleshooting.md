@@ -74,6 +74,13 @@ Symptoms, likely causes and fixes. Start with the application log (stdout) and
     application (`groupMembershipClaims: ApplicationGroup`). See
     [Single sign-on → Microsoft Entra ID](single-sign-on.md#microsoft-entra-id-oidc).
 
+??? warning "Signing out with SAML stays local although `single-logout` is on (next release)"
+    The startup log says why. SAML single logout needs the service provider's signing key and
+    certificate (`CERT_ALERT_SSO_SAML_SIGNING_KEY_LOCATION` and `_CERTIFICATE_LOCATION`, Helm
+    `sso.saml.signingSecret`) and identity provider metadata that names a `SingleLogoutService`.
+    Once both are there, give the provider the service provider metadata again so it knows
+    `<public-url>/logout/saml2/slo`. See [SAML single logout](single-sign-on.md#saml-single-logout-next-release).
+
 ??? failure "Nobody can trigger the first sync / no Admin menu"
     `cert-alert.security.admin-identifiers` is empty (the default) or does not name your `uid` or
     your entry's DN. Add your uid (or your entry's DN, as a YAML list item) and restart. An e-mail
@@ -247,6 +254,17 @@ Symptoms, likely causes and fixes. Start with the application log (stdout) and
 ??? failure "Custom template edits have no effect"
     Templates are read once and cached: restart. Files must be under an `email/` subdirectory of
     the configured directory.
+
+??? failure "Webhook deliveries fail through the egress proxy (next release)"
+    - The proxy answers `CONNECT` with something other than 2xx: a 407 means it wants credentials
+      (`CERT_ALERT_WEBHOOKS_PROXY_USERNAME` with `_PASSWORD_FILE` or `_PASSWORD`); a 403 usually
+      means its rules allow names only. CertAlert asks for a tunnel to the receiver's **address**,
+      never its name, so allow the receivers' addresses (Squid `dst`, not `dstdomain`).
+    - CertAlert still resolves the receiver's name itself: the host or pod needs DNS for it, even
+      behind the proxy.
+    - With the Helm chart's NetworkPolicy on, the pod must reach the proxy
+      (`networkPolicy.egress.extra`).
+    See [Webhooks → Through an egress proxy](webhooks.md#through-an-egress-proxy).
 
 ## Revocation
 

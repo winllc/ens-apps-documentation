@@ -385,6 +385,7 @@ The `ens-audit/1` trail, behind the **Audit log** page:
 | `/login` (`GET`, `POST`) | public: the password form |
 | `/oauth2/authorization/oidc`, `/login/oauth2/code/oidc` | public, when OIDC is on: start a single sign-on and its redirect URI |
 | `/saml2/authenticate/saml`, `/login/saml2/sso/saml`, `/saml2/service-provider-metadata/saml` | public, when SAML is on: start a single sign-on, the assertion consumer and the service provider's metadata |
+| `/logout/saml2/slo` (next release) | when SAML single logout is on: the identity provider's `LogoutResponse` and `LogoutRequest` (HTTP-Redirect), checked as in [SAML single logout](single-sign-on.md#saml-single-logout-next-release) |
 | `/api/v1/openapi.yaml` | public: the OpenAPI document |
 | `/consent` (`GET`, `POST`) | public: the notice-and-consent banner and **I agree**, when it is on |
 | `/livez`, `/readyz` | public, always on the application's port |
