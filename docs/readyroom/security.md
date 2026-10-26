@@ -258,7 +258,9 @@ never limited.
   one use per assertion across replicas, no IdP-initiated sign-in) maps the provider's identity to
   exactly one directory user by an LDAP filter, and grants `MANAGER` or `ADMIN` from the provider's
   groups only through `ENS_SSO_ROLE_MAPPING`. Every address given to the provider is built from
-  `APPLICATION_BASE_URL`, never from request headers. No provider token is kept; no single logout.
+  `APPLICATION_BASE_URL`, never from request headers. No provider token is kept. From
+  the next release signing out can also end the provider's session (`ENS_SSO_OIDC_END_SESSION`,
+  `ENS_SSO_SAML_SINGLE_LOGOUT`).
   From the next release the OIDC issuer (with the endpoints and keys it names) and the SAML metadata
   are read over `https://` only (or, for SAML, from a file), and SAML refuses to start without an
   `https://` `APPLICATION_BASE_URL`. See [Single sign-on](single-sign-on.md).

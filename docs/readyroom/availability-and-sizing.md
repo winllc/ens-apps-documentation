@@ -62,12 +62,17 @@ sends once and never retries, are not lost during an upgrade. For the suite-wide
 | License, installation id, revisions seen | The `ens_license_*` tables. An upload on one replica is in force on all within seconds |
 | License mode changes | Each replica notices; the change is recorded once |
 
+**Rate limits** (next release): a public API token's requests a minute and
+`application.logoff.refused-per-minute` per client address are counted in the database (table
+`rate_limit_windows`, Flyway `V11`), once for all replicas: with N replicas a token gets its rate, not
+N times it, and the one request that goes over is audited once. Window times are the database's
+clock. If the database cannot count for a moment, each replica counts in its own memory meanwhile (a
+WARN at most once a minute) rather than refuse requests. Up to the current release they are counted
+in each replica's memory, so a token may make up to N times its rate, and an address get up to N
+times as many refusals, before `429`.
+
 **Per replica**, by design: the access-denial summaries (each replica collapses and records its
-own), the rate limits, which are counted in each replica's memory (a public API token's requests a
-minute, and `application.logoff.refused-per-minute` per client address: with N replicas behind the
-Service a token may make up to N times its rate, and an address get up to N times as many refusals,
-before `429`; set a token's rate with that in mind, or limit at the ingress), and the caches of
-directory users and groups, revocation answers and CRLs.
+own), and the caches of directory users and groups, revocation answers and CRLs.
 
 **Helm.** Several replicas need the license volume off, after the first start of this release has
 imported it into the database:

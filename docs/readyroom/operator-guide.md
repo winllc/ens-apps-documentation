@@ -318,8 +318,9 @@ package nor the Helm chart carries scripts. Developer notes on adding a migratio
 | `V8__ens_license_state` | `ens_license_*`: the license, installation id and revisions in the database, imported from the license volume at the first start |
 | `V9__public_api` | `api_tokens`, `webhook_endpoints` (signing secrets encrypted) and `webhook_deliveries`, for the [public API](api-reference.md#public-api-apiv1) and [webhooks](webhooks.md). New tables only |
 | `V10__reports` | `user_records.time_zone` and `report_schedules`, for [time zones and scheduled reports](exports.md) |
+| `V11__rate_limit_windows` (next release) | `rate_limit_windows`: the rate limits' counts (public API tokens, refused logoffs), shared by every replica. A new table only |
 
-V2 to V4 change only the schema, plus one `UPDATE` on `user_records`, so they are quick; V6 to V10
+V2 to V4 change only the schema, plus one `UPDATE` on `user_records`, so they are quick; V6 to V11
 add tables and columns only.
 
 ## Certificate and key rotation
@@ -421,8 +422,8 @@ Nothing to do by hand: Flyway adds the tables above, and nothing existing change
 
 ### Upgrading to the next release
 
-No database change. Sign-in keeps working for every installation that kept its settings; check the
-points below.
+One new table (Flyway `V11`, `rate_limit_windows`), added at the first start. Sign-in keeps working
+for every installation that kept its settings; check the points below.
 
 | Change | What to do |
 |---|---|
@@ -431,10 +432,9 @@ points below.
 | SAML needs an `https://` `APPLICATION_BASE_URL` | With `ENS_SSO_SAML_ENABLED=true` and an `http://` `APPLICATION_BASE_URL` (Helm `publicUrl`), startup stops instead of warning. SAML could not have worked there: its browser-binding cookie is never sent over HTTP |
 | Demo mode runs no writing jobs, and refuses Windows sign-in | Production installations (demo mode off) are not affected |
 | Release package: `env.template` has a *Single sign-on* block | Copy the `ENS_SSO_*` lines into an older `.env` to use single sign-on |
-
-Rate limits stay per replica, as before: a public API token's requests a minute and refused logoffs
-per client address are counted in each replica's memory (see
-[Availability](availability-and-sizing.md#high-availability)).
+| Rate limits hold across replicas | A public API token's requests a minute and refused logoffs per client address (`application.logoff.refused-per-minute`) are counted in the database for all replicas together. With N replicas a token now gets its rate, not up to N times it, so an integration that relied on the multiplied rate may see `429` sooner: raise its token's rate if so. See [Availability](availability-and-sizing.md#high-availability) |
+| Webhooks through an egress proxy | New and unset: webhooks keep connecting directly. `APPLICATION_WEBHOOKS_PROXY` (`host:port`; Helm `webhooks.proxy.address`), with `APPLICATION_WEBHOOKS_PROXYCREDENTIALS` or `APPLICATION_WEBHOOKS_PROXYCREDENTIALSFILE`, sends them through an HTTP proxy. See [Webhooks → Through an egress proxy](webhooks.md#through-an-egress-proxy) |
+| Signing out of the identity provider too | `ENS_SSO_OIDC_END_SESSION` and `ENS_SSO_SAML_SINGLE_LOGOUT` (Helm `sso.oidc.endSession`, `sso.saml.singleLogout`) default to `false`, so an upgraded installation signs out exactly as before; the release bundle's `env.template` sets both to `true` for new installs. Before turning them on, register `<base>/signed-out` as a post-logout redirect URI at the OIDC provider; for SAML set the SP key and certificate and re-import the SP metadata at the IdP. See [Single sign-on → Signing out](single-sign-on.md#signing-out) |
 
 ## Runbook
 
