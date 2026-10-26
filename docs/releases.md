@@ -168,8 +168,9 @@ The licensing portal's **Downloads** page lists the new version within a few min
 cache, `RELEASES_LISTING_TTL`, five minutes by default).
 
 A release reaches customers from the bucket only. On a release tag the image job first checks that
-the bucket is configured (`RELEASE_S3_BUCKET` and the AWS credentials below) and fails, before
-anything is built or published, when it is not.
+the bucket is configured (`RELEASE_S3_BUCKET` and the AWS credentials below; from the next release
+CertAlert checks the bucket only, the others the role or, until it exists, the access keys) and fails, before anything is built or published,
+when it is not.
 Every pull request builds a dry-run bundle (`0.0.0-pr<n>`) as a workflow artifact, without signing
 or uploading, so packaging problems show up before a release.
 
@@ -183,7 +184,8 @@ whole organization:
 | `RELEASE_S3_BUCKET` | variable | Bucket name |
 | `RELEASE_S3_ENDPOINT` | variable | Only for Cloudflare R2 or MinIO, such as `https://<account>.r2.cloudflarestorage.com` |
 | `RELEASE_S3_REGION` | variable | Defaults to `us-east-1`; `auto` for R2 |
-| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | secrets | Credentials that can write to the bucket, and to nothing else |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | secrets | Credentials that can write to the bucket, and to nothing else. From the next release a fallback only, while `AWS_RELEASE_ROLE_ARN` is unset (below) |
+| `AWS_RELEASE_ROLE_ARN` (next release) | variable | The IAM role the upload assumes through GitHub OIDC (below) |
 | `RELEASE_GPG_PRIVATE_KEY` | secret | ASCII-armored private signing key |
 | `RELEASE_GPG_PASSPHRASE` | secret | Its passphrase, if it has one |
 
@@ -192,6 +194,73 @@ it, releases are unsigned (no `SHA256SUMS.asc`), and the job summary says so.
 
 Keep the bucket **private**: no public access and no website hosting. Customers only ever get
 pre-signed links.
+
+### Upload role and the `release` environment (next release)
+
+From the next release, each product's pipeline signs and uploads in the GitHub environment
+`release`, only on a `v*` tag (pull-request dry runs and branch pushes never use it), and the upload
+prefers short-lived credentials for an IAM role assumed through GitHub's OIDC provider
+(`aws-actions/configure-aws-credentials`, pinned by commit SHA) over the stored access keys.
+`id-token: write` is granted to that one job only.
+
+- **Nothing breaks before the setup.** While `AWS_RELEASE_ROLE_ARN` is unset, the access-key secrets
+  are used, with a `::warning::` in the job and its summary. Until the `release` environment is
+  created, GitHub creates it on the first tag without protection rules, and releases work as before.
+- **Cloudflare R2 and MinIO** have no IAM roles: they stay on the access keys, with
+  `RELEASE_S3_ENDPOINT` set.
+- The job summary says which credentials the upload used.
+
+Where the signing and upload run, and where the settings go, differs by product:
+
+| Product | Job in the `release` environment | Settings |
+|---|---|---|
+| CertAlert | A separate `release` job after `image`: it fetches the bundle `image` kept, checks it against `SHA256SUMS`, signs and uploads it | `RELEASE_S3_BUCKET` must stay a repository variable (the `image` job checks it before anything is published); the GPG secrets go in the environment |
+| Directory Services Portal | A separate `release` job after `image`: it pushes the chart, signs the images and chart (cosign), signs `SHA256SUMS` and uploads | All variables, `AWS_RELEASE_ROLE_ARN` included, at repository level (the `image` job checks them first); the GPG secrets in the environment; the fallback access keys at repository level |
+| ReadyRoom | The `image` job itself, on a tag | GPG secrets in the environment; `AWS_RELEASE_ROLE_ARN` at repository or environment level |
+| RSA Operations Portal | The `image` job itself, on a tag | Preferably all in the environment: the GPG secrets, the fallback access keys while used, `AWS_RELEASE_ROLE_ARN` and the `RELEASE_S3_*` variables |
+
+What an administrator sets up once, per product repository (the product's `README.md`, *Releases*,
+has the exact commands and policies):
+
+1. **The `release` environment** (Settings → Environments → New environment `release`):
+   *Deployment branches and tags* limited to the tag rule `v*`; *Required reviewers*, the people who
+   approve a release (optionally *Prevent self-review*), so the job waits for one of them; and the
+   `RELEASE_GPG_PRIVATE_KEY` and `RELEASE_GPG_PASSPHRASE` secrets moved here from the repository.
+2. **GitHub's OIDC provider in AWS**, once per account: IAM → Identity providers, OpenID Connect,
+   URL `https://token.actions.githubusercontent.com`, audience `sts.amazonaws.com`.
+3. **The role**, with a trust policy that admits only this repository's release runs, and a
+   permissions policy that allows `s3:PutObject` on `arn:aws:s3:::<bucket>/<product>/*` and nothing
+   else (ReadyRoom's README adds `s3:AbortMultipartUpload`; add `kms:GenerateDataKey` on the bucket's
+   key if it uses SSE-KMS). A job in an environment presents the subject
+   `repo:winllc/<repo>:environment:release`. For ReadyRoom and the RSA Operations Portal, have
+   GitHub put the ref in the subject first, and trust only release tags:
+
+    ```bash
+    gh api -X PUT repos/winllc/<repo>/actions/oidc/customization/sub \
+      -F use_default=false -f 'include_claim_keys[]=repo' -f 'include_claim_keys[]=context' -f 'include_claim_keys[]=ref'
+    ```
+
+    ```json
+    {
+      "Version": "2012-10-17",
+      "Statement": [{
+        "Effect": "Allow",
+        "Principal": {"Federated": "arn:aws:iam::<account>:oidc-provider/token.actions.githubusercontent.com"},
+        "Action": "sts:AssumeRoleWithWebIdentity",
+        "Condition": {
+          "StringEquals": {"token.actions.githubusercontent.com:aud": "sts.amazonaws.com"},
+          "StringLike": {"token.actions.githubusercontent.com:sub": "repo:winllc/<repo>:environment:release:ref:refs/tags/v*"}
+        }
+      }]
+    }
+    ```
+
+    The CertAlert and Directory Services Portal READMEs trust the default subject with
+    `StringEquals` on `repo:winllc/<repo>:environment:release` (the environment's tag rule then
+    limits it to release tags), and offer the same customisation for a subject that names the tag.
+4. **The variable** `AWS_RELEASE_ROLE_ARN` = the role's ARN. Push a pre-release tag (`v1.2.3-rc.1`)
+   to try it; then delete the `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` secrets and the IAM
+   user's access key behind them.
 
 ### Customer downloads in the licensing portal
 
