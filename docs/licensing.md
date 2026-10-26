@@ -34,6 +34,25 @@ The license takes effect immediately; no restart is needed.
 While an application is unlicensed, administrators are taken to the license screen as soon as they
 sign in. Everyone else sees a page asking them to contact their administrator.
 
+### Hiding the license screen's menu entry
+
+From the next release, `ENS_LICENSE_MENU_VISIBLE=false` (Helm: `license.menuVisible: false`) takes
+the license screen out of the navigation, for installations where operators should not be pointed at
+it. The default is `true`, so nothing changes unless you set it. A value that is not a boolean stops
+the application at startup.
+
+| Application | What `false` hides |
+|---|---|
+| CertAlert | The **Manage the license** link on the administration page (the navigation has no license entry) |
+| Directory Services Portal | **License** in the administrators' sidebar |
+| ReadyRoom | **License** in the Administration menu, while the license is in full effect |
+| RSA Operations Portal | **License** in the PMO menu and **Open License** on the administration page, while the license is in full effect |
+
+Only the menu entry goes. The license screen still opens at its address for the same people, and
+every way to it that an expired, read-only or missing license needs stays: the redirect to it, the
+banners and their links, and the reduced menu shown while no license is in effect. The short
+license status line (on the administration page or at the foot of the menu) stays too.
+
 The applications keep the license, the installation id and their license history in one directory:
 
 | Setting | Value |
