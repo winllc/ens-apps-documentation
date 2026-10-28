@@ -29,7 +29,7 @@ For every setting referenced here, see [Configuration](configuration.md).
 
 | Requirement | Notes |
 |---|---|
-| **Docker or Podman** | Docker Engine 24+ with Compose v2 (`docker compose`, or a standalone `docker-compose` v2; v1 is refused). Or Podman 4.0+ with podman-compose 1.3.0+ (`podman compose` is used when podman-compose is not installed). |
+| **Docker or Podman** | Docker Engine 24+ with Compose v2 (`docker compose`, or a standalone `docker-compose` v2; v1 is refused). Or Podman 4.0+ with podman-compose 1.0.6+ (EPEL's version for RHEL 8 and 9; `podman compose` is used when podman-compose is not installed). With podman-compose 1.0.x, write `.env` values without quotes: Podman keeps quotes as part of the value. |
 | **Disk** | About 3 GB for the images, plus the database. |
 | **sha256sum, gpg** | To verify the download. |
 
@@ -153,7 +153,7 @@ A new install publishes the UI on **every interface** (`CERT_ALERT_BIND_ADDRESS=
 |---|---|
 | TLS in CertAlert, reachable from the network | `CERT_ALERT_TLS_ENABLED=true`, keystore and trust store in `tls/` |
 | A reverse proxy on this host | `CERT_ALERT_BIND_ADDRESS=127.0.0.1`, `SERVER_FORWARD_HEADERS_STRATEGY=framework`, `ENS_COOKIE_SECURE=true`. Point the proxy at `http://127.0.0.1:8080` |
-| A reverse proxy container on the compose network | `cp docker-compose.no-ports.yml docker-compose.override.yml`. Nothing is published; the proxy joins `cert-alert_default` and forwards to `http://cert-alert:8080`. Needs Docker Compose 2.24+ or podman-compose 1.4.0+ |
+| A reverse proxy container on the compose network | `cp docker-compose.no-ports.yml docker-compose.override.yml`. Nothing is published; the proxy joins `cert-alert_default` and forwards to `http://cert-alert:8080`. Needs Docker Compose 2.24+ or podman-compose 1.4.0+ (`!reset`); with an older podman-compose the scripts refuse it: set `CERT_ALERT_BIND_ADDRESS=127.0.0.1` instead |
 | Another port | `CERT_ALERT_PORT`. Rootless Podman needs 1024 or above |
 | Plain HTTP to other hosts anyway: a lab, or a network that encrypts for you (next release) | `CERT_ALERT_ALLOW_PLAIN_HTTP=true`. `install.sh` warns every time it runs |
 
