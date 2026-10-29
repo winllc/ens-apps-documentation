@@ -195,10 +195,21 @@ If nobody does, the page says *No direct reports*.
 ## Org Chart
 
 **Org Chart** (`/app/orgchart`) shows the organization hierarchy built from an attribute in the
-directory. Each organization shows **present / total**, counting sub-organizations, and a
-percentage. Filter by name, expand or collapse the tree, and click an organization to list its
-members, with the usual **Advanced** switch. As in **Users**, coworkers whose details you may not see
-show their status only. Click a member to open their details.
+directory. Above the tree, the whole organization's **accounted for** figure for the day being viewed
+(today, or the **System Date** an admin picked), a bar of who is in which status, and the legend for
+it. Each row shows the organization's own name with its full directory value beside it, the same bar
+for that organization and everything under it, **accounted of total**, and a percentage.
+
+Everyone is counted the way **Users** and **Home** count them: a status on the person's calendar for
+the day (work from home, TDY, leave and so on) comes first; otherwise their latest record decides
+between **Checked in**, **Away** (screen locked) and **Checked out**; anyone with neither is **No
+record**. *Accounted for* is everyone but *No record*. The people counted are those the directory
+lists under the organization, with the same filter the **Users** page uses.
+
+Filter by name, expand or collapse the tree, and click an organization to list its members, with the
+usual **Advanced** switch. As in **Users**, coworkers whose details you may not see show their status
+only, and where coworker visibility is *none* the chart shows headcounts without presence. Click a
+member to open their details.
 
 ## My Profile
 

@@ -287,7 +287,7 @@ A request's `state` is `REQUESTED`, `APPROVED`, `REJECTED` or `CANCELLED`.
 |---|---|---|
 | `GET /api/notifications/my` | Signed in | The caller's notifications that are still unread. |
 | `POST /api/notifications/markAllAsRead` | Signed in | Marks all of the caller's notifications as read. |
-| `GET /api/orgnodes/hierarchy` | Signed in | The org chart tree, with presence statistics (headcounts only with coworker visibility `none`, except for `ADMIN` and `MANAGER`). |
+| `GET /api/orgnodes/hierarchy` | Signed in | The org chart tree for the viewed day: per node, the status mix (`statusMix`, `fullTreeStatusMix`), `accountedCount` and `fullTreeAccountedCount`, and the headcounts by employee type; `fullTreePresentPercentage` is accounted over total (headcounts only with coworker visibility `none`, except for `ADMIN` and `MANAGER`). Member DNs are not included; use `/api/orgnodes/users/{orgName}`. |
 | `GET /api/orgnodes/users/{orgName}` | Signed in | Directory users whose duty sub-organization attribute equals `orgName`, with status, limited by the coworker visibility setting for people whose details the caller may not see. |
 | `POST /api/system/updateSystemTime` | Signed in | Body `{"dateTime": "<ISO zoned date-time>"}`. Sets the day viewed for the rest of the session. |
 
