@@ -38,9 +38,10 @@ workstation. Every setting mentioned here is described in [Configuration](config
 - A Linux host with 2 CPUs, 4 GB RAM and 10 GB disk, and one container engine:
     - **Docker** Engine 24 or later with Docker Compose 2.24 or later (the `docker compose` plugin, or
       a v2 `docker-compose`; the Python `docker-compose` v1 cannot read the package), or
-    - **Podman** 4.4 or later with **podman-compose 1.3 or later** (`pip install --user
-      podman-compose` where your distribution's package is older), or `podman compose`. Rootful or
-      rootless. Podman runs health checks from systemd timers, so the host needs systemd.
+    - **Podman** 4.4 or later with **podman-compose 1.0.6 or later** (EPEL's version for RHEL 8 and
+      9; `pip install --user podman-compose` where your distribution's package is older), or
+      `podman compose`. Rootful or rootless. With podman-compose 1.0.x, write `.env` values without
+      quotes: Podman keeps quotes as part of the value. Podman runs health checks from systemd timers, so the host needs systemd.
 - No internet access: the container images are in the package.
 
 ### For the Helm chart

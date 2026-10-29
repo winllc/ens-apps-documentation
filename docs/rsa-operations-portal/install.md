@@ -46,7 +46,7 @@ You also need, from RSA AM:
 |---|---|
 | Operating system | Linux on x86-64 |
 | Docker | Docker Engine 23 or later and the Docker Compose plugin (`docker compose`, v2) |
-| Podman (instead of Docker) | Podman 4.6 or later (RHEL 8.9+ or 9.3+), rootful or rootless, with podman-compose 1.4.0 or later (`pip install podman-compose` where the distribution's package is older), or `podman compose` with docker-compose v2 as its provider. The host needs systemd, which runs Podman's health checks. |
+| Podman (instead of Docker) | Podman 4.6 or later (RHEL 8.9+ or 9.3+), rootful or rootless, with podman-compose 1.0.6 or later (EPEL's version for RHEL 8 and 9; `pip install podman-compose` where the distribution's package is older), or `podman compose` with docker-compose v2 as its provider. With podman-compose 1.0.x, write settings-file values without quotes: Podman keeps quotes as part of the value. The host needs systemd, which runs Podman's health checks. |
 | Ports | 8080 (HTTP) and 8443 (HTTPS) free on the server, or others set in `.env` ([Address and ports](#4-address-and-ports)) |
 | Image access | None. The images are in the package's `images/` folder. |
 | Tools | `sha256sum` and `gpg` to verify the download |
@@ -192,7 +192,7 @@ services:
     ports: !reset []
 ```
 
-`!reset` needs Docker Compose 2.24 or podman-compose 1.4.0. See [Security → Behind a proxy](security.md#behind-a-proxy) for the forwarded headers.
+`!reset` needs Docker Compose 2.24 or podman-compose 1.4.0; with an older podman-compose the scripts refuse this override, so publish on `127.0.0.1:<port>` instead. See [Security → Behind a proxy](security.md#behind-a-proxy) for the forwarded headers.
 
 ### 5. License
 

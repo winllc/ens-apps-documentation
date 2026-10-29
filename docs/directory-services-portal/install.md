@@ -49,7 +49,7 @@ rename and delete through a form.
 | Method | Requirement |
 |---|---|
 | Docker | Linux with Docker Engine 20.10+ and Docker Compose v2 (`docker compose`; `docker-compose` 1.29 is used, best effort, when v2 is missing), and about 2 GB of disk |
-| Podman | Linux with Podman 4.0+ and podman-compose 1.0.6+ (EPEL's version for RHEL 8 and 9; `podman compose` is used when podman-compose is not installed), rootful or rootless, and about 2 GB of disk |
+| Podman | Linux with Podman 4.0+ and podman-compose 1.0.6+ (EPEL's version for RHEL 8 and 9; `podman compose` is used when podman-compose is not installed), rootful or rootless, and about 2 GB of disk. With podman-compose 1.0.x, write `.env` values without quotes: Podman keeps quotes as part of the value |
 | Native | Linux with systemd and Java 21 or later; nginx is optional (the installer configures it if it is installed) |
 | Helm | Kubernetes 1.25+ or OpenShift 4, Helm 3.8+ (OCI registries), a StorageClass for the license (100 Mi) and data (2 Gi) volumes, and access to `ghcr.io/winllc` or a mirror. PostgreSQL 13+ only for [several API replicas](#several-api-replicas) |
 
