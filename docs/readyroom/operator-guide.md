@@ -110,10 +110,12 @@ Never publish that port through an ingress, route or the host. With the Promethe
 | `ens_readyroom_logoffs_refused_total{reason}` | counter | Logoffs refused: `unknown_session`, `rate_limited` |
 | `ens_readyroom_requests_total{outcome}` | counter | Status requests `created`, `approved`, `rejected`, `cancelled` |
 | `ens_readyroom_retention_purged_total{kind}` | counter | Records the retention purge deleted: `checkin`, `status`, `notification`, `request` |
+| `ens_readyroom_webhook_deliveries_total{outcome}` | counter | Webhook delivery tries: `delivered`, `retry` (tried again later), `failed` (given up) |
 
 Suggested alerts: readiness failing; `ens_readyroom_checkins_total` flat during working hours;
 `ens_license_mode{mode="full"}` at 0, or `ens_license_days_remaining` under 30;
-`ens_audit_forward_failures_total` rising; no new backup in a day.
+`ens_audit_forward_failures_total` rising; `ens_readyroom_webhook_deliveries_total{outcome="failed"}`
+rising; no new backup in a day.
 
 ### Request diagnostics
 
@@ -137,7 +139,7 @@ are raw `ens-audit/1` JSON either way.
 
 | Level for `com.winllc.innoutwork` | What is logged |
 |---|---|
-| `info` (default) | Job summaries, forced check-outs (as a count), notifications sent, permission grants and revocations, org-chart rebuilds, directory-refresh changes, denied page access (`Access denied for GET /app/...`), and unexpected errors with stack traces. |
+| `info` (default) | Job summaries, forced check-outs (as a count), notifications sent, org-chart rebuilds, directory-refresh changes, denied page access (`Access denied for GET /app/...`), and unexpected errors with stack traces. |
 | `debug` | Each status event recorded, each forced check-out, authorization decisions, per-query detail and timings. |
 
 Useful messages:
@@ -148,8 +150,10 @@ Useful messages:
 | `End SendAbsentNotificationsCron. Checked N user(s), sent M notification(s) in Xms` | One run of the absence-alert job (logged on working days). M counts the people alerted about, not people with nobody to alert. |
 | `no directory manager or delegate for <dn>; no absence alert sent` (`WARN`) | The person is late, but has no directory manager and no delegate, or none of them is found in the directory. Logged once a person a day; tried again at each run. Fix the reporting-line attributes or set a delegate. |
 | `No absence alert about <dn> today: <reason>` | The person's directory entry is gone, or their account is disabled or expired, so nobody is alerted about them. |
+| `No absence alert about <dn> this run, tried again next run: <reason>` (`WARN`) | The directory could not be read to find who to alert. Nothing was saved; the next run tries again. |
 | `Notification <id> about <dn> sent to <email>` | An absence email was sent. |
-| `Failed to send notification to <email>` | SMTP failure. A stack trace follows. |
+| `Failed to send notification to <email>` | SMTP failure. A stack trace follows. The next run of the alert job sends it again, the same day, while the alert is unanswered. |
+| `Sent N absence alert e-mail(s) that had not gone out` | The alert job sent today's alert emails the mail server had not taken before. |
 | `Manager does not have an email address: <dn>` / `Manager not found in LDAP: <dn>` | An alert recipient could not be emailed or found. |
 | `Directory refresh: N scanned, N created, N updated, ...` | The hourly directory refresh changed user records. |
 | `RefreshUserRecordsCron failed; the next run will retry` | The directory refresh failed. A stack trace follows. |
@@ -165,6 +169,9 @@ Useful messages:
 | `Retention: check-in records, statuses, status requests and absence alerts older than N days are summarised by month and deleted (...)`, or `... are kept forever (...)` | Startup: the retention setting in effect. |
 | `Retention purge: before <date> (N days kept), N check-in record(s), ... deleted over N day(s); N monthly summary write(s), in Xms` | One run of the retention purge. |
 | `Mail "<subject>" sent to <address>` / `Failed to send "<subject>" to <address>` | A status request email was sent, or failed (a stack trace follows). Request emails are not retried. |
+| `LDAP referrals: <value> for <bean>` | Startup: what a directory referral does (`spring.ldap.referral`, default `ignore`). See [Configuration](configuration.md#ldap-connection). |
+| `Webhook endpoint <id> (<name>) has failed N tries in a row since it last took a delivery; last: ...` (`WARN`) | Every 5 failed tries in a row. Check the receiver, or disable the webhook on **Administration → Integrations**. Counted per sending replica, from its start. |
+| `Webhook endpoint <id> (<name>) took a delivery again after N failed tries` | The receiver recovered. |
 
 ## Scheduled jobs
 
@@ -178,7 +185,7 @@ run. Expired sessions are also deleted once a minute, on one replica.
 |---|---|---|---|
 | **Auto check-out** (`MarkInactiveCron`) | 60 s / 30 min (`inactive-cron.fixed-rate`) | 60 s / 30 min | For each user whose **latest event is a screen lock** older than `check-out-after-minutes`, writes a `CHECK_OUT` timestamped at lock time + that many minutes, flagged `forced = true`. It looks back two days beyond that limit, so a lock left in the evening is checked out after midnight and a lock left during an outage is caught up. |
 | **Absence alerts** (`SendAbsentNotificationsCron`) | 5 min / 30 min (`send-absent-notification-cron.fixed-rate`) | immediately / 30 min | On working days, raises at most one alert per person per day for users not in by their expected time plus the grace period. See [Administration](admin-guide.md#absence-notifications). |
-| **Directory refresh** (`RefreshUserRecordsCron`) | 1 h / 1 h (`refresh-user-records-cron.fixed-rate`) | 5 min / 5 min | Reads every user from the directory and creates or updates `user_records` (DN, email, phone, organization, employee type, location, branch, duty sub-organization) in batches of changed rows. Set `refresh-user-records-cron.enabled: false` to pause it. |
+| **Directory refresh** (`RefreshUserRecordsCron`) | 1 h / 1 h (`refresh-user-records-cron.fixed-rate`) | 5 min / 5 min | Reads every user from the directory and creates or updates `user_records` (DN, email, phone, organization, employee type, location, branch, duty sub-organization) in batches of changed rows. Set `refresh-user-records-cron.enabled: false` to pause it. A sign-in only fills a record's empty columns, from the user cache, so changed directory values reach the record through this refresh. |
 | **Retention purge** (`RetentionService`) | `0 17 2 * * *`, 02:17 daily (`application.retention.cron`) | – | Only with `application.retention.events-days` above 0: summarises and deletes old check-ins, statuses, requests and absence alerts. See [Retention](#retention). |
 | **Audit retention** (`AuditRetention`) | `0 23 3 * * *`, 03:23 daily | – | Only with `ENS_AUDIT_RETENTION_DAYS` above 0: prunes delivered audit events. |
 
@@ -199,7 +206,9 @@ The directory refresh also matters for alerts: the absence job only considers pe
 
 In-memory caches are refreshed as they are used, not on a schedule: an entry is reloaded in the
 background after `cache-duration-refresh-minutes` and discarded after
-`cache-duration-expiration-minutes`. Group trees can be evicted by hand from **Settings**.
+`cache-duration-expiration-minutes`. Group trees can be evicted by hand from **Settings**, on every
+replica: each reads the evictions others recorded every `application.cache-invalidation-poll-millis`
+(10 s).
 
 ## Database
 
@@ -286,11 +295,16 @@ deletes what is older than the cutoff:
   (first check-in to last check-out each day, as the reports count it) and days per status. A later
   run adds to a month already summarised; nothing is counted twice;
 - **absence alerts**, by the day they were raised, and **status requests**, once their last day is
-  past, without a summary.
+  past, without a summary. A request still waiting for a decision is first closed as `CANCELLED`,
+  audited as `calendar.request-cancelled` (actor `system`, reason `retention`).
 
-It works one day at a time, oldest first, 500 people per transaction, so it never holds a table for
-long. A lock on the single row of `retention_state` stops two instances counting the same day
-twice. Each run is audited as `data.purged` (actor `system`) with its counts and cutoff, and
+A person's day is their own, as in the reports and exports: in their profile's time zone, else
+their site's, else the application's. The purge walks the days once per zone in use and summarises
+each person's records in their zone, up to the start of the cutoff day where they are. It works one
+day at a time, oldest first, 500 people per transaction, so it never holds a table for long. A lock
+on the single row of `retention_state` stops two instances counting the same day twice. Each run is
+audited as `data.purged` (actor `system`) with its counts (`requestsCancelled` among them) and
+cutoff, and
 counted in `ens_readyroom_retention_purged_total{kind}`; a failed run is `job.failed`, and the next
 run carries on. **Administration → Privacy** shows the setting, the cutoff and the last purge.
 
@@ -329,9 +343,11 @@ package nor the Helm chart carries scripts. Developer notes on adding a migratio
 | `V9__public_api` | `api_tokens`, `webhook_endpoints` (signing secrets encrypted) and `webhook_deliveries`, for the [public API](api-reference.md#public-api-apiv1) and [webhooks](webhooks.md). New tables only |
 | `V10__reports` | `user_records.time_zone` and `report_schedules`, for [time zones and scheduled reports](exports.md) |
 | `V11__rate_limit_windows` (next release) | `rate_limit_windows`: the rate limits' counts (public API tokens, refused logoffs), shared by every replica. A new table only |
+| `V12__alert_read_and_emailed` (next release) | `notification_records.read_at` (an alert marked read, which no longer counts as answered) and `notification_records.emailed_at` (when its email went out, so the next alert run resends today's unsent ones). Existing alerts count as emailed, and ones marked read before stay off the list |
+| `V13__cache_invalidations` (next release) | `cache_invalidations`: the group cache evictions made on Settings, which every replica applies. A new table only |
 
 V2 to V4 change only the schema, plus one `UPDATE` on `user_records`, so they are quick; V6 to V11
-add tables and columns only.
+and V13 add tables and columns only; V12 adds two columns and fills them with one `UPDATE` each.
 
 ## Certificate and key rotation
 
@@ -433,7 +449,7 @@ Nothing to do by hand: Flyway adds the tables above, and nothing existing change
 
 ### Upgrading to the next release
 
-One new table (Flyway `V11`, `rate_limit_windows`), added at the first start. Sign-in keeps working
+New tables and columns (Flyway `V11` to `V13`), added at the first start. Sign-in keeps working
 for every installation that kept its settings; check the points below.
 
 | Change | What to do |
@@ -445,6 +461,13 @@ for every installation that kept its settings; check the points below.
 | Release package: `env.template` has a *Single sign-on* block | Copy the `ENS_SSO_*` lines into an older `.env` to use single sign-on |
 | Rate limits hold across replicas | A public API token's requests a minute and refused logoffs per client address (`application.logoff.refused-per-minute`) are counted in the database for all replicas together. With N replicas a token now gets its rate, not up to N times it, so an integration that relied on the multiplied rate may see `429` sooner: raise its token's rate if so. See [Availability](availability-and-sizing.md#high-availability) |
 | Webhooks through an egress proxy | New and unset: webhooks keep connecting directly. `APPLICATION_WEBHOOKS_PROXY` (`host:port`; Helm `webhooks.proxy.address`), with `APPLICATION_WEBHOOKS_PROXYCREDENTIALS` or `APPLICATION_WEBHOOKS_PROXYCREDENTIALSFILE`, sends them through an HTTP proxy. See [Webhooks → Through an egress proxy](webhooks.md#through-an-egress-proxy) |
+| **Settings** is for administrators only | People with only the `MANAGER` role no longer see it: the organization calendar, parse rules and group cache apply to everyone |
+| Only administrators set a group's alternate managers, each someone in the directory; `POST /api/permissions/update` is removed | Groups' managers no longer see the **Group Managers** card. Access to groups follows directory membership, as it already did. Update scripts that called the endpoint |
+| `ADMIN` is never given from a person's page, and the last administrator keeps it | Name administrators in `application.super-user-dns`. **Administration → Privacy** lists them |
+| *Late Arrival* and *Early Leave* no longer count as accounted for; one set on a range reaching a day before today is a request, and *normal* there is refused (`400` `past_day`) | Tell managers that the accounted-for figures, the 30-day attendance and the org chart may read lower for people who set these without checking in. Update scripts that call `POST /api/event/update` |
+| **Mark All Read** marks alerts read without answering them | Alerts stay under **Awaiting your response** and in the bell until answered. Alerts marked read before the upgrade stay off the list |
+| Erasure also deletes webhook deliveries about the person, revokes their API tokens, disables their webhooks and ends their sessions | See [Privacy → Erasure](privacy.md#erasure) |
+| LDAP referrals are ignored explicitly (`spring.ldap.referral`, default `ignore`), and so is the partial result they leave | Nothing to do: an Active Directory searched from its domain root now returns its entries instead of failing. `follow` chases referrals instead (the other servers must accept the same bind account) |
 | Signing out of the identity provider too | `ENS_SSO_OIDC_END_SESSION` and `ENS_SSO_SAML_SINGLE_LOGOUT` (Helm `sso.oidc.endSession`, `sso.saml.singleLogout`) default to `false`, so an upgraded installation signs out exactly as before; the release bundle's `env.template` sets both to `true` for new installs. Before turning them on, register `<base>/signed-out` as a post-logout redirect URI at the OIDC provider; for SAML set the SP key and certificate and re-import the SP metadata at the IdP. See [Single sign-on → Signing out](single-sign-on.md#signing-out) |
 
 ## Runbook

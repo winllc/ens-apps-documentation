@@ -13,7 +13,7 @@ ReadyRoom has three roles (`UserRoleEnum`):
 |---|---|
 | `USER` | Automatically, for anyone whose sign-in resolves to a directory entry. Every signed-in person has it, including managers and admins. |
 | `MANAGER` | An admin sets it on the person's details page. It is stored in `user_records.user_role`. |
-| `ADMIN` | The person's DN is listed in `application.super-user-dns` (matched without regard to case). The role list in the UI does not offer `ADMIN`. The application also honors `ADMIN` if it is stored in `user_records.user_role`, which can only be set directly in the database. |
+| `ADMIN` | The person's DN is listed in `application.super-user-dns` (matched without regard to case). The application also honors `ADMIN` if it is stored in `user_records.user_role`, which can only be set directly in the database. It is never given from the UI. **Administration → Privacy** lists every administrator and where the role comes from. |
 
 With [single sign-on](single-sign-on.md), the identity provider's groups can add `MANAGER` or
 `ADMIN` for that session through `ENS_SSO_ROLE_MAPPING` (for example
@@ -22,7 +22,9 @@ Roles from the provider's groups do not count for [API tokens](api-reference.md#
 creator must be an administrator in ReadyRoom itself at every call.
 
 A user record is created automatically the first time someone signs in, and also by the hourly
-directory refresh, with the role `USER`. A certificate or account whose DN cannot be found in the
+directory refresh, with the role `USER`. A sign-in fills only the record's empty directory columns
+(organization, employee type, location, branch, duty sub-organization); changed values reach it
+through the hourly refresh. A certificate or account whose DN cannot be found in the
 directory does not sign in at all.
 
 ### Assigning a role
@@ -31,14 +33,27 @@ directory does not sign in at all.
 2. In the **Role** card (shown to admins only), choose `USER` or `MANAGER`.
 3. Choose **Submit**.
 
+The role list offers `ADMIN` only for someone whose stored role it already is, so that saving their
+page keeps it; a request for `ADMIN` for anyone else is refused (`400`, `admin_not_grantable`).
+Name administrators in `application.super-user-dns` instead. A stored `ADMIN` can be taken away
+here, except from the **last administrator**: the page then says *&lt;name&gt; is the only
+administrator left: name another first.*
+
 Roles are read when a person signs in, so a change takes effect at their next session. Changing
 the stored role of someone listed in `super-user-dns` does not remove their `ADMIN` role.
+
+### Administrators
+
+The **Administrators** card on **Administration → Privacy** lists everyone with the `ADMIN` role,
+each linked to their details page, with where the role comes from: `application.super-user-dns`,
+*Stored role*, or both. With nobody listed, it says to name administrators in
+`application.super-user-dns` (`APPLICATION_SUPERUSERDNS_0`, ...).
 
 !!! tip "Role versus reporting line"
     "Manager" means two different things in ReadyRoom:
 
-    - The **`MANAGER` role** opens the manager pages: Metrics, Settings, group reports and the
-      **System Date** picker. It does not by itself show every group or every person's data.
+    - The **`MANAGER` role** opens the manager pages: Metrics, group reports, scheduled reports
+      and the **System Date** picker. It does not by itself show every group or every person's data.
     - A **responsibility for people** gives you their details (times, notes, **Audit Log** and
       **Event Calendar**), whatever your role: a **reporting line** in the directory (someone's
       `user-ldap-manager-id-attribute` pointing at you), managing a **group** they are in, or being
@@ -63,9 +78,9 @@ the stored role of someone listed in `super-user-dns` does not remove their `ADM
 | Star (favorite) groups | – | ✓ | ✓ |
 | Other people's times and notes, **Audit Log** and **Event Calendar** | only people they are responsible for | only people they are responsible for | everyone |
 | Generate a **group report** | – | groups they manage | ✓ |
-| Edit a group's **additional managers** | – | groups they manage | ✓ |
+| Edit a group's **additional managers** | – | – | ✓ |
 | **Metrics** | – | ✓ | ✓ |
-| **Settings**: calendar, group cache, parse rules | – | ✓ | ✓ |
+| **Settings**: calendar, group cache, stored group DNs, parse rules | – | – | ✓ |
 | **System Date** picker (view another day) | – | ✓ | ✓ |
 | Change someone's **role** | – | – | ✓ |
 | Respond to an absence alert | only alerts sent to them | only alerts sent to them | only alerts sent to them |
@@ -73,7 +88,7 @@ the stored role of someone listed in `super-user-dns` does not remove their `ADM
 | Approve or reject requests, and record a status on someone's calendar | people they decide for: their direct reports in the directory, and the people they are a delegate of | as USER | everyone except themselves |
 | Set a person's **delegates**; the **Delegates** review page | – | – | ✓ |
 | Download one's own data (**My data**) | ✓ | ✓ | ✓ |
-| **Privacy** page: retention status, anyone's export, erasure | – | – | ✓ |
+| **Privacy** page: retention status, the administrators, anyone's export, erasure | – | – | ✓ |
 
 Pages are protected on the server with `@PreAuthorize` rules. The sidebar hides what a role cannot
 open, and a page opened directly without the required role shows *Unauthorized*.
@@ -92,32 +107,36 @@ that long to apply. On a group's page, members whose details you may not see sho
 directory fields and whether they are in.
 
 !!! note "Per-group permission records"
-    The database has a `permission_records` table, and `POST /api/permissions/update` (admins, and
-    managers of that group) grants or revokes a group for a user. No screen in the current UI calls this
-    endpoint, and in the current version the access checks for **Groups** and group pages read only
-    directory membership, not these records. To give someone access to a group, add them to it in
-    the directory.
+    Access to a group follows directory membership only: to give someone access to a group, add
+    them to it in the directory. Earlier releases let admins and group managers "grant" a person a
+    group (`POST /api/permissions/update`), which no access check read. That endpoint has been
+    removed. Grants made before stay in the `permission_records` table only so that the person's
+    data export lists them and erasure deletes them.
 
 ### Group managers
 
-On a group's page, admins, and people with the `MANAGER` role who manage that group, see a
-**Group Managers** card:
+On a group's page, admins see a **Group Managers** card. **Only administrators set a group's
+alternate managers**, as for delegates: a group's own managers no longer appoint them.
 
 1. Type at least part of a name in **Add a manager** and pick people from the results.
 2. Remove anyone with the remove control next to their name.
 3. Choose **Update**. The list is saved in `group_records.alternate_managers`.
 
+Each manager must be someone in the directory; a DN that is not there, or a list longer than the
+column holds (255 characters), is refused with the reason, and nothing is saved. The change is
+audited as `group.managers-changed`.
+
 A person counts as a **manager of a group** if they are its directory `owner` or are on this list.
 A group manager can open the group and sees the details of every member of every group they manage
-(times, notes, **Audit Log** and **Event Calendar**), even with only the `USER` role. Changing the
-list and running the group's report also need the `MANAGER` role. A sub-group is a separate group
-with its own managers.
+(times, notes, **Audit Log** and **Event Calendar**), even with only the `USER` role. Running the
+group's report also needs the `MANAGER` role. A sub-group is a separate group with its own
+managers.
 
-!!! warning "Group managers and absence alerts"
-    The card says that these managers receive absence notifications. In the current code, absence
-    alerts go only to the person's **directory manager** and their **delegates**, not to group
-    managers, and group managers do not decide status requests. If a group's managers must be
-    alerted, make them the members' delegates (see [Delegates](#delegates)).
+!!! note "Group managers and absence alerts"
+    Absence alerts go only to the person's **directory manager** and their **delegates**, not to
+    group managers, and group managers do not decide status requests; the card says so. If a
+    group's managers must be alerted, make them the members' delegates (see
+    [Delegates](#delegates)).
 
 ### Favorites
 
@@ -144,25 +163,33 @@ calendar), for every user record, a notification is raised when **all** of these
 - the day is not already accounted for: they have no excusable status today (*Out of Office*,
   *Work From Home*, *TDY*, *Scheduled Leave* or *Absent Excused*), and no status that only a
   manager, delegate or administrator records (*Absent*, *Absent Unexcused* or *Unscheduled
-  Leave*). A requested status counts only once it is approved;
+  Leave*). A requested status counts only once it is approved. *Late Arrival*, *Early Leave* and
+  *normal* account for nothing: a late arrival only moves the expected time. The same rule decides
+  who is accounted for on Home, My Reports, Metrics and the org chart;
 - they are still in the directory: nobody is alerted about a person whose entry is gone, or whose
   account is disabled or expired (`No absence alert about <dn> today: <reason>` in the log). A
   locked-out account is still alerted about.
 
-**Recipients** are the person's directory manager (found through the reporting-line attributes)
-and their delegates, each once, and never the person themselves. Each recipient gets a
+**Recipients** are the person's directory manager (found through the reporting-line attributes,
+read live from the directory for each alert) and their delegates, each once, and never the person
+themselves. If the directory cannot be read, no alert is saved and the next run tries the person
+again (`No absence alert about <dn> this run, tried again next run` at `WARN`), so the manager is
+not left out of an alert sent to the delegates alone. Each recipient gets a
 notification record and, if their directory entry has a valid email address, an email from
 `application.notification-sender-email` linking to `application.application-base-url` +
 `/app/notifications/id/<id>`. A recipient who is not found in the directory, or has no email
 address, is logged as an error. Someone with no directory manager and no delegate (or none found
 in the directory) cannot be alerted about: the log says `no directory manager or delegate for
-<dn>; no absence alert sent` at `WARN`, once a person a day, and each run tries again. The job's
+<dn>; no absence alert sent` at `WARN`, once a person a day, and each run tries again. An alert
+whose email the mail server did not take is emailed again by the next run, the same day, while
+nobody has answered it. The job's
 count of alerts sent (in its log line and its `job.completed` audit event) is the number of
 people alerted about.
 
 **Responses.** A recipient opens the alert and picks `UNSCHEDULED_LEAVE`, `ABSENT_EXCUSED`,
 `ABSENT_UNEXCUSED` or `ABSENT`. The response is copied to every recipient's copy of the alert and
-stored as the person's status for that day.
+stored as the person's status for that day. **Mark All Read** in the bell only marks alerts read:
+they stay awaiting an answer, in the bell and on Home, until someone responds.
 
 To set up notifications:
 
@@ -208,21 +235,29 @@ license state (erasure too while the license is read-only).
 
 **Retention and visibility** shows how long check-ins and statuses are kept (or *Forever*), when
 the purge runs, the cutoff before which only monthly summaries remain, the last purge, and the
-coworker visibility setting. They are server settings: see
+coworker visibility setting. **Administrators** lists everyone with the `ADMIN` role (see
+[Administrators](#administrators)). They are server settings: see
 [Configuration → Statuses, requests and privacy](configuration.md#statuses-requests-and-privacy).
 
 **A person's data.** Enter the person's DN and choose **Show**, or use **Export or erase data** on
-their details page. The page lists how many records of each kind ReadyRoom holds about them.
+their details page. The page lists how many records of each kind ReadyRoom holds about them,
+including the webhook deliveries about them, the API tokens and webhooks they created that are
+still active, and their open sessions.
 
 - **Download their data** gives the same JSON file the person gets from **My data**. Each download
   is audited as `data.exported` with `requestedBy` set to you.
 - **Erase personal data** deletes, in one transaction, their user record, group access,
-  check-ins, calendar statuses, status requests, absence alerts about them, and monthly
-  summaries, and takes them off other people's delegates and groups' alternate managers. Absence
-  alerts sent to them about other people are kept, with their name replaced by `(erased)`.
-  Type the person's name to confirm; the browser asks once more. The form is good for 10 minutes
-  and for that person only. Nobody can erase themselves. The erasure is audited as
-  `person.erased`, with the counts and whether the person is still in the directory.
+  check-ins, calendar statuses, status requests, absence alerts about them, monthly summaries
+  and the webhook deliveries about them (sent, given up or still waiting, so nothing naming them
+  is sent afterwards), and takes them off other people's delegates and groups' alternate
+  managers. It also revokes the API tokens and disables the webhooks they created (audited as
+  `api.token-revoked` and `webhook.disabled` with `details.via` `erasure`, by you), and ends their
+  browser sessions (`auth.session-expired`, reason `erased`). Absence alerts sent to them about
+  other people are kept, with their name replaced by `(erased)`. Type the person's name to
+  confirm; the browser asks once more. The form is good for 10 minutes and for that person only.
+  Nobody can erase themselves. The page then says how many records were erased and what was
+  revoked, disabled and ended. The erasure is audited as `person.erased`, with the counts and
+  whether the person is still in the directory.
 
 !!! warning "Erase someone who has left the directory first"
     If the person is still in the directory, the page says so: ReadyRoom creates their account
@@ -248,7 +283,8 @@ What erasure does not remove is listed in
 
 ## Settings page
 
-**Settings** (`/app/settings`) is available to admins and managers.
+**Settings** (`/app/settings`) is for administrators only: everything on it applies to the whole
+organization. The `MANAGER` role no longer opens it.
 
 ### Organization calendar
 
@@ -270,6 +306,24 @@ card shows how many group entries are cached.
   contain it. The next request reads them from the directory again.
 - **Evict All** (with confirmation): clears every cached group tree. Pages are slower until the
   caches fill again.
+
+With several replicas, an eviction reaches all of them: the replica that served the page drops its
+entries at once and records the eviction in the database, and every other replica drops the same
+entries within a few seconds (`application.cache-invalidation-poll-millis`, 10 s). The message
+gives the number of entries dropped on the replica that served it, and says if the eviction could
+not be passed on (the database did not record it): the other replicas then keep their copy until it
+expires. Each eviction is audited as `settings.cache-evicted`, with `details.everyReplica`.
+
+When the directory stops answering part way through a tree, the **Groups** page shows what it has
+with *The directory did not answer for part of this tree; try again*, and that tree is not cached.
+
+### Stored group DNs
+
+ReadyRoom keeps scheduled reports, groups' alternate managers and favorites under a group's DN. A
+group renamed or moved in the directory gets a new DN, and those are left behind under the old one.
+**Check** on the **Stored Group DNs** card looks up every stored group DN and lists those the
+directory no longer has, with what each was kept for, so you can set them up again under the new
+DN. It changes nothing. If the directory cannot be read, the card says the check did not finish.
 
 ### Organization parse rules
 

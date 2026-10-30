@@ -34,7 +34,7 @@ manager approves), so their managers know where they are when they are not at a 
 | **Single sign-on** | OpenID Connect and SAML 2.0, beside client certificates and the directory password. See [Single sign-on](single-sign-on.md). |
 | **Privacy and retention** | What coworkers see of each other is configurable. Old check-ins and statuses can be summarised by month and deleted after a set number of days. Everyone can download their own data; administrators export or erase a person's data. |
 | **Home dashboard** | Each user sees their own status, the last 30 days, whether their workstation agent is reporting, and anything scheduled in the next two weeks. Users with direct reports also see their team. |
-| **Groups** | Browse the directory group trees (`groupOfUniqueNames`), see each member's status, favorite groups, assign extra group managers, and generate a group report as a PDF. |
+| **Groups** | Browse the directory group trees (`groupOfUniqueNames`), see each member's status, favorite groups, assign extra group managers (administrators), and generate a group report as a PDF. |
 | **Org chart** | Builds a hierarchy from one flat directory attribute (for example `RYS34B` becomes `RYS` → `34` → `B`) and shows how many people are present in each organization. Parse rules can override how values are split. |
 | **My Reports** | One table of everyone who reports to you in the directory, with 30-day attendance, average arrival and absence-alert history. |
 | **Metrics** | Organization-wide accounted-for rate, status mix, workstation agent coverage, activity through the day, and status breakdowns by organization, employee type, location and branch. |

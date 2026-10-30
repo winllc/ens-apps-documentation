@@ -78,6 +78,8 @@ With TLS on, ReadyRoom refuses to start if no keystore is set, or if no truststo
 | `spring.ldap.password` | `adminpassword` | – | Bind password. |
 | `spring.ldap.base-environment."[com.sun.jndi.ldap.connect.timeout]"` | `5000` | – | Connect timeout in ms. Without it, an unresponsive directory holds requests indefinitely. |
 | `spring.ldap.base-environment."[com.sun.jndi.ldap.read.timeout]"` | `30000` | – | Read timeout in ms. |
+| `spring.ldap.referral` | – | `ignore` | What a referral from the directory does (`SPRING_LDAP_REFERRAL`): `ignore`, `follow` (chase it; the other servers must then be reachable with the same credentials) or `throw`. The startup log says `LDAP referrals: <value>`. |
+| `spring.ldap.template.ignore-partial-result-exception` | – | `true` | Searches ignore the partial result an ignored referral leaves. So an Active Directory searched from its domain root (`DC=corp,DC=com`), which ends every subtree search with referrals to ForestDnsZones, DomainDnsZones and Configuration, returns its entries rather than failing. A base DN below the domain root (`OU=People,DC=corp,DC=com`) avoids the referrals altogether. |
 | `application.ldap.pooled` | `true` | `true` | Reuse JNDI connections. Password checks on the login form never use the pool. |
 | `application.ldap.page-size` | `500` | `500` | Entries per page for large searches. Keep it below the server's size limit (Active Directory 1000, OpenLDAP 500). `0` turns paging off for directories without the paged results control. |
 | `application.ldap.max-pages` | – | `1000` | The most pages one paged search reads before it logs a warning and returns what it has. This protects against a directory or proxy that keeps returning a paging cookie. |
@@ -124,9 +126,12 @@ Users, group trees, the user count and the org chart are kept in Caffeine loadin
 |---|---|---|
 | `application.cache-duration-refresh-minutes` | `60` | An entry older than this is reloaded in the background the next time it is read. The stale value is served until the reload finishes. |
 | `application.cache-duration-expiration-minutes` | `120` | An entry older than this is discarded and loaded again in the foreground. |
+| `application.cache-invalidation-poll-millis` | `10000` | How often each replica reads the group cache evictions another replica recorded, and drops the same entries (`APPLICATION_CACHEINVALIDATIONPOLLMILLIS`). |
 
-Admins and managers can evict cached group trees from **Settings** (see
-[Administration](admin-guide.md#group-cache)).
+Administrators can evict cached group trees from **Settings** (see
+[Administration](admin-guide.md#group-cache)). An eviction reaches every replica: it is recorded in
+the database (table `cache_invalidations`, rows kept a day) and each other replica applies it within
+`cache-invalidation-poll-millis`. Expiry needs no such step.
 
 ## Time zone
 
@@ -246,7 +251,7 @@ needs an `https://` `APPLICATION_BASE_URL`, and the release package's `env.templ
 | Property | Packaged | Description |
 |---|---|---|
 | `logging.level.root` | `info` | |
-| `logging.level.com.winllc.innoutwork` | `info` | At `info`: records written by jobs, permission grants and revocations, report generation, org-chart rebuilds and job summaries. Set it to `debug` for per-query detail, timings and authorization decisions. |
+| `logging.level.com.winllc.innoutwork` | `info` | At `info`: records written by jobs, report generation, org-chart rebuilds and job summaries. Set it to `debug` for per-query detail, timings and authorization decisions. |
 | `management.endpoints.web.exposure.include` | `health` | Actuator endpoints exposed under `/actuator` on the application's port. `health` needs no authentication and shows the status only; details for `ADMIN`. Any other endpoint you add needs an `ADMIN` sign-in; see [Security](security.md#unauthenticated-endpoints). |
 | `management.server.port` (`MANAGEMENT_SERVER_PORT`) | – | Spring Boot's own setting. A separate, plain-HTTP port for the actuator: there `/actuator/health` (with `liveness` and `readiness`) and `/actuator/prometheus` are open without sign-in, and the application's port then has no actuator. Unset: no Prometheus endpoint at all. Never publish this port through an ingress, route or the host. Helm: `metrics.enabled` (default `true`), `metrics.port` (9090) |
 | `management.health.mail.enabled` (`MANAGEMENT_HEALTH_MAIL_ENABLED`) | Spring Boot's default, `true` | Whether the aggregate `/actuator/health` includes the mail server. Readiness never does. Helm: `smtp.healthCheck` |

@@ -13,7 +13,11 @@
   the day is over, a day that ends with a screen lock ended at that lock (the automatic check-out
   of an evening lock is written after midnight, on the next day).
 - **People lists**: a group's members (on its page) and a name search (*Find a user*) download as a
-  list of people with each person's status today.
+  list of people with each person's status on the day the page shows (the **System Date**, else
+  today), and the file is named after that day.
+- **When the directory cannot be read**, a group's members are not known: the group report page
+  says *The directory could not be read*, and its CSV and Excel downloads answer `503`
+  (`directory_unavailable`) instead of a file with only its header.
 
 A download holds exactly what its viewer may see on screen: the report's people are those whose
 details they may see, and a list shows everyone else as
@@ -54,8 +58,9 @@ attendance as CSV or Excel, at an hour in its owner's time zone:
   disabled, locked or expired, or they lost the right to the group's report. The owner is e-mailed
   that it was turned off and why. **Enable**, on the schedules page, turns it back on once they may
   run the report again (checked then); it next goes out at its next sending time.
-- **A directory that cannot be read** puts the run off: the schedule stays on and due, and is tried
-  again.
+- **A directory that cannot be read** (the owner's account, or the group's members) puts the run
+  off: the schedule stays on and due, and is tried again. A report is never sent as one of a group
+  without members because the member list could not be read.
 - **A run that reaches nobody** because the directory or the mail server did not answer, or an
   error, is tried again every 30 minutes until its next sending time or
   `APPLICATION_REPORTS_RETRYHOURS` (24) hours after it was due, whichever comes first. Then it is
@@ -69,8 +74,12 @@ attendance as CSV or Excel, at an hour in its owner's time zone:
 - Attachments over `APPLICATION_REPORTS_MAXATTACHMENTBYTES` (10 MB) are not sent; at most
   `APPLICATION_REPORTS_MAXRECIPIENTS` (20) recipients.
 - Audited: `report.schedule-created`, `report.schedule-deleted`, `report.schedule-disabled`,
-  `report.schedule-enabled`, and each sending as `data.exported` (`details.via` `scheduled`, the
-  recipients).
+  `report.schedule-enabled`, and each sending as `data.exported` with the schedule's owner as the
+  actor, whose rights chose its rows (`details.via` `scheduled`, `details.owner`, the recipients).
+  *Send now* is recorded as whoever pressed it.
+- A schedule's group is kept by its DN: a group renamed or moved in the directory leaves the
+  schedule behind. **Check** under *Stored Group DNs* on Settings lists such DNs (see
+  [Administration](admin-guide.md#stored-group-dns)).
 - Erasing a person deletes their schedules and takes them off others'.
 
 ## Time zones

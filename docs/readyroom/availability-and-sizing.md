@@ -61,6 +61,7 @@ sends once and never retries, are not lost during an upgrade. For the suite-wide
 | Audit forwarding (Splunk, syslog) | Every replica runs a forwarder; each batch is delivered under a lock, so none goes out twice |
 | License, installation id, revisions seen | The `ens_license_*` tables. An upload on one replica is in force on all within seconds |
 | License mode changes | Each replica notices; the change is recorded once |
+| Group cache evictions | **Evict** and **Evict All** on Settings drop the entries on the replica that served the page and record the eviction (table `cache_invalidations`, Flyway `V13`, rows kept a day); every other replica reads new ones every `application.cache-invalidation-poll-millis` (10 s) and drops the same entries |
 
 **Rate limits** (next release): a public API token's requests a minute and
 `application.logoff.refused-per-minute` per client address are counted in the database (table
@@ -72,7 +73,9 @@ in each replica's memory, so a token may make up to N times its rate, and an add
 times as many refusals, before `429`.
 
 **Per replica**, by design: the access-denial summaries (each replica collapses and records its
-own), and the caches of directory users and groups, revocation answers and CRLs.
+own), the count of a webhook's failed tries in a row (for its `WARN`), and the caches of directory
+users and groups, revocation answers and CRLs, which are re-read on their own; an eviction made on
+Settings reaches every replica (above), expiry does not need to.
 
 **Helm.** Several replicas need the license volume off, after the first start of this release has
 imported it into the database:

@@ -227,22 +227,26 @@ is off), or your ingress or route host with Helm. Timestamps in JSON records use
 | `GET /api/users/usersearch?search=` | Signed in | Directory users whose `cn` contains `search`. Used by the manager pickers. |
 | `GET /api/users/group/{groupDn}` | A member or manager of the group, or `ADMIN` | `{"data": [...statuses]}` for the group's members, limited by the coworker visibility setting for people whose details the caller may not see. |
 | `GET /api/users/reports` | Signed in | `{"data": [...]}`: the caller's direct reports, with status. |
-| `GET /api/users/checkinoutrecords/{dn}?page=1&size=10&sort=timestamp&dir=desc` | Whoever may see the user's details | The user's records, paged, newest first. |
+| `GET /api/users/checkinoutrecords/{dn}?page=1&size=10&sort=timestamp&dir=desc` | Whoever may see the user's details | The user's records, paged. `page` from 1, `size` 1 to 500, `sort` `timestamp` or `action`, `dir` `asc` or `desc`; anything else is `400` (`invalid_page`, `invalid_sort`). |
 | `GET /api/users/managers/{dn}` | Whoever may see the user's details | The user's delegates (alternate managers), as a list of objects with a `dn`. |
 | `POST /api/users/managers/update/{dn}` | `ADMIN` | Body: a JSON array of DNs, each someone else in the directory. Replaces that person's delegates. `400` (`invalid_delegate`, `invalid_person`) for a bad list. |
 
 `POST /api/users/managers/update`, with which people set their own additional managers, has been
 removed: only administrators set delegates.
 
-### Groups and permissions
+### Groups
 
 | Method and path | Access | Description |
 |---|---|---|
 | `POST /api/groups/favoriteGroup` | A/M | Body `{"groupDn": "...", "selected": true}`. Adds or removes a favorite for the caller. |
 | `GET /api/groups/managers/{groupDn}` | A/M who may open the group | The group's additional managers. |
-| `POST /api/groups/managers/update/{groupDn}` | A/M who manages the group (`ADMIN`: any) | Body: a JSON array of DNs. Replaces the group's additional managers. |
+| `POST /api/groups/managers/update/{groupDn}` | `ADMIN` | Body: a JSON array of DNs, each someone in the directory. Replaces the group's additional managers, stored without repeats. `400` (`invalid_manager`) for a group or manager that is not a DN, a manager not in the directory, or a list over 255 characters. |
 | `GET /api/groups/hierarchy` | A/M | Returns nothing in the current version. |
-| `POST /api/permissions/update` | A/M who manages the group (`ADMIN`: any) | Body `{"groupDn": "...", "userDn": "...", "selected": true}`. Grants or revokes a per-user group permission record. See the note in [Administration](admin-guide.md#groups-and-access). |
+
+`POST /api/permissions/update`, which recorded per-user group grants that no access check read, has
+been removed; access to a group follows directory membership. See
+[Administration](admin-guide.md#groups-and-access). A group's managers no longer set its additional
+managers: only administrators do.
 
 ### Status calendar and organization calendar
 
@@ -252,21 +256,26 @@ removed: only administrators set delegates.
 | `GET /api/event/allWithLogins?dn=&from=&to=` | Whoever may see the user's details | The same, plus "Online: ..." periods and organization calendar events. |
 | `POST /api/event/update` | Signed in | Puts `status` on each day from `fromDate` up to, but not including, `toDate` (ISO zoned date-times, or plain `yyyy-MM-dd`), at most `application.events.max-range-days` (366) days. Body: `{"fromDate","toDate","status","lateArrivalTime","note","dn"}`. See below. |
 | `GET /api/event/statuses` | Signed in | The statuses the caller may put on their own calendar: `[{"status","name","needsApproval"}]`. |
-| `GET /api/settings/calendar/all?from=&to=` | A/M | Organization calendar events. |
-| `POST /api/settings/calendar/update` | A/M | Body `{"fromDate","toDate","title","holiday"}`. Adds one event per day in the range (end exclusive). |
-| `DELETE /api/settings/calendar/delete/{id}` | A/M | Deletes one calendar event. |
+| `GET /api/settings/calendar/all?from=&to=` | `ADMIN` | Organization calendar events. |
+| `POST /api/settings/calendar/update` | `ADMIN` | Body `{"fromDate","toDate","title","holiday"}`. Adds one event per day in the range (end exclusive). |
+| `DELETE /api/settings/calendar/delete/{id}` | `ADMIN` | Deletes one calendar event. |
 
 **What `POST /api/event/update` does** depends on whose calendar and which status:
 
 | Case | Result |
 |---|---|
-| The caller's own calendar, a status the person sets (`STANDARD`, `EARLY_LEAVE`, `LATE_ARRIVAL`) | Set at once: `{"status","fromDate","toDate","outcome":"set"}` |
+| The caller's own calendar, a status the person sets (`STANDARD`, `EARLY_LEAVE`, `LATE_ARRIVAL`), from today on | Set at once: `{"status","fromDate","toDate","outcome":"set"}` |
+| The caller's own calendar, `EARLY_LEAVE` or `LATE_ARRIVAL` over a range starting before today | One request for the whole range, e-mailed to the approvers as any other: `"outcome":"requested"`, with `requestId` and a `message`. Approval writes it, with its late-arrival time, on each day |
+| The caller's own calendar, `STANDARD` over a range starting before today | `400` `past_day`: a past day is the manager's to correct |
 | The caller's own calendar, a requested status (by default `OUT_OF_OFFICE`, `WORK_FROM_HOME`, `TDY`, `SCHEDULED_LEAVE`, `ABSENT_EXCUSED`) | A request is created: `"outcome":"requested"`, with `requestId` and a `message`. `note` (up to 500 characters) goes with it |
 | The caller's own calendar, a status only managers record (`ABSENT`, `ABSENT_UNEXCUSED`, `UNSCHEDULED_LEAVE`) | `403` |
 | Someone else's calendar (`dn`) | Set at once, any status, if the caller is the person's directory manager, one of their delegates or `ADMIN`; otherwise `403` |
 
+"Today" is the date in the application's time zone (`APPLICATION_TIMEZONE`); the session's System
+Date does not move it.
+
 Bad input is answered with `400` and `{"error","message"}`: `range_too_long`, `invalid_range`,
-`invalid_status`, `invalid_time` or `invalid_dn`. A late arrival callers set on their own calendar
+`invalid_status`, `invalid_time`, `invalid_dn` or `past_day`. A late arrival callers set on their own calendar
 is refused with `late_arrival_too_late` after `application.events.late-arrival-latest-time` (12:00)
 and with `late_arrival_too_long` over `application.events.late-arrival-max-days` (31) days; one set
 on someone else's calendar is not limited. Earlier releases answered these with `500`, and
@@ -278,7 +287,7 @@ All need the `calendar` license feature. Who may do what is checked on every cal
 
 | Method and path | Access | Description |
 |---|---|---|
-| `POST /api/requests` | Signed in | Ask for a status on one's own days. Body: `status`, `fromDate`, `toDate` (the day after the last), optional `lateArrivalTime` and `note` (500 characters, shown to approvers). `201` with the request. `400` `not_a_request_status` for a status that is not a requested one |
+| `POST /api/requests` | Signed in | Ask for a status on one's own days. Body: `status`, `fromDate`, `toDate` (the day after the last), optional `lateArrivalTime` and `note` (500 characters, shown to approvers). `201` with the request. Takes a requested status, or `LATE_ARRIVAL` or `EARLY_LEAVE` over a range starting before today; `400` `not_a_request_status` for anything else |
 | `GET /api/requests/mine` | Signed in | The caller's requests |
 | `GET /api/requests/pending` | Signed in | Pending requests the caller may decide |
 | `GET /api/requests/{id}` | The requester, whoever may decide it, `ADMIN` | One request |
@@ -291,8 +300,8 @@ A request's `state` is `REQUESTED`, `APPROVED`, `REJECTED` or `CANCELLED`.
 
 | Method and path | Access | Description |
 |---|---|---|
-| `GET /api/notifications/my` | Signed in | The caller's notifications that are still unread. |
-| `POST /api/notifications/markAllAsRead` | Signed in | Marks all of the caller's notifications as read. |
+| `GET /api/notifications/my` | Signed in | The caller's absence alerts that await an answer, read or not (`readAt` is null while unread). |
+| `POST /api/notifications/markAllAsRead` | Signed in | Marks the caller's unread alerts read (`readAt`), audited as `absence.alerts-dismissed`. It answers nothing: they stay in `/my` until someone responds. |
 | `GET /api/orgnodes/hierarchy` | Signed in | The org chart tree for the viewed day, each person counted as the caller may see them (see [Security → Authorization](security.md#authorization)): per node, the status mix (`statusMix`, `fullTreeStatusMix`), `accountedCount` and `fullTreeAccountedCount`, and the headcounts by employee type; `fullTreePresentPercentage` is accounted over total (headcounts only with coworker visibility `none`, except for `ADMIN` and `MANAGER`). Member DNs are not included; use `/api/orgnodes/users/{orgName}`. |
 | `GET /api/orgnodes/users/{orgName}` | Signed in | Directory users whose duty sub-organization attribute equals `orgName`, with status, limited by the coworker visibility setting for people whose details the caller may not see. |
 | `POST /api/system/updateSystemTime` | A/M | Body `{"dateTime": "<ISO zoned date-time>"}`. Sets the day viewed for the rest of the session. |
@@ -333,13 +342,13 @@ A manager, delegate or administrator can record any of them for someone else, at
 | `/app/groups` | Signed in | Group trees |
 | `/app/users/{groupDn}` | A member or manager of the group, or `ADMIN` | Group members |
 | `POST /app/group/report` | A/M who manages the group (`ADMIN`: any) | Group report (`groupDn`, `fromDate`, `toDate` as `yyyy-MM-dd` days in the application's zone, at most `APPLICATION_REPORTS_MAXRANGEDAYS` (366) days; `400` otherwise) |
-| `POST /app/export/group-report` | A/M who manages the group (`ADMIN`: any) | The group report as a file (`groupDn`, `fromDate`, `toDate`, `format` `csv` or `xlsx`, `zones` `person`, the default, or `mine` for the viewer's zone). See [Reports, exports and time zones](exports.md) |
-| `POST /app/export/people` | Signed in | A people list as a file (`search` or `group`, `format`) |
+| `POST /app/export/group-report` | A/M who manages the group (`ADMIN`: any) | The group report as a file (`groupDn`, `fromDate`, `toDate`, `format` `csv` or `xlsx`, `zones` `person`, the default, or `mine` for the viewer's zone). `503` (`directory_unavailable`) when the group's members could not be read. See [Reports, exports and time zones](exports.md) |
+| `POST /app/export/people` | Signed in | A people list as a file (`search` or `group`, `format`), with each person's status on the session's System Date, else today, and named after that day |
 | `/app/reports/schedules` | A/M | Scheduled reports. `POST` creates one; `POST .../{id}/send` sends now; `POST .../{id}/enable` turns a schedule that was turned off back on; `POST .../{id}/delete` deletes |
-| `/app/admin/integrations` | ADMIN | API tokens and webhooks. `POST .../tokens`, `.../tokens/{id}/revoke`, `.../webhooks`, `.../webhooks/{id}/disable`, `/enable`, `/delete`, `/ping` |
+| `/app/admin/integrations` | ADMIN | API tokens and webhooks. `POST .../tokens`, `.../tokens/{id}/revoke`, `.../webhooks`, `.../webhooks/{id}/disable`, `/enable`, `/delete`, `/ping`, `/rotate` (a new signing secret, shown once) |
 | `/app/user/search` | Signed in | User search |
 | `/app/user/details/{dn}` | Signed in | A person's details. Times, notes, the audit log and the calendar only for the person themselves, `ADMIN` and the people responsible for them (see [Security](security.md#authorization)); anyone else sees presence and directory fields. |
-| `POST /app/user/details` | ADMIN | Change a role (`dn`, `role`) |
+| `POST /app/user/details` | ADMIN | Change a role (`dn`, `role`). `ADMIN` only to keep it for someone whose stored role it is (`400` `admin_not_grantable` otherwise); taking it from the last administrator is refused with a message on the page |
 | `/app/user/reports` | Signed in | My Reports |
 | `/app/orgchart` | Signed in | Org chart |
 | `/app/orgchart/details/{orgName}` | Signed in | Members of one organization. Not linked from the current UI. |
@@ -348,14 +357,14 @@ A manager, delegate or administrator can record any of them for someone else, at
 | `/app/approvals` | Signed in (`calendar` feature) | Approvals: requests waiting for the caller, the request form, the caller's requests. `POST /app/approvals/request`, `/app/approvals/{id}/approve`, `/reject`, `/cancel` do the same as the API |
 | `/app/privacy`, `GET /app/privacy/export` | Signed in, any license state | My data, and the caller's own data as JSON (`readyroom-personal-data/1`) |
 | `/app/admin/delegates` | ADMIN | Delegates review. `POST /app/admin/delegates/keep` and `/clear` keep or remove a person's delegates |
-| `/app/admin/privacy?dn=` | ADMIN, any license state | Retention status, and a person's data inventory. `GET /app/admin/privacy/export?dn=` downloads it; `POST /app/admin/privacy/erase` erases it (one-time token and typed name) |
+| `/app/admin/privacy?dn=` | ADMIN, any license state | Retention status, the administrators, and a person's data inventory. `GET /app/admin/privacy/export?dn=` downloads it; `POST /app/admin/privacy/erase` erases it (one-time token and typed name) |
 | `/app/notifications/id/{id}` | The recipient, or `ADMIN` | One notification |
-| `POST /app/notifications/update` | Recipient only | Respond to a notification (`notificationId`, `response`) |
-| `/app/settings` | A/M | Settings |
-| `POST /app/settings/orgparserules` | A/M | Save a parse rule (`id`, `orgName`, `orgParseRegex`) |
-| `POST /app/settings/orgparserules/delete/{id}` | A/M | Delete a parse rule |
-| `POST /app/settings/cache/groups/evict` | A/M | Evict a cached group (`dn`) |
-| `POST /app/settings/cache/groups/evictall` | A/M | Evict every cached group |
+| `POST /app/notifications/update` | Recipient only | Respond to a notification (`notificationId`, `response`: `UNSCHEDULED_LEAVE`, `ABSENT_EXCUSED`, `ABSENT_UNEXCUSED` or `ABSENT`). Another response is `400`, an alert that does not exist `404` |
+| `/app/settings` | ADMIN | Settings. `?checkGroups=true` runs the stored group DNs check |
+| `POST /app/settings/orgparserules` | ADMIN | Save a parse rule (`id`, `orgName`, `orgParseRegex`) |
+| `POST /app/settings/orgparserules/delete/{id}` | ADMIN | Delete a parse rule |
+| `POST /app/settings/cache/groups/evict` | ADMIN | Evict a cached group (`dn`), on every replica |
+| `POST /app/settings/cache/groups/evictall` | ADMIN | Evict every cached group, on every replica |
 | `/actuator/health` (and its groups `/liveness` and `/readiness`) | Open | Spring Boot Actuator health, status only; details for `ADMIN`. Any other Actuator endpoint you expose on the application's port needs `ADMIN`. With `MANAGEMENT_SERVER_PORT` set, the actuator is on that port instead |
 | `/actuator/prometheus` | Open, management port only | Prometheus metrics; exposed only when `MANAGEMENT_SERVER_PORT` is set |
 | `GET`, `POST /consent` | Open | The notice-and-consent banner and its **I agree**, when `ENS_CONSENT_BANNER_ENABLED` is on |
