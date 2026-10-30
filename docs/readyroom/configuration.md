@@ -109,7 +109,7 @@ you pass them with `-D`:
 | `application.user-ldap-manager-id-attribute` | `title` | `title` | On a **user**: the id of the person they report to. |
 | `application.manager-ldap-id-attribute` | `street` | `Email` | On a **manager**: their own id. A user reports to the manager whose value here equals the user's `user-ldap-manager-id-attribute`. |
 | `application.user-ldap-duty-sub-organization-attribute` | `departmentNumber` | `dutySubOrganization` | The flat attribute the org chart is built from (for example `RYS34B`). |
-| `application.duty-sub-org-filter` | `(departmentNumber=*)` | blank | Extra filter ANDed into the org-chart scan. |
+| `application.duty-sub-org-filter` | `(departmentNumber=*)` | blank | The only filter on the org-chart scans: the organizations and their directory members are the entries with the duty sub-organization attribute that match it (the user LDAP filter does not apply). |
 | `application.duty-sub-org-groups-base-dn` | `ou=Groups,dc=winllc,dc=com` | blank | Bound to the configuration, but not read by any code in the current version. |
 | `application.organization-name` | – | `TOP` | Name of the root node of the org chart. |
 | `application.lookup-on-dn-attribute` | – | `false` | When `true`, a user is looked up by searching `user-base-dn` for `user-dn-attribute=<DN>` instead of reading the DN directly. Use it when certificate subjects are not directory DNs. |

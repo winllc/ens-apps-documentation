@@ -221,10 +221,16 @@ your organization's coworker visibility setting:
 - *none*: only admins and managers see the counts, with these people as **Checked in** or **Not
   in**; everyone else sees headcounts without presence.
 
-*Accounted for* is everyone but *No record* and *Not in*. The people counted are those the
-directory lists under the organization, with the same filter the **Users** page uses.
+*Accounted for* is everyone but *No record* and *Not in*.
 
-Filter by name, expand or collapse the tree, and click an organization to list its members, with the
+Who belongs to which organization: someone with a check-in record that day carrying a duty
+sub-organization is counted under the value on their latest such record, wherever the directory lists
+them, so a person working in another organization that day counts there and someone who moved during the
+day counts under the later one. Everyone else is counted where the directory lists them (every entry
+with the attribute, narrowed only by the duty sub-org filter). Nobody is counted twice, and someone whose
+record names an organization that is not on the chart is not counted.
+
+Filter by name, expand or collapse the tree, and click an organization to list the people counted in it, with the
 usual **Advanced** switch. As in **Users**, coworkers whose details you may not see show their status
 only. Click a member to open their details.
 
