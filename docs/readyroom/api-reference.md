@@ -128,7 +128,7 @@ Any other `action` gets `400` (`invalid_action`).
 
 | Field | Used for |
 |---|---|
-| `sessionId` | **`out` only.** The `sessionId` from the answer to this logon's `in`. An `out` without a sign-in is recorded under the DN of that check-in, provided no logout has used the id yet and the check-in is younger than `application.logoff.session-max-age-hours` (168, 7 days). `in`, `lock` and `unlock` ignore it. |
+| `sessionId` | **`out` only.** The `sessionId` from the answer to the check-in being closed: the logon's `in`, or an `unlock` recorded as the day's check-in. An `out` without a sign-in is recorded under the DN of that check-in, provided no logout has used the id yet and the check-in is younger than `application.logoff.session-max-age-hours` (168, 7 days). `in`, `lock` and `unlock` ignore it. |
 | `windowsUserId` | Stored with the record for information. With Kerberos sign-in it is replaced by the account name from the verified ticket. |
 
 **How the DN is chosen:** `in`, `lock`, `unlock` and a signed-in `out` are recorded under the
@@ -140,7 +140,9 @@ names. No record is ever stored without a DN.
 On a signed-in call, the user's organization, employee type, location, branch and duty
 sub-organization are copied onto the record.
 
-**Response:** the stored record. Only the answer to `in` carries `sessionId`:
+**Response:** the stored record. Only the answer to an event stored as a check-in carries
+`sessionId`: an `in`, or an `unlock` recorded as the day's check-in because the person has none
+yet that day (its `action` is then `CHECK_IN`):
 
 ```json
 {
@@ -153,7 +155,8 @@ sub-organization are copied onto the record.
 }
 ```
 
-The Windows client saves `sessionId` from the `in` response and sends it back on `out`. No other
+The Windows client saves `sessionId` from such a response and sends it back on `out`; an answer
+without one leaves its saved `sessionId` as it is. No other
 response or page shows it.
 
 **Errors** are JSON, `{"error": "...", "message": "..."}`, except the `403`:

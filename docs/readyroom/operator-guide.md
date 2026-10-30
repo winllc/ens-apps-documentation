@@ -225,14 +225,19 @@ background after `cache-duration-refresh-minutes` and discarded after
     ```
 
     To restore, `./restore.sh` stops ReadyRoom, replaces the database (and, if given, the license
-    volume) with the backup's in one transaction, and starts it again:
+    volume) with the backup's, and starts it again:
 
     ```bash
     ./restore.sh backups/readyroom-db-20261017T021700Z.dump [backups/readyroom-license-20261017T021700Z.tar.gz]
     ```
 
     Everything recorded since that backup is lost. Restore into the same or a newer release, never an
-    older one: on start, Flyway brings an older backup's schema up to date.
+    older one: on start, Flyway brings an older backup's schema up to date. The script replaces the
+    whole `public` schema, not only what the dump holds, so no table a newer release created survives
+    to stop Flyway at startup with "relation already exists". It replays the dump as the database's
+    owner in one transaction, committed only once the whole dump was read and every statement
+    succeeded: a failed or truncated restore leaves the database unchanged, and the script stops with
+    ReadyRoom stopped (`./compose.sh up -d` starts it again).
 
     Also keep `.env`, `license/`, `tls/` and `kerberos/`.
 
@@ -252,7 +257,10 @@ background after `cache-duration-refresh-minutes` and discarded after
     | `backup.persistence.*` | `10Gi`, ReadWriteOnce | The PVC the dumps go to, or `existingClaim` |
 
     To back up now: `kubectl -n readyroom create job --from=cronjob/readyroom-backup readyroom-backup-now`.
-    The chart's `README.md` gives the restore steps. The dumps include the license and the
+    The chart's `README.md` gives the restore steps. Like `restore.sh`, they replace the whole
+    `public` schema in one transaction, as the account that owns ReadyRoom's tables and the database
+    (`database.username`, or `database.migration.username` with a migration account), and on any
+    error leave the database unchanged. The dumps include the license and the
     installation id, which are in the database (`ens_license_*`); the license PVC is only read on
     the first start of the release that moved them there. Copy the dumps off the cluster as well.
     Also keep your values file and the Secrets it names.
@@ -392,7 +400,7 @@ stored, and audited as a failed `auth.login` with the reason *unknown session*. 
    the startup log lines look right, Home loads, and a test check-in arrives.
 5. Re-run `Install-InOutWorker.ps1` from the new release's `windows-client/` folder on every
    workstation. Without arguments it keeps the existing `inoutworker.config.json`, installs the new
-   script, re-registers the five tasks, and corrects the folder permissions an older client left on
+   script, re-registers the six tasks, and corrects the folder permissions an older client left on
    `%ProgramData%\InOutWorker`.
 
 ### Upgrading to the approvals and retention release

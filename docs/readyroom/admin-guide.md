@@ -217,8 +217,9 @@ their details page. The page lists how many records of each kind ReadyRoom holds
 - **Download their data** gives the same JSON file the person gets from **My data**. Each download
   is audited as `data.exported` with `requestedBy` set to you.
 - **Erase personal data** deletes, in one transaction, their user record, group access,
-  check-ins, calendar statuses, status requests, absence alerts about them or sent to them, and
-  monthly summaries, and takes them off other people's delegates and groups' alternate managers.
+  check-ins, calendar statuses, status requests, absence alerts about them, and monthly
+  summaries, and takes them off other people's delegates and groups' alternate managers. Absence
+  alerts sent to them about other people are kept, with their name replaced by `(erased)`.
   Type the person's name to confirm; the browser asks once more. The form is good for 10 minutes
   and for that person only. Nobody can erase themselves. The erasure is audited as
   `person.erased`, with the counts and whether the person is still in the directory.

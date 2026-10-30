@@ -1,6 +1,6 @@
 # Windows client
 
-The ReadyRoom workstation agent is a single PowerShell script, `Update-WorkStatus.ps1`, run by five
+The ReadyRoom workstation agent is a single PowerShell script, `Update-WorkStatus.ps1`, run by six
 Windows Task Scheduler tasks. Each task reports one session event to the server. There is no
 service, tray application or user interface, so people have nothing to open or click.
 
@@ -11,7 +11,7 @@ All client files are in the release package's `windows-client/` folder:
 | `Update-WorkStatus.ps1` | The agent. A single entry point selected with `-Action login|lock|unlock|logout`. |
 | `Install-InOutWorker.ps1` | Installer and uninstaller. Copies the script, prepares the data folders and registers the tasks. |
 | `inoutworker.config.sample.json` | Sample configuration file. |
-| `tasks/InOutWork-Login.xml`, `-Lock.xml`, `-Unlock.xml`, `-Logout.xml`, `-Disconnect.xml` | Task Scheduler definitions (UTF-16 XML). |
+| `tasks/InOutWork-Login.xml`, `-Lock.xml`, `-Unlock.xml`, `-Logout.xml`, `-Disconnect.xml`, `-Reconnect.xml` | Task Scheduler definitions (UTF-16 XML). |
 
 
 ## How it works
@@ -22,10 +22,16 @@ All client files are in the release package's `windows-client/` folder:
 | Lock | `lock` | Session lock | `POST /api/check/lock` | certificate or Windows | the user |
 | Unlock | `unlock` | Session unlock | `POST /api/check/unlock` | certificate or Windows | the user |
 | Logout | `logout` | Security event **4647** (user-initiated logoff) | `POST /api/check/out` | none (session id) | `LocalSystem` (S-1-5-18) |
-| Disconnect | `logout` | **Remote disconnect** of a remote desktop session | `POST /api/check/out` | none (session id) | the user |
+| Disconnect | `lock` | **Remote disconnect** of a Remote Desktop or VDI session | `POST /api/check/lock` | certificate or Windows | the user |
+| Reconnect | `unlock` | **Remote connect** to a disconnected Remote Desktop or VDI session | `POST /api/check/unlock` | certificate or Windows | the user |
 
-The four user tasks run as `BUILTIN\Users` (S-1-5-32-545) at *LeastPrivilege*, so they fire for
-whichever user triggered them, in that user's own session, without elevation. All five tasks are
+A disconnected remote session is treated like a locked screen: the user is still logged on and may
+reconnect, so the Disconnect task reports a lock and the Reconnect task an unlock. Only the real
+logoff (the Logout task) reports a check-out. A session left disconnected is checked out by the
+automatic check-out, as a locked screen is.
+
+The five user tasks run as `BUILTIN\Users` (S-1-5-32-545) at *LeastPrivilege*, so they fire for
+whichever user triggered them, in that user's own session, without elevation. All six tasks are
 hidden, keep running when a laptop switches to battery, and are stopped after 5 minutes. The user
 tasks ignore a new start while one is already running. The Logout task queues them instead, because
 several users can log off a shared PC at once and each needs a run.
@@ -46,7 +52,7 @@ flowchart TD
     G -- ok --> K
     H -- ok --> K{Action}
     J -- ok --> K
-    K -- login --> L[Save sessionId to<br/>the user's session file]
+    K -- "login / unlock,<br/>answer has a sessionId" --> L[Save sessionId to<br/>the user's session file]
 ```
 
 ### Why logout is different
@@ -54,33 +60,38 @@ flowchart TD
 At logoff the user's profile, and with it the `CurrentUser\My` certificate store, has already been
 unloaded, so the logoff task cannot authenticate. ReadyRoom handles this as follows:
 
-1. At **login**, the server's response includes a server-generated `sessionId`. The agent saves it,
+1. Whenever the server records an event as the day's **check-in**, its response includes a
+   server-generated `sessionId`: at **login**, and at an **unlock** (or a remote reconnect) that the
+   server records as the check-in because the person has none yet that day. The agent saves it,
    with the Windows user name and the user's SID, to
    `%ProgramData%\InOutWorker\sessions\<SID>.json`. Only that user, SYSTEM and Administrators can
-   read the file. The `sessionId` is never written to a log.
+   read the file. The `sessionId` is never written to a log. A login whose response carries no
+   `sessionId`, and any other unlock, leave the cached file as it is, and the SYSTEM run never
+   writes it. So a workstation kept logged on for days or weeks and only locked overnight gets a
+   fresh `sessionId` with each day's first unlock, and its eventual logoff still has a usable one.
 2. At **logoff**, the Logout task runs as SYSTEM and gets the user's SID from event 4647. It reads
    that user's file only if `sessions\` is owned by SYSTEM or Administrators, no part of the path is
    a junction or symbolic link, the file is owned by the user (or SYSTEM or Administrators), and the
    file was written for that SID. It then posts `{sessionId, windowsUserId}` to the unauthenticated
    `/api/check/out`.
-3. On a **remote disconnect**, the user is still logged on, so the Disconnect task does the same as
-   the user, with their own file.
 
-The file is never deleted: the next login overwrites it.
+A remote disconnect is not a logoff: it is reported as a lock, so it does not use up the
+`sessionId`. The file is never deleted: the next check-in overwrites it.
 
-The server accepts a `sessionId` once, for the logon that received it, and only within 7 days of
+The server accepts a `sessionId` once, for the check-in that received it, and only within 7 days of
 that check-in (`application.logoff.session-max-age-hours`). It records the check-out under that
 check-in's DN. If there is no session file (for example, the login post failed), or its id is
-unknown, already used (for example by a remote disconnect earlier in the same logon) or older than
-that, the server refuses the logout with `401` and stores nothing. The user is checked out
-automatically later (see [Operations](operator-guide.md#scheduled-jobs)), but only if their last
-event was a screen lock.
+unknown, already used or older than that, the server refuses the logout with `401` and stores
+nothing. The user is checked out automatically later (see
+[Operations](operator-guide.md#scheduled-jobs)), but only if their last event was a screen lock
+or a remote disconnect.
 
 ### Server-side handling
 
 - An **unlock** is stored as a `CHECK_IN` when the person has no check-in yet that day, whatever
   else came before it (a lock just after midnight, or the automatic check-out of last night's
   lock). This covers people who leave the workstation locked overnight instead of logging off.
+  The answer to such an unlock carries a new `sessionId`, as a login's does.
 - The request body binds exactly two fields: `sessionId` and `windowsUserId`. With certificate
   sign-in, the user's identity comes from the certificate. With Windows sign-in, it comes from the
   verified Kerberos ticket. A signed-in call is recorded under the signed-in user, whatever the body
@@ -123,7 +134,7 @@ What the installer does:
     settings to the installer instead.
 
 4. Registers every `tasks\*.xml` under the `\InOutWork\` task folder: **Login**, **Lock**,
-   **Unlock**, **Logout** and **Disconnect**. The task name comes from the `<URI>` in each XML, and
+   **Unlock**, **Logout**, **Disconnect** and **Reconnect**. The task name comes from the `<URI>` in each XML, and
    the script path in each task is rewritten to the actual install folder. Existing tasks with the
    same name are replaced.
 
@@ -140,7 +151,7 @@ an older client left behind.
 | `-Authentication` | – | `Certificate`, `Windows` or `Auto`. Written to the config file. |
 | `-CertificateThumbprint` | – | Written to the config file. |
 | `-SkipCertificateCheck` | off | Written to the config file. Only for lab servers with self-signed certificates. |
-| `-Uninstall` | – | Unregisters the five tasks, deletes the install folder, and deletes the session files and `sessions\`. The logs are left in place, in `%ProgramData%\InOutWorker\logs` and in `%LOCALAPPDATA%\InOutWorker\logs` in each user's profile. |
+| `-Uninstall` | – | Unregisters the six tasks, deletes the install folder, and deletes the session files and `sessions\`. The logs are left in place, in `%ProgramData%\InOutWorker\logs` and in `%LOCALAPPDATA%\InOutWorker\logs` in each user's profile. |
 | `-WhatIf` | – | Shows what would happen without changing anything. |
 
 !!! note "Mass deployment"
@@ -220,9 +231,9 @@ thumbprint, then by subject text, then the certificate with the most recent *Not
 |---|---|
 | `C:\Program Files\InOutWorker\Update-WorkStatus.ps1` | The agent. |
 | `C:\Program Files\InOutWorker\inoutworker.config.json` | Configuration, if the installer wrote one. |
-| `%ProgramData%\InOutWorker\sessions\<SID>.json` | `sessionId`, `windowsUserId`, `userSid` and `savedAtUtc` from the user's last login. Readable only by that user, SYSTEM and Administrators. Overwritten by the next login, never deleted by a logout. |
+| `%ProgramData%\InOutWorker\sessions\<SID>.json` | `sessionId`, `windowsUserId`, `userSid` and `savedAtUtc` from the user's last check-in (a login, or an unlock the server recorded as the day's check-in). Readable only by that user, SYSTEM and Administrators. Overwritten by the next check-in, never deleted by a logout. |
 | `%ProgramData%\InOutWorker\logs\inoutworker-yyyyMMdd.log` | The SYSTEM runs' log (the Logout task): one file per day. |
-| `%LOCALAPPDATA%\InOutWorker\logs\inoutworker-yyyyMMdd.log` | The user's own runs' log (Login, Lock, Unlock and Disconnect), in their profile: one file per day. |
+| `%LOCALAPPDATA%\InOutWorker\logs\inoutworker-yyyyMMdd.log` | The user's own runs' log (Login, Lock, Unlock, Disconnect and Reconnect), in their profile: one file per day. |
 
 Lines in both logs look like `[yyyy-MM-dd HH:mm:ss][LEVEL][action] message`. Task Scheduler cannot
 show console output, so everything is also written there. The logs never contain the `sessionId`
@@ -255,7 +266,7 @@ Get-ScheduledTask -TaskPath "\InOutWork\" | Get-ScheduledTaskInfo
 # Run a task on demand
 Start-ScheduledTask -TaskPath "\InOutWork\" -TaskName "InOutWork - Login"
 
-# Today's log of the user's own runs (login, lock, unlock, disconnect)
+# Today's log of the user's own runs (login, lock, unlock, disconnect, reconnect)
 Get-Content "$env:LOCALAPPDATA\InOutWorker\logs\inoutworker-$(Get-Date -Format yyyyMMdd).log" -Tail 50
 
 # Today's log of the SYSTEM logoff runs (from an elevated prompt)
@@ -276,7 +287,7 @@ ended. To test a logout, log off, or run the script as the user with `-Action lo
 | `The server redirected instead of accepting Windows sign-in (is application.windows-auth enabled on the server?)` | Windows sign-in is off on the server. Enable it, or set `Authentication` to `Certificate`. |
 | `BaseUrl uses an IP address; Windows sign-in needs the server's host name.` | Use the host name registered as the SPN in `BaseUrl`. |
 | `Logout has no sessionId; the server cannot resolve the DN from it.` | The login post did not complete, so there is no session file. Investigate why the login failed. The server refuses the logout with `401`. |
-| `POST to .../out with Anonymous sign-in failed (HTTP 401) [unknown_session] ...` | The session id is unknown, already used (for example by a remote disconnect earlier in the same logon) or older than 7 days. Nothing is recorded; the user is checked out automatically if their last event was a lock. |
+| `POST to .../out with Anonymous sign-in failed (HTTP 401) [unknown_session] ...` | The session id is unknown, already used or older than 7 days. Nothing is recorded; the user is checked out automatically if their last event was a lock. |
 | `POST to .../out with Anonymous sign-in failed (HTTP 429) [rate_limited] ...` | The server has refused more than `application.logoff.refused-per-minute` logouts with an unusable session id from this address in the last minute. See [Troubleshooting](troubleshooting.md#check-ins-not-arriving). |
 | `... does not exist; re-run Install-InOutWorker.ps1. ...` or `... is missing, a link, or not owned by SYSTEM or Administrators; not reading it. Re-run Install-InOutWorker.ps1.` | `sessions\` is missing or not as the installer left it. Re-run the installer. |
 | `Session file ... is a link or not owned by <SID>; ignoring it.` | The file was replaced by a link, or another account created it. Delete it as an administrator; the user's next login writes a new one. |

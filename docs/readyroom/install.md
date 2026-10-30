@@ -1051,8 +1051,9 @@ The installer:
    SYSTEM and Administrators only;
 2. prepares `%ProgramData%\InOutWorker` with its `logs\` and `sessions\` folders, writable by SYSTEM
    and Administrators only, except that each user may add and rewrite their own session file;
-3. registers five hidden tasks under `\InOutWork\`: **Login**, **Lock**, **Unlock**, **Logout** and
-   **Disconnect**.
+3. registers six hidden tasks under `\InOutWork\`: **Login**, **Lock**, **Unlock**, **Logout**,
+   **Disconnect** and **Reconnect** (a remote session's disconnect and reconnect, reported as a
+   lock and an unlock).
 
 Re-run it on every workstation after each upgrade: without arguments it keeps the configuration,
 and it corrects the permissions an older client left on `%ProgramData%\InOutWorker`.
@@ -1092,7 +1093,7 @@ For mass deployment, configuration files, parameters and what each task does, se
 - [ ] **Groups** lists the trees under each configured group base DN.
 - [ ] On a workstation, `& 'C:\Program Files\InOutWorker\Update-WorkStatus.ps1' -Action login -WhatIf`
       reports the URL and the sign-in method it would use.
-- [ ] `Get-ScheduledTask -TaskPath "\InOutWork\"` lists five tasks.
+- [ ] `Get-ScheduledTask -TaskPath "\InOutWork\"` lists six tasks.
 - [ ] After a real logon, `%LOCALAPPDATA%\InOutWorker\logs\inoutworker-<yyyyMMdd>.log` in the
       user's profile contains `Server accepted 'login'`, and the user's status on **Home** is `IN`.
 - [ ] After a logoff, `%ProgramData%\InOutWorker\logs\inoutworker-<yyyyMMdd>.log` contains

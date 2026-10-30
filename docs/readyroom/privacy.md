@@ -100,11 +100,20 @@ themselves. In one transaction it deletes the person's:
 
 - user record and group access;
 - check-ins, calendar statuses and status requests;
-- absence alerts about them or sent to them;
+- absence alerts about them;
 - monthly summaries;
 
-and removes them from other people's delegates and from groups' alternate managers. The erasure is
-audited as `person.erased`, with the counts and whether the person is still in the directory.
+and removes them from other people's delegates and from groups' alternate managers.
+
+Absence alerts sent to them, as a manager or delegate, are about other people: the date, the
+expected time and the answer are that report's attendance record, in the report's own export and
+in My Reports. So they are kept, with the person's DN replaced by `(erased)` as the recipient and,
+on every copy of an alert they answered (an answer is copied to every manager and delegate told),
+as the one who answered.
+
+The erasure is audited as `person.erased`, with the counts (`absenceAlerts` removed, and
+`absenceAlertsKeptAnonymised` for the alerts sent to them that were kept) and whether the person is
+still in the directory.
 Erasure works in every license state, including read-only.
 
 ### What erasure does not remove
@@ -113,8 +122,8 @@ Erasure works in every license state, including read-only.
   events name people by DN. Profile note changes are recorded without their text since the release
   that added status approvals; events from earlier releases still hold the old and new note text
   until audit retention removes them.
-- **The person's DN in other people's records**, where they decided a request or answered an
-  alert.
+- **The person's DN in other people's records**, where they decided a request or, as an
+  administrator, answered an alert sent to someone else.
 - **Backups**, until they expire.
 - **Logs, SIEM copies and sent email.**
 - **Workstation files**: the client's session file and logs.
