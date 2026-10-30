@@ -253,20 +253,24 @@ license.
 
 ### 6. Upgrade
 
-Back up first, from the current release's directory, then unpack the new release next to it and run
-its `upgrade.sh`, naming the current directory. `upgrade.sh` does not back up for you.
+Unpack the new release next to the current one and run its `upgrade.sh`, naming the current
+directory.
 
 ```bash
-cd readyroom-1.2.3 && ./backup.sh && cd ..       # the database and the license volume, into backups/
-
 tar xzf readyroom-1.2.4.tar.gz
 cd readyroom-1.2.4
 ./upgrade.sh ../readyroom-1.2.3                  # add --engine podman for a Podman installation
 ```
 
-`upgrade.sh` copies `.env`, `license/`, `tls/` and `kerberos/` across without overwriting anything,
-loads the new images, lists any new settings in `env.template` that your `.env` does not mention,
-and recreates the containers. The volumes are kept, and ReadyRoom migrates its schema on start
+`upgrade.sh` first backs up with the running release's `backup.sh`, into that release's `backups/`
+(here `readyroom-1.2.3/backups/`): the database and the license volume, which a
+[rollback](availability-and-sizing.md#rolling-back-an-upgrade) needs. If the backup fails, for
+example because ReadyRoom is not running, it stops without changing anything; fix the cause and run
+it again. `--no-backup` skips the backup, with a warning; take one yourself first.
+
+Then `upgrade.sh` copies `.env`, `license/`, `tls/` and `kerberos/` across without overwriting
+anything, loads the new images, lists any new settings in `env.template` that your `.env` does not
+mention, and recreates the containers. The volumes are kept, and ReadyRoom migrates its schema on start
 (Flyway). Run ReadyRoom from the new directory from then on.
 
 If `.env` has `SSL_ENABLED=true`, `COMPOSE_FILE` must include `docker-compose.tls.yml` and

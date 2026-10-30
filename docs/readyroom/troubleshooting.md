@@ -79,11 +79,11 @@ Work through these in order:
 
 | Symptom on the server | Cause and fix |
 |---|---|
-| Status stays `AWAY` all evening | No logoff event arrived: the PC was shut down, or the session ended without event 4647 (the Logout task) or a remote disconnect (the Disconnect task). The auto check-out job checks the person out once the lock is older than `check-out-after-minutes`. |
+| Status stays `AWAY` all evening | No logoff event arrived: the PC was shut down, or the session ended without event 4647 (the Logout task) or a remote disconnect (the Disconnect task). The auto check-out job checks the person out once the lock is older than `check-out-after-minutes`; a lock left in the evening (after about 20:00 with the default 240 minutes) is checked out after midnight. Earlier releases left such a lock `AWAY` for good. |
 | People show `OUT` minutes after locking | `check-out-after-minutes` is too low. The default is `240`; check `APPLICATION_CHECKOUTAFTERMINUTES` (Helm: `checkOutAfterMinutes`). |
 | Logouts missing, and the audit log has failed `auth.login` events with the reason *unknown session* | Logouts without a usable `sessionId` are refused and not stored. Look at the workstation logs for why the login failed or the session file is missing. |
 | Logouts get `429` (`rate_limited`), and the log shows `... sent more than N logoffs with an unusable session id this minute; refusing them with 429` | More than `application.logoff.refused-per-minute` (30) logouts with a stale or missing session id came from one address within a minute. They would have been refused anyway: a logout with a usable `sessionId` is never limited. Fix the workstations sending them. |
-| `IN` although the user only unlocked | Expected: the first unlock of the day is stored as `CHECK_IN`. |
+| `IN` although the user only unlocked | Expected: an unlock is stored as `CHECK_IN` when the user has no check-in yet that day. |
 
 ## Windows sign-in
 
@@ -107,7 +107,7 @@ On the client, `The server redirected instead of accepting Windows sign-in` mean
 | Symptom | Cause and fix |
 |---|---|
 | No alerts at all | Look for `End SendAbsentNotificationsCron` in the log. On weekends and holidays the job does nothing. With the built-in defaults, the first run is 30 minutes after startup. |
-| A late person was not alerted | They have no expected time (no preferred login time, no check-in history in 30 days and no late arrival), they have an excusable status, they were already alerted today, or they have no `user_records` row yet (the directory refresh creates one). |
+| A late person was not alerted | They have no expected time (no preferred login time, no check-in history in 30 days and no late arrival), they have an excusable status or one a manager recorded (*Absent*, *Absent Unexcused*, *Unscheduled Leave*), they were already alerted today, or they have no `user_records` row yet (the directory refresh creates one). Nobody is alerted about someone whose directory entry is gone or whose account is disabled or expired (`No absence alert about ...`), or who has no directory manager and no delegate (`no directory manager or delegate for ...` at `WARN`). |
 | Alert created but no email | `Failed to send notification to ...` (SMTP), `Manager does not have an email address`, or `Invalid email address` in the log. |
 | The wrong people are alerted | Recipients are the directory manager (`user-ldap-manager-id-attribute` / `manager-ldap-id-attribute`) plus the person's delegates, which administrators set. Group managers are **not** alerted. |
 | Someone with a pending leave request was alerted | Expected: a request excuses nothing until it is approved. |

@@ -167,6 +167,8 @@ reusing numbers your SIEM may already have from the lost period:
 
 Migrations are not undone, and `restore.sh` restores only into the same or a newer release. A
 rollback therefore needs the backup taken before the upgrade, restored by the **older** release.
+With the release package, `upgrade.sh` takes that backup with the older release's `backup.sh`, into
+its `backups/` directory, unless it was run with `--no-backup`.
 
 === "Release package"
 

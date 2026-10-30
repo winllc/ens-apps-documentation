@@ -78,8 +78,9 @@ event was a screen lock.
 
 ### Server-side handling
 
-- The **first unlock of the day** is stored as a `CHECK_IN`. This covers people who leave the
-  workstation locked overnight instead of logging off.
+- An **unlock** is stored as a `CHECK_IN` when the person has no check-in yet that day, whatever
+  else came before it (a lock just after midnight, or the automatic check-out of last night's
+  lock). This covers people who leave the workstation locked overnight instead of logging off.
 - The request body binds exactly two fields: `sessionId` and `windowsUserId`. With certificate
   sign-in, the user's identity comes from the certificate. With Windows sign-in, it comes from the
   verified Kerberos ticket. A signed-in call is recorded under the signed-in user, whatever the body

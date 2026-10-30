@@ -138,16 +138,27 @@ calendar), for every user record, a notification is raised when **all** of these
 - an expected time is known: today's *Late Arrival* time, else their preferred **Login Time**, else
   their average arrival;
 - the current time is past that expected time plus
-  `application.extra-time-before-absent-notification-minutes` (default 60);
-- they have no excusable status today (*Out of Office*, *Work From Home*, *TDY*, *Scheduled Leave*
-  or *Absent Excused*). A requested status counts only once it is approved.
+  `application.extra-time-before-absent-notification-minutes` (default 60). When that falls after
+  midnight, the alert is due at the latest two job intervals before midnight: 23:00 with the
+  built-in 30-minute interval, 23:50 with the packaged 5 minutes;
+- the day is not already accounted for: they have no excusable status today (*Out of Office*,
+  *Work From Home*, *TDY*, *Scheduled Leave* or *Absent Excused*), and no status that only a
+  manager, delegate or administrator records (*Absent*, *Absent Unexcused* or *Unscheduled
+  Leave*). A requested status counts only once it is approved;
+- they are still in the directory: nobody is alerted about a person whose entry is gone, or whose
+  account is disabled or expired (`No absence alert about <dn> today: <reason>` in the log). A
+  locked-out account is still alerted about.
 
 **Recipients** are the person's directory manager (found through the reporting-line attributes)
-and their delegates. Each recipient gets a notification record
-and, if their directory entry has a valid email address, an email from
+and their delegates, each once, and never the person themselves. Each recipient gets a
+notification record and, if their directory entry has a valid email address, an email from
 `application.notification-sender-email` linking to `application.application-base-url` +
 `/app/notifications/id/<id>`. A recipient who is not found in the directory, or has no email
-address, is logged as an error.
+address, is logged as an error. Someone with no directory manager and no delegate (or none found
+in the directory) cannot be alerted about: the log says `no directory manager or delegate for
+<dn>; no absence alert sent` at `WARN`, once a person a day, and each run tries again. The job's
+count of alerts sent (in its log line and its `job.completed` audit event) is the number of
+people alerted about.
 
 **Responses.** A recipient opens the alert and picks `UNSCHEDULED_LEAVE`, `ABSENT_EXCUSED`,
 `ABSENT_UNEXCUSED` or `ABSENT`. The response is copied to every recipient's copy of the alert and
