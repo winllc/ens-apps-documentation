@@ -24,7 +24,7 @@ remains the source of truth; ReadyRoom copies some of them, as listed.
 | `check_in_out_records` | Workstation event (logon, lock, unlock, logoff) | DN, time and action, and whether it was an automatic check-out; the Windows user id; the person's organization, employee type, location, branch and duty sub-organization at the time; the logoff session id (a credential, never exported) |
 | `user_event_records` | Day with a calendar status | DN, date, status, late-arrival time, and the request it came from |
 | `status_requests` | Request for a status that needs approval | Requester DN, status, dates, late-arrival time; the requester's note and the approver's comment (up to 500 characters each); state; who decided or cancelled it, and when |
-| `notification_records` | Absence alert, one per recipient | Who it is about, who it went to, date, expected arrival time, when it was read and e-mailed, and the answer with who gave it and when |
+| `notification_records` | Absence alert, one per recipient | Who it is about, who it went to, date, expected arrival time, when it was read and e-mailed, and the answer with who gave it and when (and the approved request that gave it, if one did) |
 | `attendance_summaries`, `attendance_summary_statuses` | Person and month, once retention has summarised it | Days checked in, minutes in, days per status |
 | `group_records` | Group with alternate managers set in ReadyRoom | The group DN and the managers' DNs |
 | `audit_events` | Audited action | Actor DN, name and roles, source IP address and browser, target DN and name, action, outcome and details, and a hash of the session id. See [Audit logging](../audit-logging.md) |

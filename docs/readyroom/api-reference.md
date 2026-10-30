@@ -264,10 +264,10 @@ managers: only administrators do.
 
 | Case | Result |
 |---|---|
-| The caller's own calendar, a status the person sets (`STANDARD`, `EARLY_LEAVE`, `LATE_ARRIVAL`), from today on | Set at once: `{"status","fromDate","toDate","outcome":"set"}` |
-| The caller's own calendar, `EARLY_LEAVE` or `LATE_ARRIVAL` over a range starting before today | One request for the whole range, e-mailed to the approvers as any other: `"outcome":"requested"`, with `requestId` and a `message`. Approval writes it, with its late-arrival time, on each day |
+| The caller's own calendar, a status the person sets (`STANDARD`, `EARLY_LEAVE`, `LATE_ARRIVAL`), from today on | Set at once: `{"status","fromDate","toDate","outcome":"set"}`. On a day an approved request of the caller covers, `409` `approved_request`, naming the request: cancel or change the request instead |
+| The caller's own calendar, `EARLY_LEAVE` or `LATE_ARRIVAL` over a range starting before today | One request for the whole range, e-mailed to the approvers as any other: `"outcome":"requested"`, with `requestId` and a `message`. Approval writes it, with its late-arrival time, on each day. `409` `overlapping_request` as below |
 | The caller's own calendar, `STANDARD` over a range starting before today | `400` `past_day`: a past day is the manager's to correct |
-| The caller's own calendar, a requested status (by default `OUT_OF_OFFICE`, `WORK_FROM_HOME`, `TDY`, `SCHEDULED_LEAVE`, `ABSENT_EXCUSED`) | A request is created: `"outcome":"requested"`, with `requestId` and a `message`. `note` (up to 500 characters) goes with it |
+| The caller's own calendar, a requested status (by default `OUT_OF_OFFICE`, `WORK_FROM_HOME`, `TDY`, `SCHEDULED_LEAVE`, `ABSENT_EXCUSED`) | A request is created: `"outcome":"requested"`, with `requestId` and a `message`. `note` (up to 500 characters) goes with it. Over a day a pending or approved request of the caller already covers, `409` `overlapping_request` |
 | The caller's own calendar, a status only managers record (`ABSENT`, `ABSENT_UNEXCUSED`, `UNSCHEDULED_LEAVE`) | `403` |
 | Someone else's calendar (`dn`) | Set at once, any status, if the caller is the person's directory manager, one of their delegates or `ADMIN`; otherwise `403` |
 
@@ -281,18 +281,24 @@ and with `late_arrival_too_long` over `application.events.late-arrival-max-days`
 on someone else's calendar is not limited. Earlier releases answered these with `500`, and
 returned the request body instead of the result.
 
+A request's `message` says who was asked: *your manager or delegate has been asked*, or, for someone
+with no directory manager and no delegate, *No manager or delegate is set for you in ReadyRoom: an
+administrator has been asked* (the administrators other than the caller are e-mailed). Refusals over
+existing requests are `409` with `{"error","message"}`: `approved_request` and
+`overlapping_request`.
+
 ### Status requests
 
 All need the `calendar` license feature. Who may do what is checked on every call.
 
 | Method and path | Access | Description |
 |---|---|---|
-| `POST /api/requests` | Signed in | Ask for a status on one's own days. Body: `status`, `fromDate`, `toDate` (the day after the last), optional `lateArrivalTime` and `note` (500 characters, shown to approvers). `201` with the request. Takes a requested status, or `LATE_ARRIVAL` or `EARLY_LEAVE` over a range starting before today; `400` `not_a_request_status` for anything else |
+| `POST /api/requests` | Signed in | Ask for a status on one's own days. Body: `status`, `fromDate`, `toDate` (the day after the last), optional `lateArrivalTime` and `note` (500 characters, shown to approvers). `201` with the request. Takes a requested status, or `LATE_ARRIVAL` or `EARLY_LEAVE` over a range starting before today; `400` `not_a_request_status` for anything else. `409` `overlapping_request` over a day a pending or approved request of the caller already covers. When the caller has no directory manager and no delegate, the request carries `notice` (*No manager or delegate is set for you in ReadyRoom: an administrator has been asked*) and the administrators other than the caller are e-mailed; otherwise there is no `notice` |
 | `GET /api/requests/mine` | Signed in | The caller's requests |
 | `GET /api/requests/pending` | Signed in | Pending requests the caller may decide |
 | `GET /api/requests/{id}` | The requester, whoever may decide it, `ADMIN` | One request |
-| `POST /api/requests/{id}/approve`, `/reject` | The requester's directory manager, a delegate or `ADMIN`; never the requester | Optional body `{"comment": "..."}`. `409` (`not_pending`) once decided |
-| `POST /api/requests/{id}/cancel` | The requester or `ADMIN` | A pending request, or an approved one until its last day has passed (`409` `not_cancellable` otherwise). Cancelling an approved one takes its days from today on off the calendar |
+| `POST /api/requests/{id}/approve`, `/reject` | The requester's directory manager, a delegate or `ADMIN`; never the requester | Optional body `{"comment": "..."}`. `409` (`not_pending`) once decided; approving, `409` `overlapping_request` while another approved request of the person covers one of its days. Approval answers the person's absence alerts on its days |
+| `POST /api/requests/{id}/cancel` | The requester or `ADMIN` | A pending request, or an approved one until its last day has passed (`409` `not_cancellable` otherwise). Cancelling an approved one takes its days from today on off the calendar; a freed day another approved request of the person still covers gets that request's status back |
 
 A request's `state` is `REQUESTED`, `APPROVED`, `REJECTED` or `CANCELLED`.
 
@@ -359,7 +365,7 @@ A manager, delegate or administrator can record any of them for someone else, at
 | `/app/admin/delegates` | ADMIN | Delegates review. `POST /app/admin/delegates/keep` and `/clear` keep or remove a person's delegates |
 | `/app/admin/privacy?dn=` | ADMIN, any license state | Retention status, the administrators, and a person's data inventory. `GET /app/admin/privacy/export?dn=` downloads it; `POST /app/admin/privacy/erase` erases it (one-time token and typed name) |
 | `/app/notifications/id/{id}` | The recipient, or `ADMIN` | One notification |
-| `POST /app/notifications/update` | Recipient only | Respond to a notification (`notificationId`, `response`: `UNSCHEDULED_LEAVE`, `ABSENT_EXCUSED`, `ABSENT_UNEXCUSED` or `ABSENT`). Another response is `400`, an alert that does not exist `404` |
+| `POST /app/notifications/update` | The recipient while they still decide for the person, or `ADMIN` | Respond to a notification (`notificationId`, `response`: `UNSCHEDULED_LEAVE`, `ABSENT_EXCUSED`, `ABSENT_UNEXCUSED` or `ABSENT`). Another response is `400`, an alert that does not exist `404`. An alert that cannot be answered now (`409`: an approved request covers its day, `approved_request`, administrators included; or it is more than `application.events.alert-answer-days` (14) days old and the caller is not `ADMIN`, `too_old`) redirects back to `/app/notifications/id/{id}` with the reason, nothing recorded |
 | `/app/settings` | ADMIN | Settings. `?checkGroups=true` runs the stored group DNs check |
 | `POST /app/settings/orgparserules` | ADMIN | Save a parse rule (`id`, `orgName`, `orgParseRegex`) |
 | `POST /app/settings/orgparserules/delete/{id}` | ADMIN | Delete a parse rule |
