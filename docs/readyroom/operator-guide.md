@@ -145,7 +145,9 @@ Useful messages:
 | Message | Meaning |
 |---|---|
 | `MarkInactiveCron checked out N inactive user(s) of M locked, in Xms` | The auto check-out job ran and checked people out. |
-| `End SendAbsentNotificationsCron. Checked N user(s), sent M notification(s) in Xms` | One run of the absence-alert job (logged on working days). |
+| `End SendAbsentNotificationsCron. Checked N user(s), sent M notification(s) in Xms` | One run of the absence-alert job (logged on working days). M counts the people alerted about, not people with nobody to alert. |
+| `no directory manager or delegate for <dn>; no absence alert sent` (`WARN`) | The person is late, but has no directory manager and no delegate, or none of them is found in the directory. Logged once a person a day; tried again at each run. Fix the reporting-line attributes or set a delegate. |
+| `No absence alert about <dn> today: <reason>` | The person's directory entry is gone, or their account is disabled or expired, so nobody is alerted about them. |
 | `Notification <id> about <dn> sent to <email>` | An absence email was sent. |
 | `Failed to send notification to <email>` | SMTP failure. A stack trace follows. |
 | `Manager does not have an email address: <dn>` / `Manager not found in LDAP: <dn>` | An alert recipient could not be emailed or found. |
@@ -158,7 +160,7 @@ Useful messages:
 | `Windows sign-in refused for <principal>: <reason>` | See [Troubleshooting](troubleshooting.md#windows-sign-in). |
 | `<address> sent more than N logoffs with an unusable session id this minute; refusing them with 429 (application.logoff.refused-per-minute)` (`WARN`) | One client address had more than `refused-per-minute` logouts refused within a minute. See [Troubleshooting](troubleshooting.md#check-ins-not-arriving). |
 | `Status requests: [...] need approval; [...] are set by the person; [...] only managers and administrators record` | Startup: the status classes in effect. |
-| `Statuses [...] excuse an absence but are not in application.events.request-statuses: ...` (`WARN`) | Startup: people can set those statuses without approval, and they stop absence alerts. |
+| `Statuses [...] stop or delay absence alerts but are not in application.events.request-statuses: people set them without approval` (`WARN`) | Startup: people can set those statuses without approval. Late Arrival is always named while people set it themselves: it delays their alert to the time they enter, within `application.events.late-arrival-latest-time` and `late-arrival-max-days`. |
 | `N people have delegates (alternate managers) chosen before administrators managed them; ...` | Startup: delegates waiting for review under **Administration → Delegates**. |
 | `Retention: check-in records, statuses, status requests and absence alerts older than N days are summarised by month and deleted (...)`, or `... are kept forever (...)` | Startup: the retention setting in effect. |
 | `Retention purge: before <date> (N days kept), N check-in record(s), ... deleted over N day(s); N monthly summary write(s), in Xms` | One run of the retention purge. |
@@ -174,7 +176,7 @@ run. Expired sessions are also deleted once a minute, on one replica.
 
 | Job (class) | Delay (packaged / built-in) | First run (packaged / built-in) | What it does |
 |---|---|---|---|
-| **Auto check-out** (`MarkInactiveCron`) | 60 s / 30 min (`inactive-cron.fixed-rate`) | 60 s / 30 min | For each user whose **latest event today is a screen lock** older than `check-out-after-minutes`, writes a `CHECK_OUT` timestamped at lock time + that many minutes, flagged `forced = true`. |
+| **Auto check-out** (`MarkInactiveCron`) | 60 s / 30 min (`inactive-cron.fixed-rate`) | 60 s / 30 min | For each user whose **latest event is a screen lock** older than `check-out-after-minutes`, writes a `CHECK_OUT` timestamped at lock time + that many minutes, flagged `forced = true`. It looks back two days beyond that limit, so a lock left in the evening is checked out after midnight and a lock left during an outage is caught up. |
 | **Absence alerts** (`SendAbsentNotificationsCron`) | 5 min / 30 min (`send-absent-notification-cron.fixed-rate`) | immediately / 30 min | On working days, raises at most one alert per person per day for users not in by their expected time plus the grace period. See [Administration](admin-guide.md#absence-notifications). |
 | **Directory refresh** (`RefreshUserRecordsCron`) | 1 h / 1 h (`refresh-user-records-cron.fixed-rate`) | 5 min / 5 min | Reads every user from the directory and creates or updates `user_records` (DN, email, phone, organization, employee type, location, branch, duty sub-organization) in batches of changed rows. Set `refresh-user-records-cron.enabled: false` to pause it. |
 | **Retention purge** (`RetentionService`) | `0 17 2 * * *`, 02:17 daily (`application.retention.cron`) | – | Only with `application.retention.events-days` above 0: summarises and deletes old check-ins, statuses, requests and absence alerts. See [Retention](#retention). |
@@ -368,15 +370,16 @@ stored, and audited as a failed `auth.login` with the reason *unknown session*. 
 ## Upgrades
 
 1. Read the release's changes and note any new configuration property.
-2. **Back up the database and the license volume**: `./backup.sh` (release package), or your
-   database's backups and a license PVC snapshot (Helm).
+2. **Back up the database and the license volume.** Release package: `upgrade.sh` does this first
+   (below). Helm: your database's backups and a license PVC snapshot.
 3. Install the new release. ReadyRoom migrates its schema on start (Flyway).
 
     === "Release package"
 
         Unpack the new release next to the current one and run
-        `./upgrade.sh ../readyroom-<old-version>` in the new directory. See
-        [Installation → Upgrade](install.md#6-upgrade).
+        `./upgrade.sh ../readyroom-<old-version>` in the new directory. It first runs the old
+        release's `backup.sh`, into that directory's `backups/`, and stops without changing
+        anything if the backup fails. See [Installation → Upgrade](install.md#6-upgrade).
 
     === "Helm"
 

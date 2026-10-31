@@ -132,6 +132,13 @@ The report page shows the group name, the date range and the number of users, th
 - **User Reports**: for each member, each day's status, check-in time, check-out time and how long
   they were checked in.
 
+The dates you pick are whole days in ReadyRoom's time zone, at most 366 of them by default. The
+check-out time is when the person left: their last check-out of the day, or, for an automatic
+check-out, the screen lock before it. While the day is still in progress a screen lock is taken as
+a break, and a person who has not checked out shows *No logoff recorded*. Once the day is over, a
+day that ended with a screen lock ended at that lock. The downloads and scheduled reports count
+departures the same way.
+
 **Download PDF** saves the report as `group_report.pdf`. **CSV** and **Excel** download a row per
 person and day (status, first check-in, last check-out, minutes in and time zone), with each person's
 times in their own time zone, or choose **My time zone** to show every row in yours. See
@@ -171,7 +178,8 @@ are one of their delegates.
 If you are the person's directory manager, one of their delegates or an admin, you can **record a
 status** for them: drag across days on their Event Calendar, choose the status and **Record**. It
 takes effect at once, without approval, and you can record any status, including *Absent*,
-*Absent Unexcused* and *Unscheduled Leave*.
+*Absent Unexcused* and *Unscheduled Leave*. A *Late Arrival* you record for someone else has no
+latest time and no limit on the number of days.
 
 Admins also see a **Role** card, with **Export or erase data**. See
 [Administration](admin-guide.md#roles).
@@ -196,20 +204,29 @@ If nobody does, the page says *No direct reports*.
 
 **Org Chart** (`/app/orgchart`) shows the organization hierarchy built from an attribute in the
 directory. Above the tree, the whole organization's **accounted for** figure for the day being viewed
-(today, or the **System Date** an admin picked), a bar of who is in which status, and the legend for
+(today, or the **System Date** an admin or manager picked), a bar of who is in which status, and the legend for
 it. Each row shows the organization's own name with its full directory value beside it, the same bar
 for that organization and everything under it, **accounted of total**, and a percentage.
 
-Everyone is counted the way **Users** and **Home** count them: a status on the person's calendar for
-the day (work from home, TDY, leave and so on) comes first; otherwise their latest record decides
-between **Checked in**, **Away** (screen locked) and **Checked out**; anyone with neither is **No
-record**. *Accounted for* is everyone but *No record*. The people counted are those the directory
-lists under the organization, with the same filter the **Users** page uses.
+Each person is counted the way you may see them elsewhere. People whose details you may see
+(yourself, your reports, the people you are a delegate of and the members of groups you manage;
+everyone, for admins) are counted the way **Users** and **Home** count them: a status on the
+person's calendar for the day (work from home, TDY, leave and so on) comes first; otherwise their
+latest record decides between **Checked in**, **Away** (screen locked) and **Checked out**; anyone
+with neither is **No record**. Everyone else is counted as a coworker sees them, which depends on
+your organization's coworker visibility setting:
+
+- *full* (the default): the same, except that a status a manager recorded counts as *Out of Office*;
+- *status*: **Checked in** (a locked screen included) or **Not in**, with no calendar status;
+- *none*: only admins and managers see the counts, with these people as **Checked in** or **Not
+  in**; everyone else sees headcounts without presence.
+
+*Accounted for* is everyone but *No record* and *Not in*. The people counted are those the
+directory lists under the organization, with the same filter the **Users** page uses.
 
 Filter by name, expand or collapse the tree, and click an organization to list its members, with the
 usual **Advanced** switch. As in **Users**, coworkers whose details you may not see show their status
-only, and where coworker visibility is *none* the chart shows headcounts without presence. Click a
-member to open their details.
+only. Click a member to open their details.
 
 ## My Profile
 
@@ -221,7 +238,8 @@ Open **My Profile** from the avatar menu (`/app/profile`).
   manager, your groups' managers and your delegates. Do not enter classified data or personal
   data (PII). The audit trail records that your notes changed, never what they say.
 - **Login Time**: your normal start time. It decides when you are expected in. If you leave it
-  empty, your average arrival time is used.
+  empty, your average arrival time is used. It can be at the latest 12:00, the same limit as a
+  late arrival you set yourself (your organization may have changed it).
 - **Time zone**: the time zone your arrival and departure times are shown in on reports, downloads
   and the public API. Leave it on *My site's time zone* to use your site's.
 
@@ -247,14 +265,15 @@ Drag across one or more days, choose a status, then choose **Submit**. With the 
 |---|---|---|---|
 | normal | `STANDARD` | Set at once. It clears a status you set earlier | No |
 | Early Leave | `EARLY_LEAVE` | Set at once | No |
-| Late Arrival | `LATE_ARRIVAL` | Set at once; the time you enter becomes your expected time that day | No |
+| Late Arrival | `LATE_ARRIVAL` | Set at once; the time you enter becomes your expected time that day. At the latest 12:00, and at most 31 days at a time: for a later time ask your manager to record it; for a lasting change set your **Login Time** | No |
 | Out of Office (needs approval) | `OUT_OF_OFFICE` | Sent as a request | Yes, once approved |
 | Work From Home (needs approval) | `WORK_FROM_HOME` | Sent as a request | Yes, once approved |
 | TDY (needs approval) | `TDY` | Sent as a request | Yes, once approved |
 | Scheduled Leave (needs approval) | `SCHEDULED_LEAVE` | Sent as a request | Yes, once approved |
 | Absent Excused (needs approval) | `ABSENT_EXCUSED` | Sent as a request | Yes, once approved |
 
-Which statuses need approval is set by your administrators, so your list may differ. For one
+Which statuses need approval, and the late arrival limits, are set by your administrators, so
+yours may differ. For one
 that needs approval, you can add a **note for your manager** (up to 500 characters); it is kept
 with the request and shown to whoever decides it. Follow it under **Approvals**.
 
@@ -319,9 +338,13 @@ The notification page shows the summary and a **Status** list with these choices
 
 Only managers the alert was sent to can respond. You can change the answer later, and the day's
 status is updated to match. Alerts are not raised on weekends, on holidays in the organization
-calendar, for anyone already checked in, for anyone with an excusable status that day, or for
-anyone with no expected time at all. Each person gets at most one alert per day. A requested
-status that is still waiting for approval does not prevent an alert.
+calendar, for anyone already checked in, for anyone with an excusable status that day, for anyone
+whose day already carries a status a manager, delegate or administrator recorded (*Absent*,
+*Absent Unexcused* or *Unscheduled Leave*), for anyone who has left the directory or whose account
+is disabled or expired, or for anyone with no expected time at all. Each person gets at most one
+alert per day, and you are never alerted about yourself. A requested status that is still waiting
+for approval does not prevent an alert. If someone's expected time plus the grace period falls
+after midnight, the alert still comes that day, shortly before midnight.
 
 ## Metrics (admins and managers)
 

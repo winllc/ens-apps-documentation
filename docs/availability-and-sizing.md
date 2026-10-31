@@ -94,9 +94,9 @@ and reset a pull-API collector's cursor to the restored trail's newest sequence 
 No application undoes its own data changes on a downgrade, and an older release is not built to
 run on data a newer one has written. Every rollback therefore means:
 
-1. a backup taken **before** the upgrade. CertAlert's, the Directory Services Portal's and the RSA
-   Operations Portal's `upgrade.sh` write one; for ReadyRoom, run `./backup.sh` first; with Helm and
-   the native package, take it yourself;
+1. a backup taken **before** the upgrade. CertAlert's, the Directory Services Portal's, the RSA
+   Operations Portal's and ReadyRoom's `upgrade.sh` write one; with Helm and the native package,
+   take it yourself;
 2. stopping the new release, restoring that backup, and starting the previous release (or
    `helm rollback`, which restores the previous manifests and values but never the data).
 

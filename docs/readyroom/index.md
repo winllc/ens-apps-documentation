@@ -24,9 +24,9 @@ manager approves), so their managers know where they are when they are not at a 
 
 | Area | What ReadyRoom does |
 |---|---|
-| **Automatic check-in** | A PowerShell agent run by Windows Task Scheduler posts `login`, `lock`, `unlock` and `logout` events. The day's first unlock is stored as a check-in. |
+| **Automatic check-in** | A PowerShell agent run by Windows Task Scheduler posts `login`, `lock`, `unlock` and `logout` events. An unlock is stored as a check-in when the person has no check-in yet that day. |
 | **Status per person** | Each person's status for the day is `IN`, `AWAY` (screen locked), `OUT` (checked out) or `NONE`. A calendar status such as *Work From Home* or *TDY* takes its place when one is set. |
-| **Auto check-out** | A background job checks out anyone who has been locked for longer than `check-out-after-minutes`. The record is flagged as forced. |
+| **Auto check-out** | A background job checks out anyone who has been locked for longer than `check-out-after-minutes`, after midnight for a lock left in the evening. The record is flagged as forced. |
 | **Absence alerts** | If someone is not checked in by their expected time plus a grace period on a working day, their directory manager and their delegates get an in-app notification and an email. Managers record what happened. |
 | **Statuses and approvals** | People set a late arrival or early leave themselves; statuses that excuse an absence (leave, telework, TDY) are requested and approved by their manager or a delegate on the **Approvals** page. Delegates are set by administrators. |
 | **Reports and exports** | Group reports as PDF, CSV or Excel, people lists, and scheduled e-mailed reports, with each person's times in their own or their site's time zone. See [Reports, exports and time zones](exports.md). |
@@ -108,7 +108,7 @@ sequenceDiagram
     S->>DB: LOCK record (status AWAY)
     W->>C: Screen unlock
     C->>S: POST /api/check/unlock
-    S->>DB: UNLOCK record (or CHECK_IN if it is the first event today)
+    S->>DB: UNLOCK record (or CHECK_IN if no check-in yet today)
     W->>C: Logoff (runs as SYSTEM, profile gone)
     C->>S: POST /api/check/out {sessionId} (no authentication)
     S->>DB: Find the check-in with that sessionId and write a CHECK_OUT under its DN

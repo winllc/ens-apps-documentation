@@ -85,7 +85,9 @@ whichever way they sign in.
 - **Consent banner** (`ENS_CONSENT_BANNER_ENABLED=true`): the DoD notice-and-consent banner comes
   before any sign-in, enforced by the server, not just shown. `/consent` is reachable without
   signing in. Acknowledging it is audited as `auth.consent-acknowledged`. The Windows client's
-  `/api/check/**` calls are machine endpoints and are not held by it.
+  check-in calls (`POST` to `/api/check/in`, `/lock`, `/unlock` and `/out`) are machine endpoints
+  and are not held by it. The rest of `/api/check/`, such as the administrators' day records, is
+  called from the browser and needs the banner like any page.
 - **Session lifetime:** an idle timeout (`ENS_SESSION_IDLE_TIMEOUT`, `30m`), an optional shorter
   one for administrators (`ENS_SESSION_ADMIN_IDLE_TIMEOUT`), an absolute lifetime
   (`ENS_SESSION_ABSOLUTE_TIMEOUT`, `12h`) and an optional limit per user
@@ -201,7 +203,12 @@ All settings are listed in [Configuration](configuration.md#windows-kerberos-sig
     | `none` | No status. The org chart shows headcounts but not how many are present, except to the `ADMIN` and `MANAGER` roles |
 
     It applies to user search, a group's and an organization's members, a person's page and the
-    org chart, in the pages and the API alike.
+    org chart, in the pages and the API alike. The org chart's counts follow it too: each person
+    is counted by their real status only where the viewer may see their details, and otherwise as
+    above: under `full` a status a manager recorded counts as *Out of Office*; under `status`, and
+    under `none` for the `ADMIN` and `MANAGER` roles (the only ones who see the counts then),
+    as *Checked in* or *Not in*. So the counts of a small organization do not show whom a manager
+    marked absent.
 
 - **Statuses and requests:** each status is set by the person (normal, Early Leave, Late
   Arrival), requested (by default every status that excuses an absence:

@@ -112,7 +112,7 @@ Put `/api/v1` behind the same ingress rules as the rest of the application.
 |---|---|---|
 | `in` | `CHECK_IN` | Client certificate, or Kerberos when Windows sign-in is enabled |
 | `lock` | `LOCK` | Same as `in` |
-| `unlock` | `UNLOCK`, or `CHECK_IN` if it is the user's first record of the day | Same as `in` |
+| `unlock` | `UNLOCK`, or `CHECK_IN` if the user has no check-in yet that day | Same as `in` |
 | `out` | `CHECK_OUT` | **None**: identified by `sessionId`. A signed-in call is accepted too. |
 
 Any other `action` gets `400` (`invalid_action`).
@@ -263,7 +263,10 @@ removed: only administrators set delegates.
 | Someone else's calendar (`dn`) | Set at once, any status, if the caller is the person's directory manager, one of their delegates or `ADMIN`; otherwise `403` |
 
 Bad input is answered with `400` and `{"error","message"}`: `range_too_long`, `invalid_range`,
-`invalid_status`, `invalid_time` or `invalid_dn`. Earlier releases answered these with `500`, and
+`invalid_status`, `invalid_time` or `invalid_dn`. A late arrival callers set on their own calendar
+is refused with `late_arrival_too_late` after `application.events.late-arrival-latest-time` (12:00)
+and with `late_arrival_too_long` over `application.events.late-arrival-max-days` (31) days; one set
+on someone else's calendar is not limited. Earlier releases answered these with `500`, and
 returned the request body instead of the result.
 
 ### Status requests
@@ -287,9 +290,9 @@ A request's `state` is `REQUESTED`, `APPROVED`, `REJECTED` or `CANCELLED`.
 |---|---|---|
 | `GET /api/notifications/my` | Signed in | The caller's notifications that are still unread. |
 | `POST /api/notifications/markAllAsRead` | Signed in | Marks all of the caller's notifications as read. |
-| `GET /api/orgnodes/hierarchy` | Signed in | The org chart tree for the viewed day: per node, the status mix (`statusMix`, `fullTreeStatusMix`), `accountedCount` and `fullTreeAccountedCount`, and the headcounts by employee type; `fullTreePresentPercentage` is accounted over total (headcounts only with coworker visibility `none`, except for `ADMIN` and `MANAGER`). Member DNs are not included; use `/api/orgnodes/users/{orgName}`. |
+| `GET /api/orgnodes/hierarchy` | Signed in | The org chart tree for the viewed day, each person counted as the caller may see them (see [Security → Authorization](security.md#authorization)): per node, the status mix (`statusMix`, `fullTreeStatusMix`), `accountedCount` and `fullTreeAccountedCount`, and the headcounts by employee type; `fullTreePresentPercentage` is accounted over total (headcounts only with coworker visibility `none`, except for `ADMIN` and `MANAGER`). Member DNs are not included; use `/api/orgnodes/users/{orgName}`. |
 | `GET /api/orgnodes/users/{orgName}` | Signed in | Directory users whose duty sub-organization attribute equals `orgName`, with status, limited by the coworker visibility setting for people whose details the caller may not see. |
-| `POST /api/system/updateSystemTime` | Signed in | Body `{"dateTime": "<ISO zoned date-time>"}`. Sets the day viewed for the rest of the session. |
+| `POST /api/system/updateSystemTime` | A/M | Body `{"dateTime": "<ISO zoned date-time>"}`. Sets the day viewed for the rest of the session. |
 
 ### Status values
 
@@ -326,10 +329,10 @@ A manager, delegate or administrator can record any of them for someone else, at
 | `/app/home` | Signed in | Home |
 | `/app/groups` | Signed in | Group trees |
 | `/app/users/{groupDn}` | A member or manager of the group, or `ADMIN` | Group members |
-| `POST /app/group/report` | A/M who manages the group (`ADMIN`: any) | Group report (`groupDn`, `fromDate`, `toDate`) |
+| `POST /app/group/report` | A/M who manages the group (`ADMIN`: any) | Group report (`groupDn`, `fromDate`, `toDate` as `yyyy-MM-dd` days in the application's zone, at most `APPLICATION_REPORTS_MAXRANGEDAYS` (366) days; `400` otherwise) |
 | `POST /app/export/group-report` | A/M who manages the group (`ADMIN`: any) | The group report as a file (`groupDn`, `fromDate`, `toDate`, `format` `csv` or `xlsx`, `zones` `person`, the default, or `mine` for the viewer's zone). See [Reports, exports and time zones](exports.md) |
 | `POST /app/export/people` | Signed in | A people list as a file (`search` or `group`, `format`) |
-| `/app/reports/schedules` | A/M | Scheduled reports. `POST` creates one; `POST .../{id}/send` sends now; `POST .../{id}/delete` deletes |
+| `/app/reports/schedules` | A/M | Scheduled reports. `POST` creates one; `POST .../{id}/send` sends now; `POST .../{id}/enable` turns a schedule that was turned off back on; `POST .../{id}/delete` deletes |
 | `/app/admin/integrations` | ADMIN | API tokens and webhooks. `POST .../tokens`, `.../tokens/{id}/revoke`, `.../webhooks`, `.../webhooks/{id}/disable`, `/enable`, `/delete`, `/ping` |
 | `/app/user/search` | Signed in | User search |
 | `/app/user/details/{dn}` | Signed in | A person's details. Times, notes, the audit log and the calendar only for the person themselves, `ADMIN` and the people responsible for them (see [Security](security.md#authorization)); anyone else sees presence and directory fields. |
