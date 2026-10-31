@@ -310,6 +310,12 @@ request for the whole selection, today and later days included: your manager is 
 reaches your calendar, with its time, only once approved. Choosing *normal* for such a selection is
 refused: a past day is your manager's to correct.
 
+**Days an approved request covers.** Such a day is the request's. Setting *normal*, *Early Leave*
+or *Late Arrival* on it is refused, with a message naming the request: cancel or change the request
+instead (under **Approvals**), which tells your approvers. Nor can you ask for days that a pending or
+approved request of yours already covers: cancel that one first, or ask only for the days it does
+not cover.
+
 Excusable statuses appear in blue on calendars and others in purple (the defaults); the days of a
 pending request appear in grey, as *Requested: &lt;status&gt;*. Organization holidays and events appear in orange. Setting a status
 again for the same day replaces the one you set before. One request or status can cover at most
@@ -322,7 +328,7 @@ API is used:
 
 | Group | Statuses (default) | Who sets them |
 |---|---|---|
-| Set by the person | normal, Early Leave, Late Arrival | You, on your own calendar, for today and later days. They take effect at once and excuse nothing. A Late Arrival or Early Leave reaching an earlier day is requested instead (see [Days already past](#calendar)); normal there is refused |
+| Set by the person | normal, Early Leave, Late Arrival | You, on your own calendar, for today and later days. They take effect at once and excuse nothing. A Late Arrival or Early Leave reaching an earlier day is requested instead (see [Days already past](#calendar)); normal there is refused, and so is any of them on a day an approved request of yours covers |
 | Requested | Out of Office, Work From Home, TDY, Scheduled Leave, Absent Excused | You ask; your directory manager, one of your delegates or an admin approves or rejects. Until approved, the status is not on your calendar, and absence alerts treat the day as not excused |
 | Recorded by managers | Absent, Absent Unexcused, Unscheduled Leave | Only your directory manager, a delegate or an admin, for you (also by answering an absence alert) |
 
@@ -333,18 +339,36 @@ API is used:
   note and when they asked. **Approve** or **Reject**, each with an
   optional comment or reason. Nobody decides their own request, admins included.
 - **Ask for a status**: the status, the first and last day, and an optional note; **Send
-  request**. You can also ask from your profile calendar.
+  request**. You can also ask from your profile calendar. A request over a day that a pending or
+  approved request of yours already covers is refused: cancel that one first, or ask only for the
+  other days.
 - **My requests**: your requests, their state (requested, approved, rejected or cancelled), who
   decided and their comment. **Cancel** withdraws a pending request, or an approved one until its
-  last day has passed: its days from today on come off your calendar.
+  last day has passed: its days from today on come off your calendar. Should another approved
+  request of yours still cover one of those days (possible only for requests made before
+  overlapping requests were refused), that request's status goes back on the day.
 
 An approval writes the status on each day of the request, replacing what you had set there; a
-rejection writes nothing.
+rejection writes nothing. A request that overlaps another approved request of the same person
+cannot be approved until that one is cancelled. Approving a request also answers the absence
+alerts raised about the person on its days: each alert takes the approved status as its answer,
+with the approver as who answered (see [Notifications](#notifications-absence-alerts)).
+
+**When a day holds two statuses.** A day can hold your own status beside one your manager, a
+delegate or an administrator recorded (say *Late Arrival* you set after your manager recorded
+*Absent Unexcused*). One rule decides which counts, on every page, report, export and metric: a
+status a manager, delegate or administrator recorded wins over one an approved request put there,
+which wins over your own; between two of the same kind, the latest wins.
 
 **Email.** When a mail server is configured, a new request goes to the person's manager and
 delegates (*Approval needed: &lt;status&gt; for &lt;name&gt;*), a decision to the person who asked
 (*Your &lt;status&gt; request was approved* or *rejected*), and a cancellation to the approvers
 (*Cancelled: ...*). The emails carry the status and dates, never the notes.
+
+**No manager or delegate.** Someone with no manager in the directory and no delegate can still ask.
+They are told *No manager or delegate is set for you in ReadyRoom: an administrator has been
+asked*, and the request goes to the administrators (other than the person asking), whose email says
+it comes to them as administrators. Anyone else is told *your manager or delegate has been asked*.
 
 ## My data
 
@@ -376,8 +400,12 @@ The notification page shows the summary and a **Status** list with these choices
   who responded and when, and
 - as the person's status for that day.
 
-Only managers the alert was sent to can respond. You can change the answer later, and the day's
-status is updated to match. Alerts are not raised on weekends, on holidays in the organization
+Only managers the alert was sent to, while they still decide for the person, and administrators
+can respond. You can change the answer later, and the day's status is updated to match, for 14 days
+by default (`application.events.alert-answer-days`); after that only an administrator can answer
+it. An alert whose day an approved request covers has already been answered by the request: it shows
+**Answered By Request**, and nobody can answer it on its own, administrators included, until the
+request is cancelled. When you cannot answer an alert, its page says why. Alerts are not raised on weekends, on holidays in the organization
 calendar, for anyone already checked in, for anyone with an excusable status that day, for anyone
 whose day already carries a status a manager, delegate or administrator recorded (*Absent*,
 *Absent Unexcused* or *Unscheduled Leave*), for anyone who has left the directory or whose account

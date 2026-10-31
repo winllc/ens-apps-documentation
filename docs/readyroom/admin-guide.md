@@ -189,7 +189,19 @@ people alerted about.
 **Responses.** A recipient opens the alert and picks `UNSCHEDULED_LEAVE`, `ABSENT_EXCUSED`,
 `ABSENT_UNEXCUSED` or `ABSENT`. The response is copied to every recipient's copy of the alert and
 stored as the person's status for that day. **Mark All Read** in the bell only marks alerts read:
-they stay awaiting an answer, in the bell and on Home, until someone responds.
+they stay awaiting an answer, in the bell and on Home, until someone responds. Administrators may
+answer any alert too. Two cases are refused, and the alert page says why:
+
+- **Answered by a request.** Approving a status request answers the alerts about the person on its
+  days: every copy takes the approved status as its answer and the approver as who answered, linked
+  to the request (**Answered By Request** on the alert page), audited as `absence.alert-superseded`
+  with the answer it replaced (the approval's `calendar.request-approved` event counts them in
+  `details.alertsAnswered`). Such an alert cannot then be answered on its own, administrators
+  included: cancelling the request frees the day.
+- **Too old.** An alert more than `application.events.alert-answer-days` (14) days old can be
+  answered, or its answer changed, only by an administrator, so an old email link cannot overwrite a
+  day everyone has relied on since. See
+  [Configuration](configuration.md#statuses-requests-and-privacy).
 
 To set up notifications:
 

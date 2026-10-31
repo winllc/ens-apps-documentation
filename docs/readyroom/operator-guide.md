@@ -345,9 +345,10 @@ package nor the Helm chart carries scripts. Developer notes on adding a migratio
 | `V11__rate_limit_windows` (next release) | `rate_limit_windows`: the rate limits' counts (public API tokens, refused logoffs), shared by every replica. A new table only |
 | `V12__alert_read_and_emailed` (next release) | `notification_records.read_at` (an alert marked read, which no longer counts as answered) and `notification_records.emailed_at` (when its email went out, so the next alert run resends today's unsent ones). Existing alerts count as emailed, and ones marked read before stay off the list |
 | `V13__cache_invalidations` (next release) | `cache_invalidations`: the group cache evictions made on Settings, which every replica applies. A new table only |
+| `V14__alert_answered_by_request` (next release) | `notification_records.status_response_request_id`: the approved status request that answered an absence alert (its days' alerts take the request's status as their answer). A request the retention purge or an erasure deletes clears the link and leaves the answer. One new column only |
 
-V2 to V4 change only the schema, plus one `UPDATE` on `user_records`, so they are quick; V6 to V11
-and V13 add tables and columns only; V12 adds two columns and fills them with one `UPDATE` each.
+V2 to V4 change only the schema, plus one `UPDATE` on `user_records`, so they are quick; V6 to V11,
+V13 and V14 add tables and columns only; V12 adds two columns and fills them with one `UPDATE` each.
 
 ## Certificate and key rotation
 
@@ -449,7 +450,7 @@ Nothing to do by hand: Flyway adds the tables above, and nothing existing change
 
 ### Upgrading to the next release
 
-New tables and columns (Flyway `V11` to `V13`), added at the first start. Sign-in keeps working
+New tables and columns (Flyway `V11` to `V14`), added at the first start. Sign-in keeps working
 for every installation that kept its settings; check the points below.
 
 | Change | What to do |
