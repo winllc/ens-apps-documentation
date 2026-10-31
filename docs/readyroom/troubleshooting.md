@@ -53,7 +53,7 @@ SYSTEM logout task. For background, see [Operations](operator-guide.md) and
 | `POST /api/event/update` returns `403` | The caller tried to record a status only managers record on their own calendar, or a status on someone else's calendar without being their manager, delegate or an administrator. |
 | `POST /api/event/update` returns `400` with `range_too_long`, `invalid_range`, `invalid_status`, `invalid_time` or `invalid_dn` | The request body is wrong; the `message` says how. Ranges are limited to `APPLICATION_EVENTS_MAXRANGEDAYS` (366) days. |
 | `POST /api/event/update` returns `400` `past_day`, or the calendar refuses *normal* on an earlier day | Expected: people cannot clear their own past days. Their manager, a delegate or an administrator corrects them on the person's calendar. |
-| A Late Arrival or Early Leave someone set does not show on their calendar, and their manager got an *Approval needed* email | Expected when the days picked include one before today: it became a request, and reaches the calendar once approved. "Today" is the application time zone's date, not the **System Date**. |
+| A Late Arrival or Early Leave someone set does not show on their calendar, and their manager got an *Approval needed* email | Expected when the days picked include one before today: it became a request, and reaches the calendar once approved. "Today" is the person's own date (their time zone, from their day start), not the **System Date**. |
 | Someone with a Late Arrival or Early Leave shows as not accounted for, or *No record* on the org chart | Expected: these statuses are the person's own word and excuse nothing. Only a check-in, a status that excuses an absence or one a manager recorded accounts for the day. A late arrival still moves the time they are expected by. |
 | A user can't change their delegates | Expected: only administrators set them, on the person's details page. |
 | A group manager no longer sees the **Group Managers** card | Expected: only administrators set a group's alternate managers. |
@@ -115,7 +115,7 @@ On the client, `The server redirected instead of accepting Windows sign-in` mean
 
 | Symptom | Cause and fix |
 |---|---|
-| No alerts at all | Look for `End SendAbsentNotificationsCron` in the log. On weekends and holidays the job does nothing. With the built-in defaults, the first run is 30 minutes after startup. |
+| No alerts at all | Look for `End SendAbsentNotificationsCron` in the log. Nobody is alerted about on a day that is not one of their working days (Monday to Friday unless set otherwise), before their start date, or on a holiday. With the built-in defaults, the first run is 30 minutes after startup. |
 | A late person was not alerted | They have no expected time (no preferred login time, no check-in history in 30 days and no late arrival), they have an excusable status or one a manager recorded (*Absent*, *Absent Unexcused*, *Unscheduled Leave*), they were already alerted today, or they have no `user_records` row yet (the directory refresh creates one). Nobody is alerted about someone whose directory entry is gone or whose account is disabled or expired (`No absence alert about ...`), or who has no directory manager and no delegate (`no directory manager or delegate for ...` at `WARN`). |
 | Alert created but no email | `Failed to send notification to ...` (SMTP), `Manager does not have an email address`, or `Invalid email address` in the log. The next run of the alert job sends the email again, the same day, while the alert is unanswered (`Sent N absence alert e-mail(s) that had not gone out`). |
 | The log shows `No absence alert about <dn> this run, tried again next run` (`WARN`) | The directory could not be read to find the person's manager. Nothing was saved; the next run tries again. |
@@ -124,7 +124,9 @@ On the client, `The server redirected instead of accepting Windows sign-in` mean
 | Someone with a pending leave request was alerted | Expected: a request excuses nothing until it is approved. |
 | Request emails don't arrive | No mail server is configured, or sending failed (`Failed to send "<subject>" to ...` in the log). Request emails are sent once and not retried. |
 | The email link points to `localhost` | Set `application.application-base-url`. |
-| Alerts arrive an hour off | `application.timezone` is not set, or does not match the users' zone. The job uses the JVM default time zone. |
+| Alerts arrive an hour off, or on the wrong day | Each person is checked in their own time zone: their profile's, else their site's (`APPLICATION_REPORTS_SITETIMEZONES`), else `application.timezone`. Check the zone and day start under *Time zone* on their profile, and **Settings → Days and Time Zones**. |
+| Someone who works part-time or at weekends is alerted on their day off, or not alerted on their working day | Their working days are not set. Their manager, a delegate or an administrator sets them on their details page (**Working days**). |
+| A night shift is split across two days | The site's day start is midnight. Set a day start before the shift begins for that site (`APPLICATION_SITEDAYSTARTS`, for example `Plant 2=18:00`). See [Configuration](configuration.md#time-zone-and-day-start). |
 
 ## Data looks wrong
 

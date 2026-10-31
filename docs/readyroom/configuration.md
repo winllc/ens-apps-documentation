@@ -133,13 +133,36 @@ Administrators can evict cached group trees from **Settings** (see
 the database (table `cache_invalidations`, rows kept a day) and each other replica applies it within
 `cache-invalidation-poll-millis`. Expiry needs no such step.
 
-## Time zone
+## Time zone and day start
 
-| Property | Packaged | Built-in | Description |
-|---|---|---|---|
-| `application.timezone` | `America/New_York` | `UTC` | Sets the JVM default time zone at startup. Every stored timestamp, every "today" and every job's working-day check uses it. The log prints `Default time zone set to <zone> (from application.timezone=...)`. |
-| `spring.jackson.time-zone` | `America/New_York` | – | Time zone for JSON serialization. Keep it the same as `application.timezone`. |
-| `spring.jackson.date-format` | `yyyy-MM-dd HH:mm a z` | – | Default JSON date format. |
+Each person's day is their own. It is in **their time zone**: the one they chose on their profile,
+else their site's (`APPLICATION_REPORTS_SITETIMEZONES`, by the directory's location attribute; see
+[Reports, exports and time zones](exports.md#settings)), else the application's
+(`application.timezone`). It starts at **their site's day start** (`application.site-day-starts`),
+else the application's (`application.day-start`), midnight unless configured. Day *D* runs from *D*
+at the day start, in the person's zone, to the same time the next day.
+
+That day decides which day a check-in counts for, the date a person's statuses, weekends and
+holidays are read on, their expected time and when the absence alert checks them. Pages, reports,
+downloads, scheduled reports and the public API all follow it. **Settings → Days and Time Zones**
+shows what is configured (see [Administration](admin-guide.md#days-and-time-zones)).
+
+| Property | Env var | Packaged | Built-in | Helm | Description |
+|---|---|---|---|---|---|
+| `application.timezone` | `APPLICATION_TIMEZONE` | `America/New_York` | `UTC` | `timezone` | Sets the JVM default time zone at startup. It is the zone of anyone with no zone of their own (none on their profile, none for their site). The Records list, the metrics page's charts by time of day, the public API's `from` and `to`, and the retention purge's schedule also use it: they show one clock for everyone. The log prints `Default time zone set to <zone> (from application.timezone=...)`. |
+| `application.day-start` | `APPLICATION_DAYSTART` | – | `00:00` | `dayStart` | When days start, `HH:mm`, in each person's own time zone. |
+| `application.site-day-starts` | `APPLICATION_SITEDAYSTARTS` | – | none | `siteDayStarts` (a list) | A site's own day start: `<location>=HH:mm`, comma separated, the location as the directory spells it (any case), for example `Plant 2=18:00`. A site without one uses `application.day-start`. |
+| `spring.jackson.time-zone` | `SPRING_JACKSON_TIMEZONE` | `America/New_York` | – | `timezone` | Time zone for JSON serialization. Keep it the same as `application.timezone`. |
+| `spring.jackson.date-format` | – | `yyyy-MM-dd HH:mm a z` | – | – | Default JSON date format. |
+
+A day start that is not a time of day (`24:00`, `6pm`, or `Plant 2` without `=HH:mm`) stops
+startup with a message naming the setting. Nothing needs a database change.
+
+**Choosing a day start.** Leave it at midnight unless a site's shifts cross midnight. For such a
+site, pick a time before its earliest shift starts and after its latest shift ends. For example,
+use `18:00` for a site whose shifts run 22:00 to 06:00: the whole shift, check-in and check-out, is
+then the day it started on. A **Login Time** earlier than the day start is the next morning of that
+day: with a day start of 18:00, 02:00 is the small hours of the same shift.
 
 !!! warning "Always set `application.timezone`"
     The same key is also read through `ApplicationProperties.timeZone` (`TimeZoneConfig`), whose

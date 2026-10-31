@@ -31,6 +31,12 @@ into your API client or code generator.
 - Dates are `YYYY-MM-DD`, both ends included, at most `APPLICATION_API_MAXRANGEDAYS` (366) days.
 - Pages count from 1 and hold up to `APPLICATION_API_MAXPAGESIZE` (500) items.
 - Times are ISO-8601 with an offset, in each person's [time zone](exports.md#time-zones).
+- `from` and `to` are the application's days. Each attendance event's `date` is the person's own
+  day: in their time zone, from their site's day start (for a site whose days start at 18:00, a
+  check-out at 02:00 on Tuesday is Monday's).
+- Attendance events carry `addedByAdministrator`: `true` for a check-in or check-out an
+  administrator added (see [Check-in record corrections](#check-in-record-corrections)). Records an
+  administrator voided are never listed.
 - Errors are `{"error": "...", "message": "..."}`.
 - The API serves `GET`s only, and answers in the license states the features it reads are licensed
   in (attendance, calendar).
@@ -197,7 +203,8 @@ response or page shows it.
 ### `GET /api/check/records`
 
 The records for the day being viewed in the session (today unless the session date was changed),
-paged. `ADMIN` only. The records do not include `sessionId`.
+paged. `ADMIN` only. The day is the application's (its time zone and day start), the same for
+everyone. Void records are left out. The records do not include `sessionId`.
 
 | Parameter | Default | |
 |---|---|---|
@@ -271,8 +278,9 @@ managers: only administrators do.
 | The caller's own calendar, a status only managers record (`ABSENT`, `ABSENT_UNEXCUSED`, `UNSCHEDULED_LEAVE`) | `403` |
 | Someone else's calendar (`dn`) | Set at once, any status, if the caller is the person's directory manager, one of their delegates or `ADMIN`; otherwise `403` |
 
-"Today" is the date in the application's time zone (`APPLICATION_TIMEZONE`); the session's System
-Date does not move it.
+"Today" is the caller's own today: in their time zone, from their day start (see
+[Configuration](configuration.md#time-zone-and-day-start)). The session's System Date does not move
+it. Cancelling a request uses the requester's own today the same way.
 
 Bad input is answered with `400` and `{"error","message"}`: `range_too_long`, `invalid_range`,
 `invalid_status`, `invalid_time`, `invalid_dn` or `past_day`. A late arrival callers set on their own calendar
@@ -310,7 +318,28 @@ A request's `state` is `REQUESTED`, `APPROVED`, `REJECTED` or `CANCELLED`.
 | `POST /api/notifications/markAllAsRead` | Signed in | Marks the caller's unread alerts read (`readAt`), audited as `absence.alerts-dismissed`. It answers nothing: they stay in `/my` until someone responds. |
 | `GET /api/orgnodes/hierarchy` | Signed in | The org chart tree for the viewed day, each person counted as the caller may see them (see [Security → Authorization](security.md#authorization)): per node, the status mix (`statusMix`, `fullTreeStatusMix`), `accountedCount` and `fullTreeAccountedCount`, and the headcounts by employee type; `fullTreePresentPercentage` is accounted over total (headcounts only with coworker visibility `none`, except for `ADMIN` and `MANAGER`). Member DNs are not included; use `/api/orgnodes/users/{orgName}`. |
 | `GET /api/orgnodes/users/{orgName}` | Signed in | Directory users whose duty sub-organization attribute equals `orgName`, with status, limited by the coworker visibility setting for people whose details the caller may not see. |
-| `POST /api/system/updateSystemTime` | A/M | Body `{"dateTime": "<ISO zoned date-time>"}`. Sets the day viewed for the rest of the session. |
+| `POST /api/system/updateSystemTime` | A/M | Body `{"date": "YYYY-MM-DD"}`, the day as the browser shows it, or `{"dateTime": "<ISO zoned date-time>"}`; `date` is used when given. Sets the day viewed for the rest of the session: the same date for everyone, each person's from their own day start in their own time zone. |
+
+### Check-in record corrections
+
+A person's day as their records make it, and an administrator's corrections to those records. All
+need the `attendance` license feature. See
+[Administration → Correcting check-in records](admin-guide.md#correcting-check-in-records).
+
+| Method and path | Access | Description |
+|---|---|---|
+| `GET /api/records/day?dn=&date=YYYY-MM-DD` | Whoever may see the person's details | The person's own day (their time zone, from their day start; their today without `date`): its status, check-in and check-out as every page computes them (void records left out), every record of the day with its corrections (void ones included and marked), and the day's absence alerts with what became of them |
+| `POST /api/records/{id}/void` | `ADMIN` | Body `{"reason": "..."}`, required. The record stays, marked void, and counts nowhere. `409` `already_void` for a record already void |
+| `POST /api/records/{id}/note` | `ADMIN` | Body `{"note": "..."}`, required. Replaces an earlier note |
+| `POST /api/records/add` | `ADMIN` | Body `{"dn": "...", "action": "CHECK_IN" or "CHECK_OUT", "day": "2026-10-30", "time": "17:30", "reason": "..."}`: a time on the person's own day, in their zone (for a site whose days start at 18:00, `02:00` on Monday's day is 02:00 on Tuesday). Or `"time": "2026-10-30T17:30"`, a time on their clock, without `day`: the record counts for the day it falls on. Not in the future (`400` `future_time`) |
+
+- Administrators cannot correct their own records (`403`).
+- A missing reason or note is `400` (`reason_required`, `note_required`); one over 500 characters
+  `400` `too_long`. Other bad input is `400` (`invalid_dn`, `invalid_date`, `invalid_action`,
+  `invalid_time`); an unknown record or person `404` (`not_found`).
+- Anyone else gets `403`, and so does a request without the CSRF token.
+- Each correction is audited (`record.voided`, `record.annotated`, `record.added`), with the reason
+  or the note as the event's `reason`. The person is e-mailed when a record is voided or added.
 
 ### Status values
 
@@ -354,6 +383,7 @@ A manager, delegate or administrator can record any of them for someone else, at
 | `/app/admin/integrations` | ADMIN | API tokens and webhooks. `POST .../tokens`, `.../tokens/{id}/revoke`, `.../webhooks`, `.../webhooks/{id}/disable`, `/enable`, `/delete`, `/ping`, `/rotate` (a new signing secret, shown once) |
 | `/app/user/search` | Signed in | User search |
 | `/app/user/details/{dn}` | Signed in | A person's details. Times, notes, the audit log and the calendar only for the person themselves, `ADMIN` and the people responsible for them (see [Security](security.md#authorization)); anyone else sees presence and directory fields. |
+| `POST /app/user/details/schedule` | The person's directory manager, a delegate or `ADMIN`; never the person | Set a person's working days and start date (`dn`, `days` (one per day worked: `MONDAY` ... `SUNDAY`, at least one), `startDate` (`yyyy-MM-dd`, at most a year ahead, or empty)). Audited as `person.schedule-changed`. Bad input redirects back to the details page with the reason; anyone else gets `403` |
 | `POST /app/user/details` | ADMIN | Change a role (`dn`, `role`). `ADMIN` only to keep it for someone whose stored role it is (`400` `admin_not_grantable` otherwise); taking it from the last administrator is refused with a message on the page |
 | `/app/user/reports` | Signed in | My Reports |
 | `/app/orgchart` | Signed in | Org chart |
@@ -366,7 +396,7 @@ A manager, delegate or administrator can record any of them for someone else, at
 | `/app/admin/privacy?dn=` | ADMIN, any license state | Retention status, the administrators, and a person's data inventory. `GET /app/admin/privacy/export?dn=` downloads it; `POST /app/admin/privacy/erase` erases it (one-time token and typed name) |
 | `/app/notifications/id/{id}` | The recipient, or `ADMIN` | One notification |
 | `POST /app/notifications/update` | The recipient while they still decide for the person, or `ADMIN` | Respond to a notification (`notificationId`, `response`: `UNSCHEDULED_LEAVE`, `ABSENT_EXCUSED`, `ABSENT_UNEXCUSED` or `ABSENT`). Another response is `400`, an alert that does not exist `404`. An alert that cannot be answered now (`409`: an approved request covers its day, `approved_request`, administrators included; or it is more than `application.events.alert-answer-days` (14) days old and the caller is not `ADMIN`, `too_old`) redirects back to `/app/notifications/id/{id}` with the reason, nothing recorded |
-| `/app/settings` | ADMIN | Settings. `?checkGroups=true` runs the stored group DNs check |
+| `/app/settings` | ADMIN | Settings, with the days and time zones in use. `?checkGroups=true` runs the stored group DNs check |
 | `POST /app/settings/orgparserules` | ADMIN | Save a parse rule (`id`, `orgName`, `orgParseRegex`) |
 | `POST /app/settings/orgparserules/delete/{id}` | ADMIN | Delete a parse rule |
 | `POST /app/settings/cache/groups/evict` | ADMIN | Evict a cached group (`dn`), on every replica |

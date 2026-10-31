@@ -246,6 +246,14 @@ All settings are listed in [Configuration](configuration.md#windows-kerberos-sig
   person directly. A request's note is seen only by the requester, the people who may decide it
   and administrators, and is never in emails or the audit trail. One call can cover at most
   `application.events.max-range-days` (366) days.
+- **Working days:** a person's working days and start date are seen by whoever sees their details,
+  the person included, and set by the people who decide their requests (their directory manager,
+  their delegates, `ADMIN`), never by the person themselves (`POST /app/user/details/schedule`).
+  Audited as `person.schedule-changed`.
+- **Corrections to check-in records:** only `ADMIN` voids, annotates or adds a person's check-in
+  records (`/api/records`), never their own, always with a reason (or the note). Whoever sees the
+  person's details sees the corrections. Each is audited (`record.voided`, `record.annotated`,
+  `record.added`), and the person is e-mailed when a record is voided or added.
 - **A person's data:** anyone downloads their own (**My data**); only `ADMIN` downloads someone
   else's or erases it, never their own. Both are audited. Erasure also revokes the person's API
   tokens, disables their webhooks and ends their browser sessions (see

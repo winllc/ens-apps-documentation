@@ -80,12 +80,14 @@ each linked to their details page, with where the role comes from: `application.
 | Generate a **group report** | – | groups they manage | ✓ |
 | Edit a group's **additional managers** | – | – | ✓ |
 | **Metrics** | – | ✓ | ✓ |
-| **Settings**: calendar, group cache, stored group DNs, parse rules | – | – | ✓ |
+| **Settings**: calendar, group cache, stored group DNs, parse rules, days and time zones | – | – | ✓ |
 | **System Date** picker (view another day) | – | ✓ | ✓ |
 | Change someone's **role** | – | – | ✓ |
 | Respond to an absence alert | only alerts sent to them | only alerts sent to them | only alerts sent to them |
 | Request a status that needs approval; follow one's own requests (**Approvals**) | ✓ | ✓ | ✓ |
 | Approve or reject requests, and record a status on someone's calendar | people they decide for: their direct reports in the directory, and the people they are a delegate of | as USER | everyone except themselves |
+| Set someone's **working days** and start date | people they decide for | as USER | everyone except themselves |
+| **Correct check-in records** (void, note, add) | – | – | everyone except themselves |
 | Set a person's **delegates**; the **Delegates** review page | – | – | ✓ |
 | Download one's own data (**My data**) | ✓ | ✓ | ✓ |
 | **Privacy** page: retention status, the administrators, anyone's export, erasure | – | – | ✓ |
@@ -149,17 +151,23 @@ group's page. Favorites are stored per person in `user_records.favorite_groups` 
 Absence alerts are produced by a scheduled job. By default it runs every 30 minutes; the packaged
 configuration runs it every 5 minutes.
 
-On each working day (not Saturday or Sunday, and not a date marked **Holiday** in the organization
-calendar), for every user record, a notification is raised when **all** of these are true:
+Each person is checked on **their own day**: in their time zone, from their day start (see
+[Configuration → Time zone and day start](configuration.md#time-zone-and-day-start)). Their date
+decides whether it is one of their working days or a holiday, and which statuses apply. Nobody is
+checked on a day that is not one of their [working days](#working-days-and-start-dates), before
+their start date, or on a date marked **Holiday** in the organization calendar. Someone whose working
+days include Saturday is checked on their Saturday. For every other user record, a notification is
+raised when **all** of these are true:
 
-- the person has no check-in today;
-- they have not already been alerted about today;
+- the person has no check-in on their today;
+- they have not already been alerted about their today;
 - an expected time is known: today's *Late Arrival* time, else their preferred **Login Time**, else
-  their average arrival;
+  their average arrival, as a clock time in their zone;
 - the current time is past that expected time plus
   `application.extra-time-before-absent-notification-minutes` (default 60). When that falls after
-  midnight, the alert is due at the latest two job intervals before midnight: 23:00 with the
-  built-in 30-minute interval, 23:50 with the packaged 5 minutes;
+  the end of their day (their next day start: midnight unless their site's days start at another
+  time), the alert is due at the latest two job intervals before their day ends: 23:00 with the
+  built-in 30-minute interval and a midnight day start, 23:50 with the packaged 5 minutes;
 - the day is not already accounted for: they have no excusable status today (*Out of Office*,
   *Work From Home*, *TDY*, *Scheduled Leave* or *Absent Excused*), and no status that only a
   manager, delegate or administrator records (*Absent*, *Absent Unexcused* or *Unscheduled
@@ -170,34 +178,41 @@ calendar), for every user record, a notification is raised when **all** of these
   account is disabled or expired (`No absence alert about <dn> today: <reason>` in the log). A
   locked-out account is still alerted about.
 
-**Recipients** are the person's directory manager (found through the reporting-line attributes,
-read live from the directory for each alert) and their delegates, each once, and never the person
+**Recipients** are the person's directory manager (found through the reporting-line attributes, read
+live from the directory for each alert) and their delegates, each once, and never the person
 themselves. If the directory cannot be read, no alert is saved and the next run tries the person
 again (`No absence alert about <dn> this run, tried again next run` at `WARN`), so the manager is
-not left out of an alert sent to the delegates alone. Each recipient gets a
-notification record and, if their directory entry has a valid email address, an email from
+not left out of an alert sent to the delegates alone. Each recipient gets a notification record and,
+if their directory entry has a valid email address, an email from
 `application.notification-sender-email` linking to `application.application-base-url` +
-`/app/notifications/id/<id>`. A recipient who is not found in the directory, or has no email
-address, is logged as an error. Someone with no directory manager and no delegate (or none found
-in the directory) cannot be alerted about: the log says `no directory manager or delegate for
-<dn>; no absence alert sent` at `WARN`, once a person a day, and each run tries again. An alert
-whose email the mail server did not take is emailed again by the next run, the same day, while
-nobody has answered it. The job's
-count of alerts sent (in its log line and its `job.completed` audit event) is the number of
-people alerted about.
+`/app/notifications/id/<id>`. When the person's zone is not the application's, the email names it
+next to the expected time, for example *08:00 (Asia/Tokyo)*. A recipient who is not found in the
+directory, or has no email address, is logged as an error. Someone with no directory manager and no
+delegate (or none found in the directory) cannot be alerted about: the log says `no directory
+manager or delegate for <dn>; no absence alert sent` at `WARN`, once a person a day, and each run
+tries again. An alert whose email the mail server did not take is emailed again by the next run, the
+same day, while nobody has answered it. The job's count of alerts sent (in its log line and its
+`job.completed` audit event) is the number of people alerted about.
 
 **Responses.** A recipient opens the alert and picks `UNSCHEDULED_LEAVE`, `ABSENT_EXCUSED`,
 `ABSENT_UNEXCUSED` or `ABSENT`. The response is copied to every recipient's copy of the alert and
-stored as the person's status for that day. **Mark All Read** in the bell only marks alerts read:
-they stay awaiting an answer, in the bell and on Home, until someone responds. Administrators may
-answer any alert too. Two cases are refused, and the alert page says why:
+stored as the person's status for the day the alert was about: their own date when it was raised
+(the alert about a Tokyo person's Monday is raised on New York's Sunday evening). An answer that
+does not excuse the day (`UNSCHEDULED_LEAVE`, `ABSENT_UNEXCUSED` or `ABSENT`) is e-mailed to the
+person, as is such a status recorded on their calendar (see [User guide → E-mails about
+you](user-guide.md#e-mails-about-you)). **Mark All Read** in the bell only marks alerts read: they
+stay awaiting an answer, in the bell and on Home, until someone responds. Administrators may answer
+any alert too. Two cases are refused, and the alert page says why:
 
 - **Answered by a request.** Approving a status request answers the alerts about the person on its
   days: every copy takes the approved status as its answer and the approver as who answered, linked
   to the request (**Answered By Request** on the alert page), audited as `absence.alert-superseded`
   with the answer it replaced (the approval's `calendar.request-approved` event counts them in
   `details.alertsAnswered`). Such an alert cannot then be answered on its own, administrators
-  included: cancelling the request frees the day.
+  included: cancelling the request frees the day. An answer given before the approval is kept: the
+  alert page shows it as **Answer Given Here** beside *Superseded by the approved request of
+  &lt;date&gt; (&lt;status&gt;)*, and so do the person's **Records for a day** and **Approvals**,
+  where a pending request lists the answered alerts approving it would supersede.
 - **Too old.** An alert more than `application.events.alert-answer-days` (14) days old can be
   answered, or its answer changed, only by an administrator, so an old email link cannot overwrite a
   day everyone has relied on since. See
@@ -240,6 +255,112 @@ those to review** filters the list. While any are waiting, ReadyRoom logs at sta
 people have delegates chosen before administrators managed them. Keeping them is audited as
 `person.updated` with `details.via` `alternate-managers-reviewed`.
 
+## Working days and start dates
+
+Each person has their own **working days** (Monday to Friday unless set otherwise) and a **start
+date**. Holidays in the organization calendar apply to everyone. A day is one of someone's working
+days when it is one of their days of the week, on or after their start date, and not a holiday.
+That decides:
+
+- the **absence alert**: nobody is alerted about on a day they do not work, or before their start
+  date, each checked on their own date in their own time zone;
+- the **30-day attendance** on Home and My Reports, which counts only the person's working days. A
+  day of *Scheduled Leave*, *Unscheduled Leave* or *Absent Excused* without a check-in is left out of
+  their working days. *Work From Home*, *TDY*, *Out of Office*, *Absent* and *Absent Unexcused* still
+  count as working days;
+- **who is expected** on a day (accounted for on Home, My Reports and Metrics), and the **average
+  arrival** time;
+- the **monthly summaries** the retention purge writes, which now keep how many working days the
+  month held for each person (see [Operations → Retention](operator-guide.md#retention)).
+
+**Setting them.** Open the person's details page (**Users** → the person). On the **Working days**
+card, tick the days they work, optionally pick a start date, and choose **Save working days**.
+Choose at least one day. The start date can be up to a year ahead; leave it empty to count from
+when ReadyRoom first knew the person. Administrators can set anyone's, except their own. The
+person's directory manager and their delegates can set theirs too, as they decide their requests.
+The person sees their working days on their profile and details page but cannot change them.
+
+**Default start date.** With no start date set, a person's start is the day ReadyRoom first knew
+them. For a new person, that is when ReadyRoom first created their record: when they first signed
+in, were looked up, or were added by the directory refresh. For people already in ReadyRoom before
+the upgrade, it is their earliest check-in or monthly summary. If ReadyRoom has a check-in for
+someone from before that date, the start moves back to it. People with no history at all have no
+start date, so every day counts for them, as before. The card shows such a date as *first seen*.
+
+**Audit.** Every change is recorded as `person.schedule-changed`, with who made it, whose schedule it
+was, the old and new working days and the old and new start date. Working days are written as a
+letter for each day worked and a dot for each day off: `MTWTF..` is Monday to Friday, `MTW....` is
+Monday to Wednesday.
+
+Nobody's schedule changes on upgrade: everyone keeps Monday to Friday until someone sets otherwise.
+
+## Correcting check-in records
+
+Check-in records come from the Windows client and from the automatic check-out. When one is wrong
+or missing, an administrator corrects it from the person's details page:
+
+1. Open the person (search, a group, or the org chart) and go to **Records for a day**.
+2. Pick the day with the date box, or click the day on the person's calendar.
+3. The card shows the day's status, when the person checked in and out, and every record of the
+   day. The day is the person's own: in their time zone, from their site's day start (a night-shift
+   site's day runs from evening to evening).
+
+From there you can:
+
+- **Void a record.** Choose **Void** on the record and give the reason (required). The record stays
+  on file, struck through and marked *Void*, but it no longer counts anywhere: not for the day's
+  status or times, Home, Not in yet, the group report and its exports, attendance figures, metrics,
+  the org chart, absence alerts, the retention summary or the public API. Typical uses: a test
+  logon, a duplicate record, or an automatic check-out that ended the day while the person was still
+  at work (once voided, that day is no longer ended at the lock).
+- **Add a note.** Choose **Note** and write it. A note explains a record; it changes nothing that is
+  calculated. A new note replaces the previous one; the audit log keeps every one.
+- **Add a missing check-in or check-out.** Under the table, choose *Check-out* or *Check-in*, the
+  time and the reason (required), then **Add record**. The time is in the person's time zone, on
+  their own day: for a site whose days start at 18:00, 02:00 on Monday's day means 02:00 on Tuesday
+  morning. It cannot be in the future. The commonest case is a missed sign-out. The added record
+  counts like any other and is labelled *Added by an administrator* wherever records are listed.
+
+!!! note "Voiding an automatic check-out"
+    The automatic check-out job checks out anyone whose latest record is a screen lock older than
+    `check-out-after-minutes`, looking back two days beyond that limit. While the lock before a voided
+    automatic check-out is still the person's latest record, the job's next run writes a new
+    automatic check-out at the same time. Once the person has a later record, the lock is no longer
+    their latest and the voided check-out is not replaced.
+
+**Rules.**
+
+- Only administrators (the `ADMIN` role) can correct records. Managers, delegates and the person see
+  the corrections but cannot make them.
+- You cannot correct your own records; another administrator must.
+- Reasons and notes are at most 500 characters. Write them for the person: they see them, with your
+  name.
+- A record can be voided once. Voiding cannot be undone from the page. If you voided the wrong
+  record, add a record at the right time with a reason that says so.
+- A voided or added check-in recalculates the person's average login time.
+
+**What is recorded and who is told.**
+
+- Every correction is written to the audit log as `record.voided`, `record.added` or
+  `record.annotated`, with your reason (or the note), the record, its time and its day. Filter the
+  audit log by these actions, or by the person as the target.
+- When you void or add a record, the person receives an e-mail saying which record, who made the
+  change and why, with a link to that day. Notes are not e-mailed. E-mail goes out only when a mail
+  server is configured, using the same sender and settings as absence alerts.
+- The person, their managers and delegates see the corrections under **Records for a day**, and
+  their calendar marks corrected days (*Records corrected: ...*).
+
+**Retention and erasure.**
+
+- Void records are kept, and shown, until the retention purge deletes them, a day after the normal
+  cutoff. They are not counted in the monthly summaries. The purge's `data.purged` audit event counts
+  them as `voidCheckIns`.
+- Erasing a person deletes their records, void and added ones included, with every correction on
+  them. The audit log keeps its events, including the reasons you gave.
+
+The same corrections can be made through `/api/records`; see
+[API reference → Check-in record corrections](api-reference.md#check-in-record-corrections).
+
 ## Privacy: retention, export and erasure
 
 **Administration → Privacy** (`/app/admin/privacy`) is for administrators, and works in every
@@ -259,7 +380,8 @@ still active, and their open sessions.
 - **Download their data** gives the same JSON file the person gets from **My data**. Each download
   is audited as `data.exported` with `requestedBy` set to you.
 - **Erase personal data** deletes, in one transaction, their user record, group access,
-  check-ins, calendar statuses, status requests, absence alerts about them, monthly summaries
+  check-ins (void and added ones too, with their corrections), calendar statuses, status requests,
+  absence alerts about them, monthly summaries
   and the webhook deliveries about them (sent, given up or still waiting, so nothing naming them
   is sent afterwards), and takes them off other people's delegates and groups' alternate
   managers. It also revokes the API tokens and disables the webhooks they created (audited as
@@ -306,6 +428,17 @@ organization. The `MANAGER` role no longer opens it.
 
 Calendar events appear in orange on everyone's calendars. Events marked **Holiday** also stop
 absence alerts and make metrics report the day as *Not a working day* with the event's title.
+
+### Days and Time Zones
+
+The read-only **Days and Time Zones** card shows the application's time zone and day start, and
+each configured site (by the directory's location attribute) with its time zone and day start. Each
+person's day is in their own time zone (their profile's, else their site's, else the application's)
+and starts at their site's day start, else the application's. They are server settings
+(`APPLICATION_TIMEZONE`, `APPLICATION_DAYSTART`, `APPLICATION_SITEDAYSTARTS`,
+`APPLICATION_REPORTS_SITETIMEZONES`); see
+[Configuration → Time zone and day start](configuration.md#time-zone-and-day-start). With no site
+configured, the card says everyone without a profile time zone is on the application's.
 
 ### Group cache
 

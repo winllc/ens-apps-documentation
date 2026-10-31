@@ -61,12 +61,15 @@ a check-in the day is still not accounted for.
 
 ## Home
 
-**Home** (`/app/home`) is your own day. The top line shows the date being viewed.
+**Home** (`/app/home`) is your own day. The top line shows the date being viewed and the time zone
+your day is in, with its start when that is not midnight (for example *Today, Monday October 26 ·
+your day: Asia/Tokyo*). "Today" is your own today, and the times shown (status since, checked in,
+checked out) are in your zone. See [Your day and time zone](#your-day-and-time-zone).
 
 | Card | Shows |
 |---|---|
 | **My status** | Your current status and when it started, the time you checked in and out, the time you are **expected in by** with the rule it came from, and your **average arrival**. |
-| **Last 30 days** | Working days you checked in, days covered only by a status (one that accounts for the day, see [Statuses](#statuses); not *Late Arrival* or *Early Leave*), and days with nothing recorded, as counts and a bar. |
+| **Last 30 days** | Your working days you checked in, days covered only by a status (one that accounts for the day, see [Statuses](#statuses); not *Late Arrival* or *Early Leave*), and days with nothing recorded, as counts and a bar. Days on leave are left out of your working days, and the card says how many, for example *12 of 12 working days checked in, 10 on leave*. See [Working days](#working-days). |
 | **Workstation agent** | *Reporting* with the time of the last event, or *Not reporting* if nothing has arrived from your PC for 7 days or more. If you have been working but see *Not reporting*, the agent on your PC needs attention. |
 | **Coming up** | Statuses you have set for the next 14 days, with a link to **Update my calendar**. |
 
@@ -74,11 +77,26 @@ a check-in the day is still not accounted for.
 
 1. a *Late Arrival* time you entered for today,
 2. otherwise the **login time** you set on your profile,
-3. otherwise your **average arrival**: the mean of your first check-in on each weekday over the
-   last 30 days.
+3. otherwise your **average arrival**: the mean of your first check-in on each of your working days
+   over the last 30 days, in your time zone.
 
 If you are not checked in by that time plus the grace period (60 minutes unless your organization
-changed it) on a working day, your managers are notified.
+changed it) on one of your working days, your managers are notified.
+
+### Your day and time zone
+
+Your day is in **your own time zone**: the one you chose on your profile, else your site's, else the
+application's. It starts at **your site's day start**, midnight unless your organization set another
+time. **My Profile** says which zone and day start your days are in.
+
+- Which day a check-in counts for is yours: the first sign-in or unlock of your day, from your day
+  start in your zone, is your check-in. An arrival in Tokyo at 08:00 on Monday is Monday's.
+- Your **login time** and late arrival times are clock times in your zone.
+- Your weekends, holidays and absence alerts follow your date.
+- At a site whose days start in the evening (for example 18:00, for shifts that run 22:00 to 06:00),
+  a whole night shift, check-in and check-out, is the day it started on. A login time earlier than
+  the day start is the next morning of that day: with a day start of 18:00, 02:00 is the small hours
+  of the same shift.
 
 ### My team (if people report to you)
 
@@ -87,11 +105,14 @@ particular application role for this.
 
 | Card | Shows |
 |---|---|
-| **Accounted for** | The percentage of your reports who are checked in or have a status that accounts for the day (see [Statuses](#statuses)), and the mix of statuses. On weekends and holidays it says why nobody is expected. |
-| **Not in yet** | Reports who are not accounted for, with their expected time: the time of a *Late Arrival* they set for the day, else their login time or average arrival. A **Late** badge (**Missed** when you view a past day) appears once they are past it. |
+| **Accounted for** | The percentage of your reports who are checked in or have a status that accounts for the day (see [Statuses](#statuses)), and the mix of statuses. Only reports whose working day it is are expected. On a holiday, or a day none of your reports works, it says why nobody is expected (for example *Not a working day: Friday* for a team that works Monday to Thursday). |
+| **Not in yet** | Reports who are not accounted for on one of their working days, with their expected time: the time of a *Late Arrival* they set for the day, else their login time or average arrival. Each report's expected time is in their own time zone, shown next to the time when it is not yours (for example *expected 08:00 (Asia/Tokyo)*). A **Late** badge (**Missed** when you view a past day) appears once they are past it. |
 | **Awaiting your response** | Absence alerts nobody has answered yet, with a **New** badge on those you have not read. Marking them read in the bell does not remove them. Click one to respond. |
 | **Team agents** | How many reports' agents reported in the last 7 days, and who stopped reporting. |
 | **Team coming up** | Your reports' statuses for the next 14 days. |
+
+Each report's "today" is their own date, and the 30-day attendance counts each report's days in their
+own zone and day start.
 
 If the directory cannot be read, Home says *The directory could not be read, so your team is not
 shown* instead of leaving the team section out. Try again in a few minutes.
@@ -115,11 +136,11 @@ without being able to change it.
 
 `/app/users/<group DN>` shows:
 
-- **Members**: a table of each member's name, status, last status change and notes. Each column can
-  be filtered. Turn on **Advanced** to also show the DN, check-in time and check-out time. Click a
-  row to open that person's details. Other members' times and notes are shown only if you manage
-  the group (or can otherwise see their details, see [A person's details](#a-persons-details)).
-  Everyone else's row shows their status only.
+- **Members**: a table of each member's name, status (for their own today), last status change and
+  notes. Each column can be filtered. Turn on **Advanced** to also show the DN, check-in time and
+  check-out time. Click a row to open that person's details. Other members' times and notes are
+  shown only if you manage the group (or can otherwise see their details, see
+  [A person's details](#a-persons-details)). Everyone else's row shows their status only.
 - **Favorite**: pins the group so it shows under *Favorites only* on the Groups page.
 - **Generate Group Report** (admins, and managers of this group with the `MANAGER` role): pick a
   date range, then **Generate Report**. See [Group report](#group-report).
@@ -143,9 +164,10 @@ The report page shows the group name, the date range and the number of users, th
 - **User Reports**: for each member, each day's status, check-in time, check-out time and how long
   they were checked in.
 
-The dates you pick are whole days in ReadyRoom's time zone, at most 366 of them by default. The
-check-out time is when the person left: their last check-out of the day, or, for an automatic
-check-out, the screen lock before it. While the day is still in progress a screen lock is taken as
+The dates you pick are whole days, at most 366 of them by default, and each person's records are
+put on their own days: in their time zone, from their day start. The check-out time is when the
+person left: their last check-out of the day, or, for an automatic check-out, the screen lock
+before it. While the day is still in progress a screen lock is taken as
 a break, and a person who has not checked out shows *No logoff recorded*. Once the day is over, a
 day that ended with a screen lock ended at that lock. The downloads and scheduled reports count
 departures the same way.
@@ -186,17 +208,39 @@ including the following, if it is your own page, you are an admin, or you are re
 the person: you manage one of their groups, they report to you directly in the directory, or you
 are one of their delegates.
 
-- **Audit Log**: every check-in, lock, unlock and check-out recorded for them, newest first.
+- **Audit Log**: every check-in, lock, unlock and check-out recorded for them, newest first. Its
+  **Correction** column shows a record an administrator added, and any note, with who and why. Void
+  records are not listed here; **Records for a day** shows them.
 - **Delegates**: the people who, besides their directory manager, receive their absence alerts,
   may answer them and approve their requests. Only admins change them.
 - **Event Calendar**: their statuses, their online periods ("Online: ..."), and organization events
-  and holidays.
+  and holidays. A day whose records an administrator corrected is marked (*Records corrected:
+  ...*).
+- **Working days**: the days of the week they work and their start date. See
+  [Working days](#working-days).
+- **Records for a day**: pick a day with the date box, or click it on the calendar. The card shows
+  the day's status, when they checked in and out (as every page and report computes them), every
+  record of the day, and any correction an administrator made: a void record, struck through and
+  marked *Void*, with who voided it, when and why; a record an administrator added, labelled, with
+  who added it and why; and notes. The day is the person's own: in their time zone, from their day
+  start. It also lists the day's absence alerts and what became of them, including an answer that an
+  approved request later replaced (see [Notifications](#notifications-absence-alerts)). Only
+  administrators correct records; see
+  [Administration](admin-guide.md#correcting-check-in-records).
 
 If you are the person's directory manager, one of their delegates or an admin, you can **record a
 status** for them: drag across days on their Event Calendar, choose the status and **Record**. It
 takes effect at once, without approval, and you can record any status, including *Absent*,
 *Absent Unexcused* and *Unscheduled Leave*. A *Late Arrival* you record for someone else has no
-latest time and no limit on the number of days.
+latest time and no limit on the number of days. When the status does not excuse the day (*Absent*,
+*Absent Unexcused*, *Unscheduled Leave*, *Late Arrival* or *Early Leave*), the person is e-mailed
+that you recorded it (see [E-mails about you](#e-mails-about-you)). Recording *normal*, or a status
+that excuses an absence, sends nothing.
+
+The same people can **set their working days**: on the **Working days** card, tick the days they
+work, optionally pick a start date, then select **Save working days**. Choose at least one day;
+Monday to Friday is the default. The start date can be up to a year ahead; leave it empty to count
+from when ReadyRoom first knew the person. You cannot change your own working days.
 
 Admins also see a **Role** card, with **Export or erase data**. The role list offers `USER` and
 `MANAGER`; `ADMIN` is never given there. See [Administration](admin-guide.md#roles).
@@ -210,13 +254,13 @@ as nobody. Try again in a few minutes.
 
 | Section | Shows |
 |---|---|
-| **Accounted for today** | Percentage and count of reports accounted for (checked in, or a status that accounts for the day; see [Statuses](#statuses)). |
-| **Attendance, last 30 days** | Share of working days checked in, days covered by a status (not *Late Arrival* or *Early Leave*), and days with nothing recorded. |
+| **Accounted for today** | Percentage and count of reports accounted for (checked in, or a status that accounts for the day; see [Statuses](#statuses)). Only reports whose working day it is are expected: a four-day worker is not unaccounted for on their day off. If none of your reports works that day, it says it is not a working day. |
+| **Attendance, last 30 days** | Share of your reports' working days checked in, days covered by a status (not *Late Arrival* or *Early Leave*), and days with nothing recorded, with the team's days on leave (for example *48 of 50 working days checked in, 6 on leave*). |
 | **Average arrival, last 30 days** | The team's average first check-in on working days. |
 | **Absence alerts, last 30 days** | Alerts raised, answered and unanswered, with how they were answered. |
-| **Daily attendance, last 30 days** | A chart of each day's counts, with **Show as a table**. |
-| **Status today** | Every report's current status, organization and employee type. **Advanced** adds the DN and check-in and check-out times. |
-| **Attendance by report, last 30 days** | For each report: days checked in, status-only days, days with nothing recorded, average arrival, and when their agent last reported. A **Quiet** badge means nothing was received for a week or more. |
+| **Daily attendance, last 30 days** | A chart of each day's counts, with **Show as a table**. Each report counts only on their own working days, and not on a day they are on leave. |
+| **Status today** | Every report's current status for their own today, organization and employee type. **Advanced** adds the DN and check-in and check-out times. |
+| **Attendance by report, last 30 days** | For each report: days checked in out of their working days, status-only days, days with nothing recorded, days on leave, average arrival, and when their agent last reported. A **Quiet** badge means nothing was received for a week or more. |
 | **Calendar** | A month calendar combining the statuses your reports have set, each named and linked to the person. |
 
 ## Org Chart
@@ -264,11 +308,13 @@ Open **My Profile** from the avatar menu (`/app/profile`).
 - **Notes**: a free-text line shown only to you, admins and the people responsible for you: your
   manager, your groups' managers and your delegates. Do not enter classified data or personal
   data (PII). The audit trail records that your notes changed, never what they say.
-- **Login Time**: your normal start time. It decides when you are expected in. If you leave it
-  empty, your average arrival time is used. It can be at the latest 12:00, the same limit as a
-  late arrival you set yourself (your organization may have changed it).
-- **Time zone**: the time zone your arrival and departure times are shown in on reports, downloads
-  and the public API. Leave it on *My site's time zone* to use your site's.
+- **Login Time**: your normal start time, in your time zone. It decides when you are expected in.
+  If you leave it empty, your average arrival time is used. It can be at the latest 12:00, the same
+  limit as a late arrival you set yourself (your organization may have changed it).
+- **Time zone**: the time zone your days are in: which day a check-in counts for, your login time,
+  your weekends and holidays, when your managers are alerted, and the times on reports, downloads
+  and the public API. Leave it on *My site's time zone* to use your site's. Below it, the page says
+  which zone and day start your days are in (see [Your day and time zone](#your-day-and-time-zone)).
 
 Choose **Submit**. *Successfully updated profile* appears at the top of the page.
 
@@ -277,6 +323,24 @@ Choose **Submit**. *Successfully updated profile* appears at the top of the page
 Your directory details: organization, employee type, location, branch, email, phone, manager and
 average login time. **View My Details Page** opens your details page. If something is wrong, use
 the **Help Desk** link to report it. ReadyRoom cannot change directory data.
+
+### Working days
+
+The **Working days** card shows the days of the week you work and your start date (*first seen*
+when none was set: the day ReadyRoom first knew you). Your details page shows them too. You can see
+them but not change them: if they are wrong, ask your manager, a delegate or an administrator.
+
+- **You are only expected on your working days.** No absence alert goes to your manager on a day you
+  do not work, or before your start date. Holidays on the organization calendar still apply to
+  everyone.
+- **Your 30-day attendance counts only your working days.** If you work Monday to Wednesday and are
+  in on every one of those days, it reads 100%. Someone who started ten days ago is measured over
+  those ten days, not the whole 30.
+- **Leave does not lower your attendance.** A day of *Scheduled Leave*, *Unscheduled Leave* or
+  *Absent Excused* without a check-in is left out of your working days instead of counting as a day
+  you were not in. *Work From Home*, *TDY* and *Out of Office* still count as working days: you were
+  working, just elsewhere. An absence your manager recorded (*Absent*, *Absent Unexcused*) also
+  still counts.
 
 ### Delegates
 
@@ -304,11 +368,11 @@ yours may differ. For one
 that needs approval, you can add a **note for your manager** (up to 500 characters); it is kept
 with the request and shown to whoever decides it. Follow it under **Approvals**.
 
-**Days already past.** "Today" is the date in ReadyRoom's time zone; the **System Date** does not
-move it. A *Late Arrival* or *Early Leave* for a selection that includes an earlier day becomes one
-request for the whole selection, today and later days included: your manager is e-mailed and it
-reaches your calendar, with its time, only once approved. Choosing *normal* for such a selection is
-refused: a past day is your manager's to correct.
+**Days already past.** "Today" is your own today, in your time zone from your day start; the
+**System Date** does not move it. A *Late Arrival* or *Early Leave* for a selection that includes
+an earlier day becomes one request for the whole selection, today and later days included: your
+manager is e-mailed and it reaches your calendar, with its time, only once approved. Choosing
+*normal* for such a selection is refused: a past day is your manager's to correct.
 
 **Days an approved request covers.** Such a day is the request's. Setting *normal*, *Early Leave*
 or *Late Arrival* on it is refused, with a message naming the request: cancel or change the request
@@ -337,7 +401,9 @@ API is used:
 - **Waiting for your approval**: requests from people you decide for, with the person, status
   (a late arrival with its time, for example *Late Arrival by 09:30*), dates, number of days, their
   note and when they asked. **Approve** or **Reject**, each with an
-  optional comment or reason. Nobody decides their own request, admins included.
+  optional comment or reason. Nobody decides their own request, admins included. A request lists
+  any absence alert on its days that was already answered (*Absence alert of &lt;date&gt; answered
+  ...; approving supersedes this answer*).
 - **Ask for a status**: the status, the first and last day, and an optional note; **Send
   request**. You can also ask from your profile calendar. A request over a day that a pending or
   approved request of yours already covers is refused: cancel that one first, or ask only for the
@@ -346,7 +412,8 @@ API is used:
   decided and their comment. **Cancel** withdraws a pending request, or an approved one until its
   last day has passed: its days from today on come off your calendar. Should another approved
   request of yours still cover one of those days (possible only for requests made before
-  overlapping requests were refused), that request's status goes back on the day.
+  overlapping requests were refused), that request's status goes back on the day. An approved
+  request lists any absence alert answer it replaced, beside it.
 
 An approval writes the status on each day of the request, replacing what you had set there; a
 rejection writes nothing. A request that overlaps another approved request of the same person
@@ -363,7 +430,9 @@ which wins over your own; between two of the same kind, the latest wins.
 **Email.** When a mail server is configured, a new request goes to the person's manager and
 delegates (*Approval needed: &lt;status&gt; for &lt;name&gt;*), a decision to the person who asked
 (*Your &lt;status&gt; request was approved* or *rejected*), and a cancellation to the approvers
-(*Cancelled: ...*). The emails carry the status and dates, never the notes.
+(*Cancelled: ...*). The emails carry the status and dates, never the notes. A status your manager, a
+delegate or an administrator records for you can also be e-mailed to you; see
+[E-mails about you](#e-mails-about-you).
 
 **No manager or delegate.** Someone with no manager in the directory and no delegate can still ask.
 They are told *No manager or delegate is set for you in ReadyRoom: an administrator has been
@@ -373,15 +442,34 @@ it comes to them as administrators. Anyone else is told *your manager or delegat
 ## My data
 
 **My data** (`/app/privacy`, in the avatar menu) shows what ReadyRoom keeps about you, who sees it
-and for how long, and **Download my data**: a JSON file with your profile, the group access
-granted to you in ReadyRoom, whose delegate you are, your check-ins, calendar statuses, status
-requests (with notes and comments), absence alerts about you, and monthly summaries. Each download
-is recorded in the audit trail. The audit trail itself is not in the file; ask an administrator.
+and for how long, and **Download my data**: a JSON file with your profile (with your working days
+and start date), the group access granted to you in ReadyRoom, whose delegate you are, your
+check-ins (void ones too, each with its corrections), calendar statuses, status requests (with
+notes and comments), absence alerts about you, and monthly summaries. It also has two histories
+from the audit trail: who set, recorded, answered, approved or cancelled a status for you, or
+changed your working days (`statusHistory`), and every correction to your records, with its reason
+(`recordCorrections`). Each download is recorded in the audit trail. The rest of the audit trail is
+not in the file; ask an administrator. See [Privacy → Export](privacy.md#export).
+
+## E-mails about you
+
+When a mail server is configured, ReadyRoom e-mails you when:
+
+- **an administrator voided one of your check-in records, or added one for you** (*A check-in record
+  of yours was voided: &lt;date&gt;*, *A check-in record was added for you: &lt;date&gt;*): which
+  record, who made the change and why, with a link to that day. Notes on a record are not e-mailed;
+- **your manager, a delegate or an administrator recorded a status for you that does not excuse the
+  day** (*A status was recorded for you: &lt;status&gt;*): *Absent*, *Absent Unexcused*,
+  *Unscheduled Leave*, *Late Arrival* or *Early Leave*, on your calendar or by answering an absence
+  alert. The e-mail gives the status, the days and who recorded it.
+
+You are never e-mailed about a status you set yourself. Every correction is also shown to you
+under **Records for a day** on your details page (**My Profile** → **View My Details Page**).
 
 ## Notifications (absence alerts)
 
 When one of your reports, or someone whose delegate you are, has not checked in by their expected
-time plus the grace period on a working day, you receive:
+time plus the grace period on one of their working days, you receive:
 
 - an **email** titled *Accountability Notification for &lt;name&gt;* with the person, the date,
   the expected check-in time and a **Confirm Status** link, and
@@ -398,22 +486,35 @@ The notification page shows the summary and a **Status** list with these choices
 
 - on your notification and on every other manager's copy of the same alert, so each copy shows
   who responded and when, and
-- as the person's status for that day.
+- as the person's status for the day the alert was about: their own date when it was raised.
+
+Each person is checked on their own day, in their own time zone: a person in Tokyo is not alerted
+about on New York's Friday evening, and is alerted about on Tokyo's Monday morning if they have not
+arrived. When their zone is not the application's, the email names it next to the expected time,
+for example *08:00 (Asia/Tokyo)*. An answer that does not excuse the day (`UNSCHEDULED_LEAVE`,
+`ABSENT_UNEXCUSED` or `ABSENT`) is e-mailed to the person (see
+[E-mails about you](#e-mails-about-you)).
 
 Only managers the alert was sent to, while they still decide for the person, and administrators
 can respond. You can change the answer later, and the day's status is updated to match, for 14 days
 by default (`application.events.alert-answer-days`); after that only an administrator can answer
 it. An alert whose day an approved request covers has already been answered by the request: it shows
 **Answered By Request**, and nobody can answer it on its own, administrators included, until the
-request is cancelled. When you cannot answer an alert, its page says why. Alerts are not raised on weekends, on holidays in the organization
-calendar, for anyone already checked in, for anyone with an excusable status that day, for anyone
+request is cancelled. If the alert had been answered before the request was approved, the alert
+page shows both: **Answer Given Here** (the answer, who gave it and when) and *Superseded by the
+approved request of &lt;date&gt; (&lt;status&gt;)*. The person's day (**Records for a day**) and
+**Approvals** show them too. When you cannot answer an alert, its page says why. Alerts are not
+raised on a day that is not one of the person's working days or before their start date (see
+[Working days](#working-days)), on holidays in the organization calendar, for anyone already
+checked in, for anyone with an excusable status that day, for anyone
 whose day already carries a status a manager, delegate or administrator recorded (*Absent*,
 *Absent Unexcused* or *Unscheduled Leave*), for anyone who has left the directory or whose account
 is disabled or expired, or for anyone with no expected time at all. Each person gets at most one
 alert per day, and you are never alerted about yourself. A requested status that is still waiting
 for approval does not prevent an alert, and neither does *Late Arrival* or *Early Leave*: a late
-arrival only moves the expected time to the one entered. If someone's expected time plus the grace period falls
-after midnight, the alert still comes that day, shortly before midnight.
+arrival only moves the expected time to the one entered. If someone's expected time plus the grace
+period falls after their day ends (midnight unless their site's days start at another time), the
+alert still comes that day, shortly before it ends.
 
 ## Metrics (admins and managers)
 
@@ -421,11 +522,15 @@ after midnight, the alert still comes that day, shortly before midnight.
 
 | Section | Shows |
 |---|---|
-| **Accounted for** | The percentage of expected people who checked in or have a status that accounts for the day (see [Statuses](#statuses)). "Expected" means anyone active in the last 30 days or given such a status for the day. |
+| **Accounted for** | The percentage of expected people who checked in or have a status that accounts for the day (see [Statuses](#statuses)). "Expected" means anyone whose working day it is and who was active in the last 30 days or given such a status for the day: someone who works Saturdays is expected on Saturday. Each person is counted on their own date. |
 | **Status mix** | How the expected people split across statuses. |
 | **Agent coverage** | The share of users whose agent reported in the last 7 days, with counts of stopped agents and users with no activity in 90 days. |
 | **Current User Statuses** | A pie chart of today's check-ins, check-outs, locks and unlocks against the total number of directory users. |
 | **Today's Activity** | Each event type over the day in 15-minute buckets. |
+
+The accountability figures (accounted for, status mix, agent coverage) count each person on their
+own date and day. **Current User Statuses**, the breakdown tabs and **Today's Activity** show the
+application's day and clock, one clock for everyone.
 | Breakdown tabs | Status charts by **organization**, **employee type**, **location** and **branch**. |
 
 ## Looking at another day
@@ -433,10 +538,12 @@ after midnight, the alert still comes that day, shortly before midnight.
 Admins and managers have a **System Date** picker in the top bar. Choose an earlier date (future
 dates are not allowed), and every page (Home, groups, reports, metrics) shows that day for the rest
 of your session, or until you pick another date. The **Home** heading then reads *Showing
-&lt;date&gt;* instead of *Today*.
+&lt;date&gt;* instead of *Today*. The date you pick is the same date for everyone on the page, each
+person's from their own day start in their own time zone.
 
 ## Settings (admins)
 
 The **Settings** page manages the organization calendar, the group cache, the check of stored group
-DNs and the org-chart parse rules. It is organization-wide configuration, for administrators only.
+DNs and the org-chart parse rules, and shows the days and time zones in use. It is
+organization-wide configuration, for administrators only.
 It is described in [Administration](admin-guide.md#settings-page).
