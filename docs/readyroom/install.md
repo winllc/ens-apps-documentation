@@ -409,6 +409,7 @@ commas.
 | `privacy.coworkerVisibility` (`full`) | `APPLICATION_PRIVACY_COWORKERVISIBILITY`; the chart's schema refuses other values |
 | `retention.eventsDays` (`0`), `retention.schedule` | `APPLICATION_RETENTION_EVENTSDAYS`, `APPLICATION_RETENTION_CRON`; the schema refuses an `eventsDays` between 1 and 30 |
 | `bannerText`, `timezone`, `checkOutAfterMinutes`, `updateProfileUrl`, `logLevel`, `javaOpts` | The settings under "Other" |
+| `dayStart` (`00:00`), `siteDayStarts` | `APPLICATION_DAYSTART`, `APPLICATION_SITEDAYSTARTS`: when people's days start. See [Configuration](configuration.md#time-zone-and-day-start) |
 
 Anything else from [Configuration](configuration.md) goes in `extraEnv`, as an environment variable
 named the same way as in `.env`.
@@ -986,9 +987,10 @@ trusted any certificate. Sends time out after 30 seconds.
     Helm chart's probes use them, on the management port (9090) while `metrics.enabled` is `true`.
 
 Set the time zone deliberately. `APPLICATION_TIMEZONE` sets the JVM default time zone, which
-decides what "today" means for every page and job, and `SPRING_JACKSON_TIMEZONE` the zone dates are
-shown in. Set both to the same zone in `.env`; the Helm value `timezone` sets both. See
-[Configuration](configuration.md#time-zone).
+is the zone of everyone with no zone of their own (on their profile or for their site), and
+`SPRING_JACKSON_TIMEZONE` the zone dates are shown in. Set both to the same zone in `.env`; the Helm
+value `timezone` sets both. Where sites work in other zones, or shifts cross midnight, set the site
+time zones and day starts too. See [Configuration](configuration.md#time-zone-and-day-start).
 
 ## Windows (Kerberos) sign-in
 

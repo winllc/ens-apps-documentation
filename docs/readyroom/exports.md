@@ -28,8 +28,9 @@ details they may see, and a list shows everyone else as
   memory of the whole report.
 - Each download is a form post with the CSRF token, audited as `data.exported` (format, group or
   search, period) before it starts.
-- The days picked are taken exactly, as days in ReadyRoom's time zone (`APPLICATION_TIMEZONE`).
-  Exports, and the group report page, cover at most `APPLICATION_REPORTS_MAXRANGEDAYS` (366)
+- The days picked are taken exactly, and each person's records are put on their own days: in their
+  time zone, from their day start (see [Time zones](#time-zones)). Exports, and the group report
+  page, cover at most `APPLICATION_REPORTS_MAXRANGEDAYS` (366)
   days; a longer range is refused with `400`. Days the retention purge has
   summarised are marked so; the monthly summaries stay on the HTML report.
 - **Formula guard**: in CSV, text starting with `=`, `+`, `-`, `@`, a tab or a carriage return (or
@@ -84,19 +85,24 @@ attendance as CSV or Excel, at an hour in its owner's time zone:
 
 ## Time zones
 
-ReadyRoom runs in one zone (`APPLICATION_TIMEZONE`), which the pages, the absence check and the day
-boundaries of the metrics still use. **Reports, downloads, scheduled reports and the public API show
-each person's times in their own time zone**: the one they chose on their profile (*Time zone*), else
-their site's, else the application's. Sites are mapped by the directory's location attribute.
+**Each person's day is their own**: in their time zone, the one they chose on their profile (*Time
+zone*), else their site's, else the application's (`APPLICATION_TIMEZONE`); and from their site's
+day start, else the application's (`APPLICATION_DAYSTART`, midnight). Sites are mapped by the
+directory's location attribute. Reports, downloads, scheduled reports and the public API put each
+record on the person's own day and show their times in their zone. So do the pages and the absence
+alert. See [Configuration → Time zone and day start](configuration.md#time-zone-and-day-start).
 
-A group report's download can instead show every row in the viewer's own zone (*My time zone*).
-Per-site absence checks are not done yet.
+A group report's download can instead show every row in the viewer's own zone and day start (*My
+time zone*). The public API's `from` and `to` are still the application's days; each event's `date`
+is the person's own day.
 
 ## Settings
 
 | Variable | Default | Helm | |
 |---|---|---|---|
-| `APPLICATION_REPORTS_SITETIMEZONES` | (none) | `reports.siteTimeZones` | `<location>=<IANA zone>`, comma separated, for example `New York=America/New_York,Los Angeles=America/Los_Angeles`; an unknown zone stops startup |
+| `APPLICATION_REPORTS_SITETIMEZONES` | (none) | `reports.siteTimeZones` | `<location>=<IANA zone>`, comma separated, for example `New York=America/New_York,Los Angeles=America/Los_Angeles`; an unknown zone stops startup. Each person's days and times everywhere, not only in reports |
+| `APPLICATION_DAYSTART` | `00:00` | `dayStart` | When days start, `HH:mm`, in each person's own time zone |
+| `APPLICATION_SITEDAYSTARTS` | (none) | `siteDayStarts` | A site's own day start, `<location>=HH:mm`, comma separated, for example `Plant 2=18:00`. See [Configuration](configuration.md#time-zone-and-day-start) |
 | `APPLICATION_REPORTS_MAXRANGEDAYS` | `366` | `reports.maxRangeDays` | The most days one export covers |
 | `APPLICATION_REPORTS_MAXATTACHMENTBYTES` | `10485760` | `reports.maxAttachmentBytes` | A scheduled report's largest attachment |
 | `APPLICATION_REPORTS_MAXRECIPIENTS` | `20` | `reports.maxRecipients` | A scheduled report's most recipients |
@@ -106,3 +112,7 @@ Per-site absence checks are not done yet.
 
 Until `APPLICATION_REPORTS_SITETIMEZONES` is set, reports look as before (everyone in
 `APPLICATION_TIMEZONE`). Flyway `V10` adds `user_records.time_zone` and `report_schedules`.
+
+From the next release, a person's profile or site zone also decides their day on every page and
+for the absence alert, not only in reports. Until a day start is set, days start at midnight, as
+before.

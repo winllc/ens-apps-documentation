@@ -184,9 +184,9 @@ run. Expired sessions are also deleted once a minute, on one replica.
 | Job (class) | Delay (packaged / built-in) | First run (packaged / built-in) | What it does |
 |---|---|---|---|
 | **Auto check-out** (`MarkInactiveCron`) | 60 s / 30 min (`inactive-cron.fixed-rate`) | 60 s / 30 min | For each user whose **latest event is a screen lock** older than `check-out-after-minutes`, writes a `CHECK_OUT` timestamped at lock time + that many minutes, flagged `forced = true`. It looks back two days beyond that limit, so a lock left in the evening is checked out after midnight and a lock left during an outage is caught up. |
-| **Absence alerts** (`SendAbsentNotificationsCron`) | 5 min / 30 min (`send-absent-notification-cron.fixed-rate`) | immediately / 30 min | On working days, raises at most one alert per person per day for users not in by their expected time plus the grace period. See [Administration](admin-guide.md#absence-notifications). |
+| **Absence alerts** (`SendAbsentNotificationsCron`) | 5 min / 30 min (`send-absent-notification-cron.fixed-rate`) | immediately / 30 min | Checks each person on their own day (their time zone and day start), on their working days only, and raises at most one alert per person per day for users not in by their expected time plus the grace period. See [Administration](admin-guide.md#absence-notifications). |
 | **Directory refresh** (`RefreshUserRecordsCron`) | 1 h / 1 h (`refresh-user-records-cron.fixed-rate`) | 5 min / 5 min | Reads every user from the directory and creates or updates `user_records` (DN, email, phone, organization, employee type, location, branch, duty sub-organization) in batches of changed rows. Set `refresh-user-records-cron.enabled: false` to pause it. A sign-in only fills a record's empty columns, from the user cache, so changed directory values reach the record through this refresh. |
-| **Retention purge** (`RetentionService`) | `0 17 2 * * *`, 02:17 daily (`application.retention.cron`) | – | Only with `application.retention.events-days` above 0: summarises and deletes old check-ins, statuses, requests and absence alerts. See [Retention](#retention). |
+| **Retention purge** (`RetentionService`) | `0 17 2 * * *`, 02:17 daily (`application.retention.cron`) | – | Only with `application.retention.events-days` above 0: summarises and deletes old check-ins, statuses, requests and absence alerts, and deletes void check-ins. See [Retention](#retention). |
 | **Audit retention** (`AuditRetention`) | `0 23 3 * * *`, 03:23 daily | – | Only with `ENS_AUDIT_RETENTION_DAYS` above 0: prunes delivered audit events. |
 
 The directory refresh also matters for alerts: the absence job only considers people who have a
@@ -292,19 +292,24 @@ deletes what is older than the cutoff:
 
 - **check-in records and calendar statuses**, after rolling them up into one summary per person
   per month (`attendance_summaries` and `attendance_summary_statuses`): days checked in, time in
-  (first check-in to last check-out each day, as the reports count it) and days per status. A later
-  run adds to a month already summarised; nothing is counted twice;
+  (first check-in to last check-out each day, as the reports count it), days per status, and the
+  month's working days for the person (their working days from their start date, less holidays,
+  counted when the purge first reaches the month; months the purge finished before the next
+  release have no count). A later run adds to a month already summarised; nothing is counted twice;
+- **check-in records an administrator voided**, without a summary (they count for nothing), once
+  they are a day older than the cutoff;
 - **absence alerts**, by the day they were raised, and **status requests**, once their last day is
   past, without a summary. A request still waiting for a decision is first closed as `CANCELLED`,
   audited as `calendar.request-cancelled` (actor `system`, reason `retention`).
 
-A person's day is their own, as in the reports and exports: in their profile's time zone, else
-their site's, else the application's. The purge walks the days once per zone in use and summarises
-each person's records in their zone, up to the start of the cutoff day where they are. It works one
+A person's day is their own, as everywhere else: in their profile's time zone, else their site's,
+else the application's, from their site's day start, else the application's. The purge walks the
+days once per zone and day start in use and summarises each person's records in their own days, up
+to the start of the cutoff day where they are. It works one
 day at a time, oldest first, 500 people per transaction, so it never holds a table for long. A lock
 on the single row of `retention_state` stops two instances counting the same day twice. Each run is
-audited as `data.purged` (actor `system`) with its counts (`requestsCancelled` among them) and
-cutoff, and
+audited as `data.purged` (actor `system`) with its counts (`requestsCancelled` and `voidCheckIns`
+among them) and cutoff, and
 counted in `ens_readyroom_retention_purged_total{kind}`; a failed run is `job.failed`, and the next
 run carries on. **Administration → Privacy** shows the setting, the cutoff and the last purge.
 
@@ -346,9 +351,13 @@ package nor the Helm chart carries scripts. Developer notes on adding a migratio
 | `V12__alert_read_and_emailed` (next release) | `notification_records.read_at` (an alert marked read, which no longer counts as answered) and `notification_records.emailed_at` (when its email went out, so the next alert run resends today's unsent ones). Existing alerts count as emailed, and ones marked read before stay off the list |
 | `V13__cache_invalidations` (next release) | `cache_invalidations`: the group cache evictions made on Settings, which every replica applies. A new table only |
 | `V14__alert_answered_by_request` (next release) | `notification_records.status_response_request_id`: the approved status request that answered an absence alert (its days' alerts take the request's status as their answer). A request the retention purge or an erasure deletes clears the link and leaves the answer. One new column only |
+| `V16__work_schedules` (next release) | `user_records.working_days` (`MTWTF..`; empty for Monday to Friday), `user_records.start_date`, `user_records.created_at`, and `attendance_summaries.working_days`, for [working days and start dates](admin-guide.md#working-days-and-start-dates). `created_at` is filled for existing people with the earliest of their check-ins and monthly summaries (empty for someone with neither). Nobody's schedule changes |
+| `V17__record_corrections` (next release) | `check_in_out_records`: `voided_at`, `voided_by`, `void_reason`, `note`, `noted_by`, `noted_at`, `added_by`, `added_at`, `added_reason`, for [corrections to check-in records](admin-guide.md#correcting-check-in-records); and `notification_records.original_response`, `original_response_by_dn`, `original_response_date`, the alert answer an approved request superseded. New empty columns only: existing records are neither void nor corrected |
 
-V2 to V4 change only the schema, plus one `UPDATE` on `user_records`, so they are quick; V6 to V11,
-V13 and V14 add tables and columns only; V12 adds two columns and fills them with one `UPDATE` each.
+There is no V15. V2 to V4 change only the schema, plus one `UPDATE` on `user_records`, so they are
+quick; V6 to V11, V13, V14 and V17 add tables and columns only; V12 adds two columns and fills them
+with one `UPDATE` each; V16 adds columns and fills `user_records.created_at` with one `UPDATE` that
+reads each person's earliest check-in record and monthly summary.
 
 ## Certificate and key rotation
 
@@ -450,8 +459,9 @@ Nothing to do by hand: Flyway adds the tables above, and nothing existing change
 
 ### Upgrading to the next release
 
-New tables and columns (Flyway `V11` to `V14`), added at the first start. Sign-in keeps working
-for every installation that kept its settings; check the points below.
+New tables and columns (Flyway `V11` to `V14`, `V16` and `V17`; there is no `V15`), added at the
+first start, in that order. Sign-in keeps working for every installation that kept its settings;
+check the points below.
 
 | Change | What to do |
 |---|---|
@@ -470,6 +480,12 @@ for every installation that kept its settings; check the points below.
 | Erasure also deletes webhook deliveries about the person, revokes their API tokens, disables their webhooks and ends their sessions | See [Privacy → Erasure](privacy.md#erasure) |
 | LDAP referrals are ignored explicitly (`spring.ldap.referral`, default `ignore`), and so is the partial result they leave | Nothing to do: an Active Directory searched from its domain root now returns its entries instead of failing. `follow` chases referrals instead (the other servers must accept the same bind account) |
 | Signing out of the identity provider too | `ENS_SSO_OIDC_END_SESSION` and `ENS_SSO_SAML_SINGLE_LOGOUT` (Helm `sso.oidc.endSession`, `sso.saml.singleLogout`) default to `false`, so an upgraded installation signs out exactly as before; the release bundle's `env.template` sets both to `true` for new installs. Before turning them on, register `<base>/signed-out` as a post-logout redirect URI at the OIDC provider; for SAML set the SP key and certificate and re-import the SP metadata at the IdP. See [Single sign-on → Signing out](single-sign-on.md#signing-out) |
+| Each person's day is their own: in their time zone (profile, else site, else `APPLICATION_TIMEZONE`), from their site's day start, else `APPLICATION_DAYSTART` (midnight) | Check-ins, the absence alert, Home, My Reports, the org chart, group reports, downloads and the public API's event `date` now follow each person's zone, not only the times on reports. Where sites work in other zones, set `APPLICATION_REPORTS_SITETIMEZONES`; where a site's shifts cross midnight, give it a day start (`APPLICATION_SITEDAYSTARTS`; Helm `dayStart`, `siteDayStarts`). **Settings → Days and Time Zones** shows the result. See [Configuration](configuration.md#time-zone-and-day-start). No migration |
+| Per-person working days and start dates; leave left out of the 30-day attendance | Nobody's schedule changes: everyone keeps Monday to Friday. Set part-timers' and weekend workers' working days on their details pages (managers, delegates or administrators). Attendance figures may read higher once leave days are left out. See [Administration](admin-guide.md#working-days-and-start-dates) |
+| Administrators correct check-in records (void, note, add), audited as `record.voided`, `record.annotated` and `record.added` | Tell administrators that the person sees each correction and its reason, and is e-mailed when a record is voided or added. Correct records only once every replica runs the new release: a replica of the previous release does not know a record is void. See [Administration](admin-guide.md#correcting-check-in-records) |
+| People are e-mailed when a manager, delegate or administrator records a status that does not excuse the day (Absent, Absent Unexcused, Unscheduled Leave, Late Arrival, Early Leave), on their calendar or by answering an absence alert | Tell managers and users. Needs a mail server, with the same settings as absence alerts |
+| An alert answer that an approved request superseded is kept and shown beside the request | Only for answers superseded from this release on. Earlier ones keep the old answer only in their `absence.alert-superseded` audit event |
+| The personal data export adds `statusHistory` and `recordCorrections` from the audit trail, void records with their corrections, and the person's working days and start date | Update anything that reads the export. See [Privacy → Export](privacy.md#export) |
 
 ## Runbook
 
@@ -478,7 +494,7 @@ for every installation that kept its settings; check the points below.
 | Nobody's status updates | Is the server up (`/actuator/health/readiness`)? Are agents reaching it (workstation log; Metrics → Agent coverage)? Did the server certificate or truststore change? |
 | One person's status never updates | Their workstation log and the task's *Last Run Result*. Is their certificate valid and issued with their directory DN? |
 | People show `OUT` shortly after locking | `check-out-after-minutes` is too low. The default is 240. |
-| No absence emails | SMTP errors in the log, the manager's email attribute, `application-base-url`, whether today is a weekend or holiday, and whether the person has an expected time. |
+| No absence emails | SMTP errors in the log, the manager's email attribute, `application-base-url`, whether today is one of the person's working days (their schedule, on their own date) or a holiday, and whether the person has an expected time. |
 | Pages slow or hanging | LDAP response times. Turn on `request-metrics`. The timeouts are 5 s connect and 30 s read. |
 | Group changes in the directory not visible | Cache lifetimes. Evict the group in **Settings → Group Cache**. Membership-based access is cached for 300 s. |
 | "Wrong" data for one admin | They may have pinned another day with **System Date**. Look for `pinned their session system time` in the log. |
