@@ -322,11 +322,9 @@ From there you can:
   counts like any other and is labelled *Added by an administrator* wherever records are listed.
 
 !!! note "Voiding an automatic check-out"
-    The automatic check-out job checks out anyone whose latest record is a screen lock older than
-    `check-out-after-minutes`, looking back two days beyond that limit. While the lock before a voided
-    automatic check-out is still the person's latest record, the job's next run writes a new
-    automatic check-out at the same time. Once the person has a later record, the lock is no longer
-    their latest and the voided check-out is not replaced.
+    The automatic check-out job leaves alone a screen lock whose automatic check-out an
+    administrator voided: it does not write it again. The person's day stays open until a later
+    record of theirs ends it, or you add the check-out they missed.
 
 **Rules.**
 
