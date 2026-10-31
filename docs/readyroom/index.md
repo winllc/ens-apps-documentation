@@ -46,7 +46,7 @@ manager approves), so their managers know where they are when they are not at a 
 ```mermaid
 flowchart LR
     subgraph WS["Windows workstation"]
-        TS["Task Scheduler<br/>logon / lock / unlock / logoff / disconnect"]
+        TS["Task Scheduler<br/>logon / lock / unlock / logoff /<br/>remote disconnect / reconnect"]
         PS["Update-WorkStatus.ps1"]
         SF[("%ProgramData%\\InOutWorker<br/>sessions (one file per user), logs")]
         TS --> PS

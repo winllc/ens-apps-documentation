@@ -135,7 +135,9 @@ Audit events already forwarded to a SIEM are still there.
 2. Run `./install.sh` to load the images and start ReadyRoom on an empty database.
 3. Restore the latest backup:
    `./restore.sh backups/readyroom-db-<stamp>.dump backups/readyroom-license-<stamp>.tar.gz`. It
-   stops ReadyRoom, replaces the database and the license volume, and starts it again.
+   stops ReadyRoom, replaces the whole database schema and the license volume, and starts it again.
+   The restore is one transaction: if it fails, or the dump is truncated, the database is unchanged
+   and ReadyRoom stays stopped.
 4. The installation id is in the database, so the restore keeps it. If no database backup
    survives, the installation has a new id:
     - an unbound license works again once you upload the `.lic` file on the license screen;
@@ -147,8 +149,9 @@ Audit events already forwarded to a SIEM are still there.
 
 With Helm: install the same chart version into the new cluster with your values and Secrets and
 `replicaCount: 0`, restore the database into your PostgreSQL (the chart's `README.md` gives the
-steps for a dump from the backup PVC; the database holds the license and the installation id), then
-set `replicaCount` back to what you ran.
+steps for a dump from the backup PVC: like `restore.sh`, they replace the whole `public` schema in
+one transaction, run as the account that owns ReadyRoom's tables; the database holds the license and
+the installation id), then set `replicaCount` back to what you ran.
 
 ### The audit trail after a restore
 
@@ -167,6 +170,10 @@ reusing numbers your SIEM may already have from the lost period:
 
 Migrations are not undone, and `restore.sh` restores only into the same or a newer release. A
 rollback therefore needs the backup taken before the upgrade, restored by the **older** release.
+`restore.sh` replaces the whole `public` schema, so none of the newer release's tables survive the
+restore. Earlier releases' `restore.sh` dropped only what the dump holds: rolled back to such a
+release, the newer release's tables stay, and upgrading again stops at startup with "relation
+already exists".
 With the release package, `upgrade.sh` takes that backup with the older release's `backup.sh`, into
 its `backups/` directory, unless it was run with `--no-backup`.
 
@@ -181,12 +188,13 @@ its `backups/` directory, unless it was run with `--no-backup`.
     ```
 
     The volumes are shared between the two directories, so the old release starts on the newer
-    schema until `restore.sh` replaces the database: if it refuses to start, run `restore.sh` first
+    schema until `restore.sh` replaces it: if it refuses to start, run `restore.sh` first
     (it starts ReadyRoom when it is done). The old images must still be loaded (`docker image ls`).
 
 === "Helm"
 
-    Scale the Deployment to 0, restore the pre-upgrade dump into your PostgreSQL, then
+    Scale the Deployment to 0, restore the pre-upgrade dump into your PostgreSQL with the steps in the
+    chart's `README.md`, which replace the whole `public` schema, then
     `helm rollback readyroom <revision> -n readyroom`. `helm rollback` restores the previous
     manifests and values, not the database. The license PVC is kept.
 

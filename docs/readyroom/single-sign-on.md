@@ -13,12 +13,20 @@ does not offer single sign-on.
 Whoever the identity provider signs in must match **exactly one** directory user by the protocol's
 **user filter**: an LDAP filter with the provider's claims (OIDC) or attributes (SAML) as
 `{placeholders}`, the same way `ENS_X509_USER_FILTER` maps a certificate. The values are escaped. No
-match, or several, is refused.
+match, or several, is refused, and so is a directory user whose account is disabled, locked out or
+expired: the account is checked live, as for certificates, and the refusal is audited as a failed
+sign-in with the reason (for example `account disabled in the directory`). A directory that cannot
+be read lets the sign-in go on, from the user cache.
 
 That directory user then gets exactly the roles any other sign-in would: `USER`, a role an
 administrator assigned, `ADMIN` for `application.super-user-dns`. The provider's groups add `MANAGER`
 or `ADMIN` **only** through `ENS_SSO_ROLE_MAPPING`; a group not listed there grants nothing, whatever
 it is called.
+
+The browser session that follows is checked again every `ENS_SESSION_ACCOUNT_CHECK_INTERVAL`
+(`5m`): a disabled, locked out, expired or missing account, or a changed ReadyRoom role (the
+stored role or `application.super-user-dns`; the provider's group grants do not count), ends it.
+See [Security](security.md#notice-and-consent-banner-and-sessions).
 
 ```text
 ENS_SSO_ROLE_MAPPING=ReadyRoom Admins=ADMIN;ReadyRoom Managers=MANAGER

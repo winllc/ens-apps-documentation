@@ -57,9 +57,17 @@ flowchart TD
   `X-ENS-Proxy-Secret` (compared in constant time), and only if it chains to
   `ENS_X509_TRUSTED_CA_FILE` or the TLS trust store. ReadyRoom does not start in header mode without
   a secret of 32 characters or more and a CA.
+- **The account must still be usable.** The user's account is checked live in the directory, as
+  API token owners' are: an account that is disabled, locked out, expired or no longer in the
+  directory does not sign in with a certificate, as its password would fail at the bind. This also
+  refuses the Windows client's check-ins made with such a certificate. When the directory cannot be
+  read, the certificate signs in as before, from the user cache: an outage is no evidence that the
+  account was disabled.
 - Every refusal is audited as a failed `auth.login` with its reason (`certificate revoked`,
   `revocation unknown`, `issuer not allowed`, `no single directory user matches`,
-  `proxy secret missing or wrong`, ...). The settings are in
+  `proxy secret missing or wrong`, `account disabled in the directory`,
+  `account locked out in the directory`, `account expired in the directory`,
+  `account not in the directory, or no longer matching its filters`, ...). The settings are in
   [Installation → Client certificates](install.md#client-certificates-cacpiv).
 - If the DN is not found in the directory, the certificate does not sign in, and a browser falls
   back to the login form. The refusal is audited as a failed `auth.login` with the reason
@@ -93,6 +101,14 @@ whichever way they sign in.
   (`ENS_SESSION_ABSOLUTE_TIMEOUT`, `12h`) and an optional limit per user
   (`ENS_SESSION_MAX_PER_USER`; over it the oldest session ends). Each end is audited as
   `auth.session-expired`. See [Configuration](configuration.md#security-headers-banner-and-sessions).
+- **Account checked again:** a sign-in's roles hold for its session, and nothing signs a session in
+  again. So every `ENS_SESSION_ACCOUNT_CHECK_INTERVAL` (`5m`) a browser session's account is checked
+  live in the directory, and the person's role in ReadyRoom (their stored role, or
+  `application.super-user-dns`) is compared with the one at sign-in; the identity provider's group
+  grants do not count. An account that is disabled, locked out, expired or gone, or a changed role,
+  ends the session, audited as `auth.session-expired` with reason `account` (`details.account` says
+  why); the new role applies from the next sign-in. A directory that cannot be read leaves the
+  session as it is, as at sign-in. The Windows client's API is exempt.
 
 ### Windows (Kerberos) sign-in
 
@@ -115,6 +131,10 @@ Windows sign-in is optional and **off by default**. It applies only to `POST /ap
   certificate for that person would give.
 - The `windowsUserId` stored with the record comes from the verified ticket, not from the request
   body.
+- The account is not checked again in the directory, as it is for certificates and single sign-on:
+  the ticket comes from the domain's own KDC, which refuses tickets to a disabled, locked out or
+  expired account, and such an account cannot log on or unlock. A service ticket the workstation
+  already holds (10 hours by default) can still report a lock until it expires.
 - **NTLM is not supported.** Windows falls back to NTLM when it cannot get a Kerberos ticket for
   the URL, and the server logs this.
 
@@ -263,7 +283,9 @@ never limited.
 
 - **Single sign-on** (OIDC with PKCE, state and nonce; SAML with signed responses, `InResponseTo`,
   one use per assertion across replicas, no IdP-initiated sign-in) maps the provider's identity to
-  exactly one directory user by an LDAP filter, and grants `MANAGER` or `ADMIN` from the provider's
+  exactly one directory user by an LDAP filter (refused, and audited as a failed sign-in, when that
+  user's account is disabled, locked out or expired; a directory that cannot be read lets the
+  sign-in go on), and grants `MANAGER` or `ADMIN` from the provider's
   groups only through `ENS_SSO_ROLE_MAPPING`. Every address given to the provider is built from
   `APPLICATION_BASE_URL`, never from request headers. No access or refresh token is kept; the OIDC
   ID token stays in the server-side session until sign-out. From the next release signing out can

@@ -109,7 +109,7 @@ you pass them with `-D`:
 | `application.user-ldap-manager-id-attribute` | `title` | `title` | On a **user**: the id of the person they report to. |
 | `application.manager-ldap-id-attribute` | `street` | `Email` | On a **manager**: their own id. A user reports to the manager whose value here equals the user's `user-ldap-manager-id-attribute`. |
 | `application.user-ldap-duty-sub-organization-attribute` | `departmentNumber` | `dutySubOrganization` | The flat attribute the org chart is built from (for example `RYS34B`). |
-| `application.duty-sub-org-filter` | `(departmentNumber=*)` | blank | Extra filter ANDed into the org-chart scan. |
+| `application.duty-sub-org-filter` | `(departmentNumber=*)` | blank | The only filter on the org-chart scans: the organizations and their directory members are the entries with the duty sub-organization attribute that match it (the user LDAP filter does not apply). |
 | `application.duty-sub-org-groups-base-dn` | `ou=Groups,dc=winllc,dc=com` | blank | Bound to the configuration, but not read by any code in the current version. |
 | `application.organization-name` | – | `TOP` | Name of the root node of the org chart. |
 | `application.lookup-on-dn-attribute` | – | `false` | When `true`, a user is looked up by searching `user-base-dn` for `user-dn-attribute=<DN>` instead of reading the DN directly. Use it when certificate subjects are not directory DNs. |
@@ -237,7 +237,7 @@ needs an `https://` `APPLICATION_BASE_URL`, and the release package's `env.templ
 | Area | Settings | Details |
 |---|---|---|
 | Public API (`application.api.*`) | `APPLICATION_API_MAXTOKENDAYS` (`366`), `_DEFAULTRATEPERMINUTE` (`120`), `_MAXRATEPERMINUTE` (`1200`), `_MAXRANGEDAYS` (`366`), `_MAXPAGESIZE` (`500`). From the next release rates are counted in the database for all replicas together (up to the current release per replica: with N replicas a token may make up to N times its rate) | [API reference → Settings](api-reference.md#settings) |
-| Live account check (`application.ldap.account-status.*`) | `APPLICATION_LDAP_ACCOUNTSTATUS_FILTER`, `_LOCKOUTDURATION`, `_CACHESECONDS` (`60`), `_BUILTINCHECKS` (`true`), `_ACTIVEDIRECTORY` (`auto`) | Applies to API token, webhook and scheduled report owners; [API reference → Tokens](api-reference.md#tokens) |
+| Live account check (`application.ldap.account-status.*`) | `APPLICATION_LDAP_ACCOUNTSTATUS_FILTER`, `_LOCKOUTDURATION`, `_CACHESECONDS` (`60`), `_BUILTINCHECKS` (`true`), `_ACTIVEDIRECTORY` (`auto`) | Applies to API token, webhook and scheduled report owners, to certificate and single sign-on sign-ins, and to signed-in browser sessions (there an unreadable directory does not refuse); [API reference → Tokens](api-reference.md#tokens) |
 | Webhooks (`application.webhooks.*`) | `APPLICATION_WEBHOOKS_SECRETKEY` (unset: webhooks off), `_ALLOWEDCIDRS`, `_MAXATTEMPTS` (`8`), `_DELIVERYLOGDAYS` (`30`), timeouts and run limits | [Webhooks → Settings](webhooks.md#settings) |
 | Reports and time zones (`application.reports.*`) | `APPLICATION_REPORTS_SITETIMEZONES`, `_MAXRANGEDAYS` (`366`), `_MAXATTACHMENTBYTES` (`10485760`), `_MAXRECIPIENTS` (`20`), `_RETRYHOURS` (`24`) | [Reports, exports and time zones](exports.md#settings) |
 
@@ -268,6 +268,7 @@ The ENS platform settings: every ENS application has them, with the same names a
 | `ENS_SESSION_ADMIN_IDLE_TIMEOUT` | empty: the idle timeout | Idle timeout for administrators. DISA STIG suggests `15m` |
 | `ENS_SESSION_ABSOLUTE_TIMEOUT` | `12h` | A session ends this long after sign-in, whatever its activity |
 | `ENS_SESSION_MAX_PER_USER` | `0` (no limit) | Sessions per user; over the limit the oldest ends. DISA STIG suggests `3` |
+| `ENS_SESSION_ACCOUNT_CHECK_INTERVAL` | `5m` | How often a browser session's directory account and ReadyRoom role are checked again. A disabled, locked out, expired or missing account, or a changed role, ends the session (`auth.session-expired`, reason `account`); a directory that cannot be read keeps it. Helm: `session.accountCheckInterval` |
 
 The durations are Spring durations (`30m`, `12h`), each at least one minute. Helm: `session.*`.
 The settings for client certificates (`ENS_X509_*`) are in

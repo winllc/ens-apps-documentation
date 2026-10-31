@@ -2,7 +2,7 @@
 
 Problems are grouped by where they show up. Most have a matching line in the server log or in a
 workstation log: `%LOCALAPPDATA%\InOutWorker\logs\inoutworker-yyyyMMdd.log` in the user's profile
-for login, lock, unlock and remote disconnects, and `%ProgramData%\InOutWorker\logs\` for the
+for login, lock, unlock and remote disconnects and reconnects, and `%ProgramData%\InOutWorker\logs\` for the
 SYSTEM logout task. For background, see [Operations](operator-guide.md) and
 [Windows client](windows-client.md).
 
@@ -41,7 +41,8 @@ SYSTEM logout task. For background, see [Operations](operator-guide.md) and
 | A certificate is refused with `issuer not allowed` or `no single directory user matches` | Its issuer isn't in `ENS_X509_ALLOWED_ISSUERS`, or `ENS_X509_USER_FILTER` matched no entry or more than one. |
 | Header mode: the log shows `Ignoring the client certificate in <header> from <address>: <reason>` | The request didn't come from an address in `ENS_X509_TRUSTED_PROXIES`, or carried no or the wrong `X-ENS-Proxy-Secret`. With ingress-nginx, the secret is added with a `configuration-snippet` annotation, which the controller disables by default since 1.9. |
 | Users must click **I agree** before signing in | The consent banner is on (`ENS_CONSENT_BANNER_ENABLED`). Expected. |
-| Users are signed out sooner than before | The session lifetimes `ENS_SESSION_*` (idle `30m`, absolute `12h`). The audit log's `auth.session-expired` gives the reason. |
+| Users are signed out sooner than before | The session lifetimes `ENS_SESSION_*` (idle `30m`, absolute `12h`). The audit log's `auth.session-expired` gives the reason. Reason `account`: the account was disabled, locked out, expired or removed in the directory, or the person's ReadyRoom role changed (`details.account` says which); see [Security → Sessions](security.md#notice-and-consent-banner-and-sessions). |
+| Certificate or single sign-on refused with `account disabled in the directory`, `account locked out in the directory`, `account expired in the directory` or `account not in the directory, or no longer matching its filters` | The person's directory account is not usable. Enable or unlock it, or extend its expiry, in the directory. |
 | Login form says the credentials are wrong | The user is searched under `user-base-dn` by `uid`, `cn` or `mail`. Check the base DN, and that exactly the expected entry matches. |
 | No **Log out** in the user menu | Expected for certificate sessions. The certificate would sign you straight back in. |
 | A user cannot open a group | Only admins can open any group. Everyone else can open groups they are a member of in the directory (`uniqueMember`) or manage. Memberships are cached for 300 s. |
@@ -53,7 +54,7 @@ SYSTEM logout task. For background, see [Operations](operator-guide.md) and
 | `POST /api/event/update` returns `400` with `range_too_long`, `invalid_range`, `invalid_status`, `invalid_time` or `invalid_dn` | The request body is wrong; the `message` says how. Ranges are limited to `APPLICATION_EVENTS_MAXRANGEDAYS` (366) days. |
 | A user can't change their delegates | Expected: only administrators set them, on the person's details page. |
 | The log shows `N people have delegates (alternate managers) chosen before administrators managed them` | Review them under **Administration → Delegates**: **Keep**, **Change** or **Remove**. |
-| An admin's role change does not show | Roles are loaded at sign-in. The user needs a new session. |
+| An admin's role change does not show | Roles are loaded at sign-in. A browser session whose role changed is ended within `ENS_SESSION_ACCOUNT_CHECK_INTERVAL` (`5m`), and the new role applies from the next sign-in. |
 | Metrics or Settings are missing from the sidebar | They need the `ADMIN` or `MANAGER` role. Check `super-user-dns`, or set the role on the user's details page. |
 
 ## Check-ins not arriving
@@ -73,13 +74,13 @@ Work through these in order:
 | `'login' posts to an authenticated endpoint and no client certificate is available.` (exit 2) | No valid certificate with a private key in `CurrentUser\My`. |
 | `POST to ... failed (HTTP 401)` (exit 3) | The server did not accept the certificate or the ticket. |
 | A TLS trust error (exit 3) | The workstation does not trust the server's CA, or the host name does not match the server certificate. |
-| `Logout has no sessionId` | The morning's login post failed, so the logout cannot be attributed. The server refuses it with `401`. Fix the login failure. |
-| `... failed (HTTP 401) [unknown_session] ...` on a logout | The `sessionId` is unknown, already used (for example by a remote disconnect earlier in the same logon) or older than 7 days. Nothing is recorded. |
+| `Logout has no sessionId` | The login post failed, and no unlock was recorded as a check-in since, so the logout cannot be attributed. The server refuses it with `401`. Fix the login failure. |
+| `... failed (HTTP 401) [unknown_session] ...` on a logout | The `sessionId` is unknown, already used or older than 7 days. Nothing is recorded. A workstation kept logged on for longer gets a fresh `sessionId` with each day's first unlock, which the server records as the check-in; earlier clients and servers did not, so upgrade the server and re-run the installer on such workstations. |
 | `... failed (HTTP 429) [rate_limited] ...` on a logout | See the server-side row below. |
 
 | Symptom on the server | Cause and fix |
 |---|---|
-| Status stays `AWAY` all evening | No logoff event arrived: the PC was shut down, or the session ended without event 4647 (the Logout task) or a remote disconnect (the Disconnect task). The auto check-out job checks the person out once the lock is older than `check-out-after-minutes`; a lock left in the evening (after about 20:00 with the default 240 minutes) is checked out after midnight. Earlier releases left such a lock `AWAY` for good. |
+| Status stays `AWAY` all evening | No logoff event arrived: the PC was shut down, or the session ended without event 4647 (the Logout task). A remote session left disconnected is reported as a lock (the Disconnect task) and shows `AWAY` like a locked screen. The auto check-out job checks the person out once the lock is older than `check-out-after-minutes`; a lock left in the evening (after about 20:00 with the default 240 minutes) is checked out after midnight. Earlier releases left such a lock `AWAY` for good. |
 | People show `OUT` minutes after locking | `check-out-after-minutes` is too low. The default is `240`; check `APPLICATION_CHECKOUTAFTERMINUTES` (Helm: `checkOutAfterMinutes`). |
 | Logouts missing, and the audit log has failed `auth.login` events with the reason *unknown session* | Logouts without a usable `sessionId` are refused and not stored. Look at the workstation logs for why the login failed or the session file is missing. |
 | Logouts get `429` (`rate_limited`), and the log shows `... sent more than N logoffs with an unusable session id this minute; refusing them with 429` | More than `application.logoff.refused-per-minute` (30) logouts with a stale or missing session id came from one address within a minute. They would have been refused anyway: a logout with a usable `sessionId` is never limited. Fix the workstations sending them. |
