@@ -27,6 +27,11 @@ A webhook acts for the administrator who added it: while they are no longer one,
 it. The same live account check as for [API tokens](api-reference.md#tokens) applies to webhook
 owners.
 
+Events name people: `status.changed` and `absence.alert` carry the person's DN and name. Treat the
+receiver as a recipient of personal data (see [Privacy](privacy.md#outside-the-database)). Erasing a
+person deletes the deliveries about them, waiting ones included, and disables the webhooks they
+created.
+
 ## Verifying a delivery
 
 Each delivery carries:
@@ -41,6 +46,11 @@ Each delivery carries:
 The signing secret (`whsec_...`) is shown once, when the webhook is added. To verify: recompute the
 HMAC over the exact bytes received, compare in constant time, and refuse a timestamp more than five
 minutes from your clock.
+
+**Rotating the secret.** If a secret leaks, **Rotate secret** on the Integrations page gives the
+webhook a new one, shown once, and keeps the webhook, its URL, its events and its delivery log.
+Every try from then on, retries of deliveries already queued included, is signed with the new
+secret, so the old one stops verifying at once: give the receiver the new secret straight away.
 
 ```python
 import hashlib, hmac, time
@@ -66,8 +76,16 @@ def verify(secret: str, header: str, body: bytes) -> bool:
   up.
 - Anything but a 2xx answer (a redirect included) is retried after 30 seconds, 2, 10 and 30 minutes,
   then 1, 2, 4 and 8 hours, up to `APPLICATION_WEBHOOKS_MAXATTEMPTS` (8) tries, then marked failed.
+- Deliveries are not held back behind a retry, so they can arrive out of order: order by
+  `createdAt` (and, for a `status.changed`, by `data.at`); a retried delivery can arrive after newer
+  ones.
 - The Integrations page shows each webhook's recent deliveries (state, tries, last status, error);
   the log is kept `APPLICATION_WEBHOOKS_DELIVERYLOGDAYS` (30) days.
+- Each try is counted in `ens_readyroom_webhook_deliveries_total{outcome}` (`delivered`, `retry`
+  for one tried again later, `failed` for one given up). A webhook that has failed 5 tries in a row
+  is logged at `WARN` (`Webhook endpoint <id> (<name>) has failed 5 tries in a row since it last
+  took a delivery; ...`), again every 5 more, and at `INFO` once it takes a delivery again. The
+  count is kept by the replica sending, and starts again after a restart.
 
 ## Where webhooks may go
 
@@ -126,5 +144,7 @@ Where the only way out is an HTTP proxy, set `APPLICATION_WEBHOOKS_PROXY` to its
 
 ## Audit
 
-`webhook.created`, `webhook.disabled`, `webhook.enabled` and `webhook.deleted`; the secret appears
-only as its first characters.
+`webhook.created`, `webhook.disabled`, `webhook.enabled`, `webhook.deleted` and
+`webhook.secret-rotated`; the secret appears only as its first characters, and a rotation names the
+previous one's too (`details.previousSecretPrefix`). A webhook disabled by an erasure carries
+`details.via` `erasure`.

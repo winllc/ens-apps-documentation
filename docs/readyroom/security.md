@@ -100,7 +100,7 @@ whichever way they sign in.
   one for administrators (`ENS_SESSION_ADMIN_IDLE_TIMEOUT`), an absolute lifetime
   (`ENS_SESSION_ABSOLUTE_TIMEOUT`, `12h`) and an optional limit per user
   (`ENS_SESSION_MAX_PER_USER`; over it the oldest session ends). Each end is audited as
-  `auth.session-expired`. See [Configuration](configuration.md#security-headers-banner-and-sessions).
+  `auth.session-expired`; erasing a person ends theirs, with reason `erased`. See [Configuration](configuration.md#security-headers-banner-and-sessions).
 - **Account checked again:** a sign-in's roles hold for its session, and nothing signs a session in
   again. So every `ENS_SESSION_ACCOUNT_CHECK_INTERVAL` (`5m`) a browser session's account is checked
   live in the directory, and the person's role in ReadyRoom (their stored role, or
@@ -197,8 +197,15 @@ All settings are listed in [Configuration](configuration.md#windows-kerberos-sig
 
 - **Roles:** `USER`, `MANAGER` and `ADMIN`, granted as described in
   [Administration](admin-guide.md#roles). Method security (`@EnableMethodSecurity`) enforces
-  `@PreAuthorize` rules on controllers and REST services. Roles open pages: Metrics, Settings and
-  group reports need `MANAGER` or `ADMIN`. Whose data a page shows is decided by `AccessPolicy`.
+  `@PreAuthorize` rules on controllers and REST services. Roles open pages: Metrics and group
+  reports need `MANAGER` or `ADMIN`; **Settings** (the organization calendar, the org chart's
+  parse rules, the group cache), which applies to the whole organization, needs `ADMIN`. Whose
+  data a page shows is decided by `AccessPolicy`.
+- **Administrators:** `ADMIN` comes from `application.super-user-dns`, or from a stored role
+  (`user_records.user_role`) set in the database. It is never given from the UI: a person's page
+  offers `ADMIN` only to keep it for someone who holds it, and refuses it otherwise (`400`). The
+  last administrator cannot be demoted there: the page says why.
+  **Administration → Privacy** lists every administrator and where the role comes from.
 - **A person's details:** their arrival, departure and status-change times, notes, average login
   time, check-in history (**Audit Log**), calendar, and their delegates. These are visible to:
     - the person themselves;
@@ -240,11 +247,15 @@ All settings are listed in [Configuration](configuration.md#windows-kerberos-sig
   and administrators, and is never in emails or the audit trail. One call can cover at most
   `application.events.max-range-days` (366) days.
 - **A person's data:** anyone downloads their own (**My data**); only `ADMIN` downloads someone
-  else's or erases it, never their own. Both are audited.
+  else's or erases it, never their own. Both are audited. Erasure also revokes the person's API
+  tokens, disables their webhooks and ends their browser sessions (see
+  [Privacy → Erasure](privacy.md#erasure)).
 - **Groups:** a group's page and its members are open to the group's members, its managers and
-  `ADMIN`. Changing its managers, its report and `POST /api/permissions/update` need `ADMIN`, or
-  the `MANAGER` role together with being a current manager of that group. A sub-group is a separate
-  group with its own managers.
+  `ADMIN`. Access follows directory membership only. Its report needs `ADMIN`, or the `MANAGER`
+  role together with being a current manager of that group. Its additional managers are set by
+  `ADMIN` only, as delegates are, and each must be someone in the directory: a group's manager
+  cannot widen who sees the team. `POST /api/permissions/update`, whose grants nothing read, has
+  been removed. A sub-group is a separate group with its own managers.
 - **Direct reports:** `/api/users/reports` and **My Reports** always use the signed-in user as the
   manager, so they cannot be used to read someone else's team.
 - **Notifications:** an absence alert opens only for the manager it was sent to, and for `ADMIN`.
@@ -301,7 +312,8 @@ never limited.
 - **Webhooks** go to `https://` receivers on public addresses only (internal ranges only through
   `APPLICATION_WEBHOOKS_ALLOWEDCIDRS`, cloud metadata never), connect to the address just checked,
   follow no redirects, and are HMAC-SHA256 signed. Signing secrets are encrypted in the database with
-  `APPLICATION_WEBHOOKS_SECRETKEY` (AES-256-GCM). See [Webhooks](webhooks.md).
+  `APPLICATION_WEBHOOKS_SECRETKEY` (AES-256-GCM); a leaked one is replaced with **Rotate secret**,
+  audited as `webhook.secret-rotated`. See [Webhooks](webhooks.md).
 - **Exports** are form posts with the CSRF token, audited before they start, and hold only what the
   viewer may see; CSV cells that could run as formulas are neutralised. See
   [Reports, exports and time zones](exports.md).
@@ -362,7 +374,8 @@ See [FIPS 140-3 and DISA STIG](fips-and-stig.md).
 - [ ] Keep Actuator exposure at `health` (the packaged setting).
 - [ ] Behind a proxy that terminates TLS for browsers, set `ENS_COOKIE_SECURE=true` and
       `SERVER_FORWARD_HEADERS_STRATEGY=framework`.
-- [ ] Set `super-user-dns` to the real administrators only.
+- [ ] Set `super-user-dns` to the real administrators only, and review the **Administrators** card
+      on **Administration → Privacy**, which also lists roles stored in the database.
 - [ ] Keep the Kerberos keytab in `kerberos/` (mounted read-only) or a Secret, and out of images
       and source control.
 - [ ] Install the Windows client under Program Files (as the installer does), so non-admins cannot

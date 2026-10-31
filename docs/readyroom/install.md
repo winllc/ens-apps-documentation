@@ -26,7 +26,7 @@ workstation. Every setting mentioned here is described in [Configuration](config
 | Requirement | Notes |
 |---|---|
 | PostgreSQL | ReadyRoom keeps its own records in PostgreSQL; it is the only database supported. The release package includes PostgreSQL 16. With Helm, use your own server (an embedded one is available for evaluation only). |
-| LDAP directory | Must hold the people (by default `objectclass=inetOrgPerson`) and the groups (`groupOfUniqueNames` with `uniqueMember`; an optional `owner` is treated as the group's manager). Needs a read-only bind account that can search users and groups. The paged results control is used if it is available. Active Directory works. |
+| LDAP directory | Must hold the people (by default `objectclass=inetOrgPerson`) and the groups (`groupOfUniqueNames` with `uniqueMember`; an optional `owner` is treated as the group's manager). Needs a read-only bind account that can search users and groups. The paged results control is used if it is available. Active Directory works: referrals it returns are ignored by default (`spring.ldap.referral`), so a base DN at the domain root (`DC=corp,DC=com`) works too, though one below it (`OU=People,DC=corp,DC=com`) avoids the referrals altogether. See [Configuration → LDAP connection](configuration.md#ldap-connection). |
 | SMTP server | Used to email absence alerts. Optional: see [Configure email](#configure-email). |
 | License | An ENS Solutions license file (`.lic`) from your account on the ENS licensing portal: an evaluation, or the license issued for your order. See [Licensing](../licensing.md). Without one, ReadyRoom offers only sign-in and its license screen. |
 | Server certificate | A PKCS#12 keystore for the HTTPS listener, if ReadyRoom terminates TLS itself. Needed for client certificates and the Windows client. |
@@ -726,7 +726,7 @@ With the release package, PostgreSQL (16) is already set up. With Helm, use your
     | `status_requests` | Requests for statuses that need approval, with their notes and decisions |
     | `attendance_summaries`, `attendance_summary_statuses`, `retention_state` | Monthly summaries of purged check-ins and statuses, and the retention job's position |
     | `notification_records` | Absence alerts and managers' responses |
-    | `permission_records` | Per-user group grants |
+    | `permission_records` | Per-user group grants made by earlier releases; no longer written or read |
     | `group_records` | Alternate managers assigned to a group |
     | `global_calendar_records` | Organization calendar events and holidays |
     | `org_parse_rules` | Org-chart parse rules |

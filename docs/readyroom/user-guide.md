@@ -33,8 +33,8 @@ ReadyRoom session only, not your session at the identity provider.
 | Area | What it contains |
 |---|---|
 | **Banner** (top and bottom) | The text your organization configured, for example a classification marking. |
-| **Sidebar** | Home, Groups, Users, My Reports, Approvals, Org Chart and, for admins and managers, Metrics and Settings. Admins also see License, Delegates, Privacy and Audit Log. |
-| **Bell** (top left) | Your unread notifications. A red dot means there is at least one. Click one to open it, or **Mark All Read** to clear the list. |
+| **Sidebar** | Home, Groups, Users, My Reports, Approvals, Org Chart and, for admins and managers, Metrics. Admins also see Settings, License, Delegates, Privacy and Audit Log. |
+| **Bell** (top left) | Your absence alerts that still await an answer, unread ones in bold. A red dot means at least one is unread. Click one to open it. **Mark All Read** clears the dot; the alerts stay listed until someone answers them. |
 | **System Date** (admins and managers) | Shows the site as it stood on an earlier day. See [Looking at another day](#looking-at-another-day). |
 | **?** | The "How ReadyRoom works" help dialog. |
 | **Avatar menu** | **My Profile**, **My data**, and **Log out** for password sessions. |
@@ -52,6 +52,13 @@ If a status is on your calendar for the day (anything other than *Standard*), it
 instead, for example `WORK_FROM_HOME`, `TDY` or `LATE_ARRIVAL`. A status you asked for counts only
 once it is approved; see [Statuses and approvals](#statuses-and-approvals).
 
+**Accounted for.** A day counts as accounted for (on Home, My Reports and Metrics), as covered by a
+status (in the 30-day attendance) and as needing no absence alert only when you checked in, or the
+day carries a status that excuses an absence (leave, Work From Home, TDY and so on) or one only a
+manager records (*Absent*, *Absent Unexcused*, *Unscheduled Leave*). *Late Arrival* and *Early
+Leave* are your own word: they are shown on calendars, in the user tables and the API, but without
+a check-in the day is still not accounted for.
+
 ## Home
 
 **Home** (`/app/home`) is your own day. The top line shows the date being viewed.
@@ -59,7 +66,7 @@ once it is approved; see [Statuses and approvals](#statuses-and-approvals).
 | Card | Shows |
 |---|---|
 | **My status** | Your current status and when it started, the time you checked in and out, the time you are **expected in by** with the rule it came from, and your **average arrival**. |
-| **Last 30 days** | Working days you checked in, days covered only by a status, and days with nothing recorded, as counts and a bar. |
+| **Last 30 days** | Working days you checked in, days covered only by a status (one that accounts for the day, see [Statuses](#statuses); not *Late Arrival* or *Early Leave*), and days with nothing recorded, as counts and a bar. |
 | **Workstation agent** | *Reporting* with the time of the last event, or *Not reporting* if nothing has arrived from your PC for 7 days or more. If you have been working but see *Not reporting*, the agent on your PC needs attention. |
 | **Coming up** | Statuses you have set for the next 14 days, with a link to **Update my calendar**. |
 
@@ -80,11 +87,14 @@ particular application role for this.
 
 | Card | Shows |
 |---|---|
-| **Accounted for** | The percentage of your reports who are checked in or have a status today, and the mix of statuses. On weekends and holidays it says why nobody is expected. |
-| **Not in yet** | Reports who are not accounted for, with their expected time. A **Late** badge (**Missed** when you view a past day) appears once they are past it. |
-| **Awaiting your response** | Absence alerts you have not answered. Click one to respond. |
+| **Accounted for** | The percentage of your reports who are checked in or have a status that accounts for the day (see [Statuses](#statuses)), and the mix of statuses. On weekends and holidays it says why nobody is expected. |
+| **Not in yet** | Reports who are not accounted for, with their expected time: the time of a *Late Arrival* they set for the day, else their login time or average arrival. A **Late** badge (**Missed** when you view a past day) appears once they are past it. |
+| **Awaiting your response** | Absence alerts nobody has answered yet, with a **New** badge on those you have not read. Marking them read in the bell does not remove them. Click one to respond. |
 | **Team agents** | How many reports' agents reported in the last 7 days, and who stopped reporting. |
 | **Team coming up** | Your reports' statuses for the next 14 days. |
+
+If the directory cannot be read, Home says *The directory could not be read, so your team is not
+shown* instead of leaving the team section out. Try again in a few minutes.
 
 ## Groups
 
@@ -113,11 +123,12 @@ without being able to change it.
 - **Favorite**: pins the group so it shows under *Favorites only* on the Groups page.
 - **Generate Group Report** (admins, and managers of this group with the `MANAGER` role): pick a
   date range, then **Generate Report**. See [Group report](#group-report).
-- **Group Managers** (the same people): see [Administration](admin-guide.md#group-managers).
+- **Group Managers** (admins only): see [Administration](admin-guide.md#group-managers).
 - **Calendar**: a month calendar combining the statuses each member you may see has set (leave,
   telework and so on), each named and linked to the person.
-- **CSV** and **Excel** download the member list with each person's status today. The same buttons
-  are on the results of *Find a user*.
+- **CSV** and **Excel** download the member list with each person's status on the day the page
+  shows (the **System Date** you picked, else today). The same buttons are on the results of
+  *Find a user*.
 
 !!! note
     Saving a favorite is limited to the `MANAGER` and `ADMIN` roles. For a user with only the `USER`
@@ -143,6 +154,12 @@ departures the same way.
 person and day (status, first check-in, last check-out, minutes in and time zone), with each person's
 times in their own time zone, or choose **My time zone** to show every row in yours. See
 [Reports, exports and time zones](exports.md).
+
+If the directory does not answer while the report is made, the page says *The directory could not
+be read* instead of showing a report: the group's members come from the directory. Try again in a
+few minutes, and if it keeps happening ask your administrator to check ReadyRoom's directory
+connection. The report's CSV and Excel downloads are refused the same way, rather than giving a
+file with no members.
 
 Managers and administrators can have a group's report e-mailed every day, week or month:
 **Scheduled reports** (`/app/reports/schedules`).
@@ -181,18 +198,20 @@ takes effect at once, without approval, and you can record any status, including
 *Absent Unexcused* and *Unscheduled Leave*. A *Late Arrival* you record for someone else has no
 latest time and no limit on the number of days.
 
-Admins also see a **Role** card, with **Export or erase data**. See
-[Administration](admin-guide.md#roles).
+Admins also see a **Role** card, with **Export or erase data**. The role list offers `USER` and
+`MANAGER`; `ADMIN` is never given there. See [Administration](admin-guide.md#roles).
 
 ## My Reports
 
 **My Reports** (`/app/user/reports`) lists everyone who reports directly to you in the directory.
-If nobody does, the page says *No direct reports*.
+If nobody does, the page says *No direct reports*. If the directory cannot be read, it says *The
+directory could not be read* instead: who reports to you is then not known, which is not the same
+as nobody. Try again in a few minutes.
 
 | Section | Shows |
 |---|---|
-| **Accounted for today** | Percentage and count of reports accounted for. |
-| **Attendance, last 30 days** | Share of working days checked in, days covered by a status, and days with nothing recorded. |
+| **Accounted for today** | Percentage and count of reports accounted for (checked in, or a status that accounts for the day; see [Statuses](#statuses)). |
+| **Attendance, last 30 days** | Share of working days checked in, days covered by a status (not *Late Arrival* or *Early Leave*), and days with nothing recorded. |
 | **Average arrival, last 30 days** | The team's average first check-in on working days. |
 | **Absence alerts, last 30 days** | Alerts raised, answered and unanswered, with how they were answered. |
 | **Daily attendance, last 30 days** | A chart of each day's counts, with **Show as a table**. |
@@ -211,9 +230,11 @@ for that organization and everything under it, **accounted of total**, and a per
 Each person is counted the way you may see them elsewhere. People whose details you may see
 (yourself, your reports, the people you are a delegate of and the members of groups you manage;
 everyone, for admins) are counted the way **Users** and **Home** count them: a status on the
-person's calendar for the day (work from home, TDY, leave and so on) comes first; otherwise their
-latest record decides between **Checked in**, **Away** (screen locked) and **Checked out**; anyone
-with neither is **No record**. Everyone else is counted as a coworker sees them, which depends on
+person's calendar for the day that accounts for it (work from home, TDY, leave, or one a manager
+recorded) comes first; otherwise their latest record decides between **Checked in**, **Away**
+(screen locked) and **Checked out**; anyone with neither is **No record**. *Late Arrival*, *Early
+Leave* and *normal* do not stand in for being there: such a person is counted by their presence,
+and without a check-in is **No record**. Everyone else is counted as a coworker sees them, which depends on
 your organization's coworker visibility setting:
 
 - *full* (the default): the same, except that a status a manager recorded counts as *Out of Office*;
@@ -269,9 +290,9 @@ Drag across one or more days, choose a status, then choose **Submit**. With the 
 
 | Option | Stored as | What happens | Excuses an absence alert? |
 |---|---|---|---|
-| normal | `STANDARD` | Set at once. It clears a status you set earlier | No |
-| Early Leave | `EARLY_LEAVE` | Set at once | No |
-| Late Arrival | `LATE_ARRIVAL` | Set at once; the time you enter becomes your expected time that day. At the latest 12:00, and at most 31 days at a time: for a later time ask your manager to record it; for a lasting change set your **Login Time** | No |
+| normal | `STANDARD` | Set at once. It clears a status you set earlier. Not for a day already past: ask your manager to correct it | No |
+| Early Leave | `EARLY_LEAVE` | Set at once for today and later days; for days that include an earlier one, sent as a request | No |
+| Late Arrival | `LATE_ARRIVAL` | Set at once for today and later days; the time you enter becomes your expected time that day. For days that include an earlier one, sent as a request. At the latest 12:00, and at most 31 days at a time: for a later time ask your manager to record it; for a lasting change set your **Login Time** | No |
 | Out of Office (needs approval) | `OUT_OF_OFFICE` | Sent as a request | Yes, once approved |
 | Work From Home (needs approval) | `WORK_FROM_HOME` | Sent as a request | Yes, once approved |
 | TDY (needs approval) | `TDY` | Sent as a request | Yes, once approved |
@@ -282,6 +303,12 @@ Which statuses need approval, and the late arrival limits, are set by your admin
 yours may differ. For one
 that needs approval, you can add a **note for your manager** (up to 500 characters); it is kept
 with the request and shown to whoever decides it. Follow it under **Approvals**.
+
+**Days already past.** "Today" is the date in ReadyRoom's time zone; the **System Date** does not
+move it. A *Late Arrival* or *Early Leave* for a selection that includes an earlier day becomes one
+request for the whole selection, today and later days included: your manager is e-mailed and it
+reaches your calendar, with its time, only once approved. Choosing *normal* for such a selection is
+refused: a past day is your manager's to correct.
 
 Excusable statuses appear in blue on calendars and others in purple (the defaults); the days of a
 pending request appear in grey, as *Requested: &lt;status&gt;*. Organization holidays and events appear in orange. Setting a status
@@ -295,14 +322,15 @@ API is used:
 
 | Group | Statuses (default) | Who sets them |
 |---|---|---|
-| Set by the person | normal, Early Leave, Late Arrival | You, on your own calendar. They take effect at once |
+| Set by the person | normal, Early Leave, Late Arrival | You, on your own calendar, for today and later days. They take effect at once and excuse nothing. A Late Arrival or Early Leave reaching an earlier day is requested instead (see [Days already past](#calendar)); normal there is refused |
 | Requested | Out of Office, Work From Home, TDY, Scheduled Leave, Absent Excused | You ask; your directory manager, one of your delegates or an admin approves or rejects. Until approved, the status is not on your calendar, and absence alerts treat the day as not excused |
 | Recorded by managers | Absent, Absent Unexcused, Unscheduled Leave | Only your directory manager, a delegate or an admin, for you (also by answering an absence alert) |
 
 **Approvals** (`/app/approvals`, in the sidebar) has three parts:
 
-- **Waiting for your approval**: requests from people you decide for, with the person, status,
-  dates, number of days, their note and when they asked. **Approve** or **Reject**, each with an
+- **Waiting for your approval**: requests from people you decide for, with the person, status
+  (a late arrival with its time, for example *Late Arrival by 09:30*), dates, number of days, their
+  note and when they asked. **Approve** or **Reject**, each with an
   optional comment or reason. Nobody decides their own request, admins included.
 - **Ask for a status**: the status, the first and last day, and an optional note; **Send
   request**. You can also ask from your profile calendar.
@@ -335,6 +363,12 @@ time plus the grace period on a working day, you receive:
   the expected check-in time and a **Confirm Status** link, and
 - an entry under the **bell** in the top bar.
 
+If the mail server did not take the email, the next run of the alert job sends it again, the same
+day, while nobody has answered the alert.
+
+**Mark All Read** in the bell marks your alerts read and clears the red dot. It answers nothing: the
+alerts stay in the bell and under **Awaiting your response** on Home until someone responds.
+
 The notification page shows the summary and a **Status** list with these choices:
 `UNSCHEDULED_LEAVE`, `ABSENT_EXCUSED`, `ABSENT_UNEXCUSED` and `ABSENT`. Your answer is recorded:
 
@@ -349,7 +383,8 @@ whose day already carries a status a manager, delegate or administrator recorded
 *Absent Unexcused* or *Unscheduled Leave*), for anyone who has left the directory or whose account
 is disabled or expired, or for anyone with no expected time at all. Each person gets at most one
 alert per day, and you are never alerted about yourself. A requested status that is still waiting
-for approval does not prevent an alert. If someone's expected time plus the grace period falls
+for approval does not prevent an alert, and neither does *Late Arrival* or *Early Leave*: a late
+arrival only moves the expected time to the one entered. If someone's expected time plus the grace period falls
 after midnight, the alert still comes that day, shortly before midnight.
 
 ## Metrics (admins and managers)
@@ -358,7 +393,7 @@ after midnight, the alert still comes that day, shortly before midnight.
 
 | Section | Shows |
 |---|---|
-| **Accounted for** | The percentage of expected people who checked in or have a status. "Expected" means anyone active in the last 30 days or given a status for the day. |
+| **Accounted for** | The percentage of expected people who checked in or have a status that accounts for the day (see [Statuses](#statuses)). "Expected" means anyone active in the last 30 days or given such a status for the day. |
 | **Status mix** | How the expected people split across statuses. |
 | **Agent coverage** | The share of users whose agent reported in the last 7 days, with counts of stopped agents and users with no activity in 90 days. |
 | **Current User Statuses** | A pie chart of today's check-ins, check-outs, locks and unlocks against the total number of directory users. |
@@ -372,7 +407,8 @@ dates are not allowed), and every page (Home, groups, reports, metrics) shows th
 of your session, or until you pick another date. The **Home** heading then reads *Showing
 &lt;date&gt;* instead of *Today*.
 
-## Settings (admins and managers)
+## Settings (admins)
 
-The **Settings** page manages the organization calendar, the group cache and the org-chart parse
-rules. It is described in [Administration](admin-guide.md#settings-page).
+The **Settings** page manages the organization calendar, the group cache, the check of stored group
+DNs and the org-chart parse rules. It is organization-wide configuration, for administrators only.
+It is described in [Administration](admin-guide.md#settings-page).
