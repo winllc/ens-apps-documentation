@@ -157,6 +157,10 @@ Useful messages:
 | `Manager does not have an email address: <dn>` / `Manager not found in LDAP: <dn>` | An alert recipient could not be emailed or found. |
 | `Directory refresh: N scanned, N created, N updated, ...` | The hourly directory refresh changed user records. |
 | `RefreshUserRecordsCron failed; the next run will retry` | The directory refresh failed. A stack trace follows. |
+| `RefreshUserRecordsCron: the directory did not answer (<reason>); nothing changed, the next run will retry` (`WARN`) | The directory refresh could not list the directory's users. No record was changed; the refresh never removes, deactivates or counts out anyone. |
+| `<method> <path>: the directory did not answer (<reason>); answering 503` (`WARN`) | A page or API call needed people from the directory, which did not answer after `application.ldap.read-retries` more tries. The user got `503` with `Retry-After: 5`; nothing was changed. |
+| `Scheduled report <id> (<name>) put off: the directory did not answer for its recipients (<reason>)` (`WARN`) | The run is tried again; the report is not sent to some of its recipients only. |
+| `Nobody e-mailed that request <id> of <dn> was <what>: the directory did not answer for who decides it` (`WARN`) | The request is saved and waits on its approvers' **Approvals** page; nobody was e-mailed in their place. |
 | `Built org chart <name> with N top-level orgs (N nodes total) in Xms` | The org chart was rebuilt from the directory. |
 | `Parse rule '<name>' (<regex>) did not match org value '<value>'` | A value was left out of the org chart. Fix the rule. |
 | `Serving stale cached ... after refresh failure` | A background cache refresh from LDAP failed. The previous data is still being shown. |

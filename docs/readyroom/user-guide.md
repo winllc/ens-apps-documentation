@@ -28,6 +28,11 @@ ReadyRoom session only, not your session at the identity provider.
     lock or unlock the screen, and sign out. Your first sign-in or unlock of the day counts as
     arriving.
 
+**If the directory does not answer.** A page that needs people from the directory (a person's
+details, a group's people, the org chart, approvals) shows *The directory did not answer* /
+*The directory could not be read* instead of a page with people missing, and a download is refused
+rather than cut short. Nothing was changed: try again in a few seconds.
+
 ## The page layout
 
 | Area | What it contains |
@@ -438,6 +443,11 @@ delegate or an administrator records for you can also be e-mailed to you; see
 They are told *No manager or delegate is set for you in ReadyRoom: an administrator has been
 asked*, and the request goes to the administrators (other than the person asking), whose email says
 it comes to them as administrators. Anyone else is told *your manager or delegate has been asked*.
+
+**When the directory does not answer.** If ReadyRoom cannot reach the directory to find your manager
+when you ask, your request is still saved, and you are told *The directory did not answer, so nobody
+was e-mailed about it: it waits on the Approvals page of whoever decides it*. Nobody else is asked
+in your manager's place.
 
 ## My data
 

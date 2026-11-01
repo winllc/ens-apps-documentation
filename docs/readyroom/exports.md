@@ -17,7 +17,11 @@
   today), and the file is named after that day.
 - **When the directory cannot be read**, a group's members are not known: the group report page
   says *The directory could not be read*, and its CSV and Excel downloads answer `503`
-  (`directory_unavailable`) instead of a file with only its header.
+  (`directory_unavailable`, with `Retry-After: 5`) instead of a file with only its header. The same
+  goes for a people list, and for a group whose members can be listed but not all of whom the
+  directory answers for: every person in a download is read before its first byte, so a download is
+  refused whole, never cut short or written with people's directory columns blank, and a refused
+  download is not recorded as exported. Try again in a few seconds.
 
 A download holds exactly what its viewer may see on screen: the report's people are those whose
 details they may see, and a list shows everyone else as
@@ -59,9 +63,11 @@ attendance as CSV or Excel, at an hour in its owner's time zone:
   disabled, locked or expired, or they lost the right to the group's report. The owner is e-mailed
   that it was turned off and why. **Enable**, on the schedules page, turns it back on once they may
   run the report again (checked then); it next goes out at its next sending time.
-- **A directory that cannot be read** (the owner's account, or the group's members) puts the run
-  off: the schedule stays on and due, and is tried again. A report is never sent as one of a group
-  without members because the member list could not be read.
+- **A directory that cannot be read** (the owner's account, the group's members, or a recipient)
+  puts the run off: the schedule stays on and due, and is tried again. A report is never sent as one
+  of a group without members because the member list could not be read, nor to some of its
+  recipients because the others could not be read. Naming a recipient while the directory does not
+  answer is answered *The directory did not answer* (`503`), not *not in the directory*.
 - **A run that reaches nobody** because the directory or the mail server did not answer, or an
   error, is tried again every 30 minutes until its next sending time or
   `APPLICATION_REPORTS_RETRYHOURS` (24) hours after it was due, whichever comes first. Then it is

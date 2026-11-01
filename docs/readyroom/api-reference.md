@@ -69,8 +69,9 @@ Administrators create and revoke tokens on *Administration → Integrations*
   locked (Active Directory `msDS-User-Account-Control-Computed` or `lockoutTime` with the domain's
   `lockoutDuration`; OpenLDAP `pwdAccountLockedTime` with the policy's `pwdLockoutDuration`, or
   `APPLICATION_LDAP_ACCOUNTSTATUS_LOCKOUTDURATION` for the default policy; 389 `accountUnlockTime`).
-  The owner must also still be an administrator. When the directory cannot be read, the token is
-  refused. A usable account is remembered for at most
+  The owner must also still be an administrator. When the directory cannot be read for the owner,
+  the call is answered `503` with `Retry-After: 5` and `{"error":"directory_unavailable"}` (earlier
+  releases refused it with `401`); send it again after the `Retry-After`. A usable account is remembered for at most
   `APPLICATION_LDAP_ACCOUNTSTATUS_CACHESECONDS` (60); refusals are never remembered. The same check
   applies to webhook owners and to scheduled reports' owners and recipients.
 - **The bind account (`LDAP_USERNAME`) must be able to read** `userAccountControl`, `lockoutTime`,
@@ -226,6 +227,13 @@ is off), or your ingress or route host with Helm. Timestamps in JSON records use
 
 "Signed in" means any authenticated user. `A/M` means the `ADMIN` or `MANAGER` role.
 
+**When the directory does not answer.** A call that needs people from the directory (a group's
+members, a person's manager or reports, a search, a delegate or group manager being checked) and does
+not get an answer, after `application.ldap.read-retries` more tries, is answered `503` with
+`Retry-After: 5` and `{"error":"directory_unavailable","message":"..."}`, under `/api/v1` too. Nothing
+was changed; send it again after the `Retry-After`. It is never answered as if the people were not
+there: earlier releases returned an empty list, *Not in the directory* (`400`), or `403`.
+
 ### Users
 
 | Method and path | Access | Description |
@@ -236,7 +244,7 @@ is off), or your ingress or route host with Helm. Timestamps in JSON records use
 | `GET /api/users/reports` | Signed in | `{"data": [...]}`: the caller's direct reports, with status. |
 | `GET /api/users/checkinoutrecords/{dn}?page=1&size=10&sort=timestamp&dir=desc` | Whoever may see the user's details | The user's records, paged. `page` from 1, `size` 1 to 500, `sort` `timestamp` or `action`, `dir` `asc` or `desc`; anything else is `400` (`invalid_page`, `invalid_sort`). |
 | `GET /api/users/managers/{dn}` | Whoever may see the user's details | The user's delegates (alternate managers), as a list of objects with a `dn`. |
-| `POST /api/users/managers/update/{dn}` | `ADMIN` | Body: a JSON array of DNs, each someone else in the directory. Replaces that person's delegates. `400` (`invalid_delegate`, `invalid_person`) for a bad list. |
+| `POST /api/users/managers/update/{dn}` | `ADMIN` | Body: a JSON array of DNs, each someone else in the directory. Replaces that person's delegates. `400` (`invalid_delegate`, `invalid_person`) for a bad list; `503` (`directory_unavailable`) when the directory did not answer for one of them. |
 
 `POST /api/users/managers/update`, with which people set their own additional managers, has been
 removed: only administrators set delegates.
@@ -291,7 +299,9 @@ returned the request body instead of the result.
 
 A request's `message` says who was asked: *your manager or delegate has been asked*, or, for someone
 with no directory manager and no delegate, *No manager or delegate is set for you in ReadyRoom: an
-administrator has been asked* (the administrators other than the caller are e-mailed). Refusals over
+administrator has been asked* (the administrators other than the caller are e-mailed), or, when the
+directory did not answer for the caller's manager, *The directory did not answer, so nobody was
+e-mailed about it: it waits on the Approvals page of whoever decides it* (the request is saved). Refusals over
 existing requests are `409` with `{"error","message"}`: `approved_request` and
 `overlapping_request`.
 
@@ -301,11 +311,11 @@ All need the `calendar` license feature. Who may do what is checked on every cal
 
 | Method and path | Access | Description |
 |---|---|---|
-| `POST /api/requests` | Signed in | Ask for a status on one's own days. Body: `status`, `fromDate`, `toDate` (the day after the last), optional `lateArrivalTime` and `note` (500 characters, shown to approvers). `201` with the request. Takes a requested status, or `LATE_ARRIVAL` or `EARLY_LEAVE` over a range starting before today; `400` `not_a_request_status` for anything else. `409` `overlapping_request` over a day a pending or approved request of the caller already covers. When the caller has no directory manager and no delegate, the request carries `notice` (*No manager or delegate is set for you in ReadyRoom: an administrator has been asked*) and the administrators other than the caller are e-mailed; otherwise there is no `notice` |
+| `POST /api/requests` | Signed in | Ask for a status on one's own days. Body: `status`, `fromDate`, `toDate` (the day after the last), optional `lateArrivalTime` and `note` (500 characters, shown to approvers). `201` with the request. Takes a requested status, or `LATE_ARRIVAL` or `EARLY_LEAVE` over a range starting before today; `400` `not_a_request_status` for anything else. `409` `overlapping_request` over a day a pending or approved request of the caller already covers. When the caller has no directory manager and no delegate, the request carries `notice` (*No manager or delegate is set for you in ReadyRoom: an administrator has been asked*) and the administrators other than the caller are e-mailed. When the directory did not answer for the caller's manager, it carries *The directory did not answer, so nobody was e-mailed about it: ...* and nobody is e-mailed; otherwise there is no `notice` |
 | `GET /api/requests/mine` | Signed in | The caller's requests |
 | `GET /api/requests/pending` | Signed in | Pending requests the caller may decide |
 | `GET /api/requests/{id}` | The requester, whoever may decide it, `ADMIN` | One request |
-| `POST /api/requests/{id}/approve`, `/reject` | The requester's directory manager, a delegate or `ADMIN`; never the requester | Optional body `{"comment": "..."}`. `409` (`not_pending`) once decided; approving, `409` `overlapping_request` while another approved request of the person covers one of its days. Approval answers the person's absence alerts on its days |
+| `POST /api/requests/{id}/approve`, `/reject` | The requester's directory manager, a delegate or `ADMIN`; never the requester | Optional body `{"comment": "..."}`. `503` (`directory_unavailable`) when the directory did not answer for who decides it (nothing is decided). `409` (`not_pending`) once decided; approving, `409` `overlapping_request` while another approved request of the person covers one of its days. Approval answers the person's absence alerts on its days |
 | `POST /api/requests/{id}/cancel` | The requester or `ADMIN` | A pending request, or an approved one until its last day has passed (`409` `not_cancellable` otherwise). Cancelling an approved one takes its days from today on off the calendar; a freed day another approved request of the person still covers gets that request's status back |
 
 A request's `state` is `REQUESTED`, `APPROVED`, `REJECTED` or `CANCELLED`.
@@ -377,8 +387,8 @@ A manager, delegate or administrator can record any of them for someone else, at
 | `/app/groups` | Signed in | Group trees |
 | `/app/users/{groupDn}` | A member or manager of the group, or `ADMIN` | Group members |
 | `POST /app/group/report` | A/M who manages the group (`ADMIN`: any) | Group report (`groupDn`, `fromDate`, `toDate` as `yyyy-MM-dd` days in the application's zone, at most `APPLICATION_REPORTS_MAXRANGEDAYS` (366) days; `400` otherwise) |
-| `POST /app/export/group-report` | A/M who manages the group (`ADMIN`: any) | The group report as a file (`groupDn`, `fromDate`, `toDate`, `format` `csv` or `xlsx`, `zones` `person`, the default, or `mine` for the viewer's zone). `503` (`directory_unavailable`) when the group's members could not be read. See [Reports, exports and time zones](exports.md) |
-| `POST /app/export/people` | Signed in | A people list as a file (`search` or `group`, `format`), with each person's status on the session's System Date, else today, and named after that day |
+| `POST /app/export/group-report` | A/M who manages the group (`ADMIN`: any) | The group report as a file (`groupDn`, `fromDate`, `toDate`, `format` `csv` or `xlsx`, `zones` `person`, the default, or `mine` for the viewer's zone). `503` (`directory_unavailable`, `Retry-After: 5`) when the group's members, or any of them, could not be read: before anything is written, so never a file cut short. See [Reports, exports and time zones](exports.md) |
+| `POST /app/export/people` | Signed in | A people list as a file (`search` or `group`, `format`), with each person's status on the session's System Date, else today, and named after that day. `503` (`directory_unavailable`, `Retry-After: 5`) when the directory did not answer for the group, the search or one of the people, before anything is written |
 | `/app/reports/schedules` | A/M | Scheduled reports. `POST` creates one; `POST .../{id}/send` sends now; `POST .../{id}/enable` turns a schedule that was turned off back on; `POST .../{id}/delete` deletes |
 | `/app/admin/integrations` | ADMIN | API tokens and webhooks. `POST .../tokens`, `.../tokens/{id}/revoke`, `.../webhooks`, `.../webhooks/{id}/disable`, `/enable`, `/delete`, `/ping`, `/rotate` (a new signing secret, shown once) |
 | `/app/user/search` | Signed in | User search |
