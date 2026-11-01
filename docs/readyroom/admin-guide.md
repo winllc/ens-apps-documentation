@@ -125,8 +125,10 @@ alternate managers**, as for delegates: a group's own managers no longer appoint
 3. Choose **Update**. The list is saved in `group_records.alternate_managers`.
 
 Each manager must be someone in the directory; a DN that is not there, or a list longer than the
-column holds (255 characters), is refused with the reason, and nothing is saved. The change is
-audited as `group.managers-changed`.
+column holds (255 characters), is refused with the reason, and nothing is saved. If the directory
+does not answer while it checks them, nothing is saved either, and the answer says so (`503`,
+`directory_unavailable`) rather than *Not in the directory*. The change is audited as
+`group.managers-changed`.
 
 A person counts as a **manager of a group** if they are its directory `owner` or are on this list.
 A group manager can open the group and sees the details of every member of every group they manage
@@ -239,7 +241,9 @@ lists them.
 To set someone's delegates, open their details page (**Users** → the person). On the
 **Delegates** card, search under **Add a delegate**, remove anyone with the remove control, and
 choose **Save delegates**. Each delegate must be someone else in the directory. The change is
-audited as `person.updated` with `details.via` `alternate-managers` and the old and new lists.
+audited as `person.updated` with `details.via` `alternate-managers` and the old and new lists. If
+the directory does not answer while it checks them, nothing is saved and the answer is *The directory
+did not answer* (`503`), not *Not in the directory*: save again in a few seconds.
 
 **Administration → Delegates** (`/app/admin/delegates`) lists everyone who has delegates, with
 who set them:
@@ -389,7 +393,9 @@ still active, and their open sessions.
   confirm; the browser asks once more. The form is good for 10 minutes and for that person only.
   Nobody can erase themselves. The page then says how many records were erased and what was
   revoked, disabled and ended. The erasure is audited as `person.erased`, with the counts and
-  whether the person is still in the directory.
+  whether the person is still in the directory. If the directory does not answer, the page (and
+  the erasure) says *The directory did not answer* instead, and nothing is erased: whether the
+  person is still there, and so comes back, is not known. Try again in a few seconds.
 
 !!! warning "Erase someone who has left the directory first"
     If the person is still in the directory, the page says so: ReadyRoom creates their account
