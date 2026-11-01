@@ -56,7 +56,8 @@ With TLS on, ReadyRoom refuses to start if no keystore is set, or if no truststo
 
 | Property | Packaged | Description |
 |---|---|---|
-| `spring.datasource.url` | `jdbc:postgresql://${DB_HOST:postgres}:${DB_PORT:5432}/${DB_NAME:appdb}` | JDBC URL. Set `DB_HOST`, `DB_PORT` and `DB_NAME`, or `SPRING_DATASOURCE_URL` whole. |
+| `spring.datasource.url` | `jdbc:postgresql://${DB_HOST:postgres}:${DB_PORT:5432}/${DB_NAME:appdb}?options=${DB_OPTIONS:-c%20plan_cache_mode%3Dforce_custom_plan}` | JDBC URL. Set `DB_HOST`, `DB_PORT` and `DB_NAME`, or `SPRING_DATASOURCE_URL` whole. A whole URL of your own should keep the `options` parameter. |
+| `DB_OPTIONS` | `-c%20plan_cache_mode%3Dforce_custom_plan` | PostgreSQL settings for each connection, URL-encoded (Helm: `database.options`). The default plans every query for its own parameters. PostgreSQL's own default switches a query that runs often over long lists of people to a generic plan, which was up to 240 times slower in a 100,000-person load test. Behind a connection pooler that refuses startup options (PgBouncer without `ignore_startup_parameters`), set it empty (Helm: `-`) and run `ALTER DATABASE <name> SET plan_cache_mode = force_custom_plan` instead. |
 | `spring.datasource.username` | `DB_USERNAME`, packaged `appuser` | |
 | `spring.datasource.password` | `DB_PASSWORD`, packaged `secret123` | Override it. |
 | `spring.datasource.driver-class-name` | `org.postgresql.Driver` | |
@@ -83,6 +84,7 @@ With TLS on, ReadyRoom refuses to start if no keystore is set, or if no truststo
 | `application.ldap.pooled` | `true` | `true` | Reuse JNDI connections. Password checks on the login form never use the pool. |
 | `application.ldap.page-size` | `500` | `500` | Entries per page for large searches. Keep it below the server's size limit (Active Directory 1000, OpenLDAP 500). `0` turns paging off for directories without the paged results control. |
 | `application.ldap.max-pages` | – | `1000` | The most pages one paged search reads before it logs a warning and returns what it has. This protects against a directory or proxy that keeps returning a paging cookie. |
+| `application.ldap.user-cache-size` | – | `150000` | The most directory users kept in memory for sign-in, reports and alerts (`APPLICATION_LDAP_USERCACHESIZE`), about 1 KB of heap each. Keep it at or above the number of people who check in. Below that, check-ins and large group reports read the directory for nearly every person. Up to the current release it was fixed at 5,000. |
 | `application.ldap.group-membership-cache-seconds` | `300` | `300` | How long a user's group memberships are cached. Permission checks read them on every request, so a directory change can take this long to show. `0` disables the cache. |
 
 The JDK connection pool is configured by system properties that ReadyRoom sets at startup, unless

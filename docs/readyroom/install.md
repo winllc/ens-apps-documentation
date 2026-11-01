@@ -389,7 +389,7 @@ commas.
 | Value | Matches `.env` |
 |---|---|
 | `publicUrl` | `APPLICATION_BASE_URL` (defaults to the ingress or route host) |
-| `database.*` | `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USERNAME`, `DB_PASSWORD` |
+| `database.*` | `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USERNAME`, `DB_PASSWORD`, `DB_OPTIONS` (`database.options`; `-` sends none, for a pooler that refuses startup options) |
 | `ldap.scheme` (`ldaps`), `ldap.host`, `ldap.port`, `ldap.url`, `ldap.bindDn` | `SPRING_LDAP_URLS`, `LDAP_USERNAME`. The port follows the scheme (636 or 389). `ldap.port: 389` with the default `ldaps` scheme fails the render: set `ldap.scheme: ldap` deliberately for plain LDAP |
 | `ldap.userBaseDn`, `ldap.userFilter`, `ldap.groupBaseDns` | `APPLICATION_USERBASEDN`, `APPLICATION_USERLDAPFILTER`, `APPLICATION_GROUPS_n_GROUPSBASEDN` |
 | `ldap.attributes.*` | `APPLICATION_USERLDAP*ATTRIBUTE`, `APPLICATION_MANAGERLDAPIDATTRIBUTE` |
