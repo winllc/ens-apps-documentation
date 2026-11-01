@@ -84,6 +84,8 @@ With TLS on, ReadyRoom refuses to start if no keystore is set, or if no truststo
 | `application.ldap.page-size` | `500` | `500` | Entries per page for large searches. Keep it below the server's size limit (Active Directory 1000, OpenLDAP 500). `0` turns paging off for directories without the paged results control. |
 | `application.ldap.max-pages` | – | `1000` | The most pages one paged search reads before it logs a warning and returns what it has. This protects against a directory or proxy that keeps returning a paging cookie. |
 | `application.ldap.group-membership-cache-seconds` | `300` | `300` | How long a user's group memberships are cached. Permission checks read them on every request, so a directory change can take this long to show. `0` disables the cache. |
+| `application.ldap.pool-max-size` | `0` | `0` | The most pooled directory connections (`APPLICATION_LDAP_POOLMAXSIZE`). `0` sizes the pool for the request threads: `server.tomcat.threads.max` plus `spring.task.scheduling.pool.size` (208 with the defaults), never fewer than 20. Every sign-in reads the directory, so a pool smaller than the request threads makes a burst of check-ins wait for a connection, and a wait longer than the connect timeout fails the read. Connections are opened only when needed and closed after 5 idle minutes. Lower it if the directory limits connections per client; raise it together with `server.tomcat.threads.max`. The startup log says `LDAP connection pooling enabled for ..., at most <n> connections`. |
+| `application.ldap.sign-in-retries` | `2` | `2` | How many more times a sign-in reads the directory when it does not answer (a time-out, or no free pooled connection), 200 ms and then 400 ms later, before the request is answered `503` with `Retry-After: 5` (`APPLICATION_LDAP_SIGNINRETRIES`). A directory that cannot be asked is never taken for "no such user": that is still a `401`, at once. |
 
 The JDK connection pool is configured by system properties that ReadyRoom sets at startup, unless
 you pass them with `-D`:
@@ -91,8 +93,12 @@ you pass them with `-D`:
 | System property | Default set by ReadyRoom |
 |---|---|
 | `com.sun.jndi.ldap.connect.pool.protocol` | `plain ssl` (pools `ldaps://` connections too) |
-| `com.sun.jndi.ldap.connect.pool.maxsize` | `20` |
+| `com.sun.jndi.ldap.connect.pool.maxsize` | `application.ldap.pool-max-size`, or with that at `0` the request threads plus the job threads (208 with the defaults; it was a fixed `20`) |
 | `com.sun.jndi.ldap.connect.pool.timeout` | `300000` (5 minutes idle) |
+
+A connection is waited for as long as `com.sun.jndi.ldap.connect.timeout` (5 s packaged). If the
+database pool (`spring.datasource.hikari.maximum-pool-size`) is raised, raise the directory pool with it:
+a larger database pool lets more requests reach the directory at once.
 
 ## Directory mapping
 
