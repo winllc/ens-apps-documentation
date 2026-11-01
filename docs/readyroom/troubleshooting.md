@@ -81,6 +81,7 @@ Work through these in order:
 | `Configuration error: BaseUrl ...` (exit 1) | Set `BaseUrl` in `inoutworker.config.json` or with `-BaseUrl`. The built-in default is a lab address. |
 | `'login' posts to an authenticated endpoint and no client certificate is available.` (exit 2) | No valid certificate with a private key in `CurrentUser\My`. |
 | `POST to ... failed (HTTP 401)` (exit 3) | The server did not accept the certificate or the ticket. |
+| `POST to ... failed (HTTP 503) [directory_unavailable] ...` (exit 3) | The directory did not answer while the server checked who signed in, even after `application.ldap.sign-in-retries` more tries: a time-out, or no free pooled connection during a burst of check-ins. The person was not refused. The agent sent the event again after the server's `Retry-After`, up to `Retries` times (3), and gave up; the next logon, lock or unlock goes through once the directory answers. Check the server log for `the directory did not answer`, the directory's health, `application.ldap.pool-max-size` and the connect timeout. |
 | A TLS trust error (exit 3) | The workstation does not trust the server's CA, or the host name does not match the server certificate. |
 | `Logout has no sessionId` | The login post failed, and no unlock was recorded as a check-in since, so the logout cannot be attributed. The server refuses it with `401`. Fix the login failure. |
 | `... failed (HTTP 401) [unknown_session] ...` on a logout | The `sessionId` is unknown, already used or older than 7 days. Nothing is recorded. A workstation kept logged on for longer gets a fresh `sessionId` with each day's first unlock, which the server records as the check-in; earlier clients and servers did not, so upgrade the server and re-run the installer on such workstations. |
@@ -152,7 +153,8 @@ On the client, `The server redirected instead of accepting Windows sign-in` mean
 | Symptom | Cause and fix |
 |---|---|
 | Pages slow | Turn on `application.diagnostics.request-metrics` to count SQL statements and LDAP operations per request. The indexes come from the `V1` migration; check that it was applied (`flyway_schema_history`). |
-| Requests hang on the directory | The connect and read timeouts under `spring.ldap.base-environment` must be set (5 s and 30 s in the packaged configuration). Check pool exhaustion: the pool holds at most 20 connections by default. |
+| Requests hang on the directory | The connect and read timeouts under `spring.ldap.base-environment` must be set (5 s and 30 s in the packaged configuration). Check pool exhaustion: by default the pool holds one connection per request and job thread (`application.ldap.pool-max-size`); a `-D` value of `com.sun.jndi.ldap.connect.pool.maxsize` overrides it. |
+| Sign-ins answered `503` with `Retry-After`, the log saying `Sign-in could not ... the directory did not answer` | A directory read at sign-in timed out or found no free pooled connection, three times in a row. Before this release such a sign-in was refused with `401` as if the person did not exist. Check the directory and the pool size (above). |
 | Database connections exhausted | Keep `spring.jpa.open-in-view: false`. |
 
 ## Reaching the server
