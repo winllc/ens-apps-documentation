@@ -465,6 +465,11 @@ expires. Each eviction is audited as `settings.cache-evicted`, with `details.eve
 
 When the directory stops answering part way through a tree, the **Groups** page shows what it has
 with *The directory did not answer for part of this tree; try again*, and that tree is not cached.
+That includes a sub-group the directory did not answer for, which earlier releases left out as if it
+did not exist, and cached the tree without it; the next read after the directory answers gets the
+whole tree. A top-level tree the directory did not answer for at all is left off the page with the
+same notice. A group's own page is *The directory did not answer* (`503`) rather than *no such
+group* (`404`), and a person's groups and the groups they own are never cached as "none".
 
 ### Stored group DNs
 
