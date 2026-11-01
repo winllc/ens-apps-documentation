@@ -162,7 +162,8 @@ The report page shows the group name, the date range and the number of users, th
 - **Day Reports**: for each day, the number of check-ins and check-outs, and counts by employee
   type, location and organization.
 - **User Reports**: for each member, each day's status, check-in time, check-out time and how long
-  they were checked in.
+  they were checked in. For a large group the page shows the first 200 members (by default) and says
+  so; the day reports above still count everyone, and **CSV** and **Excel** have every member.
 
 The dates you pick are whole days, at most 366 of them by default, and each person's records are
 put on their own days: in their time zone, from their day start. The check-out time is when the
@@ -192,7 +193,10 @@ Managers and administrators can have a group's report e-mailed every day, week o
 name and choose **Search**. The search matches any part of the common name. The results table has
 the same columns as a group's member list, including the **Advanced** switch. For coworkers whose
 details you may not see, it shows their directory details and status only. Click a row to open that
-person's details.
+person's details. A short name can match many people: the table lists the first 500 (by default) and
+says when there are more, so type more of the name to find the rest. **CSV** and **Excel** download
+everyone the search matches, up to 5,000 people by default; a search matching more is refused, so
+narrow it or download a group.
 
 ## A person's details
 
@@ -294,6 +298,10 @@ them, so a person working in another organization that day counts there and some
 day counts under the later one. Everyone else is counted where the directory lists them (every entry
 with the attribute, narrowed only by the duty sub-org filter). Nobody is counted twice, and someone whose
 record names an organization that is not on the chart is not counted.
+
+Today's placement and statuses are worked out once a minute and shared by everyone viewing the chart,
+so they can be up to a minute old; what each viewer may see of them is still decided for that viewer.
+A day picked with the **System Date** is worked out when you open it.
 
 Filter by name, expand or collapse the tree, and click an organization to list the people counted in it, with the
 usual **Advanced** switch. As in **Users**, coworkers whose details you may not see show their status
@@ -531,6 +539,10 @@ alert still comes that day, shortly before it ends.
 The accountability figures (accounted for, status mix, agent coverage) count each person on their
 own date and day. **Current User Statuses**, the breakdown tabs and **Today's Activity** show the
 application's day and clock, one clock for everyone.
+
+Today's figures are the same for everyone who opens the page, so they are counted once a minute and
+shared: they can be up to a minute old. A day picked with the **System Date** is counted when you
+open it.
 | Breakdown tabs | Status charts by **organization**, **employee type**, **location** and **branch**. |
 
 ## Looking at another day

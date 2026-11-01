@@ -24,12 +24,13 @@ into your API client or code generator.
 | Endpoint | Scope | What |
 |---|---|---|
 | `GET /api/v1/people?q=&location=&organization=&page=&size=` | `people:read` | Tracked people and their status today |
-| `GET /api/v1/attendance/events?from=&to=&dn=&page=&size=` | `attendance:read` | Check-ins, locks, unlocks and check-outs, oldest first |
+| `GET /api/v1/attendance/events?from=&to=&dn=&page=&size=&after=` | `attendance:read` | Check-ins, locks, unlocks and check-outs, oldest first |
 | `GET /api/v1/absences?from=&to=&dn=&page=&size=` | `absences:read` | Days with leave, telework, an absence or another status |
 | `GET /api/v1/absences/requests?from=&to=&dn=&state=&page=&size=` | `absences:read` | Leave requests covering the range, with their decision (no notes) |
 
 - Dates are `YYYY-MM-DD`, both ends included, at most `APPLICATION_API_MAXRANGEDAYS` (366) days.
 - Pages count from 1 and hold up to `APPLICATION_API_MAXPAGESIZE` (500) items.
+- Attendance events can also be read **by cursor**; see [Reading a long range](#reading-a-long-range).
 - Times are ISO-8601 with an offset, in each person's [time zone](exports.md#time-zones).
 - `from` and `to` are the application's days. Each attendance event's `date` is the person's own
   day: in their time zone, from their site's day start (for a site whose days start at 18:00, a
@@ -48,6 +49,29 @@ curl -H "Authorization: Bearer ensapi_..." \
 curl -H "Authorization: Bearer ensapi_..." \
   "https://readyroom.example.com/api/v1/absences?from=2026-10-01&to=2026-10-31&dn=CN%3DJane%20Doe%2COU%3DUsers%2CDC%3Dexample%2CDC%3Dcom"
 ```
+
+### Reading a long range
+
+Every page of attendance events but the last carries `next`, an opaque cursor. Pass it back as
+`after`, with the same `from`, `to` and `dn` and no `page`, for the page that follows:
+
+```bash
+curl -H "Authorization: Bearer ensapi_..." \
+  "https://readyroom.example.com/api/v1/attendance/events?from=2026-10-01&to=2026-10-31&size=500"
+# then, while the answer has "next":
+curl -H "Authorization: Bearer ensapi_..." \
+  "https://readyroom.example.com/api/v1/attendance/events?from=2026-10-01&to=2026-10-31&size=500&after=<next>"
+```
+
+- A page read with `after` is not counted: it has `items`, `size` and `next` (absent on the last
+  page), and no `page`, `totalItems` or `totalPages`. It costs the same however deep it is (an index
+  range scan from where the last page ended).
+- Numbered pages are unchanged and still counted. Each one counts the whole range and skips the
+  pages before it, so over a month of a large organization (millions of events) a deep `page` takes
+  seconds and gets slower the deeper it is. Start with page 1 (or no `page`), then follow `next`.
+- `page` other than 1 together with `after`, or an `after` the API did not give, is `400`
+  (`bad_request`).
+- The other lists (`people`, `absences`, `absences/requests`) have no `next` and are unchanged.
 
 ### Tokens
 
@@ -230,7 +254,7 @@ is off), or your ingress or route host with Helm. Timestamps in JSON records use
 
 | Method and path | Access | Description |
 |---|---|---|
-| `GET /api/users/search?search=&page=1&size=10&sort=id&dir=asc` | Signed in | Directory users whose `cn` contains `search` (all users when empty), with today's status. For people whose details the caller may not see, only directory fields and what `application.privacy.coworker-visibility` allows (see [Security](security.md#authorization)). |
+| `GET /api/users/search?search=&page=1&size=10&sort=id&dir=asc` | Signed in | Directory users whose `cn` contains `search` (everyone when empty), with today's status: the first `application.ldap.search-max-results` (500) of them; when more match, the `X-Results-Limited` header is set to that number. For people whose details the caller may not see, only directory fields and what `application.privacy.coworker-visibility` allows (see [Security](security.md#authorization)). |
 | `GET /api/users/usersearch?search=` | Signed in | Directory users whose `cn` contains `search`. Used by the manager pickers. |
 | `GET /api/users/group/{groupDn}` | A member or manager of the group, or `ADMIN` | `{"data": [...statuses]}` for the group's members, limited by the coworker visibility setting for people whose details the caller may not see. |
 | `GET /api/users/reports` | Signed in | `{"data": [...]}`: the caller's direct reports, with status. |
@@ -376,9 +400,9 @@ A manager, delegate or administrator can record any of them for someone else, at
 | `/app/home` | Signed in | Home |
 | `/app/groups` | Signed in | Group trees |
 | `/app/users/{groupDn}` | A member or manager of the group, or `ADMIN` | Group members |
-| `POST /app/group/report` | A/M who manages the group (`ADMIN`: any) | Group report (`groupDn`, `fromDate`, `toDate` as `yyyy-MM-dd` days in the application's zone, at most `APPLICATION_REPORTS_MAXRANGEDAYS` (366) days; `400` otherwise) |
+| `POST /app/group/report` | A/M who manages the group (`ADMIN`: any) | Group report (`groupDn`, `fromDate`, `toDate` as `yyyy-MM-dd` days in the application's zone, at most `APPLICATION_REPORTS_MAXRANGEDAYS` (366) days; `400` otherwise) The page shows the own days of the first `APPLICATION_REPORTS_HTMLMAXMEMBERS` (200) members; its day summaries, and the CSV and Excel downloads, have everyone |
 | `POST /app/export/group-report` | A/M who manages the group (`ADMIN`: any) | The group report as a file (`groupDn`, `fromDate`, `toDate`, `format` `csv` or `xlsx`, `zones` `person`, the default, or `mine` for the viewer's zone). `503` (`directory_unavailable`) when the group's members could not be read. See [Reports, exports and time zones](exports.md) |
-| `POST /app/export/people` | Signed in | A people list as a file (`search` or `group`, `format`), with each person's status on the session's System Date, else today, and named after that day |
+| `POST /app/export/people` | Signed in | A people list as a file (`search` or `group`, `format`), with each person's status on the session's System Date, else today, and named after that day. A `search` matching more than `application.ldap.search-max-download` (5,000) people is `400` (`too_many_matches`) |
 | `/app/reports/schedules` | A/M | Scheduled reports. `POST` creates one; `POST .../{id}/send` sends now; `POST .../{id}/enable` turns a schedule that was turned off back on; `POST .../{id}/delete` deletes |
 | `/app/admin/integrations` | ADMIN | API tokens and webhooks. `POST .../tokens`, `.../tokens/{id}/revoke`, `.../webhooks`, `.../webhooks/{id}/disable`, `/enable`, `/delete`, `/ping`, `/rotate` (a new signing secret, shown once) |
 | `/app/user/search` | Signed in | User search |

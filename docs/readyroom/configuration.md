@@ -83,6 +83,8 @@ With TLS on, ReadyRoom refuses to start if no keystore is set, or if no truststo
 | `application.ldap.pooled` | `true` | `true` | Reuse JNDI connections. Password checks on the login form never use the pool. |
 | `application.ldap.page-size` | `500` | `500` | Entries per page for large searches. Keep it below the server's size limit (Active Directory 1000, OpenLDAP 500). `0` turns paging off for directories without the paged results control. |
 | `application.ldap.max-pages` | – | `1000` | The most pages one paged search reads before it logs a warning and returns what it has. This protects against a directory or proxy that keeps returning a paging cookie. |
+| `application.ldap.search-max-results` | – | `500` | The most people a name search (*Find a user*) lists (`APPLICATION_LDAP_SEARCHMAXRESULTS`). The directory is asked for one more, so the page can say there are more and ask for more of the name. Keep it below the directory's size limit if paging is off. |
+| `application.ldap.search-max-download` | – | `5000` | The most people a download of a name search holds (`APPLICATION_LDAP_SEARCHMAXDOWNLOAD`); a search matching more is refused with `400` (`too_many_matches`). |
 | `application.ldap.group-membership-cache-seconds` | `300` | `300` | How long a user's group memberships are cached. Permission checks read them on every request, so a directory change can take this long to show. `0` disables the cache. |
 
 The JDK connection pool is configured by system properties that ReadyRoom sets at startup, unless
@@ -268,7 +270,7 @@ needs an `https://` `APPLICATION_BASE_URL`, and the release package's `env.templ
 | Public API (`application.api.*`) | `APPLICATION_API_MAXTOKENDAYS` (`366`), `_DEFAULTRATEPERMINUTE` (`120`), `_MAXRATEPERMINUTE` (`1200`), `_MAXRANGEDAYS` (`366`), `_MAXPAGESIZE` (`500`). From the next release rates are counted in the database for all replicas together (up to the current release per replica: with N replicas a token may make up to N times its rate) | [API reference → Settings](api-reference.md#settings) |
 | Live account check (`application.ldap.account-status.*`) | `APPLICATION_LDAP_ACCOUNTSTATUS_FILTER`, `_LOCKOUTDURATION`, `_CACHESECONDS` (`60`), `_BUILTINCHECKS` (`true`), `_ACTIVEDIRECTORY` (`auto`) | Applies to API token, webhook and scheduled report owners, to certificate and single sign-on sign-ins, and to signed-in browser sessions (there an unreadable directory does not refuse); [API reference → Tokens](api-reference.md#tokens) |
 | Webhooks (`application.webhooks.*`) | `APPLICATION_WEBHOOKS_SECRETKEY` (unset: webhooks off), `_ALLOWEDCIDRS`, `_MAXATTEMPTS` (`8`), `_DELIVERYLOGDAYS` (`30`), timeouts and run limits | [Webhooks → Settings](webhooks.md#settings) |
-| Reports and time zones (`application.reports.*`) | `APPLICATION_REPORTS_SITETIMEZONES`, `_MAXRANGEDAYS` (`366`), `_MAXATTACHMENTBYTES` (`10485760`), `_MAXRECIPIENTS` (`20`), `_RETRYHOURS` (`24`) | [Reports, exports and time zones](exports.md#settings) |
+| Reports and time zones (`application.reports.*`) | `APPLICATION_REPORTS_SITETIMEZONES`, `_MAXRANGEDAYS` (`366`), `_HTMLMAXMEMBERS` (`200`), `_MAXATTACHMENTBYTES` (`10485760`), `_MAXRECIPIENTS` (`20`), `_RETRYHOURS` (`24`) | [Reports, exports and time zones](exports.md#settings) |
 
 ## Logging, monitoring and diagnostics
 

@@ -14,7 +14,13 @@
   of an evening lock is written after midnight, on the next day).
 - **People lists**: a group's members (on its page) and a name search (*Find a user*) download as a
   list of people with each person's status on the day the page shows (the **System Date**, else
-  today), and the file is named after that day.
+  today), and the file is named after that day. A search lists its first
+  `APPLICATION_LDAP_SEARCHMAXRESULTS` (500) matches and says when there are more; its download holds
+  every match, up to `APPLICATION_LDAP_SEARCHMAXDOWNLOAD` (5,000): a search matching more is refused
+  (`400`, `too_many_matches`), never cut short. Narrow the search, or download a group.
+- **The group report page** counts every member in its day summaries but shows the own days of the
+  first `APPLICATION_REPORTS_HTMLMAXMEMBERS` (200) members only, and says so (a month of a
+  5,000-member group was a 68 MB page). The CSV and Excel downloads have every member.
 - **When the directory cannot be read**, a group's members are not known: the group report page
   says *The directory could not be read*, and its CSV and Excel downloads answer `503`
   (`directory_unavailable`) instead of a file with only its header.
@@ -104,6 +110,7 @@ is the person's own day.
 | `APPLICATION_DAYSTART` | `00:00` | `dayStart` | When days start, `HH:mm`, in each person's own time zone |
 | `APPLICATION_SITEDAYSTARTS` | (none) | `siteDayStarts` | A site's own day start, `<location>=HH:mm`, comma separated, for example `Plant 2=18:00`. See [Configuration](configuration.md#time-zone-and-day-start) |
 | `APPLICATION_REPORTS_MAXRANGEDAYS` | `366` | `reports.maxRangeDays` | The most days one export covers |
+| `APPLICATION_REPORTS_HTMLMAXMEMBERS` | `200` | – | The most members whose own days the group report page shows; its day summaries and the downloads have everyone |
 | `APPLICATION_REPORTS_MAXATTACHMENTBYTES` | `10485760` | `reports.maxAttachmentBytes` | A scheduled report's largest attachment |
 | `APPLICATION_REPORTS_MAXRECIPIENTS` | `20` | `reports.maxRecipients` | A scheduled report's most recipients |
 | `APPLICATION_REPORTS_RETRYHOURS` | `24` | – | How long a scheduled report that reached nobody is tried again, never past its next sending time |
