@@ -73,7 +73,7 @@ checking off; or `ENS_CSP_REPORT_ONLY` is on.
 | Path | Includes |
 |---|---|
 | `/actuator/health/liveness` | ReadyRoom's own state only, so an outage elsewhere never restarts it |
-| `/actuator/health/readiness` | Also the database (`db`), the directory (`ldap`) and whether the audit trail can be written (`auditStore`). Never the mail server |
+| `/actuator/health/readiness` | Also the database (`db`), the directory (`ldap`) and whether the audit trail can be written (`auditStore`; from the next release its details also give `pending`, the audit events stored but not yet chained, and `oldestPending`). Never the mail server |
 | `/actuator/health` | The aggregate, including the mail server unless `MANAGEMENT_HEALTH_MAIL_ENABLED=false` |
 
 All three are open without sign-in and show the status only; component details are shown to `ADMIN`
@@ -353,9 +353,10 @@ package nor the Helm chart carries scripts. Developer notes on adding a migratio
 | `V14__alert_answered_by_request` (next release) | `notification_records.status_response_request_id`: the approved status request that answered an absence alert (its days' alerts take the request's status as their answer). A request the retention purge or an erasure deletes clears the link and leaves the answer. One new column only |
 | `V16__work_schedules` (next release) | `user_records.working_days` (`MTWTF..`; empty for Monday to Friday), `user_records.start_date`, `user_records.created_at`, and `attendance_summaries.working_days`, for [working days and start dates](admin-guide.md#working-days-and-start-dates). `created_at` is filled for existing people with the earliest of their check-ins and monthly summaries (empty for someone with neither). Nobody's schedule changes |
 | `V17__record_corrections` (next release) | `check_in_out_records`: `voided_at`, `voided_by`, `void_reason`, `note`, `noted_by`, `noted_at`, `added_by`, `added_at`, `added_reason`, for [corrections to check-in records](admin-guide.md#correcting-check-in-records); and `notification_records.original_response`, `original_response_by_dn`, `original_response_date`, the alert answer an approved request superseded. New empty columns only: existing records are neither void nor corrected |
+| `V18__audit_pending` (next release) | `audit_pending`: audit events stored with the action they record and waiting, normally under a second, for their place in the hash chain, which a chainer on each replica gives them in batches. A new table only: `audit_events`, its rows and `audit_chain_head` are unchanged, and the trail verifies as before |
 
 There is no V15. V2 to V4 change only the schema, plus one `UPDATE` on `user_records`, so they are
-quick; V6 to V11, V13, V14 and V17 add tables and columns only; V12 adds two columns and fills them
+quick; V6 to V11, V13, V14, V17 and V18 add tables and columns only; V12 adds two columns and fills them
 with one `UPDATE` each; V16 adds columns and fills `user_records.created_at` with one `UPDATE` that
 reads each person's earliest check-in record and monthly summary.
 
@@ -459,7 +460,7 @@ Nothing to do by hand: Flyway adds the tables above, and nothing existing change
 
 ### Upgrading to the next release
 
-New tables and columns (Flyway `V11` to `V14`, `V16` and `V17`; there is no `V15`), added at the
+New tables and columns (Flyway `V11` to `V14` and `V16` to `V18`; there is no `V15`), added at the
 first start, in that order. Sign-in keeps working for every installation that kept its settings;
 check the points below.
 
@@ -486,6 +487,7 @@ check the points below.
 | People are e-mailed when a manager, delegate or administrator records a status that does not excuse the day (Absent, Absent Unexcused, Unscheduled Leave, Late Arrival, Early Leave), on their calendar or by answering an absence alert | Tell managers and users. Needs a mail server, with the same settings as absence alerts |
 | An alert answer that an approved request superseded is kept and shown beside the request | Only for answers superseded from this release on. Earlier ones keep the old answer only in their `absence.alert-superseded` audit event |
 | The personal data export adds `statusHistory` and `recordCorrections` from the audit trail, void records with their corrections, and the person's working days and start date | Update anything that reads the export. See [Privacy → Export](privacy.md#export) |
+| Audit events are added to the hash chain in the background (`V18`) | Nothing to do; a rolling update is safe. An audited action no longer waits for the one audit chain head row, so audited actions stop queuing behind each other. Each event is stored with its action as before, and joins the trail, the audit page, exports, the pull API and the outputs within about a second (`ENS_AUDIT_CHAIN_MILLIS`, see [Configuration](configuration.md#audit-trail)). Events already stored are untouched and verify as before. While old and new replicas run side by side, both add to the same chain under the same row lock, so it stays gapless. Each event's line goes to the stdout and audit file of the replica that chained it, not necessarily the one that recorded it (its `host` still names that one). A [rollback](availability-and-sizing.md#rolling-back-an-upgrade) restores the pre-upgrade backup, as for any release. If you instead start the previous release on this database, stop every replica of this one first (stopping chains what is waiting) and check that `SELECT count(*) FROM audit_pending` returns 0: the previous release does not read that table, so events left in it would stay out of the trail |
 
 ## Runbook
 
@@ -497,6 +499,7 @@ check the points below.
 | No absence emails | SMTP errors in the log, the manager's email attribute, `application-base-url`, whether today is one of the person's working days (their schedule, on their own date) or a holiday, and whether the person has an expected time. |
 | Pages slow or hanging | LDAP response times. Turn on `request-metrics`. The timeouts are 5 s connect and 30 s read. |
 | Group changes in the directory not visible | Cache lifetimes. Evict the group in **Settings → Group Cache**. Membership-based access is cached for 300 s. |
+| Recent audit events missing from **Audit log**, exports or the SIEM | They join the trail within about a second. If they stay out, readiness's `auditStore` details show `pending` and `oldestPending` (signed in as `ADMIN`), and the log says `Could not chain the recorded audit events`, with the database error. Nothing is lost meanwhile: the events stay stored and are chained once the cause is fixed. |
 | "Wrong" data for one admin | They may have pinned another day with **System Date**. Look for `pinned their session system time` in the log. |
 
 More detail on each problem is in [Troubleshooting](troubleshooting.md).
