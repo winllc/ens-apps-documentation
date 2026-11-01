@@ -200,7 +200,9 @@ Explicit parameters override the file. The script itself never needs to be edite
   "Authentication": "Certificate",
   "CertificateThumbprint": "",
   "CertificateSubjectContains": "",
-  "SkipCertificateCheck": false
+  "SkipCertificateCheck": false,
+  "Retries": 3,
+  "MaxRetryWaitSeconds": 30
 }
 ```
 
@@ -211,6 +213,8 @@ Explicit parameters override the file. The script itself never needs to be edite
 | `CertificateThumbprint` / `-CertificateThumbprint` | blank | Use the certificate with this thumbprint (non-hex characters are ignored). |
 | `CertificateSubjectContains` / `-CertificateSubjectContains` | blank | If no thumbprint matches, use the first certificate whose subject contains this text. |
 | `SkipCertificateCheck` / `-SkipCertificateCheck` | `false` | Turns off server certificate validation. **Lab use only.** |
+| `Retries` | `3` | After a `503` (the server could not reach its directory for a moment): how many more times to send the event. `0` sends it once. |
+| `MaxRetryWaitSeconds` | `30` | The longest wait before each of those tries. The agent waits as long as the server's `Retry-After` says (5 seconds), up to this. |
 | `-Action` | **required** | `login`, `logout`, `lock` or `unlock`. |
 | `-UserSid` | – | For `logout` run as SYSTEM: the SID of the user whose session ended, which selects their session file. The Logout task passes it from event 4647. Run as a user, the user's own SID is used. |
 | `-ConfigPath` | – | Read the configuration from this file. |
@@ -233,6 +237,7 @@ thumbprint, then by subject text, then the certificate with the most recent *Not
 | `C:\Program Files\InOutWorker\inoutworker.config.json` | Configuration, if the installer wrote one. |
 | `%ProgramData%\InOutWorker\sessions\<SID>.json` | `sessionId`, `windowsUserId`, `userSid` and `savedAtUtc` from the user's last check-in (a login, or an unlock the server recorded as the day's check-in). Readable only by that user, SYSTEM and Administrators. Overwritten by the next check-in, never deleted by a logout. |
 | `%ProgramData%\InOutWorker\logs\inoutworker-yyyyMMdd.log` | The SYSTEM runs' log (the Logout task): one file per day. |
+| `%LOCALAPPDATA%\InOutWorker\latest-event` | A token naming the user's latest logon, lock or unlock run, so that a run still retrying a `503` stops once a later one has started. |
 | `%LOCALAPPDATA%\InOutWorker\logs\inoutworker-yyyyMMdd.log` | The user's own runs' log (Login, Lock, Unlock, Disconnect and Reconnect), in their profile: one file per day. |
 
 Lines in both logs look like `[yyyy-MM-dd HH:mm:ss][LEVEL][action] message`. Task Scheduler cannot
@@ -284,7 +289,8 @@ ended. To test a logout, log off, or run the script as the user with `-Action lo
 | `No certificate matched thumbprint ...; falling back.` | The configured thumbprint is stale, for example after a renewal. Update or clear `CertificateThumbprint`. |
 | `Profile for <user> not ready after 30s; continuing anyway.` | The profile loaded slowly. The post may fail if the certificate store is not yet available. Increase `-ProfileWaitTimeoutSec` in the task's arguments if this keeps happening. |
 | `POST to ... with Certificate sign-in failed (HTTP 401)` | The certificate was not accepted: it is not issued by a CA in the server's truststore, or its subject DN is not a directory user. |
-| `POST to ... sign-in failed (HTTP 503) [directory_unavailable] ...` | The server could not reach its directory to check who signed in (it tries three times). The user was not refused; the client does not send the event again, and the next logon, lock or unlock goes through once the directory answers. |
+| `POST to ... failed (HTTP 503) [directory_unavailable] ...; trying again in 5s (1 of 3).` | The server could not reach its directory to check who signed in (it tries three times itself). The user was not refused. The agent sends the event again after the server's `Retry-After`, up to `Retries` times. If the directory still does not answer, the run ends with exit code 3, and the next logon, lock or unlock goes through once the directory answers. |
+| `Not sending 'lock' again: a later logon, lock or unlock of this user has started.` | A `503` was being retried when the same user locked, unlocked or logged on again. The older event is dropped, because sent after the newer one it would undo it (a lock after the unlock that followed it would show the person as locked while they work). |
 | `The server redirected instead of accepting Windows sign-in (is application.windows-auth enabled on the server?)` | Windows sign-in is off on the server. Enable it, or set `Authentication` to `Certificate`. |
 | `BaseUrl uses an IP address; Windows sign-in needs the server's host name.` | Use the host name registered as the SPN in `BaseUrl`. |
 | `Logout has no sessionId; the server cannot resolve the DN from it.` | The login post did not complete, so there is no session file. Investigate why the login failed. The server refuses the logout with `401`. |
