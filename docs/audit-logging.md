@@ -56,7 +56,7 @@ be reviewed and exported.
 | `license` | `license.installed`, `license.rejected`, `license.mode-changed`, `license.limit-exceeded` |
 | `data` | The product's own objects created, changed or deleted; `data.exported` for every report or download, a person's data export included; bulk uploads; `data.purged` for each retention run (ReadyRoom); status requests (`calendar.request-created`, `-approved`, `-rejected`, `-cancelled`, ReadyRoom; a request the retention purge closes is `-cancelled` with actor `system` and reason `retention`); a person's working days or start date changed (`person.schedule-changed`, ReadyRoom, with the old and new values); an administrator's correction to a check-in record (`record.voided`, `record.annotated`, `record.added`, ReadyRoom, with the reason or the note as the event's `reason`, the record, its time and its day); a scheduled report sent (ReadyRoom) is a `data.exported` with its owner as the actor and `details.via` `scheduled`; every Authentication Manager change before and after it is made (`am.change-attempt`, `am.change-outcome`), `token.expired-unassigned` and `appointment.request-refused` (RSA Operations Portal). Free-text notes are never recorded: a profile note change is recorded as `notesChanged`. The exception is ReadyRoom's corrections to check-in records, whose events keep the administrator's reason or note |
 | `system` | `system.started`, `system.stopped`, and `job.completed` / `job.failed` / `job.skipped` for each scheduled job run |
-| `audit` | The trail itself: `audit.exported`, `audit.verified`, `audit.token-created`, `audit.token-revoked`, `audit.pruned`, `audit.delivery-failed`, `audit.delivery-recovered` |
+| `audit` | The trail itself: `audit.exported`, `audit.verified`, `audit.token-created`, `audit.token-revoked`, `audit.pruned`, `audit.delivery-failed`, `audit.delivery-recovered`; `audit.chain-failed` (ReadyRoom, next release: an event that could not be added to the chain was set aside, and this event takes its place in it, outcome `failure`, severity `alert`, naming the event's id, its recorded time and the SHA-256 of its stored form) |
 
 **RSA Operations Portal: Authentication Manager changes and help-desk requests.**
 
@@ -105,8 +105,8 @@ Each event is one JSON object, `ens-audit/1`, identical in every product and in 
 | Field | Meaning |
 |---|---|
 | `id` | Unique id. Use it to drop duplicates: outputs deliver at least once. |
-| `seq` | Position in this installation's trail: 1, 2, 3, ... with no gaps. |
-| `time` | When it happened, UTC. |
+| `seq` | Position in this installation's trail: 1, 2, 3, ... with no gaps. The trail's order. |
+| `time` | When it happened, UTC. Close to `seq` order but not strictly in it: events recorded at almost the same moment can be numbered in a different order from their times (in ReadyRoom from the next release, by up to about a second). Sort by `seq`. |
 | `product`, `version`, `host`, `installationId` | Which installation recorded it. |
 | `category`, `action` | What happened. Action ids are stable and never renamed. |
 | `outcome` | `success`, `failure` or `denied`. |
@@ -135,6 +135,10 @@ python3 tools/audit/verify_chain.py audit-export.ndjson
 
 After retention has removed old events, the check starts from the oldest event still kept and says so.
 
+The check orders events by `seq` and never compares times, so it works the same for every product and
+release, including ReadyRoom's from the next release, which adds events to the chain shortly after
+recording them (see [Sending events](#sending-events-to-splunk-or-another-siem)).
+
 ## Sending events to Splunk or another SIEM
 
 There are four ways to get events out. Use whichever suits your network; they can be combined.
@@ -147,7 +151,9 @@ There are four ways to get events out. Use whichever suits your network; they ca
 | **Pull API** | A collector that reaches in, rather than the application reaching out | API token from the audit page |
 
 **HEC and syslog delivery is reliable:**
-- Every event is stored in the application first.
+- Every event is stored in the application first. ReadyRoom, from the next release, stores it with the
+  action it records and adds it to the hash chain within about a second; only then is it on the audit
+  page, in exports and the pull API, and sent to any output (stdout, the audit file, HEC, syslog).
 - A background sender delivers events from the store and remembers how far it has got, across restarts.
 - When Splunk or the syslog server is unreachable, events queue in the application and are sent once it
   is back. Requests are never slowed or refused because of it.
@@ -174,6 +180,7 @@ environment. Spring-based applications also accept them as `ens.audit.*` propert
 | `ENS_AUDIT_SYSLOG_PROTOCOL` | `tcp` | `udp`, `tcp` or `tls` |
 | `ENS_AUDIT_SYSLOG_FACILITY` | `local0` | Syslog facility |
 | `ENS_AUDIT_RETENTION_DAYS` | `0` (keep forever) | Remove events older than this. Only events every enabled output has delivered are removed, and each removal is itself audited. |
+| `ENS_AUDIT_CHAIN_MILLIS` | `500` | ReadyRoom only, from the next release: how often, in milliseconds, each instance looks for recorded events still to be added to the chain. See [ReadyRoom configuration](readyroom/configuration.md#audit-trail). |
 | `ENS_AUDIT_QUERY_MAX_SCAN` | `2000000` | Directory Services Portal only, which keeps its trail in files: the most events one search or export on the audit page reads. The page says when a search stopped at this limit. |
 
 Splunk's certificate is checked against the JVM trust store for the Java applications, and Node's

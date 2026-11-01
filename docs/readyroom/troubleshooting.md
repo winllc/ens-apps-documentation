@@ -152,6 +152,13 @@ On the client, `The server redirected instead of accepting Windows sign-in` mean
 | An erased person reappears with an empty record | They are still in the directory: ReadyRoom recreates them at sign-in and at the hourly directory refresh. Remove or disable them in the directory. |
 | Duplicate users that differ only by DN case | Releases with Flyway merge them automatically: the `V1` migration merges user rows whose DNs differ only by letter case, and the user DN is unique regardless of case. The log shows `Merging N duplicate user record(s)`. |
 
+## Audit trail
+
+| Symptom | Cause and fix |
+|---|---|
+| **Audit log** shows a red warning, *N audit event(s) could not be added to the chain*; the log has `could not be chained and is quarantined`; `ens_audit_quarantined` is above 0 (next release) | A stored audit event could never become part of the hash chain: its stored form is malformed, its id is already in the trail, or the database refuses one of its values. ReadyRoom set it aside in `audit_quarantine`, exactly as stored, and chained an `audit.chain-failed` event (severity `alert`) in its place, so every other event is recorded and chained as usual and **Verify integrity** still reports the chain intact. Nothing needs to be done for the trail to work. Investigate how the event came to be stored that way: a database edited or restored by hand, or a fault in the release that recorded it. The **Quarantined events** list on **Audit log** shows each one's stored body, the reason and its SHA-256, which the `audit.chain-failed` event's `details.bodySha256` matches. Keep the rows with your audit records: the table cannot be changed or emptied by the application's account (a trigger refuses UPDATE and DELETE). |
+| Recent events missing from **Audit log**, exports or the SIEM, and `ens_audit_pending` keeps rising (next release) | Events are waiting to be chained, and the chainer keeps failing on something that is not an event's fault (the log says `Could not chain the recorded audit events`, with the database error). It retries with backoff; fix the database problem and they are chained. Nothing is lost meanwhile. |
+
 ## Performance
 
 | Symptom | Cause and fix |

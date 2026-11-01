@@ -291,6 +291,15 @@ needs an `https://` `APPLICATION_BASE_URL`, and the release package's `env.templ
 | `logging.structured.format.console` (`LOGGING_STRUCTURED_FORMAT_CONSOLE`) | – | `ecs` writes each log line as one JSON object (Elastic Common Schema). Helm: `logFormat: json`, the default. The audit lines on stdout are raw `ens-audit/1` JSON either way |
 | `application.diagnostics.request-metrics` | `false` | When `true`, every request logs `GET /app/home -> 200: <n> SQL statement(s), <n> LDAP operation(s), <n>ms`. Use it for measuring, not for normal running. |
 
+## Audit trail
+
+The audit trail's settings (`ENS_AUDIT_*`: stdout, file, Splunk, syslog, retention) are the same in every
+ENS application; see [Audit logging → Settings](../audit-logging.md#settings). ReadyRoom also has:
+
+| Env var | Default | Description |
+|---|---|---|
+| `ENS_AUDIT_CHAIN_MILLIS` (next release) | `500` | Each audit event is stored in the same transaction as the action it records, without waiting for its place in the hash chain; a chainer on each replica then adds stored events to the chain in batches, in the order they were recorded. A replica chains its own events as soon as they commit; this is how often, in milliseconds, it also looks for events still to be chained (those another replica recorded, or left by a crash). Until it is chained, an event is in no list, export, verification, pull-API answer or output; **Audit log** says how many are waiting. Helm: `extraEnv` |
+
 ## Security headers, banner and sessions
 
 The ENS platform settings: every ENS application has them, with the same names and defaults.
