@@ -25,7 +25,7 @@ into your API client or code generator.
 |---|---|---|
 | `GET /api/v1/people?q=&location=&organization=&page=&size=` | `people:read` | Tracked people and their status today |
 | `GET /api/v1/attendance/events?from=&to=&dn=&page=&size=` | `attendance:read` | Check-ins, locks, unlocks and check-outs, oldest first |
-| `GET /api/v1/absences?from=&to=&dn=&page=&size=` | `absences:read` | Days with leave, telework, an absence or another status |
+| `GET /api/v1/absences?from=&to=&dn=&page=&size=` | `absences:read` | Days with leave, telework, an absence or another status: `status` (the code, for example `TDY` for Temporary Duty or `TRAINING`), `statusName`, `loginByTime` (a Late Arrival's expected arrival) and `leaveAtTime` (an Early Leave's time of leaving, when one was given) |
 | `GET /api/v1/absences/requests?from=&to=&dn=&state=&page=&size=` | `absences:read` | Leave requests covering the range, with their decision (no notes) |
 
 - Dates are `YYYY-MM-DD`, both ends included, at most `APPLICATION_API_MAXRANGEDAYS` (366) days.
@@ -269,7 +269,7 @@ managers: only administrators do.
 |---|---|---|
 | `GET /api/event/all?dn=&from=&to=` | Whoever may see the user's details | A user's status entries between two ISO instants, as calendar events. |
 | `GET /api/event/allWithLogins?dn=&from=&to=` | Whoever may see the user's details | The same, plus "Online: ..." periods and organization calendar events. |
-| `POST /api/event/update` | Signed in | Puts `status` on each day from `fromDate` up to, but not including, `toDate` (ISO zoned date-times, or plain `yyyy-MM-dd`), at most `application.events.max-range-days` (366) days. Body: `{"fromDate","toDate","status","lateArrivalTime","note","dn"}`. See below. |
+| `POST /api/event/update` | Signed in | Puts `status` on each day from `fromDate` up to, but not including, `toDate` (ISO zoned date-times, or plain `yyyy-MM-dd`), at most `application.events.max-range-days` (366) days. Body: `{"fromDate","toDate","status","lateArrivalTime","leaveAtTime","note","dn"}`: `lateArrivalTime` (`HH:mm`) goes with `LATE_ARRIVAL`, `leaveAtTime` (`HH:mm`, optional) with `EARLY_LEAVE`; each is ignored for any other status. See below. |
 | `GET /api/event/statuses` | Signed in | The statuses the caller may put on their own calendar: `[{"status","name","needsApproval"}]`. |
 | `GET /api/settings/calendar/all?from=&to=` | `ADMIN` | Organization calendar events. |
 | `POST /api/settings/calendar/update` | `ADMIN` | Body `{"fromDate","toDate","title","holiday"}`. Adds one event per day in the range (end exclusive). |
@@ -280,9 +280,9 @@ managers: only administrators do.
 | Case | Result |
 |---|---|
 | The caller's own calendar, a status the person sets (`STANDARD`, `EARLY_LEAVE`, `LATE_ARRIVAL`), from today on | Set at once: `{"status","fromDate","toDate","outcome":"set"}`. On a day an approved request of the caller covers, `409` `approved_request`, naming the request: cancel or change the request instead |
-| The caller's own calendar, `EARLY_LEAVE` or `LATE_ARRIVAL` over a range starting before today | One request for the whole range, e-mailed to the approvers as any other: `"outcome":"requested"`, with `requestId` and a `message`. Approval writes it, with its late-arrival time, on each day. `409` `overlapping_request` as below |
+| The caller's own calendar, `EARLY_LEAVE` or `LATE_ARRIVAL` over a range starting before today | One request for the whole range, e-mailed to the approvers as any other: `"outcome":"requested"`, with `requestId` and a `message`. Approval writes it, with its late-arrival time or its early-leave time, on each day. `409` `overlapping_request` as below |
 | The caller's own calendar, `STANDARD` over a range starting before today | `400` `past_day`: a past day is the manager's to correct |
-| The caller's own calendar, a requested status (by default `OUT_OF_OFFICE`, `WORK_FROM_HOME`, `TDY`, `SCHEDULED_LEAVE`, `ABSENT_EXCUSED`) | A request is created: `"outcome":"requested"`, with `requestId` and a `message`. `note` (up to 500 characters) goes with it. Over a day a pending or approved request of the caller already covers, `409` `overlapping_request` |
+| The caller's own calendar, a requested status (by default `OUT_OF_OFFICE`, `WORK_FROM_HOME`, `TDY` (Temporary Duty), `TRAINING`, `SCHEDULED_LEAVE`, `ABSENT_EXCUSED`) | A request is created: `"outcome":"requested"`, with `requestId` and a `message`. `note` (up to 500 characters) goes with it. Over a day a pending or approved request of the caller already covers, `409` `overlapping_request` |
 | The caller's own calendar, a status only managers record (`ABSENT`, `ABSENT_UNEXCUSED`, `UNSCHEDULED_LEAVE`) | `403` |
 | Someone else's calendar (`dn`) | Set at once, any status, if the caller is the person's directory manager, one of their delegates or `ADMIN`; otherwise `403` |
 
@@ -311,7 +311,7 @@ All need the `calendar` license feature. Who may do what is checked on every cal
 
 | Method and path | Access | Description |
 |---|---|---|
-| `POST /api/requests` | Signed in | Ask for a status on one's own days. Body: `status`, `fromDate`, `toDate` (the day after the last), optional `lateArrivalTime` and `note` (500 characters, shown to approvers). `201` with the request. Takes a requested status, or `LATE_ARRIVAL` or `EARLY_LEAVE` over a range starting before today; `400` `not_a_request_status` for anything else. `409` `overlapping_request` over a day a pending or approved request of the caller already covers. When the caller has no directory manager and no delegate, the request carries `notice` (*No manager or delegate is set for you in ReadyRoom: an administrator has been asked*) and the administrators other than the caller are e-mailed. When the directory did not answer for the caller's manager, it carries *The directory did not answer, so nobody was e-mailed about it: ...* and nobody is e-mailed; otherwise there is no `notice` |
+| `POST /api/requests` | Signed in | Ask for a status on one's own days. Body: `status`, `fromDate`, `toDate` (the day after the last), optional `lateArrivalTime` (with `LATE_ARRIVAL`), `leaveAtTime` (with `EARLY_LEAVE`) and `note` (500 characters, shown to approvers). `201` with the request, which carries `loginByTime` and `leaveAtTime`. Takes a requested status, or `LATE_ARRIVAL` or `EARLY_LEAVE` over a range starting before today; `400` `not_a_request_status` for anything else. `409` `overlapping_request` over a day a pending or approved request of the caller already covers. When the caller has no directory manager and no delegate, the request carries `notice` (*No manager or delegate is set for you in ReadyRoom: an administrator has been asked*) and the administrators other than the caller are e-mailed. When the directory did not answer for the caller's manager, it carries *The directory did not answer, so nobody was e-mailed about it: ...* and nobody is e-mailed; otherwise there is no `notice` |
 | `GET /api/requests/mine` | Signed in | The caller's requests |
 | `GET /api/requests/pending` | Signed in | Pending requests the caller may decide |
 | `GET /api/requests/{id}` | The requester, whoever may decide it, `ADMIN` | One request |
@@ -361,9 +361,10 @@ need the `attendance` license feature. See
 | `STANDARD` | normal | Set by the person | (clears a status) |
 | `OUT_OF_OFFICE` | Out of Office | Requested | ✓ once approved |
 | `WORK_FROM_HOME` | Work From Home | Requested | ✓ once approved |
-| `TDY` | TDY | Requested | ✓ once approved |
+| `TDY` | Temporary Duty (shown as *TDY* before this release) | Requested | ✓ once approved |
+| `TRAINING` | Training | Requested | ✓ once approved |
 | `SCHEDULED_LEAVE` | Scheduled Leave | Requested | ✓ once approved |
-| `EARLY_LEAVE` | Early Leave | Set by the person | – |
+| `EARLY_LEAVE` | Early Leave | Set by the person | – (an optional time of leaving is shown only) |
 | `LATE_ARRIVAL` | Late Arrival | Set by the person | – (sets the expected time) |
 | `UNSCHEDULED_LEAVE` | Unscheduled Leave | Recorded by managers | – |
 | `ABSENT_EXCUSED` | Absent Excused | Requested | ✓ once approved |

@@ -11,7 +11,7 @@ arrived by their expected time.
 
 Nobody has to check in by hand. The first sign-in or unlock of the day counts as arriving, a locked
 screen counts as away, and signing out counts as checking out. People can also put a status on
-their calendar (a late arrival, or work from home, TDY, scheduled leave and so on, which their
+their calendar (a late arrival, or work from home, temporary duty (TDY), training, scheduled leave and so on, which their
 manager approves), so their managers know where they are when they are not at a workstation.
 
 !!! info "Naming"
@@ -25,10 +25,10 @@ manager approves), so their managers know where they are when they are not at a 
 | Area | What ReadyRoom does |
 |---|---|
 | **Automatic check-in** | A PowerShell agent run by Windows Task Scheduler posts `login`, `lock`, `unlock` and `logout` events. An unlock is stored as a check-in when the person has no check-in yet that day. |
-| **Status per person** | Each person's status for the day is `IN`, `AWAY` (screen locked), `OUT` (checked out) or `NONE`. A calendar status such as *Work From Home* or *TDY* takes its place when one is set. |
+| **Status per person** | Each person's status for the day is `IN`, `AWAY` (screen locked), `OUT` (checked out) or `NONE`. A calendar status such as *Work From Home* or *Temporary Duty* takes its place when one is set, shown by its name. |
 | **Auto check-out** | A background job checks out anyone who has been locked for longer than `check-out-after-minutes`, after midnight for a lock left in the evening. The record is flagged as forced. |
 | **Absence alerts** | If someone is not checked in by their expected time plus a grace period on a working day, their directory manager and their delegates get an in-app notification and an email. Managers record what happened. |
-| **Statuses and approvals** | People set a late arrival or early leave themselves; statuses that excuse an absence (leave, telework, TDY) are requested and approved by their manager or a delegate on the **Approvals** page. Delegates are set by administrators. |
+| **Statuses and approvals** | People set a late arrival or early leave themselves; statuses that excuse an absence (leave, telework, temporary duty, training) are requested and approved by their manager or a delegate on the **Approvals** page. Delegates are set by administrators. |
 | **Reports and exports** | Group reports as PDF, CSV or Excel, people lists, and scheduled e-mailed reports, with each person's times in their own or their site's time zone. See [Reports, exports and time zones](exports.md). |
 | **Public API and webhooks** | A read-only REST API (`/api/v1`, OpenAPI document) for scoped API tokens, and HMAC-signed webhooks for absence alerts and status changes. See [API reference](api-reference.md) and [Webhooks](webhooks.md). |
 | **Single sign-on** | OpenID Connect and SAML 2.0, beside client certificates and the directory password. See [Single sign-on](single-sign-on.md). |

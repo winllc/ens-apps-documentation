@@ -440,7 +440,7 @@ stored, and audited as a failed `auth.login` with the reason *unknown session*. 
 
 | Change | What to do |
 |---|---|
-| People can no longer set Out of Office, Work From Home, TDY or Scheduled Leave themselves (or Absent Excused through the API): the calendar sends them as requests | Tell your users and managers. Statuses already on calendars, future ones included, keep their effect; nothing is converted to a request. To let people set one again without approval, leave it out of `APPLICATION_EVENTS_REQUESTSTATUSES` |
+| People can no longer set Out of Office, Work From Home, Temporary Duty (TDY) or Scheduled Leave themselves (or Absent Excused through the API): the calendar sends them as requests | Tell your users and managers. Statuses already on calendars, future ones included, keep their effect; nothing is converted to a request. To let people set one again without approval, leave it out of `APPLICATION_EVENTS_REQUESTSTATUSES` |
 | Only administrators set delegates; `POST /api/users/managers/update` is removed | Review the delegates people chose themselves under **Administration → Delegates**. Until then they keep receiving alerts and may now also approve requests |
 | `POST /api/event/update` returns `{status, fromDate, toDate, outcome, requestId?, message?}`, answers bad input with `400` instead of `500`, accepts plain `yyyy-MM-dd` dates, and refuses ranges over 366 days | Update scripts that call it |
 | Profile note changes are audited as `notesChanged`, without the text | Events from earlier releases keep the old and new text until audit retention prunes them |
@@ -466,7 +466,7 @@ Nothing to do by hand: Flyway adds the tables above, and nothing existing change
 
 ### Upgrading to the next release
 
-New tables and columns (Flyway `V11` to `V14` and `V16` to `V18`; there is no `V15`), added at the
+New tables and columns (Flyway `V11` to `V14` and `V16` to `V19`; there is no `V15`), added at the
 first start, in that order. Sign-in keeps working for every installation that kept its settings;
 check the points below.
 
@@ -493,6 +493,9 @@ check the points below.
 | People are e-mailed when a manager, delegate or administrator records a status that does not excuse the day (Absent, Absent Unexcused, Unscheduled Leave, Late Arrival, Early Leave), on their calendar or by answering an absence alert | Tell managers and users. Needs a mail server, with the same settings as absence alerts |
 | An alert answer that an approved request superseded is kept and shown beside the request | Only for answers superseded from this release on. Earlier ones keep the old answer only in their `absence.alert-superseded` audit event |
 | The personal data export adds `statusHistory` and `recordCorrections` from the audit trail, void records with their corrections, and the person's working days and start date | Update anything that reads the export. See [Privacy → Export](privacy.md#export) |
+| *TDY* is shown as *Temporary Duty* (TDY), and *Training* (`TRAINING`) is a new status, treated as Temporary Duty: requested and approved by default, it excuses an absence and stays a working day (`V19` lets the status columns hold it) | Tell users and managers. Codes are unchanged in the API, webhooks, configuration and the database. If you set `APPLICATION_EVENTS_REQUESTSTATUSES`, add `TRAINING` to it for Training to need approval (otherwise people set it themselves, and startup warns). During a rolling update an older replica cannot read a Training day: let the update finish before people use it |
+| An *Early Leave* can carry the time the person leaves (optional; `leave_at_time`, `V19`) | Nothing to do. It is shown on calendars, on **Approvals**, in the person's notice e-mail, in the API's absences (`leaveAtTime`) and in the personal data export (`leaveAtTime`), and changes nothing else: an early leave still excuses nothing |
+| The user tables (Users, My Reports, the org chart's people) and the people export show a calendar status by its name (*Work From Home*, *Temporary Duty*) instead of its code (`WORK_FROM_HOME`, `TDY`) | Update anything that reads the people export's **Status today** column. The API keeps the codes |
 | Audit events are added to the hash chain in the background (`V18`) | Nothing to do; a rolling update is safe. An audited action no longer waits for the one audit chain head row, so audited actions stop queuing behind each other. Each event is stored with its action as before, and joins the trail, the audit page, exports, the pull API and the outputs within about a second (`ENS_AUDIT_CHAIN_MILLIS`, see [Configuration](configuration.md#audit-trail)). Events already stored are untouched and verify as before. While old and new replicas run side by side, both add to the same chain under the same row lock, so it stays gapless. Each event's line goes to the stdout and audit file of the replica that chained it, not necessarily the one that recorded it (its `host` still names that one). A [rollback](availability-and-sizing.md#rolling-back-an-upgrade) restores the pre-upgrade backup, as for any release. If you instead start the previous release on this database, stop every replica of this one first (stopping chains what is waiting) and check that `SELECT count(*) FROM audit_pending` returns 0: the previous release does not read that table, so events left in it would stay out of the trail |
 
 ## Runbook

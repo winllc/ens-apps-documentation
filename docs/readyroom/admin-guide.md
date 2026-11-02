@@ -171,9 +171,9 @@ raised when **all** of these are true:
   time), the alert is due at the latest two job intervals before their day ends: 23:00 with the
   built-in 30-minute interval and a midnight day start, 23:50 with the packaged 5 minutes;
 - the day is not already accounted for: they have no excusable status today (*Out of Office*,
-  *Work From Home*, *TDY*, *Scheduled Leave* or *Absent Excused*), and no status that only a
-  manager, delegate or administrator records (*Absent*, *Absent Unexcused* or *Unscheduled
-  Leave*). A requested status counts only once it is approved. *Late Arrival*, *Early Leave* and
+  *Work From Home*, *Temporary Duty (TDY)*, *Training*, *Scheduled Leave* or *Absent Excused*), and no
+  status that only a manager, delegate or administrator records (*Absent*, *Absent Unexcused* or
+  *Unscheduled Leave*). A requested status counts only once it is approved. *Late Arrival*, *Early Leave* and
   *normal* account for nothing: a late arrival only moves the expected time. The same rule decides
   who is accounted for on Home, My Reports, Metrics and the org chart;
 - they are still in the directory: nobody is alerted about a person whose entry is gone, or whose
@@ -270,8 +270,8 @@ That decides:
   date, each checked on their own date in their own time zone;
 - the **30-day attendance** on Home and My Reports, which counts only the person's working days. A
   day of *Scheduled Leave*, *Unscheduled Leave* or *Absent Excused* without a check-in is left out of
-  their working days. *Work From Home*, *TDY*, *Out of Office*, *Absent* and *Absent Unexcused* still
-  count as working days;
+  their working days. *Work From Home*, *Temporary Duty*, *Training*, *Out of Office*, *Absent* and
+  *Absent Unexcused* still count as working days;
 - **who is expected** on a day (accounted for on Home, My Reports and Metrics), and the **average
   arrival** time;
 - the **monthly summaries** the retention purge writes, which now keep how many working days the

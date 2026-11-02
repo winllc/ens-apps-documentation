@@ -54,12 +54,14 @@ rather than cut short. Nothing was changed: try again in a few seconds.
 | `NONE` (grey) | Nothing recorded for the day. |
 
 If a status is on your calendar for the day (anything other than *Standard*), it is shown
-instead, for example `WORK_FROM_HOME`, `TDY` or `LATE_ARRIVAL`. A status you asked for counts only
-once it is approved; see [Statuses and approvals](#statuses-and-approvals).
+instead, by its name: for example *Work From Home*, *Temporary Duty (TDY)*, *Training* or *Late
+Arrival*. The API and webhooks give its code instead (`WORK_FROM_HOME`, `TDY`, `TRAINING`,
+`LATE_ARRIVAL`). A status you asked for counts only once it is approved; see
+[Statuses and approvals](#statuses-and-approvals).
 
 **Accounted for.** A day counts as accounted for (on Home, My Reports and Metrics), as covered by a
 status (in the 30-day attendance) and as needing no absence alert only when you checked in, or the
-day carries a status that excuses an absence (leave, Work From Home, TDY and so on) or one only a
+day carries a status that excuses an absence (leave, Work From Home, Temporary Duty, Training and so on) or one only a
 manager records (*Absent*, *Absent Unexcused*, *Unscheduled Leave*). *Late Arrival* and *Early
 Leave* are your own word: they are shown on calendars, in the user tables and the API, but without
 a check-in the day is still not accounted for.
@@ -237,7 +239,9 @@ If you are the person's directory manager, one of their delegates or an admin, y
 status** for them: drag across days on their Event Calendar, choose the status and **Record**. It
 takes effect at once, without approval, and you can record any status, including *Absent*,
 *Absent Unexcused* and *Unscheduled Leave*. A *Late Arrival* you record for someone else has no
-latest time and no limit on the number of days. When the status does not excuse the day (*Absent*,
+latest time and no limit on the number of days. With *Late Arrival* you enter the time they are
+expected by (**Expected arrival**), and with *Early Leave*, optionally, the time they leave
+(**Leaving at**); left empty, a time already on the day is kept. The e-mail names the time. When the status does not excuse the day (*Absent*,
 *Absent Unexcused*, *Unscheduled Leave*, *Late Arrival* or *Early Leave*), the person is e-mailed
 that you recorded it (see [E-mails about you](#e-mails-about-you)). Recording *normal*, or a status
 that excuses an absence, sends nothing.
@@ -279,7 +283,7 @@ for that organization and everything under it, **accounted of total**, and a per
 Each person is counted the way you may see them elsewhere. People whose details you may see
 (yourself, your reports, the people you are a delegate of and the members of groups you manage;
 everyone, for admins) are counted the way **Users** and **Home** count them: a status on the
-person's calendar for the day that accounts for it (work from home, TDY, leave, or one a manager
+person's calendar for the day that accounts for it (work from home, temporary duty, training, leave, or one a manager
 recorded) comes first; otherwise their latest record decides between **Checked in**, **Away**
 (screen locked) and **Checked out**; anyone with neither is **No record**. *Late Arrival*, *Early
 Leave* and *normal* do not stand in for being there: such a person is counted by their presence,
@@ -343,8 +347,8 @@ them but not change them: if they are wrong, ask your manager, a delegate or an 
   those ten days, not the whole 30.
 - **Leave does not lower your attendance.** A day of *Scheduled Leave*, *Unscheduled Leave* or
   *Absent Excused* without a check-in is left out of your working days instead of counting as a day
-  you were not in. *Work From Home*, *TDY* and *Out of Office* still count as working days: you were
-  working, just elsewhere. An absence your manager recorded (*Absent*, *Absent Unexcused*) also
+  you were not in. *Work From Home*, *Temporary Duty*, *Training* and *Out of Office* still count as
+  working days: you were working, just elsewhere. An absence your manager recorded (*Absent*, *Absent Unexcused*) also
   still counts.
 
 ### Delegates
@@ -360,11 +364,12 @@ Drag across one or more days, choose a status, then choose **Submit**. With the 
 | Option | Stored as | What happens | Excuses an absence alert? |
 |---|---|---|---|
 | normal | `STANDARD` | Set at once. It clears a status you set earlier. Not for a day already past: ask your manager to correct it | No |
-| Early Leave | `EARLY_LEAVE` | Set at once for today and later days; for days that include an earlier one, sent as a request | No |
+| Early Leave | `EARLY_LEAVE` | Set at once for today and later days; for days that include an earlier one, sent as a request. You can enter the time you leave (**Leaving at**, optional): it is shown with the status and changes nothing else | No |
 | Late Arrival | `LATE_ARRIVAL` | Set at once for today and later days; the time you enter becomes your expected time that day. For days that include an earlier one, sent as a request. At the latest 12:00, and at most 31 days at a time: for a later time ask your manager to record it; for a lasting change set your **Login Time** | No |
 | Out of Office (needs approval) | `OUT_OF_OFFICE` | Sent as a request | Yes, once approved |
 | Work From Home (needs approval) | `WORK_FROM_HOME` | Sent as a request | Yes, once approved |
-| TDY (needs approval) | `TDY` | Sent as a request | Yes, once approved |
+| Temporary Duty (needs approval) | `TDY` | Sent as a request | Yes, once approved |
+| Training (needs approval) | `TRAINING` | Sent as a request | Yes, once approved |
 | Scheduled Leave (needs approval) | `SCHEDULED_LEAVE` | Sent as a request | Yes, once approved |
 | Absent Excused (needs approval) | `ABSENT_EXCUSED` | Sent as a request | Yes, once approved |
 
@@ -376,7 +381,8 @@ with the request and shown to whoever decides it. Follow it under **Approvals**.
 **Days already past.** "Today" is your own today, in your time zone from your day start; the
 **System Date** does not move it. A *Late Arrival* or *Early Leave* for a selection that includes
 an earlier day becomes one request for the whole selection, today and later days included: your
-manager is e-mailed and it reaches your calendar, with its time, only once approved. Choosing
+manager is e-mailed and it reaches your calendar, with its time (the time you expect to arrive, or
+the time you leave), only once approved. Choosing
 *normal* for such a selection is refused: a past day is your manager's to correct.
 
 **Days an approved request covers.** Such a day is the request's. Setting *normal*, *Early Leave*
@@ -398,13 +404,14 @@ API is used:
 | Group | Statuses (default) | Who sets them |
 |---|---|---|
 | Set by the person | normal, Early Leave, Late Arrival | You, on your own calendar, for today and later days. They take effect at once and excuse nothing. A Late Arrival or Early Leave reaching an earlier day is requested instead (see [Days already past](#calendar)); normal there is refused, and so is any of them on a day an approved request of yours covers |
-| Requested | Out of Office, Work From Home, TDY, Scheduled Leave, Absent Excused | You ask; your directory manager, one of your delegates or an admin approves or rejects. Until approved, the status is not on your calendar, and absence alerts treat the day as not excused |
+| Requested | Out of Office, Work From Home, Temporary Duty, Training, Scheduled Leave, Absent Excused | You ask; your directory manager, one of your delegates or an admin approves or rejects. Until approved, the status is not on your calendar, and absence alerts treat the day as not excused |
 | Recorded by managers | Absent, Absent Unexcused, Unscheduled Leave | Only your directory manager, a delegate or an admin, for you (also by answering an absence alert) |
 
 **Approvals** (`/app/approvals`, in the sidebar) has three parts:
 
 - **Waiting for your approval**: requests from people you decide for, with the person, status
-  (a late arrival with its time, for example *Late Arrival by 09:30*), dates, number of days, their
+  (a late arrival with its time, for example *Late Arrival by 09:30*, and an early leave with the
+  time the person leaves, when they gave one: *Early Leave at 15:00*), dates, number of days, their
   note and when they asked. **Approve** or **Reject**, each with an
   optional comment or reason. Nobody decides their own request, admins included. A request lists
   any absence alert on its days that was already answered (*Absence alert of &lt;date&gt; answered
