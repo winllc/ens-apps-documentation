@@ -153,7 +153,10 @@ without being able to change it.
   date range, then **Generate Report**. See [Group report](#group-report).
 - **Group Managers** (admins only): see [Administration](admin-guide.md#group-managers).
 - **Calendar**: a month calendar combining the statuses each member you may see has set (leave,
-  telework and so on), each named and linked to the person.
+  telework and so on), each named and linked to the person. **Show** above it chooses whose statuses: *All* (everyone), or one employee type, by default *Gov*,
+  *CTR* or *MIL*, as your administrators set them up. Someone whose employee type is not listed, or who
+  has none, shows under *All* only. The count beside it counts what is shown, and your browser
+  remembers your choice.
 - **CSV** and **Excel** download the member list with each person's status on the day the page
   shows (the **System Date** you picked, else today). The same buttons are on the results of
   *Find a user*.
@@ -272,7 +275,7 @@ as nobody. Try again in a few minutes.
 | **Daily attendance, last 30 days** | A chart of each day's counts, with **Show as a table**. Each report counts only on their own working days, and not on a day they are on leave. |
 | **Status today** | Every report's current status for their own today, organization and employee type. **Advanced** adds the DN and check-in and check-out times. |
 | **Attendance by report, last 30 days** | For each report: days checked in out of their working days, status-only days, days with nothing recorded, days on leave, average arrival, and when their agent last reported. A **Quiet** badge means nothing was received for a week or more. |
-| **Calendar** | A month calendar combining the statuses your reports have set, each named and linked to the person. |
+| **Calendar** | A month calendar combining the statuses your reports have set, each named and linked to the person. **Show** above it chooses whose statuses: *All* (everyone), or one employee type, by default *Gov*, *CTR* or *MIL*, as your administrators set them up. Someone whose employee type is not listed, or who has none, shows under *All* only. The count beside it counts what is shown, and your browser remembers your choice. |
 
 ## Org Chart
 

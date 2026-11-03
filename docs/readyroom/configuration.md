@@ -201,6 +201,7 @@ What each job does is described in [Operations](operator-guide.md#scheduled-jobs
 
 | Property | Env var | Built-in | Helm | Description |
 |---|---|---|---|---|
+| `application.calendar.employee-type-filters` | `APPLICATION_CALENDAR_EMPLOYEETYPEFILTERS_0_LABEL`, `..._0_VALUES`, `_1_LABEL`, ... | Gov: `GOV,GOVERNMENT,CIV,CIVILIAN`; CTR: `CTR,CON,CONTRACTOR`; MIL: `MIL,MILITARY` | `calendar.employeeTypeFilters` (empty list: the default) | The Team Calendar's and Group Calendar's **Show** choices after *All*, in order: each a label and the employee types it shows, matched ignoring case against the person's employee type (`application.user-ldap-employee-type-attribute`, default `employeeType`). Setting any replaces the defaults. See [Mapping your directory's employee types](#mapping-your-directorys-employee-types) |
 | `application.events.request-statuses` | `APPLICATION_EVENTS_REQUESTSTATUSES` | `OUT_OF_OFFICE,WORK_FROM_HOME,TDY,TRAINING,SCHEDULED_LEAVE,ABSENT_EXCUSED` | `events.requestStatuses` (empty list: the default) | The statuses people **request** and their manager, a delegate or an administrator approves before they count. Comma-separated status codes (`TDY` is Temporary Duty (TDY); `TRAINING` is Training). `STANDARD` is refused at startup. A deployment that sets this keeps its list on upgrade: add `TRAINING` for Training to need approval. Leaving an excusing status out lets people set it themselves; startup then warns that it stops absence alerts without approval (the warning also names Late Arrival, which delays them). See [Statuses and approvals](user-guide.md#statuses-and-approvals) |
 | `application.events.max-range-days` | `APPLICATION_EVENTS_MAXRANGEDAYS` | `366` | `events.maxRangeDays` | The most days one call may set a status, a request or an organization calendar event on, 1 to 3660. Longer ranges are refused with `range_too_long` |
 | `application.events.late-arrival-latest-time` | `APPLICATION_EVENTS_LATEARRIVALLATESTTIME` | `12:00` | – | The latest time, `HH:mm`, a person may give for a late arrival they set for themselves, and for the **Login Time** on their profile. Either becomes the time their absence alert waits for. Later is refused (`late_arrival_too_late`); a manager, delegate or administrator recording a late arrival for someone is not limited |
@@ -212,6 +213,43 @@ What each job does is described in [Operations](operator-guide.md#scheduled-jobs
 | `application.calendar-requested-event-color` | – | `gray` | – | Calendar colour of the days of a pending request |
 
 A bad value in any of these stops startup with a message naming the setting.
+
+
+### Mapping your directory's employee types
+
+Directories spell employee types differently (`FT`, `PT`, `CON`, `CONTRACTOR`, `GS`, ...). Look at
+the values your `employeeType` attribute (or the one `application.user-ldap-employee-type-attribute`
+names) holds, then list each calendar choice with every spelling it covers. Labels must be
+non-empty, unique ignoring case and not *All* (always offered first), each with at least one value,
+or startup stops naming the setting. Release package (`.env`):
+
+```bash
+APPLICATION_CALENDAR_EMPLOYEETYPEFILTERS_0_LABEL=Gov
+APPLICATION_CALENDAR_EMPLOYEETYPEFILTERS_0_VALUES=FT,PT,GS
+APPLICATION_CALENDAR_EMPLOYEETYPEFILTERS_1_LABEL=CTR
+APPLICATION_CALENDAR_EMPLOYEETYPEFILTERS_1_VALUES=CON,CONTRACTOR
+APPLICATION_CALENDAR_EMPLOYEETYPEFILTERS_2_LABEL=MIL
+APPLICATION_CALENDAR_EMPLOYEETYPEFILTERS_2_VALUES=MIL,USAF,USN
+```
+
+Helm:
+
+```yaml
+calendar:
+  employeeTypeFilters:
+    - label: Gov
+      values: [FT, PT, GS]
+    - label: CTR
+      values: [CON, CONTRACTOR]
+    - label: MIL
+      values: [MIL, USAF, USN]
+```
+
+A group's members are matched on the employee type ReadyRoom keeps on their user record (from the
+directory at sign-in and at each refresh); someone ReadyRoom has never seen has none and shows
+under *All* only. A manager's reports are matched on their directory entries. The API endpoints
+behind the calendars take the label as `type` (`/api/event/reports?type=CTR`); an unknown one is
+`400` `unknown_type`.
 
 ## Email and notifications
 

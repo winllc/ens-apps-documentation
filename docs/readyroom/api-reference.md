@@ -269,6 +269,8 @@ managers: only administrators do.
 |---|---|---|
 | `GET /api/event/all?dn=&from=&to=` | Whoever may see the user's details | A user's status entries between two ISO instants, as calendar events. |
 | `GET /api/event/allWithLogins?dn=&from=&to=` | Whoever may see the user's details | The same, plus "Online: ..." periods and organization calendar events. |
+| `GET /api/event/group/{groupDn}?from=&to=&type=` | Whoever may open the group | Every member's statuses, narrowed to the members whose details the caller may see. Optional `type`: a label of `application.calendar.employee-type-filters` (any case) keeps the members of those employee types; none or `All` is everyone; an unknown one is `400` `unknown_type`. |
+| `GET /api/event/reports?from=&to=&type=` | Signed in | The same over the caller's own direct reports, `type` as above. |
 | `POST /api/event/update` | Signed in | Puts `status` on each day from `fromDate` up to, but not including, `toDate` (ISO zoned date-times, or plain `yyyy-MM-dd`), at most `application.events.max-range-days` (366) days. Body: `{"fromDate","toDate","status","lateArrivalTime","leaveAtTime","note","dn"}`: `lateArrivalTime` (`HH:mm`) goes with `LATE_ARRIVAL`, `leaveAtTime` (`HH:mm`, optional) with `EARLY_LEAVE`; each is ignored for any other status. See below. |
 | `GET /api/event/statuses` | Signed in | The statuses the caller may put on their own calendar: `[{"status","name","needsApproval"}]`. |
 | `GET /api/settings/calendar/all?from=&to=` | `ADMIN` | Organization calendar events. |
