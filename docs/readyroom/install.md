@@ -115,8 +115,9 @@ Replace every `CHANGE_ME`:
 
 The template also lists optional blocks, commented out: the consent banner, session lifetimes,
 reverse-proxy settings, client certificates (`ENS_X509_*`), audit outputs (`ENS_AUDIT_*`), JSON
-logs, the management port, statuses that need approval, privacy and retention, reports, the public
-API and webhooks. From the next release it also has a *Single sign-on* block (`ENS_SSO_*`, OpenID
+logs, the management port, statuses that need approval, the calendars' employee-type choices
+(`APPLICATION_CALENDAR_EMPLOYEETYPEFILTERS_n_LABEL` and `_VALUES`), privacy and retention, reports,
+the public API and webhooks. From the next release it also has a *Single sign-on* block (`ENS_SSO_*`, OpenID
 Connect and SAML 2.0): the issuer and the SAML metadata must be `https://` (or the metadata a file in
 `tls/`), and SAML needs an `https://` `APPLICATION_BASE_URL`; see
 [Single sign-on](single-sign-on.md). See [Configuration](configuration.md).
@@ -389,7 +390,7 @@ commas.
 | Value | Matches `.env` |
 |---|---|
 | `publicUrl` | `APPLICATION_BASE_URL` (defaults to the ingress or route host) |
-| `database.*` | `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USERNAME`, `DB_PASSWORD` |
+| `database.*` | `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USERNAME`, `DB_PASSWORD`, `DB_OPTIONS` (`database.options`; `-` sends none, for a pooler that refuses startup options) |
 | `ldap.scheme` (`ldaps`), `ldap.host`, `ldap.port`, `ldap.url`, `ldap.bindDn` | `SPRING_LDAP_URLS`, `LDAP_USERNAME`. The port follows the scheme (636 or 389). `ldap.port: 389` with the default `ldaps` scheme fails the render: set `ldap.scheme: ldap` deliberately for plain LDAP |
 | `ldap.userBaseDn`, `ldap.userFilter`, `ldap.groupBaseDns` | `APPLICATION_USERBASEDN`, `APPLICATION_USERLDAPFILTER`, `APPLICATION_GROUPS_n_GROUPSBASEDN` |
 | `ldap.attributes.*` | `APPLICATION_USERLDAP*ATTRIBUTE`, `APPLICATION_MANAGERLDAPIDATTRIBUTE` |
@@ -406,6 +407,7 @@ commas.
 | `logFormat` (`json`) | `LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs`; `text` for plain lines |
 | `backup.*` | A database backup CronJob (off by default; see [Operations](operator-guide.md#backups)) |
 | `events.requestStatuses`, `events.maxRangeDays` | `APPLICATION_EVENTS_REQUESTSTATUSES` (empty list: the default), `APPLICATION_EVENTS_MAXRANGEDAYS` |
+| `calendar.employeeTypeFilters` (`[]`: Gov, CTR, MIL) | `APPLICATION_CALENDAR_EMPLOYEETYPEFILTERS_n_LABEL` and `_VALUES`: the Team and Group Calendars' **Show** choices. See [Configuration](configuration.md#mapping-your-directorys-employee-types) |
 | `privacy.coworkerVisibility` (`full`) | `APPLICATION_PRIVACY_COWORKERVISIBILITY`; the chart's schema refuses other values |
 | `retention.eventsDays` (`0`), `retention.schedule` | `APPLICATION_RETENTION_EVENTSDAYS`, `APPLICATION_RETENTION_CRON`; the schema refuses an `eventsDays` between 1 and 30 |
 | `bannerText`, `timezone`, `checkOutAfterMinutes`, `updateProfileUrl`, `logLevel`, `javaOpts` | The settings under "Other" |

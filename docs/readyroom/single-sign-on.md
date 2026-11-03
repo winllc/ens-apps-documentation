@@ -16,7 +16,14 @@ Whoever the identity provider signs in must match **exactly one** directory user
 match, or several, is refused, and so is a directory user whose account is disabled, locked out or
 expired: the account is checked live, as for certificates, and the refusal is audited as a failed
 sign-in with the reason (for example `account disabled in the directory`). A directory that cannot
-be read lets the sign-in go on, from the user cache.
+be read for the account check lets the sign-in go on, from the user cache.
+
+If the directory does not answer while the provider's user is **looked up**, ReadyRoom tries again
+(`application.ldap.sign-in-retries`, as for certificates and Windows tickets) and then answers `503`
+with `Retry-After: 5` and *ReadyRoom could not reach the directory to sign you in. Try again in a
+few seconds.* The person is not refused, and nothing is audited as a refusal: they sign in again once
+the directory answers. Earlier releases sent them back to the sign-in page as refused (*no single
+directory user matches*).
 
 That directory user then gets exactly the roles any other sign-in would: `USER`, a role an
 administrator assigned, `ADMIN` for `application.super-user-dns`. The provider's groups add `MANAGER`

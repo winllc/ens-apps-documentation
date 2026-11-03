@@ -56,7 +56,8 @@ With TLS on, ReadyRoom refuses to start if no keystore is set, or if no truststo
 
 | Property | Packaged | Description |
 |---|---|---|
-| `spring.datasource.url` | `jdbc:postgresql://${DB_HOST:postgres}:${DB_PORT:5432}/${DB_NAME:appdb}` | JDBC URL. Set `DB_HOST`, `DB_PORT` and `DB_NAME`, or `SPRING_DATASOURCE_URL` whole. |
+| `spring.datasource.url` | `jdbc:postgresql://${DB_HOST:postgres}:${DB_PORT:5432}/${DB_NAME:appdb}?options=${DB_OPTIONS:-c%20plan_cache_mode%3Dforce_custom_plan}` | JDBC URL. Set `DB_HOST`, `DB_PORT` and `DB_NAME`, or `SPRING_DATASOURCE_URL` whole. A whole URL of your own should keep the `options` parameter. |
+| `DB_OPTIONS` | `-c%20plan_cache_mode%3Dforce_custom_plan` | PostgreSQL settings for each connection, URL-encoded (Helm: `database.options`). The default plans every query for its own parameters. PostgreSQL's own default switches a query that runs often over long lists of people to a generic plan, which was up to 240 times slower in a 100,000-person load test. Behind a connection pooler that refuses startup options (PgBouncer without `ignore_startup_parameters`), set it empty (Helm: `-`) and run `ALTER DATABASE <name> SET plan_cache_mode = force_custom_plan` instead. |
 | `spring.datasource.username` | `DB_USERNAME`, packaged `appuser` | |
 | `spring.datasource.password` | `DB_PASSWORD`, packaged `secret123` | Override it. |
 | `spring.datasource.driver-class-name` | `org.postgresql.Driver` | |
@@ -81,11 +82,15 @@ With TLS on, ReadyRoom refuses to start if no keystore is set, or if no truststo
 | `spring.ldap.referral` | – | `ignore` | What a referral from the directory does (`SPRING_LDAP_REFERRAL`): `ignore`, `follow` (chase it; the other servers must then be reachable with the same credentials) or `throw`. The startup log says `LDAP referrals: <value>`. |
 | `spring.ldap.template.ignore-partial-result-exception` | – | `true` | Searches ignore the partial result an ignored referral leaves. So an Active Directory searched from its domain root (`DC=corp,DC=com`), which ends every subtree search with referrals to ForestDnsZones, DomainDnsZones and Configuration, returns its entries rather than failing. A base DN below the domain root (`OU=People,DC=corp,DC=com`) avoids the referrals altogether. |
 | `application.ldap.pooled` | `true` | `true` | Reuse JNDI connections. Password checks on the login form never use the pool. |
+| `application.ldap.read-retries` | `1` | `1` | How many more times a read of a person outside sign-in (reports, exports, absence alerts, a person's manager) is tried when the directory does not answer (a time-out, or no free pooled connection), 200 ms and then 400 ms later (`APPLICATION_LDAP_READRETRIES`). After that a page or API call is answered `503` with `Retry-After: 5`, and a background job leaves that person, or its run, for its next run. Never taken for "no such person". Kept short because the request waits for it; `0` turns it off. |
 | `application.ldap.page-size` | `500` | `500` | Entries per page for large searches. Keep it below the server's size limit (Active Directory 1000, OpenLDAP 500). `0` turns paging off for directories without the paged results control. |
 | `application.ldap.max-pages` | – | `1000` | The most pages one paged search reads before it logs a warning and returns what it has. This protects against a directory or proxy that keeps returning a paging cookie. |
 | `application.ldap.search-max-results` | – | `500` | The most people a name search (*Find a user*) lists (`APPLICATION_LDAP_SEARCHMAXRESULTS`). The directory is asked for one more, so the page can say there are more and ask for more of the name. Keep it below the directory's size limit if paging is off. |
 | `application.ldap.search-max-download` | – | `5000` | The most people a download of a name search holds (`APPLICATION_LDAP_SEARCHMAXDOWNLOAD`); a search matching more is refused with `400` (`too_many_matches`). |
+| `application.ldap.user-cache-size` | – | `150000` | The most directory users kept in memory for sign-in, reports and alerts (`APPLICATION_LDAP_USERCACHESIZE`), about 1 KB of heap each. Keep it at or above the number of people who check in. Below that, check-ins and large group reports read the directory for nearly every person. Up to the current release it was fixed at 5,000. |
 | `application.ldap.group-membership-cache-seconds` | `300` | `300` | How long a user's group memberships are cached. Permission checks read them on every request, so a directory change can take this long to show. `0` disables the cache. |
+| `application.ldap.pool-max-size` | `0` | `0` | The most pooled directory connections (`APPLICATION_LDAP_POOLMAXSIZE`). `0` sizes the pool for the request threads: `server.tomcat.threads.max` plus `spring.task.scheduling.pool.size` (208 with the defaults), never fewer than 20. Every sign-in reads the directory, so a pool smaller than the request threads makes a burst of check-ins wait for a connection, and a wait longer than the connect timeout fails the read. Connections are opened only when needed and closed after 5 idle minutes. Lower it if the directory limits connections per client; raise it together with `server.tomcat.threads.max`. The startup log says `LDAP connection pooling enabled for ..., at most <n> connections`. |
+| `application.ldap.sign-in-retries` | `2` | `2` | How many more times a sign-in reads the directory when it does not answer (a time-out, or no free pooled connection), 200 ms and then 400 ms later, before the request is answered `503` with `Retry-After: 5` (`APPLICATION_LDAP_SIGNINRETRIES`). A directory that cannot be asked is never taken for "no such user": that is still a `401`, at once. |
 
 The JDK connection pool is configured by system properties that ReadyRoom sets at startup, unless
 you pass them with `-D`:
@@ -93,8 +98,12 @@ you pass them with `-D`:
 | System property | Default set by ReadyRoom |
 |---|---|
 | `com.sun.jndi.ldap.connect.pool.protocol` | `plain ssl` (pools `ldaps://` connections too) |
-| `com.sun.jndi.ldap.connect.pool.maxsize` | `20` |
+| `com.sun.jndi.ldap.connect.pool.maxsize` | `application.ldap.pool-max-size`, or with that at `0` the request threads plus the job threads (208 with the defaults; it was a fixed `20`) |
 | `com.sun.jndi.ldap.connect.pool.timeout` | `300000` (5 minutes idle) |
+
+A connection is waited for as long as `com.sun.jndi.ldap.connect.timeout` (5 s packaged). If the
+database pool (`spring.datasource.hikari.maximum-pool-size`) is raised, raise the directory pool with it:
+a larger database pool lets more requests reach the directory at once.
 
 ## Directory mapping
 
@@ -175,7 +184,7 @@ day: with a day start of 18:00, 02:00 is the small hours of the same shift.
 
 | Property | Packaged | Built-in | Description |
 |---|---|---|---|
-| `application.check-out-after-minutes` (`checkOutAfterMinutes`) | `240` | `240` | How long someone's latest event can be a screen lock before they are automatically checked out, also when that runs past midnight (a lock after about 20:00 with `240`). |
+| `application.check-out-after-minutes` (`checkOutAfterMinutes`) | `240` | `240` | How long someone's latest event can be a screen lock before they are automatically checked out, also when that runs past midnight (a lock after about 20:00 with `240`). On a day of *Early Leave* with a time of leaving, a lock at or after that time is checked out on the next run instead. |
 | `application.extra-time-before-absent-notification-minutes` | – | `60` | Grace period after a person's expected login time before an absence alert is raised. The help dialog shows this value. |
 | `application.inactive-cron.fixed-rate` | `60000` | `1800000` | Milliseconds between auto check-out runs. It is used as a fixed **delay** after each run finishes, so runs never overlap. |
 | `application.inactive-cron.initial-delay` | `60000` | `1800000` | Delay before the first auto check-out run, in ms. |
@@ -194,7 +203,8 @@ What each job does is described in [Operations](operator-guide.md#scheduled-jobs
 
 | Property | Env var | Built-in | Helm | Description |
 |---|---|---|---|---|
-| `application.events.request-statuses` | `APPLICATION_EVENTS_REQUESTSTATUSES` | `OUT_OF_OFFICE,WORK_FROM_HOME,TDY,SCHEDULED_LEAVE,ABSENT_EXCUSED` | `events.requestStatuses` (empty list: the default) | The statuses people **request** and their manager, a delegate or an administrator approves before they count. Comma-separated. `STANDARD` is refused at startup. Leaving an excusing status out lets people set it themselves; startup then warns that it stops absence alerts without approval (the warning also names Late Arrival, which delays them). See [Statuses and approvals](user-guide.md#statuses-and-approvals) |
+| `application.calendar.employee-type-filters` | `APPLICATION_CALENDAR_EMPLOYEETYPEFILTERS_0_LABEL`, `..._0_VALUES`, `_1_LABEL`, ... | Gov: `GOV,GOVERNMENT,CIV,CIVILIAN`; CTR: `CTR,CON,CONTRACTOR`; MIL: `MIL,MILITARY` | `calendar.employeeTypeFilters` (empty list: the default) | The Team Calendar's and Group Calendar's **Show** choices after *All*, in order: each a label and the employee types it shows, matched ignoring case against the person's employee type (`application.user-ldap-employee-type-attribute`, default `employeeType`). Setting any replaces the defaults. See [Mapping your directory's employee types](#mapping-your-directorys-employee-types) |
+| `application.events.request-statuses` | `APPLICATION_EVENTS_REQUESTSTATUSES` | `OUT_OF_OFFICE,WORK_FROM_HOME,TDY,TRAINING,SCHEDULED_LEAVE,ABSENT_EXCUSED` | `events.requestStatuses` (empty list: the default) | The statuses people **request** and their manager, a delegate or an administrator approves before they count. Comma-separated status codes (`TDY` is Temporary Duty (TDY); `TRAINING` is Training). `STANDARD` is refused at startup. A deployment that sets this keeps its list on upgrade: add `TRAINING` for Training to need approval. Leaving an excusing status out lets people set it themselves; startup then warns that it stops absence alerts without approval (the warning also names Late Arrival, which delays them). See [Statuses and approvals](user-guide.md#statuses-and-approvals) |
 | `application.events.max-range-days` | `APPLICATION_EVENTS_MAXRANGEDAYS` | `366` | `events.maxRangeDays` | The most days one call may set a status, a request or an organization calendar event on, 1 to 3660. Longer ranges are refused with `range_too_long` |
 | `application.events.late-arrival-latest-time` | `APPLICATION_EVENTS_LATEARRIVALLATESTTIME` | `12:00` | – | The latest time, `HH:mm`, a person may give for a late arrival they set for themselves, and for the **Login Time** on their profile. Either becomes the time their absence alert waits for. Later is refused (`late_arrival_too_late`); a manager, delegate or administrator recording a late arrival for someone is not limited |
 | `application.events.late-arrival-max-days` | `APPLICATION_EVENTS_LATEARRIVALMAXDAYS` | `31` | – | The most days one late arrival a person sets for themselves may cover; more is refused (`late_arrival_too_long`). Not a limit on a manager, delegate or administrator |
@@ -205,6 +215,43 @@ What each job does is described in [Operations](operator-guide.md#scheduled-jobs
 | `application.calendar-requested-event-color` | – | `gray` | – | Calendar colour of the days of a pending request |
 
 A bad value in any of these stops startup with a message naming the setting.
+
+
+### Mapping your directory's employee types
+
+Directories spell employee types differently (`FT`, `PT`, `CON`, `CONTRACTOR`, `GS`, ...). Look at
+the values your `employeeType` attribute (or the one `application.user-ldap-employee-type-attribute`
+names) holds, then list each calendar choice with every spelling it covers. Labels must be
+non-empty, unique ignoring case and not *All* (always offered first), each with at least one value,
+or startup stops naming the setting. Release package (`.env`):
+
+```bash
+APPLICATION_CALENDAR_EMPLOYEETYPEFILTERS_0_LABEL=Gov
+APPLICATION_CALENDAR_EMPLOYEETYPEFILTERS_0_VALUES=FT,PT,GS
+APPLICATION_CALENDAR_EMPLOYEETYPEFILTERS_1_LABEL=CTR
+APPLICATION_CALENDAR_EMPLOYEETYPEFILTERS_1_VALUES=CON,CONTRACTOR
+APPLICATION_CALENDAR_EMPLOYEETYPEFILTERS_2_LABEL=MIL
+APPLICATION_CALENDAR_EMPLOYEETYPEFILTERS_2_VALUES=MIL,USAF,USN
+```
+
+Helm:
+
+```yaml
+calendar:
+  employeeTypeFilters:
+    - label: Gov
+      values: [FT, PT, GS]
+    - label: CTR
+      values: [CON, CONTRACTOR]
+    - label: MIL
+      values: [MIL, USAF, USN]
+```
+
+A group's members are matched on the employee type ReadyRoom keeps on their user record (from the
+directory at sign-in and at each refresh); someone ReadyRoom has never seen has none and shows
+under *All* only. A manager's reports are matched on their directory entries. The API endpoints
+behind the calendars take the label as `type` (`/api/event/reports?type=CTR`); an unknown one is
+`400` `unknown_type`.
 
 ## Email and notifications
 
@@ -283,6 +330,15 @@ needs an `https://` `APPLICATION_BASE_URL`, and the release package's `env.templ
 | `management.health.mail.enabled` (`MANAGEMENT_HEALTH_MAIL_ENABLED`) | Spring Boot's default, `true` | Whether the aggregate `/actuator/health` includes the mail server. Readiness never does. Helm: `smtp.healthCheck` |
 | `logging.structured.format.console` (`LOGGING_STRUCTURED_FORMAT_CONSOLE`) | – | `ecs` writes each log line as one JSON object (Elastic Common Schema). Helm: `logFormat: json`, the default. The audit lines on stdout are raw `ens-audit/1` JSON either way |
 | `application.diagnostics.request-metrics` | `false` | When `true`, every request logs `GET /app/home -> 200: <n> SQL statement(s), <n> LDAP operation(s), <n>ms`. Use it for measuring, not for normal running. |
+
+## Audit trail
+
+The audit trail's settings (`ENS_AUDIT_*`: stdout, file, Splunk, syslog, retention) are the same in every
+ENS application; see [Audit logging → Settings](../audit-logging.md#settings). ReadyRoom also has:
+
+| Env var | Default | Description |
+|---|---|---|
+| `ENS_AUDIT_CHAIN_MILLIS` (next release) | `500` | Each audit event is stored in the same transaction as the action it records, without waiting for its place in the hash chain; a chainer on each replica then adds stored events to the chain in batches, in the order they were recorded. A replica chains its own events as soon as they commit; this is how often, in milliseconds, it also looks for events still to be chained (those another replica recorded, or left by a crash). Until it is chained, an event is in no list, export, verification, pull-API answer or output; **Audit log** says how many are waiting. Helm: `extraEnv` |
 
 ## Security headers, banner and sessions
 

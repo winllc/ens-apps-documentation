@@ -73,7 +73,7 @@ checking off; or `ENS_CSP_REPORT_ONLY` is on.
 | Path | Includes |
 |---|---|
 | `/actuator/health/liveness` | ReadyRoom's own state only, so an outage elsewhere never restarts it |
-| `/actuator/health/readiness` | Also the database (`db`), the directory (`ldap`) and whether the audit trail can be written (`auditStore`). Never the mail server |
+| `/actuator/health/readiness` | Also the database (`db`), the directory (`ldap`) and whether the audit trail can be written (`auditStore`; from the next release its details also give `pending`, the audit events stored but not yet chained, and `oldestPending`, and `quarantined`, `newestQuarantined` and an `attention` flag for events set aside because they could not be chained; those keep it UP, since restarting or removing replicas would not help). Never the mail server |
 | `/actuator/health` | The aggregate, including the mail server unless `MANAGEMENT_HEALTH_MAIL_ENABLED=false` |
 
 All three are open without sign-in and show the status only; component details are shown to `ADMIN`
@@ -103,6 +103,8 @@ Never publish that port through an ingress, route or the host. With the Promethe
 | `ens_license_days_remaining` | gauge | Days until the license (or its grace period) ends; no value for a perpetual license |
 | `ens_audit_events_total{category,outcome}` | counter | Audit events stored |
 | `ens_audit_forward_failures_total{output}` | counter | Failed deliveries to an audit output (`splunk`, `syslog`) |
+| `ens_audit_pending` (next release) | gauge | Audit events recorded and not yet chained; normally near 0 |
+| `ens_audit_quarantined` (next release) | gauge | Audit events that could not be chained and were set aside; see [Troubleshooting](troubleshooting.md#audit-trail) |
 | `ens_auth_attempts_total{method,outcome}` | counter | Sign-ins by method (`ldap`, `x509`, `sso`, `api-token`, `session-id`) and outcome, the Windows client's included |
 | `ens_readyroom_checkins_total{action}` | counter | The Windows client's events recorded (`in`, `lock`, `unlock`, `out`) |
 | `ens_readyroom_people_in` | gauge | People whose latest event today is a check-in or unlock (refreshed at most once a minute) |
@@ -114,8 +116,8 @@ Never publish that port through an ingress, route or the host. With the Promethe
 
 Suggested alerts: readiness failing; `ens_readyroom_checkins_total` flat during working hours;
 `ens_license_mode{mode="full"}` at 0, or `ens_license_days_remaining` under 30;
-`ens_audit_forward_failures_total` rising; `ens_readyroom_webhook_deliveries_total{outcome="failed"}`
-rising; no new backup in a day.
+`ens_audit_forward_failures_total` rising; `ens_audit_quarantined` above 0, or `ens_audit_pending` rising for
+minutes (next release); `ens_readyroom_webhook_deliveries_total{outcome="failed"}` rising; no new backup in a day.
 
 ### Request diagnostics
 
@@ -157,6 +159,10 @@ Useful messages:
 | `Manager does not have an email address: <dn>` / `Manager not found in LDAP: <dn>` | An alert recipient could not be emailed or found. |
 | `Directory refresh: N scanned, N created, N updated, ...` | The hourly directory refresh changed user records. |
 | `RefreshUserRecordsCron failed; the next run will retry` | The directory refresh failed. A stack trace follows. |
+| `RefreshUserRecordsCron: the directory did not answer (<reason>); nothing changed, the next run will retry` (`WARN`) | The directory refresh could not list the directory's users. No record was changed; the refresh never removes, deactivates or counts out anyone. |
+| `<method> <path>: the directory did not answer (<reason>); answering 503` (`WARN`) | A page or API call needed people from the directory, which did not answer after `application.ldap.read-retries` more tries. The user got `503` with `Retry-After: 5`; nothing was changed. |
+| `Scheduled report <id> (<name>) put off: the directory did not answer for its recipients (<reason>)` (`WARN`) | The run is tried again; the report is not sent to some of its recipients only. |
+| `Nobody e-mailed that request <id> of <dn> was <what>: the directory did not answer for who decides it` (`WARN`) | The request is saved and waits on its approvers' **Approvals** page; nobody was e-mailed in their place. |
 | `Built org chart <name> with N top-level orgs (N nodes total) in Xms` | The org chart was rebuilt from the directory. |
 | `Parse rule '<name>' (<regex>) did not match org value '<value>'` | A value was left out of the org chart. Fix the rule. |
 | `Serving stale cached ... after refresh failure` | A background cache refresh from LDAP failed. The previous data is still being shown. |
@@ -183,7 +189,7 @@ run. Expired sessions are also deleted once a minute, on one replica.
 
 | Job (class) | Delay (packaged / built-in) | First run (packaged / built-in) | What it does |
 |---|---|---|---|
-| **Auto check-out** (`MarkInactiveCron`) | 60 s / 30 min (`inactive-cron.fixed-rate`) | 60 s / 30 min | For each user whose **latest event is a screen lock** older than `check-out-after-minutes`, writes a `CHECK_OUT` timestamped at lock time + that many minutes, flagged `forced = true`. It looks back two days beyond that limit, so a lock left in the evening is checked out after midnight and a lock left during an outage is caught up. |
+| **Auto check-out** (`MarkInactiveCron`) | 60 s / 30 min (`inactive-cron.fixed-rate`) | 60 s / 30 min | For each user whose **latest event is a screen lock** older than `check-out-after-minutes`, writes a `CHECK_OUT` timestamped at lock time + that many minutes, flagged `forced = true`. It looks back two days beyond that limit, so a lock left in the evening is checked out after midnight and a lock left during an outage is caught up. A lock at or after the time of leaving of the person's *Early Leave* for that day is checked out on the next run instead, a second after the lock (`record.auto-checked-out` in the audit log); the early leaves are read in one query a run. |
 | **Absence alerts** (`SendAbsentNotificationsCron`) | 5 min / 30 min (`send-absent-notification-cron.fixed-rate`) | immediately / 30 min | Checks each person on their own day (their time zone and day start), on their working days only, and raises at most one alert per person per day for users not in by their expected time plus the grace period. See [Administration](admin-guide.md#absence-notifications). |
 | **Directory refresh** (`RefreshUserRecordsCron`) | 1 h / 1 h (`refresh-user-records-cron.fixed-rate`) | 5 min / 5 min | Reads every user from the directory and creates or updates `user_records` (DN, email, phone, organization, employee type, location, branch, duty sub-organization) in batches of changed rows. Set `refresh-user-records-cron.enabled: false` to pause it. A sign-in only fills a record's empty columns, from the user cache, so changed directory values reach the record through this refresh. |
 | **Retention purge** (`RetentionService`) | `0 17 2 * * *`, 02:17 daily (`application.retention.cron`) | – | Only with `application.retention.events-days` above 0: summarises and deletes old check-ins, statuses, requests and absence alerts, and deletes void check-ins. See [Retention](#retention). |
@@ -353,9 +359,10 @@ package nor the Helm chart carries scripts. Developer notes on adding a migratio
 | `V14__alert_answered_by_request` (next release) | `notification_records.status_response_request_id`: the approved status request that answered an absence alert (its days' alerts take the request's status as their answer). A request the retention purge or an erasure deletes clears the link and leaves the answer. One new column only |
 | `V16__work_schedules` (next release) | `user_records.working_days` (`MTWTF..`; empty for Monday to Friday), `user_records.start_date`, `user_records.created_at`, and `attendance_summaries.working_days`, for [working days and start dates](admin-guide.md#working-days-and-start-dates). `created_at` is filled for existing people with the earliest of their check-ins and monthly summaries (empty for someone with neither). Nobody's schedule changes |
 | `V17__record_corrections` (next release) | `check_in_out_records`: `voided_at`, `voided_by`, `void_reason`, `note`, `noted_by`, `noted_at`, `added_by`, `added_at`, `added_reason`, for [corrections to check-in records](admin-guide.md#correcting-check-in-records); and `notification_records.original_response`, `original_response_by_dn`, `original_response_date`, the alert answer an approved request superseded. New empty columns only: existing records are neither void nor corrected |
+| `V18__audit_pending` (next release) | `audit_pending`: audit events stored with the action they record and waiting, normally under a second, for their place in the hash chain, which a chainer on each replica gives them in batches. Also `audit_quarantine`, where an event that can never be chained through its own fault is set aside, exactly as stored, with an `audit.chain-failed` event in its place in the chain; append-only (a trigger refuses UPDATE and DELETE). New tables only: `audit_events`, its rows and `audit_chain_head` are unchanged, and the trail verifies as before |
 
 There is no V15. V2 to V4 change only the schema, plus one `UPDATE` on `user_records`, so they are
-quick; V6 to V11, V13, V14 and V17 add tables and columns only; V12 adds two columns and fills them
+quick; V6 to V11, V13, V14, V17 and V18 add tables and columns only; V12 adds two columns and fills them
 with one `UPDATE` each; V16 adds columns and fills `user_records.created_at` with one `UPDATE` that
 reads each person's earliest check-in record and monthly summary.
 
@@ -433,7 +440,7 @@ stored, and audited as a failed `auth.login` with the reason *unknown session*. 
 
 | Change | What to do |
 |---|---|
-| People can no longer set Out of Office, Work From Home, TDY or Scheduled Leave themselves (or Absent Excused through the API): the calendar sends them as requests | Tell your users and managers. Statuses already on calendars, future ones included, keep their effect; nothing is converted to a request. To let people set one again without approval, leave it out of `APPLICATION_EVENTS_REQUESTSTATUSES` |
+| People can no longer set Out of Office, Work From Home, Temporary Duty (TDY) or Scheduled Leave themselves (or Absent Excused through the API): the calendar sends them as requests | Tell your users and managers. Statuses already on calendars, future ones included, keep their effect; nothing is converted to a request. To let people set one again without approval, leave it out of `APPLICATION_EVENTS_REQUESTSTATUSES` |
 | Only administrators set delegates; `POST /api/users/managers/update` is removed | Review the delegates people chose themselves under **Administration → Delegates**. Until then they keep receiving alerts and may now also approve requests |
 | `POST /api/event/update` returns `{status, fromDate, toDate, outcome, requestId?, message?}`, answers bad input with `400` instead of `500`, accepts plain `yyyy-MM-dd` dates, and refuses ranges over 366 days | Update scripts that call it |
 | Profile note changes are audited as `notesChanged`, without the text | Events from earlier releases keep the old and new text until audit retention prunes them |
@@ -459,7 +466,7 @@ Nothing to do by hand: Flyway adds the tables above, and nothing existing change
 
 ### Upgrading to the next release
 
-New tables and columns (Flyway `V11` to `V14`, `V16` and `V17`; there is no `V15`), added at the
+New tables and columns (Flyway `V11` to `V14` and `V16` to `V20`; there is no `V15`), added at the
 first start, in that order. Sign-in keeps working for every installation that kept its settings;
 check the points below.
 
@@ -486,6 +493,13 @@ check the points below.
 | People are e-mailed when a manager, delegate or administrator records a status that does not excuse the day (Absent, Absent Unexcused, Unscheduled Leave, Late Arrival, Early Leave), on their calendar or by answering an absence alert | Tell managers and users. Needs a mail server, with the same settings as absence alerts |
 | An alert answer that an approved request superseded is kept and shown beside the request | Only for answers superseded from this release on. Earlier ones keep the old answer only in their `absence.alert-superseded` audit event |
 | The personal data export adds `statusHistory` and `recordCorrections` from the audit trail, void records with their corrections, and the person's working days and start date | Update anything that reads the export. See [Privacy → Export](privacy.md#export) |
+| *TDY* is shown as *Temporary Duty* (TDY), and *Training* (`TRAINING`) is a new status, treated as Temporary Duty: requested and approved by default, it excuses an absence and stays a working day (`V19` lets the status columns hold it) | Tell users and managers. Codes are unchanged in the API, webhooks, configuration and the database. If you set `APPLICATION_EVENTS_REQUESTSTATUSES`, add `TRAINING` to it for Training to need approval (otherwise people set it themselves, and startup warns). During a rolling update an older replica cannot read a Training day: let the update finish before people use it |
+| An *Early Leave* can carry the time the person leaves (optional; `leave_at_time`, `V19`) | Nothing to do. It is shown on calendars, on **Approvals**, in the person's notice e-mail, in the API's absences (`leaveAtTime`) and in the personal data export (`leaveAtTime`), and changes nothing else: an early leave still excuses nothing |
+| The user tables (Users, My Reports, the org chart's people) show a calendar status by its name (*Work From Home*, *Temporary Duty*) instead of its code (`WORK_FROM_HOME`, `TDY`) | Nothing to do: the people export's **Status today** column and the API keep the codes |
+| A lock at or after an *Early Leave*'s time of leaving is checked out at once, not after `check-out-after-minutes` | Tell managers. Audited as `record.auto-checked-out` |
+| An absence alert can be answered with any status that accounts for the day, Work From Home, Temporary Duty, Training and the other leave and work-elsewhere statuses included, listed by name in two groups; a status a manager, delegate or administrator records is their word on the day whatever it is (`recorded_by_decider`, `V20`) | Tell managers. Existing calendar days are read as before |
+| Request e-mails and `GET /api/v1/absences/requests` carry a late arrival's and an early leave's time | Update anything that reads the leave-request items (`loginByTime`, `leaveAtTime`) |
+| Audit events are added to the hash chain in the background (`V18`) | Nothing to do; a rolling update is safe. An audited action no longer waits for the one audit chain head row, so audited actions stop queuing behind each other. Each event is stored with its action as before, and joins the trail, the audit page, exports, the pull API and the outputs within about a second (`ENS_AUDIT_CHAIN_MILLIS`, see [Configuration](configuration.md#audit-trail)). Events already stored are untouched and verify as before. While old and new replicas run side by side, both add to the same chain under the same row lock, so it stays gapless. Each event's line goes to the stdout and audit file of the replica that chained it, not necessarily the one that recorded it (its `host` still names that one). A [rollback](availability-and-sizing.md#rolling-back-an-upgrade) restores the pre-upgrade backup, as for any release. If you instead start the previous release on this database, stop every replica of this one first (stopping chains what is waiting) and check that `SELECT count(*) FROM audit_pending` returns 0: the previous release does not read that table, so events left in it would stay out of the trail |
 
 ## Runbook
 
@@ -497,6 +511,8 @@ check the points below.
 | No absence emails | SMTP errors in the log, the manager's email attribute, `application-base-url`, whether today is one of the person's working days (their schedule, on their own date) or a holiday, and whether the person has an expected time. |
 | Pages slow or hanging | LDAP response times. Turn on `request-metrics`. The timeouts are 5 s connect and 30 s read. |
 | Group changes in the directory not visible | Cache lifetimes. Evict the group in **Settings → Group Cache**. Membership-based access is cached for 300 s. |
+| Recent audit events missing from **Audit log**, exports or the SIEM | They join the trail within about a second. If they stay out, readiness's `auditStore` details show `pending` and `oldestPending` (signed in as `ADMIN`), and the log says `Could not chain the recorded audit events`, with the database error. Nothing is lost meanwhile: the events stay stored and are chained once the cause is fixed. |
+| **Audit log** warns that audit events could not be added to the chain; `ens_audit_quarantined` above 0 | Each was set aside in `audit_quarantine` with an `audit.chain-failed` event in its place; the trail stays intact and everything else is chained. See [Troubleshooting → Audit trail](troubleshooting.md#audit-trail). |
 | "Wrong" data for one admin | They may have pinned another day with **System Date**. Look for `pinned their session system time` in the log. |
 
 More detail on each problem is in [Troubleshooting](troubleshooting.md).

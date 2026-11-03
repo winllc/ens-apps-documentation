@@ -125,8 +125,10 @@ alternate managers**, as for delegates: a group's own managers no longer appoint
 3. Choose **Update**. The list is saved in `group_records.alternate_managers`.
 
 Each manager must be someone in the directory; a DN that is not there, or a list longer than the
-column holds (255 characters), is refused with the reason, and nothing is saved. The change is
-audited as `group.managers-changed`.
+column holds (255 characters), is refused with the reason, and nothing is saved. If the directory
+does not answer while it checks them, nothing is saved either, and the answer says so (`503`,
+`directory_unavailable`) rather than *Not in the directory*. The change is audited as
+`group.managers-changed`.
 
 A person counts as a **manager of a group** if they are its directory `owner` or are on this list.
 A group manager can open the group and sees the details of every member of every group they manage
@@ -169,9 +171,9 @@ raised when **all** of these are true:
   time), the alert is due at the latest two job intervals before their day ends: 23:00 with the
   built-in 30-minute interval and a midnight day start, 23:50 with the packaged 5 minutes;
 - the day is not already accounted for: they have no excusable status today (*Out of Office*,
-  *Work From Home*, *TDY*, *Scheduled Leave* or *Absent Excused*), and no status that only a
-  manager, delegate or administrator records (*Absent*, *Absent Unexcused* or *Unscheduled
-  Leave*). A requested status counts only once it is approved. *Late Arrival*, *Early Leave* and
+  *Work From Home*, *Temporary Duty (TDY)*, *Training*, *Scheduled Leave* or *Absent Excused*), and no
+  status that only a manager, delegate or administrator records (*Absent*, *Absent Unexcused* or
+  *Unscheduled Leave*). A requested status counts only once it is approved. *Late Arrival*, *Early Leave* and
   *normal* account for nothing: a late arrival only moves the expected time. The same rule decides
   who is accounted for on Home, My Reports, Metrics and the org chart;
 - they are still in the directory: nobody is alerted about a person whose entry is gone, or whose
@@ -194,8 +196,14 @@ tries again. An alert whose email the mail server did not take is emailed again 
 same day, while nobody has answered it. The job's count of alerts sent (in its log line and its
 `job.completed` audit event) is the number of people alerted about.
 
-**Responses.** A recipient opens the alert and picks `UNSCHEDULED_LEAVE`, `ABSENT_EXCUSED`,
-`ABSENT_UNEXCUSED` or `ABSENT`. The response is copied to every recipient's copy of the alert and
+**Responses.** A recipient opens the alert and picks any status that accounts for the day, by name:
+under **Recorded by a manager**, *Unscheduled Leave*, *Absent Excused*, *Absent Unexcused* or
+*Absent*; under **Leave and work elsewhere**, *Out of Office*, *Work From Home*, *Temporary Duty*,
+*Training* or *Scheduled Leave*. *normal*, *Late Arrival* and *Early Leave* are refused (`400`):
+they leave the person unaccounted for. A leave or work-elsewhere answer is recorded as the
+responder's word on the day (the API's `source` `manager`; the person's own status that day does not
+replace it), never as a request needing approval, even when the status is in
+`APPLICATION_EVENTS_REQUESTSTATUSES`. The response is copied to every recipient's copy of the alert and
 stored as the person's status for the day the alert was about: their own date when it was raised
 (the alert about a Tokyo person's Monday is raised on New York's Sunday evening). An answer that
 does not excuse the day (`UNSCHEDULED_LEAVE`, `ABSENT_UNEXCUSED` or `ABSENT`) is e-mailed to the
@@ -239,7 +247,9 @@ lists them.
 To set someone's delegates, open their details page (**Users** → the person). On the
 **Delegates** card, search under **Add a delegate**, remove anyone with the remove control, and
 choose **Save delegates**. Each delegate must be someone else in the directory. The change is
-audited as `person.updated` with `details.via` `alternate-managers` and the old and new lists.
+audited as `person.updated` with `details.via` `alternate-managers` and the old and new lists. If
+the directory does not answer while it checks them, nothing is saved and the answer is *The directory
+did not answer* (`503`), not *Not in the directory*: save again in a few seconds.
 
 **Administration → Delegates** (`/app/admin/delegates`) lists everyone who has delegates, with
 who set them:
@@ -266,8 +276,8 @@ That decides:
   date, each checked on their own date in their own time zone;
 - the **30-day attendance** on Home and My Reports, which counts only the person's working days. A
   day of *Scheduled Leave*, *Unscheduled Leave* or *Absent Excused* without a check-in is left out of
-  their working days. *Work From Home*, *TDY*, *Out of Office*, *Absent* and *Absent Unexcused* still
-  count as working days;
+  their working days. *Work From Home*, *Temporary Duty*, *Training*, *Out of Office*, *Absent* and
+  *Absent Unexcused* still count as working days;
 - **who is expected** on a day (accounted for on Home, My Reports and Metrics), and the **average
   arrival** time;
 - the **monthly summaries** the retention purge writes, which now keep how many working days the
@@ -321,9 +331,17 @@ From there you can:
   morning. It cannot be in the future. The commonest case is a missed sign-out. The added record
   counts like any other and is labelled *Added by an administrator* wherever records are listed.
 
+!!! note "An early leave's time and the automatic check-out"
+    On a day whose one status is *Early Leave* with a time of leaving, a screen lock at or after
+    that time (in the person's zone and day) is checked out on the job's next run, not after
+    `check-out-after-minutes`. It is the same automatic check-out, timed a second after the lock,
+    and is audited as `record.auto-checked-out` with the reason (*early leave at 15:00*). A status a
+    manager recorded over the early leave decides instead. Locks before the time, and early leaves
+    without one, wait for the usual limit.
+
 !!! note "Voiding an automatic check-out"
     The automatic check-out job leaves alone a screen lock whose automatic check-out an
-    administrator voided: it does not write it again. The person's day stays open until a later
+    administrator voided: it does not write it again, early leave or not. The person's day stays open until a later
     record of theirs ends it, or you add the check-out they missed.
 
 **Rules.**
@@ -389,7 +407,9 @@ still active, and their open sessions.
   confirm; the browser asks once more. The form is good for 10 minutes and for that person only.
   Nobody can erase themselves. The page then says how many records were erased and what was
   revoked, disabled and ended. The erasure is audited as `person.erased`, with the counts and
-  whether the person is still in the directory.
+  whether the person is still in the directory. If the directory does not answer, the page (and
+  the erasure) says *The directory did not answer* instead, and nothing is erased: whether the
+  person is still there, and so comes back, is not known. Try again in a few seconds.
 
 !!! warning "Erase someone who has left the directory first"
     If the person is still in the directory, the page says so: ReadyRoom creates their account
@@ -459,6 +479,11 @@ expires. Each eviction is audited as `settings.cache-evicted`, with `details.eve
 
 When the directory stops answering part way through a tree, the **Groups** page shows what it has
 with *The directory did not answer for part of this tree; try again*, and that tree is not cached.
+That includes a sub-group the directory did not answer for, which earlier releases left out as if it
+did not exist, and cached the tree without it; the next read after the directory answers gets the
+whole tree. A top-level tree the directory did not answer for at all is left off the page with the
+same notice. A group's own page is *The directory did not answer* (`503`) rather than *no such
+group* (`404`), and a person's groups and the groups they own are never cached as "none".
 
 ### Stored group DNs
 
