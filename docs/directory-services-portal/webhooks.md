@@ -17,6 +17,29 @@ until one exists.
 
 A webhook can be limited to some directories. **Send test event** queues a `ping`.
 
+From the next release every event's `data` also has `directory`, the id of the LDAP directory the
+entry is in (`default` with one directory; see
+[Configuration → Several directories](configuration.md#several-directories)), next to
+`definitionId`, and the `actor` has `directory`, the directory the person who made the change
+signed in to. Both are additive: receivers that ignore unknown fields need no change. For example:
+
+```json
+{
+  "type": "entry.changed",
+  "actor": {"username": "erin", "authMethod": "password", "directory": "corp"},
+  "data": {
+    "operation": "update",
+    "definitionId": "def-staff",
+    "directory": "corp",
+    "dn": "uid=alice,ou=people,dc=corp,dc=example,dc=com",
+    "name": "Alice Anderson",
+    "attributes": ["telephoneNumber"]
+  }
+}
+```
+
+The envelope's other fields (`id`, `createdAt`, `source`) are unchanged and left out above.
+
 ## Verifying a delivery
 
 Each request carries `X-DSP-Event`, `X-DSP-Event-Id`, `X-DSP-Delivery`, `X-DSP-Timestamp` and

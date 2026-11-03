@@ -17,17 +17,19 @@ flowchart TB
         MET["Metrics engine<br/>Analysis service"]
         JOBS["JobService<br/>metrics pool · analysis pool"]
         STORE["ConfigStore<br/>AnalysisResultStore · AuditLog"]
-        LDAPGW["LdapDirectory gateway<br/>UnboundID connection pool"]
+        DIRS["Directories<br/>one gateway per LDAP directory"]
+        LDAPGW["LdapDirectory gateway<br/>UnboundID connection pool<br/>failover or round-robin server set"]
         EMB["EmbeddedDirectory<br/>(memory mode only)"]
     end
-    LDAP[(LDAP server)]
+    LDAP[("LDAP servers<br/>(one or more directories,<br/>each with replicas)")]
     FS[("DATA_DIR")]
 
     UI -->|"same origin, DSP_SESSION cookie,<br/>X-DSP-Request: 1"| NG
     NG -->|"API_URL"| SEC --> CTRL --> SVC
     CTRL --> MET --> JOBS
-    SVC --> LDAPGW
-    MET --> LDAPGW
+    SVC --> DIRS
+    MET --> DIRS
+    DIRS --> LDAPGW
     SVC --> STORE
     MET --> STORE
     STORE --> FS
@@ -50,7 +52,8 @@ flowchart TB
 | Jobs | Background execution, progress, cancellation, deduplication, retention | `jobs/*` |
 | Config store | Single JSON document with atomic writes; with a shared database, a versioned document in `dsp_document` | `store/ConfigStore`, `store/DemoConfigSeeder` |
 | Audit | The `ens-audit/1` store (hash-chained monthly JSON Lines files with a single synchronized writer, or `dsp_audit_event` with a shared database), the `ens.audit` logger, delivery to Splunk HEC and syslog, retention, and searches over the files | `audit/*` |
-| LDAP gateway | Pooled service-account connections (UnboundID SDK), TLS options, timeouts | `ldap/LdapDirectory` |
+| LDAP gateway | Pooled service-account connections (UnboundID SDK), TLS options, timeouts. Next release: several servers per directory (`FailoverServerSet` in order, or `RoundRobinServerSet`), and the server in use | `ldap/LdapDirectory` |
+| Directories (next release) | The configured LDAP directories (`PORTAL_DIRECTORIES_*`, or one, `default`, from `LDAP_*`), each with its settings and gateway; which the license enables (`multi-directory`; the first always); the directory of a definition or a user. Startup validation | `ldap/Directories`, `config/DirectoryConfig`, `config/DirectoryProperties` |
 | Shared database | Only with `DSP_DATABASE_URL`: the connection pool (Flyway migrations), Spring Session JDBC with an allow-list for session attributes, cluster locks (ShedLock on `dsp_shedlock`), the versioned shared documents, and the election of the one instance that runs the audit forwarders | `cluster/*`, `audit/JdbcAuditStore` |
 | Embedded directory | UnboundID in-memory server on a loopback port with demo schema and data | `ldap/EmbeddedDirectory`, `resources/demo/*` |
 
@@ -76,9 +79,32 @@ sequenceDiagram
     A-->>B: 200 updated entry
 ```
 
+## Several directories (next release)
+
+```mermaid
+flowchart LR
+    U["SessionUser<br/>(directory, DN)"] -->|signs in to| D1
+    DEF1["Definition A<br/>directory: corp"] --> D1[(corp<br/>dc1, dc2)]
+    DEF2["Definition B<br/>directory: lab"] --> D2[(lab<br/>ldap1)]
+    G["Grant on B<br/>subject alice @ corp"] -.matches only corp users.-> U
+```
+
+- Every **definition** names one directory; every operation through it (entries, search,
+  drop-downs, import and export, metrics, analyses, webhooks, the integration API) uses that
+  directory's gateway, and its server schema (cached per directory, merged with the shared custom
+  schema).
+- A **user** is (directory, DN). Grants name their subject's directory, so a grant matches only
+  users and groups of that directory. Administrators come from each directory's own lists. Jobs,
+  the session limit and throttles key on the qualified user.
+- **Configuration** version 2 stores `directory` on definitions and grants; version 1 is upgraded
+  at the first start (everything to `default`, which also stands for the first directory).
+- **Licensing**: without `multi-directory` only the first directory is enabled. Its users sign in,
+  and the others' definitions answer `feature_not_licensed`.
+
 ## Sign-in
 
-1. `POST /api/auth/login` with username and password.
+1. `POST /api/auth/login` with username and password (next release: and, with several directories,
+   the `directory` chosen on the login page; none means the first).
 2. The API checks that the consent banner, if enabled, has been acknowledged, then the throttle
    (`LOGIN_MAX_FAILURES` per client address and username in `LOGIN_LOCKOUT_WINDOW`) and the
    username's characters.
@@ -87,13 +113,16 @@ sequenceDiagram
 4. The API binds as that DN with the password (empty passwords are rejected beforehand).
 5. The API reads `cn`, `displayName`, `mail`, the username attribute and `memberOf`, and runs
    `LDAP_GROUP_FILTER` under `LDAP_GROUP_SEARCH_BASE`.
-6. The API sets the admin flag from `ADMIN_USERS` / `ADMIN_GROUPS`.
+6. The API sets the admin flag from `ADMIN_USERS` / `ADMIN_GROUPS` (with several directories, the
+   chosen directory's lists).
 7. The API rotates the session ID and stores the `SessionUser` in the HTTP session.
 
 Certificate sign-in (`POST /api/auth/x509`, or automatically through `GET /api/auth/me`) replaces
 steps 1–4 with certificate validation and mapping. See [Security](security.md#x509-client-certificates).
 Single sign-on replaces them with the identity provider's answer, mapped to exactly one entry by
-`SSO_*_USER_FILTER`; see [Single sign-on](single-sign-on.md).
+`SSO_*_USER_FILTER`; see [Single sign-on](single-sign-on.md). With several directories, certificate
+sign-in and single sign-on search every enabled directory that takes them (`X509`, `SSO`), and
+exactly one entry across all of them must match.
 
 A call to the integration API (`/api/v1`) does not sign in: the API token is checked on every call,
 and the call runs as the token's creator, with their rights read again from the directory. See
@@ -104,7 +133,7 @@ and the call runs as the token's creator, with their rights read again from the 
 | Data | Store | With a shared database (`DSP_DATABASE_URL`) | Lifetime |
 |---|---|---|---|
 | Directory entries | LDAP server | LDAP server | Permanent (the embedded demo server is in memory only) |
-| Forms, definitions, grants, custom schema, schema cache, dashboards, analyses | `DATA_DIR/portal-config.json` | `dsp_document`, a versioned document | Permanent |
+| Forms, definitions, grants, custom schema, schema cache (per directory), dashboards, analyses | `DATA_DIR/portal-config.json` | `dsp_document`, a versioned document | Permanent |
 | Latest analysis results | `DATA_DIR/analysis-results/<id>.json` | `dsp_document` | Until the next run |
 | Audit events | `AUDIT_DIR` or `DATA_DIR/audit/audit-YYYY-MM.jsonl` | `dsp_audit_event`, the same hash chain | Append-only; kept until `ENS_AUDIT_RETENTION_DAYS` removes them (default: never) |
 | License and installation id | `ENS_LICENSE_STATE_DIR` (the license volume) | `ens_license_*` | Permanent |

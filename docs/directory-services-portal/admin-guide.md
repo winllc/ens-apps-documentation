@@ -16,6 +16,10 @@ A signed-in user is an administrator when:
   `SSO_OIDC_ADMIN_GROUPS` or `SSO_SAML_ADMIN_GROUPS`. Such a session ends after `SSO_IDP_ADMIN_SESSION_LIFETIME`
   (default `1h`), because the provider is not asked again during it.
 
+With [several directories](configuration.md#several-directories) (next release), each directory
+has its own `ADMINUSERS` / `ADMINGROUPS`, matched against users and groups of that directory only; an
+administrator from any of them administers the whole portal.
+
 See [Configuration → Users, groups and administrators](configuration.md#users-groups-and-administrators).
 Administrators see an **Admin** section in the sidebar with **Directory definitions**, **Forms**,
 **Schema**, **Permissions**, **Data analysis**, **Integrations** and **Audit log**. Every `/api/admin/**` call
@@ -195,6 +199,19 @@ compares parsed DNs (RFC 4514), so string tricks cannot escape the namespace.
 Deleting a definition also removes all its permission grants. The audit log records how many grants
 were removed.
 
+!!! info "Next release: several directories"
+    With [more than one LDAP directory](configuration.md#several-directories), the **Namespace**
+    section starts with **LDAP directory**: the directory this definition reads and writes. The
+    base DN, the DN browser and **Test namespace** then work in that directory, and choosing
+    another directory moves a base DN still at the old directory's suffix to the new one's. The
+    definitions list shows each definition's directory, and marks a directory the license doesn't
+    enable (**Not licensed**) or one no longer configured. Definitions saved before have the
+    directory `default`, which is the first directory when none has that id. With one directory
+    nothing changes on these pages.
+
+    A definition of a disabled directory stays listed here but nobody can open it (403
+    `feature_not_licensed`). **My profile** shows a user only definitions of their own directory.
+
 !!! warning "From the next release: attribute matching must be safe"
     Matching by an attribute (*entry attribute equals the user's attribute*) is only as strong as
     those attributes. A user who can edit `mail` in self service could set it to a colleague's and
@@ -248,6 +265,12 @@ flowchart TD
   effect immediately.
 - A grant for the same definition and subject replaces the previous access level.
 - Read-only definitions accept only view grants.
+- **Several directories (next release)**: a grant names the directory of its user or group. The
+  **Grant access** form then has a directory list, set to the definition's directory; pick another
+  to grant to users or groups of another directory (for example a partner forest), and the search
+  looks there. A grant matches only users who signed in to that directory, and groups of that
+  directory, so `uid=alice` of one directory never gets another directory's grant. Grants made
+  before name `default`. **Every signed-in user can read** covers users of every directory.
 - **Self-service**: users can always see definitions that can locate them (self match) on
   **My profile**, and edit their own entry's **Self-service** fields there, even without a grant.
   From the next release, attribute matching must find exactly one entry (unless it matches by the
@@ -405,6 +428,18 @@ The page works whatever the license says. How long events are kept is an operato
 `ENS_AUDIT_RETENTION_DAYS` (default: keep everything); see the
 [Operator guide](operator-guide.md#data-and-backups).
 
+## LDAP directories (next release)
+
+*Admin → LDAP directories*
+
+A read-only view of the directories the portal connects to (they are configured in its environment;
+see [Configuration → Several directories](configuration.md#several-directories)). For each: its
+name and id, the base DN, its servers in the order they are tried (or **Round robin**), the server
+the latest connection went to, whether it answers now (**Reachable** / **Unreachable** with the
+error; **Check again** asks again), and whether the license enables it. Without the license feature
+`multi-directory` only the first directory is enabled, and a notice says so. The same is available
+as `GET /api/admin/directories`.
+
 ## Site-wide settings
 
 Some settings are environment variables rather than admin-UI settings, so an operator changes them:
@@ -414,6 +449,8 @@ Some settings are environment variables rather than admin-UI settings, so an ope
 - the DoD notice-and-consent banner: `ENS_CONSENT_BANNER_ENABLED` and its text
 - session timeouts and limits: `ENS_SESSION_*`
 - certificate-only sign-in: `PASSWORD_LOGIN_ENABLED=false`
-- administrators: `ADMIN_USERS`, `ADMIN_GROUPS`
+- administrators: `ADMIN_USERS`, `ADMIN_GROUPS` (or each directory's `PORTAL_DIRECTORIES_<n>_ADMINUSERS` /
+  `_ADMINGROUPS`)
+- the directories and their servers: `LDAP_URL` (several servers for failover) or `PORTAL_DIRECTORIES_<n>_*`
 
 See [Configuration](configuration.md).

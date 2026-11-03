@@ -45,6 +45,12 @@ curl -X POST -H "Authorization: Bearer $DSP_TOKEN" -H "Content-Type: application
 Member changes are value-level adds and deletes, never a replace of the list (see
 [Import and export → Bulk membership](import-export.md#bulk-membership)).
 
+From the next release each directory in `GET /api/v1/directories` (and in `directory` of
+`GET /api/v1/directories/{id}`) also has `directory`: the id of the LDAP directory its entries are in
+(`default` with one directory; see [Configuration → Several directories](configuration.md#several-directories)).
+A token acts as its creator in the directory the creator signed in to. Additive: clients that ignore
+unknown fields need no change.
+
 ### API tokens
 
 *Administration → Integrations → API tokens*
@@ -125,7 +131,7 @@ curl -b jar https://portal.example.com/api/definitions
 |---|---|---|
 | GET | `/api/health` | Liveness, kept for existing monitoring: `{"ok": true}` |
 | GET | `/api/v1/openapi`, `/api/v1/openapi.yaml` | The integration API's OpenAPI document |
-| GET | `/api/info` | `mode`, `connected` (whether the directory answers), `version`, `auth` (`password`, `x509`, `x509AutoLogin`, and `sso`: a list of `{id, label, url}` for each single sign-on button), `loginHint`, `banner`, and `consent` (the consent banner's `title` and `text`, or null). `baseDn` only for signed-in users; `ldapUrl` and `error` only for administrators |
+| GET | `/api/info` | `mode`, `connected` (whether the directory answers), `version`, `auth` (`password`, `x509`, `x509AutoLogin`, and `sso`: a list of `{id, label, url}` for each single sign-on button; from the next release `directories`, a list of `{id, name}` when more than one directory is enabled, else absent), `loginHint`, `banner`, and `consent` (the consent banner's `title` and `text`, or null). `baseDn` (of the user's directory) only for signed-in users; `ldapUrl` (the first directory's first server) and `error` only for administrators. With several directories `connected` is the first directory's |
 | GET | `/livez`, `/readyz` | Liveness and readiness probes on the API's own port. Not published by the web tier |
 | GET | `/actuator/health`, `/actuator/health/liveness`, `/actuator/health/readiness` | Spring Boot's probes (on the management port when `MANAGEMENT_SERVER_PORT` is set). Details only for administrators. Not published by the web tier |
 | GET | `/actuator/prometheus` | Prometheus metrics, on the management port only |
@@ -135,7 +141,7 @@ curl -b jar https://portal.example.com/api/definitions
 | Method | Path | Body / params | Description |
 |---|---|---|---|
 | POST | `/api/auth/consent` | — | Acknowledge the notice-and-consent banner for this browser session. Returns `{"consentRequired": false}`. Reachable without signing in |
-| POST | `/api/auth/login` | `{"username", "password"}` | Password sign-in. Returns `{"user": SessionUser}`. 401 for bad credentials, 429 when throttled, 403 when password sign-in is disabled, 403 `consent_required` when the consent banner has not been acknowledged |
+| POST | `/api/auth/login` | `{"username", "password"}`; next release: optional `"directory"` (an id from `/api/info`; none: the first directory; an unknown or disabled one: 400) | Password sign-in. Returns `{"user": SessionUser}`. 401 for bad credentials, 429 when throttled, 403 when password sign-in is disabled, 403 `consent_required` when the consent banner has not been acknowledged |
 | POST | `/api/auth/x509` | — | Sign in with the presented client certificate. 403 `consent_required` as above |
 | POST | `/api/auth/logout` | — | Sign out and invalidate the session. Returns `{"ok": true, "consentRequired": ...}`: whether the banner must be acknowledged again before the next sign-in. From the next release, when signing out at the identity provider applies (`SSO_OIDC_PROVIDER_LOGOUT`, `SSO_SAML_SINGLE_LOGOUT`), also `redirect`: the address the web client goes to next. See [Single sign-on → Signing out](single-sign-on.md#signing-out) |
 | GET | `/api/auth/me` | — | `{"user": SessionUser or null, "consentRequired": ...}`. With X.509 auto-login enabled, it may sign the user in (only once the banner, if enabled, has been acknowledged), or return `certificateError` |
@@ -145,7 +151,8 @@ curl -b jar https://portal.example.com/api/definitions
 | GET | `/api/auth/sso/saml/metadata` | — | This service provider's SAML metadata, for the identity provider |
 
 `SessionUser` contains `username`, `dn`, `displayName`, `mail`, `groups`, `isAdmin`, `authMethod`
-(`password`, `x509`, `oidc` or `saml`) and `certificateSubject` (certificate sign-ins only). See
+(`password`, `x509`, `oidc` or `saml`) and `certificateSubject` (certificate sign-ins only). From
+the next release also `directory`: the id of the LDAP directory the user signed in to. See
 [Single sign-on](single-sign-on.md).
 
 ## Directories and entries
@@ -207,8 +214,8 @@ See [Import and export](import-export.md).
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/admin/schema` | Merged schema (server + custom) |
-| POST | `/api/admin/schema/refresh` | Pull the schema from the directory |
+| GET | `/api/admin/schema` | Merged schema (server + custom). Next release: `directory` (an id; none: the first directory) chooses whose server schema |
+| POST | `/api/admin/schema/refresh` | Pull the schema from the directory (next release: `directory` as above) |
 | POST | `/api/admin/schema/import` | `{"text"}` (≤ 2,000,000 characters): import schema definitions |
 | GET | `/api/admin/schema/export` | Custom definitions as a `.schema` file |
 | PUT | `/api/admin/schema/attribute-types` | `{"definition", "originalOid"}`: save a custom attribute type |
@@ -226,27 +233,28 @@ See [Import and export](import-export.md).
 | PUT | `/api/admin/forms/{id}` | Update; returns `{"form", "warnings"}` |
 | DELETE | `/api/admin/forms/{id}` | Delete (409 while a definition uses it) |
 | POST | `/api/admin/forms/lint` | Check a form without saving: `{"errors", "warnings"}` |
-| POST | `/api/admin/forms/preview-options` | `{"source", "q"}`: **Test search** for a directory-search drop-down (options, truncated, filter, duration, error) |
+| POST | `/api/admin/forms/preview-options` | `{"source", "q"}` (next release: and `"directory"`): **Test search** for a directory-search drop-down (options, truncated, filter, duration, error) |
 
 ### Directory definitions and directory tools
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/admin/definitions` | List definitions |
-| POST | `/api/admin/definitions` | Create |
+| GET | `/api/admin/definitions` | List definitions (next release: each with `directory`) |
+| POST | `/api/admin/definitions` | Create. Next release: optional `directory` (none: the first directory; unknown: 400; not enabled by the license: 403) |
 | PUT | `/api/admin/definitions/{id}` | Update |
 | DELETE | `/api/admin/definitions/{id}` | Delete (also removes its grants) |
-| POST | `/api/admin/preview` | `{"baseDn", "scope": "base|one|sub", "filter", "attributes"}`: **Test namespace** |
-| GET | `/api/admin/browse` | `base`: child entries for the DN browser |
+| POST | `/api/admin/preview` | `{"baseDn", "scope": "base|one|sub", "filter", "attributes"}` (next release: and `"directory"`): **Test namespace** |
+| GET | `/api/admin/browse` | `base` (next release: and `directory`): child entries for the DN browser |
+| GET | `/api/admin/directories` | Next release. The configured LDAP directories: `{"directories": [{id, name, primary, servers, serverSelection, currentServer, reachable, error, enabled, baseDn, x509, sso}], "multiDirectoryLicensed", "notice"}`. `health=false` skips asking each directory whether it answers. Never a password |
 
 ### Permissions
 
 | Method | Path | Description |
 |---|---|---|
 | GET | `/api/admin/grants` | `definitionId` (optional): list grants |
-| POST | `/api/admin/grants` | `{"definitionId", "subjectType": "user|group", "subject", "subjectLabel", "access": "read|write"}`: create or replace |
+| POST | `/api/admin/grants` | `{"definitionId", "subjectType": "user|group", "subject", "subjectLabel", "access": "read|write"}` (next release: and `"directory"`, the subject's; none: the definition's): create or replace |
 | DELETE | `/api/admin/grants/{id}` | Revoke |
-| GET | `/api/admin/subjects` | `q`, `type` (`user`/`group`): search users and groups (up to 25 users) |
+| GET | `/api/admin/subjects` | `q`, `type` (`user`/`group`), next release `directory`: search users and groups (up to 25 users) |
 
 ### Dashboards
 
