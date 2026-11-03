@@ -466,7 +466,7 @@ Nothing to do by hand: Flyway adds the tables above, and nothing existing change
 
 ### Upgrading to the next release
 
-New tables and columns (Flyway `V11` to `V14` and `V16` to `V19`; there is no `V15`), added at the
+New tables and columns (Flyway `V11` to `V14` and `V16` to `V20`; there is no `V15`), added at the
 first start, in that order. Sign-in keeps working for every installation that kept its settings;
 check the points below.
 
@@ -497,6 +497,7 @@ check the points below.
 | An *Early Leave* can carry the time the person leaves (optional; `leave_at_time`, `V19`) | Nothing to do. It is shown on calendars, on **Approvals**, in the person's notice e-mail, in the API's absences (`leaveAtTime`) and in the personal data export (`leaveAtTime`), and changes nothing else: an early leave still excuses nothing |
 | The user tables (Users, My Reports, the org chart's people) show a calendar status by its name (*Work From Home*, *Temporary Duty*) instead of its code (`WORK_FROM_HOME`, `TDY`) | Nothing to do: the people export's **Status today** column and the API keep the codes |
 | A lock at or after an *Early Leave*'s time of leaving is checked out at once, not after `check-out-after-minutes` | Tell managers. Audited as `record.auto-checked-out` |
+| An absence alert can be answered with any status that accounts for the day, Work From Home, Temporary Duty, Training and the other leave and work-elsewhere statuses included, listed by name in two groups; a status a manager, delegate or administrator records is their word on the day whatever it is (`recorded_by_decider`, `V20`) | Tell managers. Existing calendar days are read as before |
 | Request e-mails and `GET /api/v1/absences/requests` carry a late arrival's and an early leave's time | Update anything that reads the leave-request items (`loginByTime`, `leaveAtTime`) |
 | Audit events are added to the hash chain in the background (`V18`) | Nothing to do; a rolling update is safe. An audited action no longer waits for the one audit chain head row, so audited actions stop queuing behind each other. Each event is stored with its action as before, and joins the trail, the audit page, exports, the pull API and the outputs within about a second (`ENS_AUDIT_CHAIN_MILLIS`, see [Configuration](configuration.md#audit-trail)). Events already stored are untouched and verify as before. While old and new replicas run side by side, both add to the same chain under the same row lock, so it stays gapless. Each event's line goes to the stdout and audit file of the replica that chained it, not necessarily the one that recorded it (its `host` still names that one). A [rollback](availability-and-sizing.md#rolling-back-an-upgrade) restores the pre-upgrade backup, as for any release. If you instead start the previous release on this database, stop every replica of this one first (stopping chains what is waiting) and check that `SELECT count(*) FROM audit_pending` returns 0: the previous release does not read that table, so events left in it would stay out of the trail |
 

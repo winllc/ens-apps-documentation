@@ -236,7 +236,9 @@ are one of their delegates.
   [Administration](admin-guide.md#correcting-check-in-records).
 
 If you are the person's directory manager, one of their delegates or an admin, you can **record a
-status** for them: drag across days on their Event Calendar, choose the status and **Record**. It
+status** for them: drag across days on their Event Calendar, choose the status (grouped as on an
+absence alert: **Recorded by a manager**, **Leave and work elsewhere**, then **Normal, arrival and
+leaving**) and **Record**. It
 takes effect at once, without approval, and you can record any status, including *Absent*,
 *Absent Unexcused* and *Unscheduled Leave*. A *Late Arrival* you record for someone else has no
 latest time and no limit on the number of days. With *Late Arrival* you enter the time they are
@@ -505,8 +507,18 @@ day, while nobody has answered the alert.
 **Mark All Read** in the bell marks your alerts read and clears the red dot. It answers nothing: the
 alerts stay in the bell and under **Awaiting your response** on Home until someone responds.
 
-The notification page shows the summary and a **Status** list with these choices:
-`UNSCHEDULED_LEAVE`, `ABSENT_EXCUSED`, `ABSENT_UNEXCUSED` and `ABSENT`. Your answer is recorded:
+The notification page shows the summary and a **Status** list of every status that accounts for
+the day, by name, in two groups:
+
+- **Recorded by a manager**: *Unscheduled Leave*, *Absent Excused*, *Absent Unexcused* and
+  *Absent*;
+- **Leave and work elsewhere**: *Out of Office*, *Work From Home*, *Temporary Duty*, *Training* and
+  *Scheduled Leave*.
+
+*normal*, *Late Arrival* and *Early Leave* are not offered: they leave the person unaccounted for.
+A leave or work-elsewhere answer is your word on the day, recorded at once: it is not sent for
+approval (you are the approver), and the person's own status for that day does not replace it.
+Your answer is recorded:
 
 - on your notification and on every other manager's copy of the same alert, so each copy shows
   who responded and when, and

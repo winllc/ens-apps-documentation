@@ -196,8 +196,14 @@ tries again. An alert whose email the mail server did not take is emailed again 
 same day, while nobody has answered it. The job's count of alerts sent (in its log line and its
 `job.completed` audit event) is the number of people alerted about.
 
-**Responses.** A recipient opens the alert and picks `UNSCHEDULED_LEAVE`, `ABSENT_EXCUSED`,
-`ABSENT_UNEXCUSED` or `ABSENT`. The response is copied to every recipient's copy of the alert and
+**Responses.** A recipient opens the alert and picks any status that accounts for the day, by name:
+under **Recorded by a manager**, *Unscheduled Leave*, *Absent Excused*, *Absent Unexcused* or
+*Absent*; under **Leave and work elsewhere**, *Out of Office*, *Work From Home*, *Temporary Duty*,
+*Training* or *Scheduled Leave*. *normal*, *Late Arrival* and *Early Leave* are refused (`400`):
+they leave the person unaccounted for. A leave or work-elsewhere answer is recorded as the
+responder's word on the day (the API's `source` `manager`; the person's own status that day does not
+replace it), never as a request needing approval, even when the status is in
+`APPLICATION_EVENTS_REQUESTSTATUSES`. The response is copied to every recipient's copy of the alert and
 stored as the person's status for the day the alert was about: their own date when it was raised
 (the alert about a Tokyo person's Monday is raised on New York's Sunday evening). An answer that
 does not excuse the day (`UNSCHEDULED_LEAVE`, `ABSENT_UNEXCUSED` or `ABSENT`) is e-mailed to the
