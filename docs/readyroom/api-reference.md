@@ -26,7 +26,7 @@ into your API client or code generator.
 | `GET /api/v1/people?q=&location=&organization=&page=&size=` | `people:read` | Tracked people and their status today |
 | `GET /api/v1/attendance/events?from=&to=&dn=&page=&size=` | `attendance:read` | Check-ins, locks, unlocks and check-outs, oldest first |
 | `GET /api/v1/absences?from=&to=&dn=&page=&size=` | `absences:read` | Days with leave, telework, an absence or another status: `status` (the code, for example `TDY` for Temporary Duty or `TRAINING`), `statusName`, `loginByTime` (a Late Arrival's expected arrival) and `leaveAtTime` (an Early Leave's time of leaving, when one was given) |
-| `GET /api/v1/absences/requests?from=&to=&dn=&state=&page=&size=` | `absences:read` | Leave requests covering the range, with their decision (no notes) |
+| `GET /api/v1/absences/requests?from=&to=&dn=&state=&page=&size=` | `absences:read` | Leave requests covering the range, with their decision (no notes), and the time of a Late Arrival (`loginByTime`) or an Early Leave (`leaveAtTime`) |
 
 - Dates are `YYYY-MM-DD`, both ends included, at most `APPLICATION_API_MAXRANGEDAYS` (366) days.
 - Pages count from 1 and hold up to `APPLICATION_API_MAXPAGESIZE` (500) items.

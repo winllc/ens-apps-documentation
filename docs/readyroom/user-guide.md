@@ -50,7 +50,7 @@ rather than cut short. Nothing was changed: try again in a few seconds.
 |---|---|
 | `IN` (green) | Checked in, and the latest event was a sign-in or an unlock. |
 | `AWAY` (purple) | The latest event was a screen lock. |
-| `OUT` (blue) | Checked out: you signed out, or ReadyRoom checked you out after the screen had been locked for too long. |
+| `OUT` (blue) | Checked out: you signed out, or ReadyRoom checked you out after the screen had been locked for too long (or, on a day of *Early Leave* with a time, as soon as you locked the screen at or after that time). |
 | `NONE` (grey) | Nothing recorded for the day. |
 
 If a status is on your calendar for the day (anything other than *Standard*), it is shown
@@ -364,7 +364,7 @@ Drag across one or more days, choose a status, then choose **Submit**. With the 
 | Option | Stored as | What happens | Excuses an absence alert? |
 |---|---|---|---|
 | normal | `STANDARD` | Set at once. It clears a status you set earlier. Not for a day already past: ask your manager to correct it | No |
-| Early Leave | `EARLY_LEAVE` | Set at once for today and later days; for days that include an earlier one, sent as a request. You can enter the time you leave (**Leaving at**, optional): it is shown with the status and changes nothing else | No |
+| Early Leave | `EARLY_LEAVE` | Set at once for today and later days; for days that include an earlier one, sent as a request. You can enter the time you leave (**Leaving at**, optional): it is shown with the status, and a screen lock at or after that time checks you out for the day at once instead of after the usual time locked (see below) | No |
 | Late Arrival | `LATE_ARRIVAL` | Set at once for today and later days; the time you enter becomes your expected time that day. For days that include an earlier one, sent as a request. At the latest 12:00, and at most 31 days at a time: for a later time ask your manager to record it; for a lasting change set your **Login Time** | No |
 | Out of Office (needs approval) | `OUT_OF_OFFICE` | Sent as a request | Yes, once approved |
 | Work From Home (needs approval) | `WORK_FROM_HOME` | Sent as a request | Yes, once approved |
@@ -377,6 +377,12 @@ Which statuses need approval, and the late arrival limits, are set by your admin
 yours may differ. For one
 that needs approval, you can add a **note for your manager** (up to 500 characters); it is kept
 with the request and shown to whoever decides it. Follow it under **Approvals**.
+
+**Leaving early at a time.** When your day is an *Early Leave* with a leaving time (in your own
+time zone and day), locking your screen at or after that time means you have left: ReadyRoom checks
+you out on its next run, a minute or so later, instead of after the usual time locked (240 minutes
+by default). The check-out is an automatic one, timed at your lock. Locking before your leaving
+time, or an early leave without a time, works as before.
 
 **Days already past.** "Today" is your own today, in your time zone from your day start; the
 **System Date** does not move it. A *Late Arrival* or *Early Leave* for a selection that includes
@@ -442,7 +448,8 @@ which wins over your own; between two of the same kind, the latest wins.
 **Email.** When a mail server is configured, a new request goes to the person's manager and
 delegates (*Approval needed: &lt;status&gt; for &lt;name&gt;*), a decision to the person who asked
 (*Your &lt;status&gt; request was approved* or *rejected*), and a cancellation to the approvers
-(*Cancelled: ...*). The emails carry the status and dates, never the notes. A status your manager, a
+(*Cancelled: ...*). The emails carry the status, with a late arrival's or early leave's time (*Late Arrival
+by 10:30*, *Early Leave at 15:00*), and the dates, never the notes. A status your manager, a
 delegate or an administrator records for you can also be e-mailed to you; see
 [E-mails about you](#e-mails-about-you).
 

@@ -182,7 +182,7 @@ day: with a day start of 18:00, 02:00 is the small hours of the same shift.
 
 | Property | Packaged | Built-in | Description |
 |---|---|---|---|
-| `application.check-out-after-minutes` (`checkOutAfterMinutes`) | `240` | `240` | How long someone's latest event can be a screen lock before they are automatically checked out, also when that runs past midnight (a lock after about 20:00 with `240`). |
+| `application.check-out-after-minutes` (`checkOutAfterMinutes`) | `240` | `240` | How long someone's latest event can be a screen lock before they are automatically checked out, also when that runs past midnight (a lock after about 20:00 with `240`). On a day of *Early Leave* with a time of leaving, a lock at or after that time is checked out on the next run instead. |
 | `application.extra-time-before-absent-notification-minutes` | – | `60` | Grace period after a person's expected login time before an absence alert is raised. The help dialog shows this value. |
 | `application.inactive-cron.fixed-rate` | `60000` | `1800000` | Milliseconds between auto check-out runs. It is used as a fixed **delay** after each run finishes, so runs never overlap. |
 | `application.inactive-cron.initial-delay` | `60000` | `1800000` | Delay before the first auto check-out run, in ms. |

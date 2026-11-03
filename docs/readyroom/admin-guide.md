@@ -325,9 +325,17 @@ From there you can:
   morning. It cannot be in the future. The commonest case is a missed sign-out. The added record
   counts like any other and is labelled *Added by an administrator* wherever records are listed.
 
+!!! note "An early leave's time and the automatic check-out"
+    On a day whose one status is *Early Leave* with a time of leaving, a screen lock at or after
+    that time (in the person's zone and day) is checked out on the job's next run, not after
+    `check-out-after-minutes`. It is the same automatic check-out, timed a second after the lock,
+    and is audited as `record.auto-checked-out` with the reason (*early leave at 15:00*). A status a
+    manager recorded over the early leave decides instead. Locks before the time, and early leaves
+    without one, wait for the usual limit.
+
 !!! note "Voiding an automatic check-out"
     The automatic check-out job leaves alone a screen lock whose automatic check-out an
-    administrator voided: it does not write it again. The person's day stays open until a later
+    administrator voided: it does not write it again, early leave or not. The person's day stays open until a later
     record of theirs ends it, or you add the check-out they missed.
 
 **Rules.**
