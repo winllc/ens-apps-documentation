@@ -121,8 +121,9 @@ Certificate sign-in (`POST /api/auth/x509`, or automatically through `GET /api/a
 steps 1–4 with certificate validation and mapping. See [Security](security.md#x509-client-certificates).
 Single sign-on replaces them with the identity provider's answer, mapped to exactly one entry by
 `SSO_*_USER_FILTER`; see [Single sign-on](single-sign-on.md). With several directories, certificate
-sign-in and single sign-on search every enabled directory that takes them (`X509`, `SSO`), and
-exactly one entry across all of them must match.
+sign-in and single sign-on search every enabled directory that takes them (`X509`, `SSO`) in
+configured order: the first directory with a match wins (and must hold exactly one), and later
+directories that also match are logged and recorded in `details.alsoMatched`.
 
 A call to the integration API (`/api/v1`) does not sign in: the API token is checked on every call,
 and the call runs as the token's creator, with their rights read again from the directory. See

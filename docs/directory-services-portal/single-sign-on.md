@@ -10,6 +10,11 @@ The login page shows one button per configured provider.
 The provider asserts an identity: an OIDC claim, or a SAML attribute or the NameID.
 `SSO_OIDC_USER_FILTER` or `SSO_SAML_USER_FILTER`, with `{{value}}` replaced by that identity
 (filter-escaped), must match **exactly one** directory entry; none or several refuses the sign-in.
+From the next release, with [several directories](configuration.md#several-directories), every
+directory whose `SSO` setting is on is searched in configured order (each with its
+`SSOUSERFILTER`, if set): the first directory with a match wins and must hold exactly one entry.
+If later directories also hold a match, the user signs in to the first, the API logs a WARN naming
+the others, and the sign-in's audit record lists them in `details.alsoMatched`.
 
 Groups, administrator status (`ADMIN_USERS`, `ADMIN_GROUPS`) and permissions then come from the
 directory, exactly as for a password sign-in, and are read again every `GROUP_REFRESH_INTERVAL`. The

@@ -182,8 +182,11 @@ What belongs to which directory:
   administrator picks another). **Administrators** come from each directory's `ADMINUSERS` /
   `ADMINGROUPS` and administer the whole portal.
 - **Certificate sign-in and single sign-on** search every enabled directory whose `X509` / `SSO`
-  setting is on; exactly one entry across all of them must match, so an account found in two
-  directories is refused. Turn a directory's setting off, or narrow its filter, to resolve it.
+  setting is on, in configured order. The first directory with a matching account wins and must
+  hold exactly one (two there refuse the sign-in). If later directories also match, the user signs
+  in to the first; the API logs a WARN naming the others and the sign-in's audit record lists them
+  in `details.alsoMatched`. Reorder the directories, turn a directory's setting off, or narrow its
+  filter to change which one wins.
 - Forms, the custom schema, dashboards and analyses are shared; each directory's server schema is
   read and cached separately.
 

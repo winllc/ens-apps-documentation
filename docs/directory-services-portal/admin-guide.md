@@ -440,6 +440,12 @@ error; **Check again** asks again), and whether the license enables it. Without 
 `multi-directory` only the first directory is enabled, and a notice says so. The same is available
 as `GET /api/admin/directories`.
 
+The order of the directories matters for certificate sign-in and single sign-on: an account found in
+several directories signs in to the first in this list (two accounts in that directory still refuse
+the sign-in). Such sign-ins are logged at WARN, and their `auth.login` audit record names the other
+directories in `alsoMatched`: search the audit log for it to find accounts that exist in more than
+one directory.
+
 ## Site-wide settings
 
 Some settings are environment variables rather than admin-UI settings, so an operator changes them:
