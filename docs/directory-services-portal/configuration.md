@@ -26,7 +26,9 @@ Where to set them:
 |---|---|---|---|
 | `DIRECTORY_MODE` | `portal.directory-mode` | `memory` | `memory` starts the embedded demo LDAP server; `ldap` connects to `LDAP_URL`. From the next release `memory` starts only with `DEMO_MODE=true` or an API that listens on a loopback address only (`SERVER_ADDRESS=127.0.0.1`); otherwise the API refuses to start and logs why at ERROR. A bare jar or image run with the default must set `DIRECTORY_MODE=ldap` or `DEMO_MODE=true` |
 | `DEMO_MODE` (next release) | `portal.demo-mode` | `false` | `true` says this installation is a demo: the built-in directory's credentials (`admin`/`password`) are public. Required for `DIRECTORY_MODE=memory`. `install.sh --demo`, `docker-compose.demo.yml` and the chart with `directory.mode: memory` set it; the package's `env.template` has `DEMO_MODE=false` |
-| `LDAP_URL` | `portal.ldap.url` | `ldap://localhost:389` | `ldap://` or `ldaps://` URL of the directory server |
+| `LDAP_URL` | `portal.ldap.url` | `ldap://localhost:389` | `ldap://` or `ldaps://` URL of the directory server. From the next release, several servers of the same directory (replicas), separated by commas or spaces: they are tried in order, the first that answers is used, and the pool goes back to the first once it answers again. Failover needs no license feature |
+| `LDAP_SERVER_SELECTION` (next release) | `portal.ldap.server-selection` | `failover` | `failover` (the servers of `LDAP_URL` in order) or `round-robin` (in turn; every URL must then use the same scheme) |
+| `DIRECTORY_NAME` (next release) | `portal.directory-name` | `Directory` | The directory's display name; its id is `default`. See [Several directories](#several-directories) |
 | `LDAP_STARTTLS` | `portal.ldap.start-tls` | `false` | Upgrade plain `ldap://` connections with StartTLS |
 | `LDAP_TLS_REJECT_UNAUTHORIZED` | `portal.ldap.tls-reject-unauthorized` | `true` | Verify the server certificate against the JVM trust store and check the host name. `false` trusts any certificate (testing only) |
 | `LDAP_TIMEOUT_MS` | `portal.ldap.timeout-ms` | `10000` | Connect and response timeout in milliseconds |
@@ -113,6 +115,84 @@ bind.
     ```
     This is an illustration built from the documented placeholders. The portal also reads
     `memberOf` from the user entry.
+
+## Several directories (next release) { #several-directories }
+
+One portal can serve several LDAP directories (several forests, a directory per enclave). It needs
+the license feature `multi-directory` (Enterprise); without it only the first directory is used and
+the others are listed as disabled. The older `LDAP_*` settings above still work unchanged: they
+describe one directory, with the id `default`.
+
+Each directory is a numbered block of environment variables, `PORTAL_DIRECTORIES_<n>_<SETTING>`
+with `n` from 0 (or the list `portal.directories` in a Spring configuration file). The first is
+the **primary** directory. When the list is set, `LDAP_URL`, `LDAP_BIND_*`, `LDAP_BASE_DN`, the user
+and group settings and `ADMIN_USERS` / `ADMIN_GROUPS` are not used. Settings a block leaves out take
+the same defaults as the `LDAP_*` settings.
+
+| Setting (`PORTAL_DIRECTORIES_0_...`) | Property (`portal.directories[0].`) | Default | Description |
+|---|---|---|---|
+| `ID` | `id` | *(required)* | 1-32 lower-case letters, digits, `-` and `_`, unique. It appears in URLs, audit records and webhook payloads, so don't change it once used. `default` is the id stored on everything saved before; when no directory has that id it stands for the first |
+| `NAME` | `name` | the id | Shown on the login page and to administrators |
+| `URLS` | `urls` | *(required)* | One or more `ldap://` / `ldaps://` URLs of the same directory, separated by commas or spaces (a YAML list in a file) |
+| `SERVERSELECTION` | `server-selection` | `failover` | `failover` or `round-robin` |
+| `BINDDN` | `bind-dn` | *(empty)* | Service account |
+| `BINDPASSWORD`, `BINDPASSWORDFILE` | `bind-password`, `bind-password-file` | *(empty)* | Its password, or (preferred) a file holding it |
+| `STARTTLS`, `TLSREJECTUNAUTHORIZED` | `start-tls`, `tls-reject-unauthorized` | `false`, `true` | As `LDAP_STARTTLS`, `LDAP_TLS_REJECT_UNAUTHORIZED` |
+| `TIMEOUTMS`, `POOLSIZE` | `timeout-ms`, `pool-size` | `10000`, `10` | As `LDAP_TIMEOUT_MS`, `LDAP_POOL_SIZE`; each directory has its own pool |
+| `BASEDN` | `base-dn` | `dc=example,dc=com` | As `LDAP_BASE_DN` |
+| `USERSEARCHBASE`, `USERFILTER`, `USERNAMEATTRIBUTE` | `user-search-base`, `user-filter`, `username-attribute` | as the `LDAP_*` defaults | How users are found at sign-in |
+| `GROUPSEARCHBASE`, `GROUPFILTER` | `group-search-base`, `group-filter` | as the `LDAP_*` defaults | How their groups are found |
+| `ADMINUSERS`, `ADMINGROUPS` | `admin-users`, `admin-groups` | *(empty)* | This directory's users and groups who administer the (whole) portal, `;` separated |
+| `X509`, `X509USERFILTER` | `x509`, `x509-user-filter` | `true`, *(`X509_USER_FILTER`)* | Whether certificate sign-in looks for users here, and with which filter |
+| `SSO`, `SSOUSERFILTER` | `sso`, `sso-user-filter` | `true`, *(the provider's)* | Whether single sign-on looks for users here, and with which filter (must contain `{{value}}`) |
+
+```ini
+PORTAL_DIRECTORIES_0_ID=default
+PORTAL_DIRECTORIES_0_NAME=Corporate
+PORTAL_DIRECTORIES_0_URLS=ldaps://dc1.corp.example.com:636,ldaps://dc2.corp.example.com:636
+PORTAL_DIRECTORIES_0_BINDDN=CN=svc-portal,OU=Service,DC=corp,DC=example,DC=com
+PORTAL_DIRECTORIES_0_BINDPASSWORDFILE=/run/secrets/corp-bind-password
+PORTAL_DIRECTORIES_0_BASEDN=DC=corp,DC=example,DC=com
+PORTAL_DIRECTORIES_0_USERFILTER=(&(objectClass=user)(sAMAccountName={{username}}))
+PORTAL_DIRECTORIES_0_USERNAMEATTRIBUTE=sAMAccountName
+PORTAL_DIRECTORIES_0_ADMINGROUPS=CN=Portal Admins,OU=Groups,DC=corp,DC=example,DC=com
+PORTAL_DIRECTORIES_1_ID=enclave-b
+PORTAL_DIRECTORIES_1_NAME=Enclave B
+PORTAL_DIRECTORIES_1_URLS=ldaps://ldap1.b.example.com ldaps://ldap2.b.example.com
+PORTAL_DIRECTORIES_1_BINDDN=cn=portal,ou=system,o=enclave-b
+PORTAL_DIRECTORIES_1_BINDPASSWORDFILE=/run/secrets/enclave-b-bind-password
+PORTAL_DIRECTORIES_1_BASEDN=o=enclave-b
+PORTAL_DIRECTORIES_1_X509=false
+```
+
+The API checks the list at startup and **refuses to start** when an id is missing, malformed or used
+twice, a directory has no URL, a URL is not `ldap://` or `ldaps://`, round robin mixes schemes, a
+filter doesn't parse or a password file can't be read. The message names the setting, never a
+password. It logs each directory (id, name, servers, failover or round robin) at startup, and a WARN
+for each directory the license leaves disabled.
+
+What belongs to which directory:
+
+- Every **directory definition** belongs to one directory, chosen in the definition editor; all
+  reading and writing through it happens there.
+- A **signed-in user** is a directory plus a DN: the same user name in two directories is two
+  people. With several enabled directories the login page asks which one; see
+  [User guide → Signing in](user-guide.md#signing-in).
+- **Grants** name the directory of the user or group they grant to (the definition's unless the
+  administrator picks another). **Administrators** come from each directory's `ADMINUSERS` /
+  `ADMINGROUPS` and administer the whole portal.
+- **Certificate sign-in and single sign-on** search every enabled directory whose `X509` / `SSO`
+  setting is on, in configured order. The first directory with a matching account wins and must
+  hold exactly one (two there refuse the sign-in). If later directories also match, the user signs
+  in to the first; the API logs a WARN naming the others and the sign-in's audit record lists them
+  in `details.alsoMatched`. Reorder the directories, turn a directory's setting off, or narrow its
+  filter to change which one wins.
+- Forms, the custom schema, dashboards and analyses are shared; each directory's server schema is
+  read and cached separately.
+
+**Moving from `LDAP_*` to the list:** copy the settings into block 0 and give it the id `default`
+(any id works: `default` then stands for the first directory). Existing definitions and grants keep
+working.
 
 ## Server and proxy
 
@@ -527,12 +607,13 @@ the UI, and it is persisted as one JSON document: `$DATA_DIR/portal-config.json`
 
 | Key | Content |
 |---|---|
-| `version` | Store format version (`1`) |
+| `version` | Store format version: `2` from the next release (definitions and grants name their directory; a version 1 document is upgraded at the first start, giving them `default`, and written back once). Back up `DATA_DIR`, or the database, before upgrading if you may roll back |
 | `customSchema` | Attribute types and object classes defined or overridden in the portal |
-| `schemaCache` | The last schema pulled from the directory |
+| `schemaCache` | The last schema pulled from the (primary) directory |
+| `schemaCaches` | Next release: the last schema pulled from each other directory, by id |
 | `forms` | Form definitions |
-| `definitions` | Directory definitions |
-| `grants` | Permission grants |
+| `definitions` | Directory definitions, each with its `directory` (next release) |
+| `grants` | Permission grants, each with the `directory` of its subject (next release) |
 | `dashboards` | Metric dashboards |
 | `analyses` | Saved analyses, including a summary of their last run |
 

@@ -23,12 +23,18 @@ can't sign in until you do. You see it again before each sign-in.
       it), further attempts from your address are refused for that username for a while ("Too many
       failed login attempts. Try again later.").
     - If the portal cannot reach the directory, the page shows **Directory unreachable**.
+    - From the next release, a portal that serves **several directories** shows a **Directory**
+      list above the username: choose the directory that holds your account (for example your
+      forest or enclave). The browser remembers your choice for next time. With one directory there
+      is no list. The same username in two directories is two different accounts, each with its own
+      password and access.
 
 === "Single sign-on"
 
     If your organisation has set it up, the login page shows a button such as **Sign in with single
     sign-on**. You sign in at your organisation's identity provider and come back signed in, as long
-    as the directory holds exactly one account for you. **Sign out** ends your portal session only,
+    as the directory holds exactly one account for you (with several directories, you sign in to
+    the first directory, in the order your organisation set, that holds an account for you). **Sign out** ends your portal session only,
     not your session at the identity provider, unless your organisation has set the portal to sign
     you out there too (from the next release); you then come back to the sign-in page.
 

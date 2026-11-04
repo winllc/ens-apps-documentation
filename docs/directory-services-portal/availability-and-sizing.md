@@ -17,7 +17,7 @@ Backups themselves are in the [Operator guide](operator-guide.md#data-and-backup
 |---|---|---|
 | Metric scans and analyses | The only work that reads many entries at once. Each source reads up to `METRICS_MAX_ENTRIES` entries (100,000 by default), streamed from LDAP in pages of 500, and analyses keep up to `ANALYSIS_MAX_ISSUES` findings. Several run at once: `JOBS_METRICS_THREADS` (4) plus `JOBS_ANALYSIS_THREADS` (2). Heap is what limits this | `METRICS_MAX_ENTRIES`, `ANALYSIS_MAX_ISSUES`, `JOBS_*` |
 | Finished tasks kept in memory | Results of finished tasks stay in memory for `JOBS_RETAIN_MINUTES` (24 hours), up to 500 tasks. With the shared database, progress and results are shared through it | `JOBS_RETAIN_MINUTES`, `PORTAL_JOBS_MAX_JOBS` |
-| LDAP connections | Every request and every running scan takes a connection from the service account's pool for its duration. Each API instance has its own pool | `LDAP_POOL_SIZE` (10) |
+| LDAP connections | Every request and every running scan takes a connection from the service account's pool for its duration. Each API instance has its own pool (with several directories, one per directory) | `LDAP_POOL_SIZE` (10) |
 | Interactive users | Browsing and editing are single LDAP searches and writes; sessions are small, in memory or in the shared database | `LDAP_POOL_SIZE`, CPU |
 | Audit store | Grows with every sign-in, change and refused request, and is kept until `ENS_AUDIT_RETENTION_DAYS` removes it. In the data volume, or in the shared database | `ENS_AUDIT_RETENTION_DAYS`, data volume or database size |
 | Directory size | Matters only through the scans above. Browsing pages through search results; it does not load whole directories | `METRICS_MAX_ENTRIES` |
@@ -53,6 +53,25 @@ How to adjust:
 The web tier is stateless and can always have several replicas (Helm: `web.replicaCount`). The API
 runs as one instance unless it has a shared PostgreSQL database. For the suite-wide picture, see
 [Sizing, availability and recovery](../availability-and-sizing.md).
+
+### The directory: failover (next release)
+
+The portal can list several servers of one directory (replicas holding the same data):
+`LDAP_URL=ldaps://dc1.example.com:636,ldaps://dc2.example.com:636` (Helm: `ldap.url` as a list). A
+new connection goes to the first server that answers, in order; connections to a later server are
+closed after 15 minutes, so the pool goes back to the first once it answers again.
+`LDAP_SERVER_SELECTION=round-robin` spreads connections over all of them instead. A user's
+password check fails over the same way. Failover is part of every edition (no license feature).
+Each API instance has its own pool per directory, so `LDAP_POOL_SIZE` applies per instance and per
+directory.
+
+With [several directories](configuration.md#several-directories) (license feature
+`multi-directory`), each has its own servers and failover. One directory being down doesn't take
+the portal down: the readiness check (`ldap`) stays UP while at least one directory answers, with
+`details.degraded: true` and each directory's status in `details.directories`; only that
+directory's definitions and users are affected. *Admin → LDAP directories* shows which server each
+directory is using and whether it answers. The readiness check is DOWN only when no directory
+answers (with one directory: when it doesn't).
 
 ### Without a shared database: one API instance
 

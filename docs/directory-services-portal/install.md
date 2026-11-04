@@ -443,7 +443,8 @@ same version. The chart's README lists every value. Run
 
 | Value | Purpose |
 |---|---|
-| `ldap.*`, `admin.*` | Directory connection, users and groups, administrators (the `LDAP_*` and `ADMIN_*` settings) |
+| `ldap.*`, `admin.*` | Directory connection, users and groups, administrators (the `LDAP_*` and `ADMIN_*` settings). Next release: `ldap.url` may be a list (or a string with commas or spaces) of the directory's servers, tried in order; `ldap.serverSelection` (`failover` or `round-robin`); `ldap.name` |
+| `directories` | Next release: several LDAP directories (license feature `multi-directory`), see below. When set, `ldap.*` (except `truststore`) and `admin.*` are not used |
 | `directory.mode` | `ldap`, or `memory` for the built-in demo directory (evaluation only) |
 | `server.session.*` | `idleTimeout` (`30m`), `adminIdleTimeout`, `absoluteTimeout` (`12h`), `maxPerUser` (`0`). The deprecated `server.sessionTtlMinutes`, when set, still wins over `idleTimeout` |
 | `server.groupRefreshInterval`, `server.login.*` | Group refresh (`5m`); `maxFailures` (`8`) and `lockoutWindow` (`15m`) for the sign-in lockout |
@@ -466,6 +467,42 @@ same version. The chart's README lists every value. Run
 Every setting from the Docker package's `env.template` has a value; the
 [Configuration](configuration.md) page describes what each one does. Anything else goes in
 `api.extraEnv`.
+
+#### Several directories (next release)
+
+Each entry of `directories` becomes a `PORTAL_DIRECTORIES_<n>_*` block (see
+[Configuration → Several directories](configuration.md#several-directories)); each bind password is
+mounted as a file at `/etc/dsp/directories/<id>/bind-password`, from the chart's Secret (inline
+`value`) or an existing Secret. The chart refuses a missing, malformed or repeated `id` and an entry
+without `urls`. The chart's `ci/multi-directory-values.yaml` is a complete example.
+
+```yaml
+directories:
+  - id: default            # keeps definitions made with the ldap.* settings
+    name: Corporate
+    urls: [ldaps://dc1.corp.example.com:636, ldaps://dc2.corp.example.com:636]
+    bindDn: CN=svc-portal,OU=Service,DC=corp,DC=example,DC=com
+    bindPassword:
+      existingSecret: corp-ldap
+      existingSecretKey: bind-password
+    baseDn: DC=corp,DC=example,DC=com
+    userFilter: (&(objectClass=user)(sAMAccountName={{username}}))
+    usernameAttribute: sAMAccountName
+    admin:
+      groups: [CN=Portal Admins,OU=Groups,DC=corp,DC=example,DC=com]
+  - id: enclave-b
+    name: Enclave B
+    urls: [ldaps://ldap1.b.example.com, ldaps://ldap2.b.example.com]
+    bindDn: cn=portal,ou=system,o=enclave-b
+    bindPassword:
+      existingSecret: enclave-b-ldap
+      existingSecretKey: bind-password
+    baseDn: o=enclave-b
+    x509: false            # certificate sign-in doesn't look for users here
+```
+
+With a NetworkPolicy, `networkPolicy.egress.ldap` must admit every directory's servers. One
+`ldap.truststore` serves every directory: include each directory's CA.
 
 ### 3. Secrets { #secrets }
 
@@ -814,7 +851,7 @@ For any installation that isn't a demo, set at least these values: in `.env` (Do
 | Setting | Helm value | Example |
 |---|---|---|
 | `DIRECTORY_MODE` | `directory.mode` | `ldap`. From the next release the API refuses to start with the default, `memory` (the built-in demo directory, whose administrator password is public), unless `DEMO_MODE=true` or it listens on loopback only |
-| `LDAP_URL` | `ldap.url` | `ldaps://ldap.example.com:636` |
+| `LDAP_URL` | `ldap.url` | `ldaps://ldap.example.com:636`; from the next release several servers of the directory, separated by commas or spaces (a list in Helm), tried in order |
 | `LDAP_BIND_DN` | `ldap.bindDn` | `cn=portal,ou=system,dc=example,dc=com` |
 | `LDAP_BIND_PASSWORD_FILE` or `LDAP_BIND_PASSWORD` | `ldap.bindPassword` | (a Secret, mounted as a file) |
 | `LDAP_BASE_DN` | `ldap.baseDn` | `dc=example,dc=com` |
@@ -824,7 +861,10 @@ For any installation that isn't a demo, set at least these values: in `.env` (Do
 | `ADMIN_GROUPS` | `admin.groups` | `cn=directory-admins,ou=groups,dc=example,dc=com` |
 | `ENS_COOKIE_SECURE` | `server.cookieSecure` | `true` whenever browsers use HTTPS |
 
-Separate several administrators with `;` (DNs contain commas); in Helm, use a list. For
+Separate several administrators with `;` (DNs contain commas); in Helm, use a list. Several
+directories in one portal (next release, license feature `multi-directory`) are configured with
+`PORTAL_DIRECTORIES_<n>_*` instead (Helm: `directories`); see
+[Configuration → Several directories](configuration.md#several-directories). For
 `ldaps://` with a private CA, see
 [Configuration → LDAPS with a private CA](configuration.md#ldaps-with-a-private-ca), or
 `ldap.truststore` in Helm. All settings are described in [Configuration](configuration.md).
