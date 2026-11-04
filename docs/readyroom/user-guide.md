@@ -227,9 +227,13 @@ are one of their delegates.
   records are not listed here; **Records for a day** shows them.
 - **Delegates**: the people who, besides their directory manager, receive their absence alerts,
   may answer them and approve their requests. Only admins change them.
-- **Event Calendar**: their statuses, their online periods ("Online: ..."), and organization events
+- **Event Calendar**: their statuses, their online periods, and organization events
   and holidays. A day whose records an administrator corrected is marked (*Records corrected:
-  ...*).
+  ...*). Each day they checked in has one online entry: *Online: 8 hrs, 51 mins* when the day has a
+  departure (a logoff, an automatic check-out after a lock, or, once the day is over, a final lock);
+  *Online since 08:02* for today while it is in progress, since a lock during the day is a break;
+  and *Online from 08:02 (no logoff recorded)* for a past day that ended without a logoff, such as a
+  PC shut down after it was unlocked. Reports and attendance count only days with a departure.
 - **Working days**: the days of the week they work and their start date. See
   [Working days](#working-days).
 - **Records for a day**: pick a day with the date box, or click it on the calendar. The card shows
