@@ -68,7 +68,7 @@ plugins:
   - search
 
 nav:
-  # Tab labels are kept short so all five tabs fit on one line; each
+  # Tab labels are kept short so all six tabs fit on one line; each
   # product's own pages carry its full name.
   - Overview:
       - index.md
@@ -150,3 +150,22 @@ nav:
           - Accessibility: rsa-operations-portal/accessibility.md
           - Sizing, availability and recovery: rsa-operations-portal/availability-and-sizing.md
           - Troubleshooting: rsa-operations-portal/troubleshooting.md
+  - syncd:
+      - syncd/index.md
+      - Install guide: syncd/install.md
+      - Configuration guide: syncd/configuration.md
+      - Operator guide: syncd/operator-guide.md
+      - Admin guide: syncd/admin-guide.md
+      - User guide: syncd/user-guide.md
+      - Additional guidance:
+          - Connectors: syncd/connectors.md
+          - Computed attributes and rules: syncd/rules.md
+          - Single sign-on: syncd/single-sign-on.md
+          - API reference: syncd/api-reference.md
+          - Webhooks: syncd/webhooks.md
+          - Architecture: syncd/architecture.md
+          - Security: syncd/security.md
+          - FIPS 140-3 and DISA STIG: syncd/fips-and-stig.md
+          - Accessibility: syncd/accessibility.md
+          - Sizing, availability and recovery: syncd/availability-and-sizing.md
+          - Troubleshooting: syncd/troubleshooting.md

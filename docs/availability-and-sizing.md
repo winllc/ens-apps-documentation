@@ -8,6 +8,7 @@ page has the details:
 - [Directory Services Portal](directory-services-portal/availability-and-sizing.md)
 - [ReadyRoom](readyroom/availability-and-sizing.md)
 - [RSA Operations Portal](rsa-operations-portal/availability-and-sizing.md)
+- [syncd](syncd/availability-and-sizing.md)
 
 ## Sizing
 
@@ -27,9 +28,14 @@ page has the details:
 With the charts' defaults the Java heap is 75% of the memory limit (`-XX:MaxRAMPercentage=75`), so
 raising the limit raises the heap. The product pages name the metrics to watch.
 
+**syncd** is the one application with measured figures, from its own benchmarks on a 4 vCPU host:
+the engine needs about 1.2 GiB of memory per million entities (twice that during the first full
+load) and about 250 MB of disk per million, plus entity history. Its `syncd` service may use 80% of
+the host's memory (`MemoryMax=80%`). See [syncd's page](syncd/availability-and-sizing.md).
+
 ## High availability
 
-**Every application can run as several replicas** behind one Service or load balancer, with
+**Every application except syncd can run as several replicas** behind one Service or load balancer, with
 the Helm chart. Sessions, scheduled-job locks, single sign-on requests in progress and the license
 state (installation id, license, revisions seen) are kept in the database, so any replica serves any
 request, each scheduled job runs on one replica at a time, and a restart or rolling update signs
@@ -59,6 +65,9 @@ Also:
 - **Cold standby** remains an option for a site without Kubernetes: a second host with the same
   release installed and stopped, with backups copied to it. Never run it while the primary could
   still be running.
+- **syncd** runs on one host, as two systemd services that restart on failure. It has no Helm chart
+  and no standby yet: run a cold standby as above. After a restart the engine resumes each source
+  from its checkpoint.
 
 ## Backups and disaster recovery
 
@@ -68,6 +77,7 @@ Also:
 | Directory Services Portal | The data directory (configuration, audit store, analysis results); the license directory | `./portal.sh backup` and `./portal.sh restore` (Docker package; the license volume is not included). Native and Helm: `tar` or volume snapshots |
 | ReadyRoom | The PostgreSQL database; the license volume | `./backup.sh` (database and license volume, kept 14 days) and `./restore.sh`. Helm: a backup CronJob, off by default (`backup.enabled`) |
 | RSA Operations Portal | The MySQL database; the license volume; the AM trust store and the Connector's certificates | `util/backupdb.sh`. Helm: a backup CronJob, off by default (`backup.enabled`) |
+| syncd | The engine store (`/var/lib/syncd/engine`), the console's PostgreSQL database, its master key (`/var/lib/syncd/console/master.key`) and `/etc/syncd` | `syncdctl backup` and `syncdctl restore`; `syncdctl upgrade` takes one first and keeps the last three |
 
 For every product, also keep the settings (`.env` files, or your values file and the Secrets it
 names), the release you installed (or the image digests and chart version), and the license file
@@ -95,10 +105,15 @@ No application undoes its own data changes on a downgrade, and an older release 
 run on data a newer one has written. Every rollback therefore means:
 
 1. a backup taken **before** the upgrade. CertAlert's, the Directory Services Portal's, the RSA
-   Operations Portal's and ReadyRoom's `upgrade.sh` write one; with Helm and the native package,
-   take it yourself;
+   Operations Portal's and ReadyRoom's `upgrade.sh` write one, and so does syncd's `syncdctl upgrade`;
+   with Helm and the native package, take it yourself;
 2. stopping the new release, restoring that backup, and starting the previous release (or
    `helm rollback`, which restores the previous manifests and values but never the data).
+
+syncd automates step 2: `syncdctl upgrade` rolls back by itself when the new release is not
+healthy, and `syncdctl rollback` goes back to the previous release later. It keeps the console's
+database unless the newer release changed its schema. See
+[syncd's install guide](syncd/install.md#rollback).
 
 Anything recorded since the upgrade is lost from the application; forwarded audit events stay in
 your SIEM. ENS has not tested these rollbacks as procedures: practise one on a test installation

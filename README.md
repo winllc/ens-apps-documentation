@@ -8,6 +8,7 @@ Source for the documentation website covering the ENS application suite:
 | Directory Services Portal | `docs/directory-services-portal/` | [winllc/directory-services-portal](https://github.com/winllc/directory-services-portal) |
 | ReadyRoom | `docs/readyroom/` | [winllc/in-n-out-work](https://github.com/winllc/in-n-out-work) |
 | RSA Operations Portal | `docs/rsa-operations-portal/` | [winllc/rsa-operations-portal](https://github.com/winllc/rsa-operations-portal) |
+| syncd | `docs/syncd/` | [winllc/ldap-sync-merge-view](https://github.com/winllc/ldap-sync-merge-view) |
 
 The site is built with [MkDocs](https://www.mkdocs.org/) and the
 [Material](https://squidfunk.github.io/mkdocs-material/) theme.

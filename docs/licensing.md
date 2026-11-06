@@ -8,6 +8,11 @@ the **ENS licensing portal**:
 Each application checks its license offline, against public keys built into it, so licensing works the
 same on an air-gapped network.
 
+!!! note "syncd"
+    syncd has no license check yet: it needs no license file and has no license screen. Licensing by
+    managed identities and connector packs is on its roadmap. The rest of this page does not apply to
+    it.
+
 ## Getting a license
 
 1. **Create an account** on the ENS licensing portal (`/account`) and confirm your email address.
