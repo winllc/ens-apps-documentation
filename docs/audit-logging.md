@@ -12,6 +12,14 @@ The trail is the same in every product: one event format, one set of settings, o
 applications covered are CertAlert, the Directory Services Portal, ReadyRoom, the RSA Operations Portal,
 and the ENS licensing portal.
 
+!!! note "syncd"
+    syncd's console keeps its own audit log, not this one. It records every sign-in, account change,
+    configuration action, engine command and object-explorer search in PostgreSQL, append-only and
+    hash-chained, and auditors and administrators read and verify it on the console's **Audit** page
+    (`/audit`). It does not use the event format, the settings or the Splunk add-on on this page,
+    and has no SIEM forwarder or pull API yet. See [syncd's admin guide](syncd/admin-guide.md) and
+    [Security](syncd/security.md).
+
 ## For administrators: the audit page
 
 Each application has an **Audit log** page for its administrators:

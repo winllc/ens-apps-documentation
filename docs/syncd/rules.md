@@ -1,0 +1,671 @@
+# Computed attributes and rules
+
+Every transformation in syncd is an expression in **CEL** (Common Expression Language):
+attribute flows from sources, join keys, computed attributes, publication filters and
+mappings, DN values and group membership. The engine compiles each expression once, when
+a configuration is loaded, into native code that reads attributes directly, so rules run
+at pipeline speed.
+
+This page describes the rule language, the function library, computed attributes and
+their test cases. The YAML keys are listed in
+[Configuration](configuration.md#views-views); where the values come from is in
+[Connectors](connectors.md).
+
+## Where expressions are used
+
+Each expression reads one root variable: `source`, the staged record of one source, or
+`e`, the merged entity.
+
+| Where | Reads | Lookup tables | `unique()` | Other entities (`ref()` ...) |
+|---|---|---|---|---|
+| View source `flows` | `source` | Yes | No | No |
+| Join rule `source` and `when` | `source` | Yes | No | No |
+| Computed attribute `steps` and `output` | `e`, step variables | Yes | Yes | Yes |
+| Publication `filter`, `attributes`, `dn_attributes` | `e` | Yes | No | No |
+| Computed group `filter` | `e` | Yes | No | No |
+
+```yaml
+flows:
+  uid: lower(trim(source.USERID))            # source scope
+computed:
+  - name: displayName
+    output: e.givenName + " " + e.sn         # entity scope
+publications:
+  - filter: e.status == "active"             # entity scope
+```
+
+Using the wrong root is a compile error that says which one is available.
+
+## The rule language
+
+syncd implements a subset of standard CEL; the syntax and macros are CEL's, parsed by a
+CEL parser.
+
+### Values
+
+| Type | Written as | Notes |
+|---|---|---|
+| string | `"text"`, `'text'`, `r"raw"` | |
+| int | `42`, `-1` | 64-bit, overflow is an error. Unsigned literals are read as ints. |
+| bool | `true`, `false` | |
+| null | `null` | An absent value. |
+| bytes | `b"\xff\xd8"` | Binary data: an `objectGUID`, a photo, a certificate. |
+| list | `["a", "b"]` | A multi-valued attribute reads as a list. |
+| timestamp | `now()`, `timestamp("2024-01-02")` | An instant, in UTC microseconds. |
+| duration | `duration("90d")` | A signed span of time. |
+| entity | `ref(e.manager)` | Another entity, in computed attributes only. Read its attributes; it has no value of its own. |
+
+Not supported: floating-point numbers (`1.5` is a compile error), map and message
+literals, two-variable comprehensions, optional elements, and nested field access other
+than on an entity (`e.a.b`).
+
+### Attributes
+
+- `e.mail` or `source.mail` reads an attribute. A name with characters CEL does not allow
+  in an identifier cannot be read this way; MongoDB embedded fields therefore arrive as
+  `outer_inner` (`source.name_given`).
+- **An absent attribute.** Reading one is an "attribute not set" error, not an empty
+  string. `has(e.nickname)` tests for it without failing, and
+  `coalesce(e.preferredName, e.givenName)` takes the first that has a value.
+- **Missing input is not a failure.** When a flow or a computed attribute fails only
+  because an attribute it reads is absent (or a referenced entity does not exist), the
+  attribute gets no value from it. The error policy is for real errors.
+- **One or many values.** An attribute holding one value reads as that value; one holding
+  several reads as a list. Attributes listed in `attributes.multi_valued` always read as a
+  list: a single value is a one-element list and an absent one an empty list. So list in
+  `multi_valued` any attribute a rule iterates over.
+
+### Operators
+
+| Operator | Works on |
+|---|---|
+| `==`, `!=` | Any values. Values of different types are simply unequal (`4 == "4"` is `false`). |
+| `<`, `<=`, `>`, `>=` | Ints, strings, bytes, timestamps, durations. Text compared with a timestamp is read as one (`e.contractEnd > now()`). |
+| `+` | Ints; strings (concatenation); bytes; lists; timestamp + duration; duration + duration. Adding a string and an int is an error: use `string()`. |
+| `-` | Ints; timestamp − duration; timestamp − timestamp (a duration); duration − duration. |
+| `*`, `/`, `%` | Ints; duration × int. Division by zero is an error. |
+| `&&`, `||`, `!` | Bools. As in CEL, the deciding side wins even if the other errors: `false && error` is `false`. |
+| `c ? a : b` | A bool condition. |
+| `x in list` | Membership. A one-valued attribute counts as a one-element list. |
+| `list[i]` | Indexing from 0. Index `0` of a single value is that value. |
+| `has(e.x)` | Whether the attribute has a value. |
+
+### Macros
+
+The CEL macros iterate over lists, and over multi-valued attributes:
+
+| Macro | Gives |
+|---|---|
+| `list.all(x, p)` | Whether `p` holds for every element. |
+| `list.exists(x, p)` | Whether `p` holds for at least one. |
+| `list.exists_one(x, p)` | Whether `p` holds for exactly one. |
+| `list.map(x, f)` | Each element transformed. |
+| `list.filter(x, p)` | The elements for which `p` holds. |
+
+```text
+e.memberOf.filter(g, g.contains("vpn")).map(g, upper(g))
+e.memberOf.exists(g, g.startsWith("cn=admins,"))
+```
+
+As in CEL, `exists` is true if any element is true even when others error, and `all` is
+false if any is false; an error nothing decides, or one inside `map()`, fails the
+expression.
+
+### Methods and calls
+
+Every function can be called either way: `e.sn.lower()` is `lower(e.sn)`, and
+`list.join(",")` is `join(list, ",")`. Text functions given a list apply to every value,
+so `lower(e.mail)` works whether `mail` holds one address or several.
+
+### Results
+
+- `null` means no value: the attribute is left without one.
+- A list becomes several values; nested lists are flattened.
+- A timestamp is stored typed and exported to LDAP as GeneralizedTime
+  (`20240102030405Z`); a duration is exported as whole seconds (for `pwdMaxAge`, say).
+- Bytes are exported as they are.
+
+## Function library
+
+The console's expression editor offers these as completions with the same descriptions.
+Arguments ending in `?` are optional. Time zone arguments are IANA names
+(`Europe/Paris`), `UTC`, or offsets (`+02:00`), UTC when left out.
+
+### Text
+
+| Function | What it does | Example |
+|---|---|---|
+| `lower(s)` | Lowercase. On a list, every value. | `lower(e.mail)` |
+| `upper(s)` | Uppercase. On a list, every value. | `upper(e.sn)` |
+| `lowerAscii(s)` | Lowercases ASCII letters only; other characters stay. | `lowerAscii(e.uid)` |
+| `upperAscii(s)` | Uppercases ASCII letters only. | `upperAscii(e.uid)` |
+| `trim(s)` | Removes leading and trailing whitespace. | `trim(e.title)` |
+| `ascii(s)` | Transliterates to ASCII: `Zoë Ærø` becomes `Zoe AEro`. For logins and mail addresses. | `lower(ascii(e.givenName))` |
+| `escapeRdn(s)` | Escapes a value for a DN (RFC 4514): commas, plus signs, quotes and the like get a backslash. For DNs built in an expression, such as `dn_attributes`. | `"ou=" + escapeRdn(e.department) + ",dc=example,dc=com"` |
+| `substring(s, start, end?)` | The characters from `start` (from 0) up to `end`, or to the end. | `e.givenName.substring(0, 1)` |
+| `replace(s, from, to)` | Replaces every occurrence. | `replace(e.sn, " ", "")` |
+| `split(s, separator)` | Splits into a list; an empty separator splits into characters. | `split(e.mail, "@")` |
+| `contains(s, part)` | Whether `s` contains `part`. | `e.title.contains("Manager")` |
+| `startsWith(s, prefix)` | Whether `s` starts with `prefix`. | `e.uid.startsWith("adm-")` |
+| `endsWith(s, suffix)` | Whether `s` ends with `suffix`. | `e.mail.endsWith("@example.com")` |
+| `matches(s, regex)` | Whether a regular expression matches somewhere in `s`. | `matches(e.employeeId, "^E[0-9]+$")` |
+| `regexReplace(s, regex, replacement)` | Replaces every match. `$1` in a literal replacement is the first group; a replacement read from data is used as it is. | `regexReplace(e.phone, "[^0-9+]", "")` |
+| `regexExtract(s, regex)` | The first group of the first match (or the whole match); empty when nothing matches. | `regexExtract(e.mail, "@(.+)$")` |
+
+A regular expression written as a literal is checked when the rule compiles. One read from
+data is compiled at run time, limited to 1 000 characters.
+
+### Lists
+
+| Function | What it does | Example |
+|---|---|---|
+| `join(list, separator)` | Joins values into one text; absent (null) values are left out. | `join([e.givenName, e.sn], " ")` |
+| `size(x)` | Values in a list, characters in a text, or bytes in binary data. | `size(e.mail)` |
+| `first(x)` | The first value of a list; a single value as it is. | `first(e.mail)` |
+
+### Conversion and choice
+
+| Function | What it does | Example |
+|---|---|---|
+| `string(x)` | A number, boolean, timestamp (RFC 3339) or duration (`3600s`) as text, or bytes holding UTF-8 text as that text. `string(null)` is an error: use `coalesce()`. | `string(e.level)` |
+| `int(x)` | Text as a whole number; a timestamp as seconds since 1970; a duration as seconds. | `int(e.employeeId.substring(1))` |
+| `coalesce(a, b, ...)` | The first argument that has a value; missing attributes and empty lists are skipped. | `coalesce(e.preferredName, e.givenName)` |
+
+### Lookup and generation
+
+| Function | What it does | Example |
+|---|---|---|
+| `lookup(table, key, default)` | The value for `key` in one of the view's lookup tables, or `default`. | `lookup("dept_codes", e.department, "GEN")` |
+| `unique(scope, candidates)` | The first candidate not yet taken in the scope; `{n}` in a candidate counts up. Use with `mode: assign_once`. | `unique("uid", [lower(e.sn), lower(e.sn) + "{n}"])` |
+
+See [Lookup tables](#lookup-tables) and [Unique values](#unique-values).
+
+### Relations
+
+Computed attributes only. See [Reading other entities](#reading-other-entities).
+
+| Function | What it does | Example |
+|---|---|---|
+| `ref(e.reference)` | The entity a reference attribute points at, such as the manager. | `ref(e.manager).displayName` |
+| `refs(e.reference)` | Every entity a multi-valued reference points at. | `refs(e.manager).map(m, m.mail)` |
+| `reports(e)` | The entities whose `manager` reference points at this one. | `size(reports(e))` |
+| `referrers(e, "reference")` | The entities whose given reference points at this one. | `size(referrers(e, "manager"))` |
+
+### Binary
+
+| Function | What it does | Example |
+|---|---|---|
+| `bytes(s)` | Text as its UTF-8 bytes. | `bytes(e.uid)` |
+| `base64(b)` | Bytes as base64 text (text is encoded as its UTF-8 bytes). On a list, each value. | `base64(e.jpegPhoto)` |
+| `fromBase64(s)` | The bytes base64 text stands for (padding optional). | `fromBase64(e.photoBase64)` |
+| `hex(b)` | Bytes as lowercase hex, two digits per byte. | `hex(e.objectGUID)` |
+| `fromHex(s)` | The bytes hex text stands for; a `0x` or `\x` prefix is allowed. | `fromHex(e.badgeId)` |
+| `guid(b)` | A 16-byte GUID (`objectGUID`, `mS-DS-ConsistencyGuid`) as text, in Microsoft's byte order: what Active Directory tools show. | `guid(e.objectGUID)` |
+| `fromGuid(s)` | The 16 bytes of a GUID written as text: the inverse of `guid()`. | `fromGuid(e.immutableId)` |
+| `sid(b)` | A security identifier (`objectSid`) as text, `S-1-5-21-...`. | `sid(e.objectSid)` |
+| `fromSid(s)` | The bytes of a security identifier written as text: the inverse of `sid()`. | `fromSid(e.sidText)` |
+
+### Time
+
+| Function | What it does | Example |
+|---|---|---|
+| `now()` | The time of the run, as a timestamp. | `e.contractEnd > now()` |
+| `timestamp(x)` | A timestamp from text in any form sources send, or from seconds since 1970. | `timestamp(e.hireDate)` |
+| `duration(text)` | A span of time: `"90d"`, `"1h30m"`, `"3600s"`; an int is seconds. | `now() - duration("90d")` |
+| `parseTime(s, format, zone?)` | A timestamp from text in a strftime format (`%d/%m/%Y`). Without an offset in the text, a local time in the zone. | `parseTime(e.startDate, "%d/%m/%Y", "Europe/Paris")` |
+| `formatTime(t, format, zone?)` | A timestamp as text in a strftime format, in the zone. `%Y%m%d%H%M%SZ` is LDAP GeneralizedTime. | `formatTime(now(), "%Y-%m-%d", "America/New_York")` |
+| `getFullYear(t, zone?)` | The year. | `getFullYear(now())` |
+| `getMonth(t, zone?)` | The month, from 0 (January) to 11, as in CEL. | `getMonth(now()) + 1` |
+| `getDate(t, zone?)` | The day of the month, from 1. | `getDate(now())` |
+| `getDayOfMonth(t, zone?)` | The day of the month, from 0, as in CEL. | `getDayOfMonth(now())` |
+| `getDayOfWeek(t, zone?)` | The day of the week, from 0 (Sunday) to 6. | `getDayOfWeek(now()) == 1` |
+| `getDayOfYear(t, zone?)` | The day of the year, from 0. | `getDayOfYear(now())` |
+| `getHours(t, zone?)` | The hour. On a duration, its total in hours. | `getHours(now(), "Europe/Paris")` |
+| `getMinutes(t, zone?)` | The minutes. On a duration, its total in minutes. | `getMinutes(now())` |
+| `getSeconds(t, zone?)` | The seconds. On a duration, its total in seconds. | `getSeconds(now() - timestamp(e.pwdChangedTime))` |
+| `getMilliseconds(t, zone?)` | The milliseconds. On a duration, its total in milliseconds. | `getMilliseconds(now())` |
+| `addMonths(t, n, zone?)` | `n` calendar months later (earlier when negative); a day past the end of the month becomes its last day. | `addMonths(timestamp(e.hireDate), 6)` |
+| `startOfDay(t, zone?)` | Midnight at the start of the day, in the zone. | `startOfDay(now(), "Europe/Paris")` |
+| `daysBetween(a, b, zone?)` | Calendar days from the day of `a` to the day of `b` (negative when `b` is earlier). | `daysBetween(now(), e.contractEnd)` |
+| `fromFiletime(x)` | A timestamp from an AD FILETIME (`accountExpires`, `pwdLastSet`, `lastLogonTimestamp`), as an int or text; null for `0` and "never". | `fromFiletime(e.accountExpires)` |
+| `filetime(t)` | A timestamp as an AD FILETIME. | `filetime(addMonths(now(), 12))` |
+
+Functions that take a timestamp also take text, read as `timestamp()` reads it. A literal
+zone, format or duration is checked when the rule compiles.
+
+!!! note "Not in the library"
+    The product plan also lists padding, hashing, UUID generation, `userAccountControl`
+    flag helpers, DN parsing, reading a named source's value (`src.hr_db.title`) and
+    custom WASM functions. None of these is built: the table above is the whole library.
+
+## Computed attributes
+
+A computed attribute is a value the view derives from the merged entity:
+
+```yaml
+computed:
+  - name: displayName
+    output: coalesce(e.preferredName, e.givenName) + " " + e.sn
+    tests:
+      - input: { givenName: Jane, sn: Doe }
+        expect: Jane Doe
+```
+
+| Key | Default | What |
+|---|---|---|
+| `name` | required | The attribute it sets. |
+| `mode` | `recompute` | `recompute`, `assign_once` or `only_if_empty`. |
+| `steps` | none | `let` and `when` steps. |
+| `output` | required | The final value. |
+| `on_error` | `skip` | `skip`, `default` or `quarantine`. |
+| `default` | | The fallback text for `on_error: default`. |
+| `tests` | none | Test cases. |
+
+### Evaluation order
+
+- Computed attributes may read each other. They are evaluated in dependency order, and a
+  cycle is refused with the path it takes.
+- On a change, the engine evaluates again only the attributes whose inputs changed.
+  Attributes that call `now()` or `unique()`, read other entities, or quarantine on error
+  are always evaluated when their entity is recomputed.
+- A computed attribute with the same name as a flowed attribute replaces the flowed value,
+  unless its mode is `only_if_empty`.
+- `now()` is the run's logical time, not the wall clock, so previews and replays are
+  deterministic. A rule that uses it changes value only when its entity is recomputed
+  (a change to the entity, or a full sync).
+
+### Multi-step transforms
+
+`steps` run before `output`, in order:
+
+- `let: <name>` with `expr: <CEL>` sets a variable that later steps and the output read by
+  its bare name. A later `let` of the same name replaces the value, and its expression can
+  read the previous one (`base + ".ext"`).
+- `when: <CEL>` with `then: [steps]` and optional `else: [steps]` runs one branch.
+
+```yaml
+computed:
+  - name: mail
+    mode: assign_once
+    steps:
+      - let: base
+        expr: regexReplace(lower(ascii(e.givenName + "." + e.sn)), "[^a-z0-9.]", "")
+      - let: domain
+        expr: lookup("mail_domains", e.company, "example.com")
+      - when: e.employeeType == "contractor"
+        then:
+          - let: base
+            expr: base + ".ext"
+    output: unique("people.mail", [base + "@" + domain, base + "{n}@" + domain])
+    on_error: quarantine
+    tests:
+      - input: { givenName: "Ann-Marie", sn: "O'Neil", company: ACME, employeeType: staff }
+        lookups: { mail_domains: { ACME: acme.com } }
+        expect: annmarie.oneil@acme.com
+      - input: { givenName: Bo, sn: Ek, company: Other, employeeType: contractor }
+        expect: bo.ek.ext@example.com
+```
+
+`then` and `else` are always lists. Reading a variable that no step set on the path taken
+is an error. The console's preview shows each step's value, numbered as `2` or `3.then.1`.
+
+### Value modes
+
+| `mode` | Behaviour |
+|---|---|
+| `recompute` | Evaluated again whenever its inputs change. |
+| `assign_once` | Keeps the first value ever assigned; never evaluated again once set. For generated logins and mail addresses, so they and their `unique()` claim stay stable when names change. |
+| `only_if_empty` | Only set when no source gives the attribute a value; a source value wins. |
+
+### Error policies
+
+An error is a real failure: a type error, an unparsable date, `int("abc")`, no `unique()`
+value left. An absent input is not an error (the attribute simply gets no value).
+
+| `on_error` | On an error |
+|---|---|
+| `skip` | The attribute keeps the value it had. |
+| `default` | The attribute gets `default`, a literal text. |
+| `quarantine` | The attribute keeps the value it had, and the entity's exports are held until the rule succeeds again. |
+
+Every rule error counts in the `syncd_rule_errors_total` metric (alert `SyncdRuleErrors`)
+and is logged at debug level with the view, attribute and error. A failing flow is
+logged as a warning; flows have no error policy.
+
+```yaml
+- name: hireYear
+  output: string(getFullYear(timestamp(e.hireDate)))
+  on_error: default
+  default: "unknown"
+```
+
+## Lookup tables
+
+A view's `lookups` are inline tables of text keys to text values:
+
+```yaml
+views:
+  - name: people
+    lookups:
+      dept_codes:
+        Engineering: ENG
+        Sales: SLS
+      mail_domains:
+        ACME: acme.com
+    computed:
+      - name: departmentNumber
+        output: lookup("dept_codes", e.department, "GEN")
+```
+
+- `lookup(table, key, default)` takes exactly three arguments. The table name must be a
+  literal string. An int key is looked up as its text.
+- Keys match exactly, including case: normalise in the key expression
+  (`lookup("dept_codes", upper(trim(e.department)), "GEN")`) if the data varies.
+- A table the view does not have is a validation warning, and `lookup()` returns its
+  default.
+- Tables are versioned with the configuration. The console's lookup table manager edits
+  them, with search, CSV import (replacing or merging rows) and CSV export. Binding a table
+  to a database table is not built.
+
+## Unique values
+
+`unique(scope, candidates)` returns the first candidate no other entity holds in the
+scope, and claims it for this entity.
+
+```yaml
+- name: uid
+  mode: assign_once
+  output: >-
+    unique("uid", [
+      lower(e.givenName.substring(0, 1) + e.sn),
+      lower(e.givenName.substring(0, 2) + e.sn),
+      lower(e.givenName.substring(0, 1) + e.sn) + "{n}"
+    ])
+```
+
+- The scope is a literal name; computed attributes of any view that use the same scope
+  share it. One computed attribute may use one scope.
+- `{n}` in a candidate is replaced by a counter from 2 up to 9 999: `jdoe2`, `jdoe3`, ...
+  A value the entity already holds is kept while it is still a candidate.
+- Claims are case-insensitive, as LDAP naming attributes are, and stored by the engine.
+  They are released when the entity is deleted. Claims are checked against the engine's
+  own index, not against the live target.
+- When no candidate is free, the rule fails with "no unique value left", and the error
+  policy applies.
+- Use `mode: assign_once`. In `recompute` mode a value moves back to an earlier candidate
+  once that one is released.
+- Claims are recorded only for computed attributes, so `unique()` is refused in flows and
+  join rules. Generate values in a computed attribute and map that attribute in
+  publications.
+- Previews and test cases treat every candidate as free, so the first candidate wins.
+
+## Reading other entities
+
+A view's `references` declare attributes whose values identify other entities. Computed
+attributes can then follow them:
+
+```yaml
+views:
+  - name: people
+    references:
+      manager: { match: employeeId }        # manager holds the manager's employeeId
+    computed:
+      - name: managerName
+        output: ref(e.manager).displayName
+      - name: managerMail
+        output: ref(e.manager).mail
+      - name: isManager
+        output: size(reports(e)) > 0
+      - name: skipLevelMail
+        output: ref(ref(e.manager).manager).mail
+  - name: teams
+    references:
+      member: { view: people, match: employeeId }
+    computed:
+      - name: activeMembers
+        output: refs(e.member).filter(m, m.status == "active").map(m, m.mail)
+```
+
+- `ref(x.attr)` gives the one entity `attr` points at; `refs(x.attr)` every entity a
+  multi-valued reference points at, as a list to iterate with `map`, `filter` or `exists`.
+- `reports(x)` gives the entities whose `manager` reference points at `x`.
+  `referrers(x, "attr")` does the same for any reference, named as a literal string.
+- Read an entity's attributes with `.attr`. `has(ref(e.manager).mail)` is `false` when
+  there is no manager either.
+- Paths can go up to 4 references deep (`ref(ref(e.manager).manager)`).
+- A reference whose entity does not exist gives no value, not an error.
+- When a referenced entity changes an attribute a rule read, the entities whose rules read
+  it are evaluated again. The engine tracks which attributes each rule reads at the end of
+  each path.
+- Cross-entity functions work in computed attributes only, not in flows or publication
+  mappings, and cannot be previewed on their own or run in test cases: `syncd test`
+  reports such tests as skipped, not failed.
+
+Publications export a reference attribute as the DN its entity has in the same target,
+through the publication's own `references` map; see
+[Configuration](configuration.md#publications-publications).
+
+## Dates and times
+
+Sources send dates as text by default. Rules read that text as a timestamp in three ways:
+
+- `timestamp(e.hireDate)`;
+- implicitly, when text is compared with or subtracted from a timestamp
+  (`e.contractEnd > now()`);
+- as an argument of a time function (`formatTime(e.hired, "%Y")`).
+
+Listing the attribute under the object's `timestamps` makes it arrive typed instead; see
+[Connectors](connectors.md#binary-values-and-dates-from-sources).
+
+`timestamp()` reads these forms; a form without an offset is UTC:
+
+| Form | Example |
+|---|---|
+| RFC 3339, ISO 8601 | `2024-01-02T03:04:05Z`, `2024-01-02T03:04:05.123+01:00` |
+| PostgreSQL | `2024-01-02 03:04:05.123456+00` |
+| MySQL, SQL Server | `2024-01-02 03:04:05`, `2024-01-02 03:04:05.1234567 +01:00` |
+| A date | `2024-01-02` (midnight) |
+| LDAP GeneralizedTime | `20240102030405Z`, `20240102030405.5+0100` |
+
+Any other form needs `parseTime(text, format, zone?)`. Durations take the units `d`,
+`h`, `m`, `s`, `ms`, `us` and `ns`, combined (`1h30m`) and optionally negative.
+
+```yaml
+computed:
+  # Contract ends within 30 days.
+  - name: expiringSoon
+    output: daysBetween(now(), e.contractEnd) <= 30
+  # A local date in the HR system's format, exported as GeneralizedTime.
+  - name: startDate
+    output: parseTime(e.start, "%d/%m/%Y", "Europe/Paris")
+  # Active Directory account expiry, a year after hire.
+  - name: accountExpires
+    output: string(filetime(addMonths(timestamp(e.hireDate), 12)))
+
+publications:
+  - name: active_contractors
+    filter: e.contractEnd > now()
+```
+
+## Binary values
+
+Binary data passes through rules unchanged, so `jpegPhoto: source.jpegPhoto` and
+`jpegPhoto: e.jpegPhoto` export the same bytes. `has()`, `coalesce()`, `==`, ordering, `+`
+and `size()` work on bytes. Using bytes where text is expected (`lower(e.jpegPhoto)`,
+`e.jpegPhoto + "x"`) is an error that suggests `base64()` or `hex()`.
+
+```yaml
+flows:
+  objectGuidText: guid(source.objectGUID)        # 12345678-1234-5678-9abc-def012345678
+  sidText: sid(source.objectSid)                 # S-1-5-21-...
+  photo: source.thumbnailPhoto                   # bytes, as they are
+publications:
+  - attributes:
+      employeeNumber: e.objectGuidText
+      jpegPhoto: e.photo
+      carLicense: hex(e.photo)
+```
+
+A binary value cannot go into a DN: a DN is text, so use `guid()` or `hex()` in a
+`dn_attributes` entry.
+
+## Test cases
+
+Test cases are kept with the computed attribute and run without any source:
+
+```yaml
+computed:
+  - name: vpnGroups
+    output: e.memberOf.filter(g, g.contains("vpn")).map(g, upper(g))
+    tests:
+      - input: { memberOf: [cn=staff, cn=vpn-users, cn=vpn-admins] }
+        expect: [CN=VPN-ADMINS, CN=VPN-USERS]
+  - name: guidText
+    output: guid(e.objectGUID)
+    tests:
+      - input: { objectGUID: { base64: "eFY0EjQSeFaavN7wEjRWeA==" } }
+        expect: "12345678-1234-5678-9abc-def012345678"
+  - name: departmentNumber
+    output: lookup("dept_codes", e.department, "GEN")
+    tests:
+      - input: { department: Legal }
+        lookups: { dept_codes: { Legal: LEG } }
+        expect: LEG
+```
+
+| Key | What |
+|---|---|
+| `input` | Entity attributes: name to a string, int, bool, list of strings, or `{ base64: "..." }` bytes. |
+| `lookups` | Lookup tables for this test, merged over the view's own tables (the test's entries win). |
+| `expect` | The expected value, in the same forms. |
+
+- Values are compared as sorted text, so list order does not matter and `4` equals `"4"`
+  (both export as the text `4`). A value repeated in the output counts twice, so it fails
+  against a single expected value.
+- Timestamps are expected as RFC 3339 text; bytes are shown as `base64:...`.
+- Tests compile the rule as the engine does, so attributes in `attributes.multi_valued`
+  read as lists.
+- `now()` is the start of 1970 (0) in a test, and `unique()` treats every candidate as
+  free.
+- Rules that read other entities (`ref()`, `referrers()`) cannot be tested this way; their
+  tests are reported as skipped.
+
+`syncd test -c config.yaml` runs every test and reports failures as
+`view <v>: computed <c>: test <n>: expected ..., got ...`. Publishing requires every test to
+pass: the console will save a version whose tests fail but not publish it, and the engine
+refuses to apply it.
+
+## Authoring in the console
+
+The console's Computed Attribute Studio edits a view's computed attributes in a
+configuration version:
+
+- the expression as CEL text, with completion and hover help from the function library,
+  or as visual blocks (values, attributes, function calls, `+`, comparisons, conditions,
+  lists) for those who would rather not write CEL;
+- steps, with each step's value shown in a live preview on a real entity or on
+  hand-written input, which can be kept as a test case;
+- the test cases, run as you edit;
+- what the attribute reads and what reads it.
+
+Compiler errors and warnings (an attribute nothing sets, an unknown lookup table) appear as
+you type. See the [user guide](user-guide.md) for the workflow, and simulate a version
+before publishing to see how many entities change and what each target would receive.
+
+## Worked examples
+
+These come from the example configurations in the source repository (`examples/*.yaml`).
+
+### Building names and codes
+
+```yaml
+views:
+  - name: people
+    lookups:
+      dept_codes: { Engineering: ENG, Sales: SLS }
+    computed:
+      - name: displayName
+        output: e.givenName + " " + e.sn
+        tests:
+          - input: { givenName: Jane, sn: Doe }
+            expect: Jane Doe
+      - name: departmentNumber
+        output: lookup("dept_codes", e.department, "GEN")
+        tests:
+          - input: { department: Engineering }
+            expect: ENG
+          - input: { department: Legal }
+            expect: GEN
+```
+
+### Cleaning database values in flows
+
+Db2 pads fixed-width columns and reports names in upper case
+(`examples/db2-via-jdbc.yaml`):
+
+```yaml
+flows:
+  uid: lower(trim(source.USERID))
+  givenName: trim(source.FIRSTNME)
+  sn: trim(source.LASTNAME)
+  title: trim(source.JOB)
+  department: source.WORKDEPT
+```
+
+### A constant, and a filter on a source value
+
+A literal string is quoted twice, once for YAML and once for CEL
+(`examples/mysql-to-openldap.yaml`, `examples/oracle-via-debezium.yaml`):
+
+```yaml
+flows:
+  title: '"Contractor"'
+  uid: lower(source.LOGIN)
+publications:
+  - filter: e.status == "ACTIVE"
+```
+
+### Flags from a status
+
+From the Active Directory target test configuration: NORMAL_ACCOUNT (512) plus
+PASSWD_NOTREQD (32), and ACCOUNTDISABLE (2) while on leave.
+
+```yaml
+- name: accountControl
+  output: 'e.status == "leave" ? "546" : "544"'
+  tests:
+    - { input: { status: active }, expect: "544" }
+    - { input: { status: leave }, expect: "546" }
+```
+
+### Multi-valued values from text
+
+A team's members held as comma-separated employee ids, turned into a reference
+(`member` must be in `attributes.multi_valued`):
+
+```yaml
+views:
+  - name: teams
+    sources:
+      - connector: hr_db
+        object: team
+        project: true
+        flows:
+          name: source.name
+          member: split(source.members, ",")
+    references:
+      member: { view: people, match: employeeId }
+```
+
+### A container built from data
+
+```yaml
+publications:
+  - name: people_out
+    dn: uid={uid},{dn:container}
+    dn_attributes:
+      container: >-
+        coalesce(e.parentDn, "ou=" + escapeRdn(e.department) + ",l=" + escapeRdn(e.office)
+        + ",o=Staff,dc=example,dc=com")
+    create_containers: true
+```

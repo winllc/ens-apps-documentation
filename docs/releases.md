@@ -10,6 +10,12 @@ ways to install it:
 - a **Helm chart** for Kubernetes and OpenShift, at the same version as the application, published
   at `oci://ghcr.io/winllc/charts/<chart>` and included in the download.
 
+!!! note "syncd"
+    syncd ships differently: as an offline bundle (`.tar.gz`), a `.deb` and an `.rpm` for a Linux host
+    with systemd, with no container images or Helm chart yet, and its releases are not on the
+    licensing portal. Its `SHA256SUMS` is not signed yet. See
+    [syncd's install guide](syncd/install.md#getting-the-release).
+
 ## For customers: downloading and verifying a release
 
 ### Downloading
