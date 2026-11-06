@@ -100,7 +100,7 @@ flowchart LR
 | Console UI | React 19, TypeScript, Vite, TanStack Router and Query, Tailwind CSS, Monaco editor |
 | Cryptography | rustls with aws-lc-rs; the AWS-LC FIPS module in a FIPS build |
 | JDBC bridge (optional) | Java 17+, run separately, with your databases' JDBC drivers |
-| Delivery | `syncd-<version>-linux-<arch>.tar.gz`, `.deb` and `.rpm` packages for x86_64 and aarch64, with `SHA256SUMS`; systemd units `syncd` and `syncd-console` |
+| Delivery | `syncd-<version>-linux-x86_64.tar.gz`, `.deb`, `.rpm` and a RHEL 8 `.rpm`, with `SHA256SUMS` (not signed yet); systemd units `syncd` and `syncd-console`. aarch64 and FIPS builds are built from source; the published release has neither |
 
 ## Roles
 
