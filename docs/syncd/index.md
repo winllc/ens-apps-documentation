@@ -108,11 +108,12 @@ flowchart LR
 |---|---|
 | **admin** | Everything, including users, engine registration, sign-in policy, configuration approval and banners |
 | **designer** | What a viewer can, plus edit, check, preview, simulate, approve and publish configurations, and run connector checks |
-| **operator** | What a viewer can, plus run and control engines: full syncs, reconciliations, threshold approvals, dead-letter retry and discard |
+| **operator** | What a viewer can, plus run and control engines: full syncs, reconciliations, drift checks, threshold approvals, dead-letter retry and discard, and manual joins and unjoins in correlation review |
 | **viewer** | Read engines, status, configurations and the object explorer |
 | **auditor** | What a viewer can, plus the audit log |
 
-The [Admin guide](admin-guide.md) gives each role's exact permissions.
+Roles do not stack: a designer cannot run engines, and an operator cannot publish. The
+[Admin guide](admin-guide.md) gives each role's exact permissions.
 
 ## Documentation map
 
