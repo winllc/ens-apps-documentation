@@ -258,8 +258,8 @@ database's credentials match.
 ### Certificates on Kubernetes
 
 The Helm chart issues the control API's certificates itself, at install, with Helm's own
-functions (`genCA`, `genSignedCert`: RSA keys, not ECDSA), into the `<release>-pki` Secret
-(`syncd-pki` for a release named `syncd`):
+functions (`genCA`, `genSignedCert`: RSA keys, not ECDSA), into the `syncd-pki` Secret (for a release named
+`syncd`; otherwise `<release>-syncd-pki`):
 
 | Key | For |
 |---|---|

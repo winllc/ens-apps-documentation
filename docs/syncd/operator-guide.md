@@ -2,16 +2,17 @@
 
 This guide covers running syncd day to day: the services, starting and stopping them, checking
 health, reading logs, the `syncd` and `syncdctl` commands, backups, monitoring, certificates and the
-master key. Installing and upgrading are in [Installation](install.md); what to do when something
-goes wrong is in [Troubleshooting](troubleshooting.md).
+master key. [Running on Kubernetes](#running-on-kubernetes) covers the same for the Helm chart.
+Installing and upgrading are in [Installation](install.md); what to do when something goes wrong
+is in [Troubleshooting](troubleshooting.md).
 
 ## What runs where
 
 | Process | systemd unit | Runs as | Listens on |
 |---|---|---|---|
-| Engine (`syncd run`) | `syncd.service` | `syncd` | Control API (gRPC, mutual TLS): `127.0.0.1:7443`. Prometheus metrics, when `api.metrics_listen` is set (for example `127.0.0.1:9464`). The listeners of any `debezium` connectors |
-| Console (`syncd-console serve`) | `syncd-console.service` | `syncd-console` | `127.0.0.1:8080`, plain HTTP (`CONSOLE_LISTEN`) |
-| nginx *(you install it)* | `nginx.service` | nginx | 443 (HTTPS) and 80 (redirect), in front of the console |
+| Engine (`syncd run`) | `syncd.service` | `syncd` | Control API (gRPC, mutual TLS): `127.0.0.1:7443`. The control socket `/run/syncd/control.sock`, when `api.control_socket` is set. Prometheus metrics, when `api.metrics_listen` is set (for example `127.0.0.1:9464`). The listeners of any `debezium` connectors |
+| Console (`syncd-console serve`) | `syncd-console.service` | `syncd-console` | `127.0.0.1:8080` (`CONSOLE_LISTEN`): plain HTTP, or HTTPS when given `CONSOLE_TLS_CERT` and `CONSOLE_TLS_KEY` |
+| nginx *(optional, you install it)* | `nginx.service` | nginx | 443 (HTTPS) and 80 (redirect), in front of the console |
 | PostgreSQL | your PostgreSQL service | postgres | The console's database. On this host or elsewhere |
 | JDBC bridge, Debezium Server *(optional)* | yours | yours | See [Installation](install.md#the-jdbc-bridge) |
 
@@ -21,8 +22,8 @@ and `postgresql.service`.
 
 Both units run with systemd's sandboxing: `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`,
 `NoNewPrivileges`, no capabilities, a system-call filter, and write access only to their own
-directories (`/var/lib/syncd/engine` and `/etc/syncd/engine` for the engine,
-`/var/lib/syncd/console` for the console). The engine may use 80% of the host's memory
+directories (`/var/lib/syncd/engine` and `/etc/syncd/engine` for the engine, and `/run/syncd`,
+which its unit creates and removes when it stops; `/var/lib/syncd/console` for the console). The engine may use 80% of the host's memory
 (`MemoryMax=80%`) and 65 536 open files.
 
 ## Start, stop and status
@@ -33,11 +34,16 @@ sudo systemctl stop syncd-console syncd
 sudo systemctl restart syncd               # after editing engine.env or engine.yaml by hand
 sudo systemctl restart syncd-console       # after editing console.env
 systemctl status syncd syncd-console
-sudo syncdctl status                       # releases, services, health, store format, backups
+sudo syncdctl status                       # releases, services, health, store format, certificates, backups
 sudo syncd status                          # what the engine is doing
 ```
 
-- **Restarts.** Both units restart on failure after 5 seconds (`Restart=on-failure`).
+- **Restarts.** Both units restart on failure after 5 seconds (`Restart=on-failure`). systemd's
+  default start limit (5 starts in 10 seconds) still stops a real crash loop. From 0.3.0,
+  `syncdctl` clears that limit (`systemctl reset-failed`) before its own starts and restarts, so
+  an upgrade followed by `renew-certs` no longer fails with `Start request repeated too quickly`.
+  After a crash loop, clear it yourself with `systemctl reset-failed syncd` once the cause is
+  fixed.
 - **Stopping the engine is safe.** It stops between pages, within seconds; systemd waits up to 90
   seconds (`TimeoutStopSec=90`). A full sync in progress resumes where it stopped at the next
   start, and each source carries on from its last committed checkpoint.
@@ -48,14 +54,15 @@ sudo syncd status                          # what the engine is doing
 `syncdctl status` prints:
 
 ```text
-release:   0.2.1
-previous:  0.2.0
+release:   0.3.0
+previous:  0.2.1
 engine:    active, control API answers
-store:     format 1 (syncd 0.2.1 reads up to 1)
+store:     format 1 (syncd 0.3.0 reads up to 1)
 console:   active, http://127.0.0.1:8080 answers
+certificates: valid until Nov  4 10:15:00 2036 GMT (ca.crt expires first)
 users:     https://syncd.example.com
 backups:
-  /var/lib/syncd/backups/20261024T101500Z-upgrade-0.2.0-to-0.2.1
+  /var/lib/syncd/backups/20261107T101500Z-upgrade-0.2.1-to-0.3.0
 ```
 
 ## Health checks
@@ -68,11 +75,22 @@ backups:
 | `GET /metrics` | The engine answers scrapes, when `api.metrics_listen` is set. `up{job="syncd"}` in Prometheus |
 | The console's engine page | The same status as `syncd status`, live |
 
+`certificates:` names the control API certificate that expires first, and from 60 days before
+says `EXPIRES WITHIN 60 DAYS, renew with syncdctl renew-certs` (see [Certificates](#certificates)).
+
 `syncd status` shows, for each source, its mode, state (`starting`, `reading`, `streaming`, `idle`,
 `RETRYING`, `FAILED`), the changes received, its checkpoint, restarts, the next try and the last
 error. For each publication it shows its target and dead letters, and the last drift check. Then
 any unreachable target, deletes held back by a threshold, what the engine is busy with, and
-running totals.
+running totals. From 0.3.0 it also shows:
+
+- **the engine process**, on one line: memory now, its peak and the limit (when there is one),
+  CPU time and its average since the engine started, threads and open files. For example
+  `process: memory 200.0 MiB (peak 300.0 MiB, limit 2.0 GiB)  cpu 30.0s (12.5% of 4 CPUs since
+  start)  12 threads  40 open files`;
+- **quarantined entities**, per view (`view people: 3 quarantined (exports held back by a failing
+  rule)`), followed by up to 20 of them with the rule and its error (see
+  [Quarantined entities](#quarantined-entities)).
 
 ## Logs
 
@@ -104,14 +122,24 @@ Useful engine log messages:
 | `exceeds the deletion threshold` | A deletion threshold holds deletes back |
 | `the new configuration did not start; restoring the previous one` | A published configuration rolled back |
 | `engine.cache_mb takes effect when syncd restarts` | A published configuration changed `cache_mb` |
+| `an entry moved or renamed in the target was put back where the publication places it`, `... was found by its id` | Someone moved or renamed a managed entry in the target; the engine found it by the target's id and put it back |
+| `rename blocked by an entry this batch renames away; parked until it has moved` | Two entries swap names, or a chain of renames, in one batch |
+| `the entry's RDN is taken where it is moved aside; it was given one of its own` | A leaver moved aside into a container where its RDN was taken |
+| `container renamed in the source; its entries were read again` | An LDAP source's container was renamed (`container_check_secs`) |
+| `removed empty container` / `could not remove an empty container` | `remove_empty_containers` removed a container syncd created |
+| `the publication lacked tables the object follows; added them` | A PostgreSQL source completed its publication with `ALTER PUBLICATION ... ADD TABLE` |
+| `configuration file created from the initial one` | A container's first start copied `--initial-config` to the data volume |
 
 Useful console log messages:
 
 | Message | Meaning |
 |---|---|
-| `console listening` | The console is up |
+| `console listening` (with `https`) | The console is up, over HTTPS when `https=true` |
 | `created a new master key for stored secrets; back it up` | The first start created `master.key` |
-| `the console listens on ... over plain HTTP: browsers on other machines will not keep its session cookie` | It listens beyond loopback without an HTTPS `CONSOLE_PUBLIC_URL` |
+| `the master key does not open the stored secrets: engines registered with mTLS must be registered again` | `CONSOLE_NEW_MASTER_KEY=true` started the console with a key that does not open the stored secrets |
+| `audit log head` (with `id`, `at`, `hash`) | The newest audit entry, logged at start and every hour when it moved. Keep these lines outside the database (the journal, a SIEM): they let **Verify chain** find entries removed from the end of the log |
+| `TLS certificate loaded again` / `the changed TLS certificate does not load; keeping the previous one` | The console's own HTTPS certificate changed on disk |
+| `the console listens on ... over plain HTTP: browsers on other machines will not keep its session cookie` | It listens beyond loopback over plain HTTP, without an HTTPS `CONSOLE_PUBLIC_URL` |
 | `development mode: do not use this console in production` | `SYNC_DEV_MODE=true` |
 | `single sign-on could not start` | The identity provider could not be reached or is misconfigured |
 
@@ -128,15 +156,18 @@ in its database, not in the journal; see [Security](security.md).
   does, so `test-connection` and `discover` find the passwords the configuration refers to.
   Variables already set win, and `--env-file` names another file. `SYNCD_FIPS_MODE=true` in that
   file turns on `--fips`.
-- **Control API.** Commands that talk to the running engine use the command line's client
-  certificate, `/etc/syncd/pki/cli.crt` and `cli.key`. Install and upgrade issue it, and
-  `sudo syncdctl cli-cert` issues it on a host that lacks one.
+- **Control API.** Commands that talk to the running engine use the control socket when the
+  configuration sets `api.control_socket` and the socket exists. Otherwise they use mutual TLS
+  with the command line's client certificate, `/etc/syncd/pki/cli.crt` and `cli.key`. Install and
+  upgrade issue it, `syncdctl renew-certs` renews it, and `sudo syncdctl cli-cert` issues it on a
+  host that lacks one.
 
 ### Commands
 
 | Command | What it does | Needs the running engine |
 |---|---|---|
 | `syncd status` | The running engine's status | Yes |
+| `syncd quarantine` | Lists the entities whose exports a failing rule (`on_error: quarantine`) holds back, one per line: view, entity id, `since=` (microseconds since the epoch), the computed attribute and its error. `no quarantined entities` when there are none. Reads the store directly, read-only. New in 0.3.0 | No (works while it runs) |
 | `syncd dlq` | Lists failed exports waiting to be retried: publication, entity id, attempts, last failure, DN, error. Reads the store directly, read-only | No (works while it runs) |
 | `syncd retry [--publication P] [--entity ID]` | Exports dead-lettered entities again now: all, one publication's, or one entity (as `syncd dlq` lists it) | Yes |
 | `syncd discard --publication P --entity ID` | Removes a dead letter without retrying it | Yes |
@@ -168,6 +199,7 @@ operation (a full sync, a reconciliation, a reload), then is refused: `the engin
 | `-c`, `--config FILE` | `SYNCD_CONFIG` | The configuration file. Default `./syncd.yaml`, else `/etc/syncd/engine/engine.yaml` |
 | `--env-file FILE` | `SYNCD_ENV_FILE` | Environment file with the secrets the configuration refers to. Default `/etc/syncd/engine.env` with the packaged configuration |
 | `--data-dir DIR` | `SYNCD_DATA_DIR` | Overrides `engine.data_dir`. The service passes `--data-dir /var/lib/syncd/engine` |
+| `--initial-config FILE` | `SYNCD_INITIAL_CONFIG` | When the configuration file does not exist yet, creates it as a copy of this one; an existing file is never replaced. The container image uses it to start `/var/lib/syncd/engine.yaml` on the data volume from the image's `/etc/syncd/engine.yaml`. New in 0.3.0 |
 | `--fips` | `SYNCD_FIPS_MODE` | Uses the FIPS 140-3 crypto provider. Needs a FIPS build |
 | `--version`, `--help` | | |
 
@@ -183,8 +215,22 @@ For `status`, `reconcile`, `full-sync`, `approve`, `check-drift`, `retry`, `disc
 | `--api-cert FILE` | `SYNCD_API_CERT` | The client certificate. Default `cli.crt`, else `client.crt`, next to `api.tls.client_ca_file` |
 | `--api-key FILE` | `SYNCD_API_KEY` | The client certificate's private key file (a PEM file, not a token). Goes with `--api-cert` |
 
-`api.control_socket` (a Unix socket, mode 0600, serving the whole API to the engine's own user) is
-an engine setting; the installed configuration does not set it, and uses mutual TLS instead.
+### The control socket
+
+`api.control_socket` is a Unix socket, mode 0600, that serves the whole control API to the
+engine's own user and root, without certificates. The installed configuration has it commented
+out, and uses mutual TLS instead. To use it on a host, uncomment it in the `api` section of
+`/etc/syncd/engine/engine.yaml` and restart the engine:
+
+```yaml
+api:
+  control_socket: /run/syncd/control.sock
+```
+
+From 0.3.0 the engine's unit creates `/run/syncd` (`RuntimeDirectory=syncd`, mode 0750) and
+removes it when the engine stops; before, the engine could not create the socket there. `syncd`
+commands run as root then use the socket. A host installed before 0.3.0 keeps its `engine.yaml`,
+without the commented line: add it. The container image sets it, for `kubectl exec`.
 
 ## syncdctl commands
 
@@ -197,7 +243,8 @@ an engine setting; the installed configuration does not set it, and uses mutual 
 | `rollback` | `--keep-data`, `--yes` | Back to the previous release, restoring the backup taken before the upgrade ([Rollback](install.md#rollback)) |
 | `backup` | `--skip-db-backup`, `--leave-stopped` | Stops syncd briefly to take a consistent backup; prints its directory. `--leave-stopped` leaves the services stopped afterwards |
 | `restore DIR` | `--yes` | Restores a backup: engine store, console files and database, `/etc/syncd` |
-| `status` | | Releases, services, health, store format, public URL, backups |
+| `status` | | Releases, services, health, store format, when the control API's certificates expire, public URL, backups |
+| `renew-certs` | `--new-ca`, `--yes` | Renews the control API's certificates, restarts the engine with them and gives the console its new credentials (see [Certificates](#certificates)). New in 0.3.0 |
 | `cli-cert` | | Issues the command line's client certificate, if it is missing |
 | `uninstall` | `--purge`, `--yes` | Removes syncd ([Uninstall](install.md#uninstall)) |
 | `version`, `help` | | |
@@ -218,7 +265,7 @@ package manager there. Only one `syncdctl` that changes something runs at a time
 
 ```bash
 sudo syncdctl backup                  # stops syncd briefly; prints the backup's directory
-sudo syncdctl restore /var/lib/syncd/backups/20261024T101500Z-manual-0.2.1
+sudo syncdctl restore /var/lib/syncd/backups/20261107T101500Z-manual-0.3.0
 ```
 
 A backup is a directory under `/var/lib/syncd/backups`, readable by root only, named
@@ -235,6 +282,10 @@ A backup is a directory under `/var/lib/syncd/backups`, readable by root only, n
 - **Consistency.** Both services are stopped while the store is copied, so the copy is consistent.
   They start again afterwards if they were running. Plan for a short outage: the time to copy the
   store.
+- **Certificates kept by a rollback.** `syncdctl rollback` restores the console's database only
+  when the schema changed. When it keeps the database, it keeps `/etc/syncd/pki` too, since the
+  console's stored credentials for the engine match the current certificates (after a
+  `renew-certs`, say).
 - **Restore** stops the services, puts every part back, always restores the console's database
   (`pg_restore --clean --single-transaction`), and starts and checks the services. It warns when
   the backup was taken with another version, and refuses a backup whose store format the installed
@@ -280,7 +331,9 @@ stops the engine from starting.
 | `syncd_deletes_held{scope}` | Deletes held back by a threshold, waiting for approval |
 | `syncd_threshold_blocks_total` | Threshold holds started (a hold still in place is not counted again) |
 | `syncd_engine_busy`, `syncd_engine_busy_seconds` | A long operation runs (full sync, reconciliation, reload), and for how long; commands are refused meanwhile |
-| `process_resident_memory_bytes`, `syncd_memory_limit_bytes` | Resident memory, and the cgroup's limit (`MemoryMax`) when one is set |
+| `syncd_view_quarantined{view}` | Entities whose exports a failing rule (`on_error: quarantine`) holds back, per view (0 for a view with none). New in 0.3.0 |
+| `process_resident_memory_bytes`, `syncd_memory_limit_bytes` | Resident memory, and the cgroup's limit (`MemoryMax`, or a container's memory limit) when one is set |
+| `process_cpu_seconds_total`, `process_threads`, `process_open_fds` | CPU time used, user and system (its rate is the CPUs in use), threads and open files. New in 0.3.0 |
 | `syncd_export_operations_total`, `syncd_export_failures_total` | Export results |
 | `syncd_entities_changed_total`, `syncd_entities_deleted_total`, `syncd_records_joined_total`, `syncd_records_projected_total`, `syncd_records_unchanged_total`, `syncd_ambiguous_joins_total`, `syncd_rule_errors_total`, `syncd_orphans` | Pipeline counters |
 | `syncd_build_info`, `syncd_config_info`, `syncd_start_time_seconds` | The version, the configuration version, and when the engine started |
@@ -294,7 +347,11 @@ scrape_configs:
       - targets: ["127.0.0.1:9464"]
 ```
 
-The console has no metrics endpoint; watch it with `/healthz`.
+The console has no metrics endpoint; watch it with `/healthz`. It shows the engine's CPU and
+memory live, from the engine's status: on each engine's card on the engines dashboard, with a
+sparkline of the last minute (amber at 90% of the CPUs the engine may use, or of its memory
+limit), and in the **Engine process** section of the live metrics page, charted over 1, 5 or 15
+minutes. That history lasts while the page is open; for longer, scrape `/metrics`.
 
 ### Alert rules
 
@@ -312,6 +369,7 @@ assume the scrape job is called `syncd`; change `job="syncd"` in them if yours i
 | `SyncdTargetDown` | critical | An export target has been unreachable for 5 minutes |
 | `SyncdDeadLetters` | warning | Failed exports have been waiting for 30 minutes |
 | `SyncdDeletesHeld` | warning | A deletion threshold holds deletes back |
+| `SyncdQuarantined` | warning | A view has had quarantined entities for 30 minutes (new in 0.3.0) |
 | `SyncdRuleErrors` | warning | Rules failed in the last 30 minutes |
 | `SyncdEngineBusy` | warning | One long operation has run for over an hour |
 | `SyncdMemoryNearLimit` | warning | Resident memory has been above 90% of the cgroup's limit for 10 minutes |
@@ -321,6 +379,24 @@ how long your full syncs take. A quiet source commits rarely (syncrepl only send
 with a change), so `SyncdSourceStalled` looks for changes received since the last commit rather
 than for an old commit alone. PostgreSQL replication slot retention isn't an engine metric; watch
 it with `postgres_exporter` (`pg_replication_slots`). What to do about each alert is in
+[Troubleshooting](troubleshooting.md).
+
+## Quarantined entities
+
+A computed attribute with `on_error: quarantine` holds an entity's exports back when it fails for
+that entity, rather than writing a wrong value (see [Rules](rules.md)). From 0.3.0 the hold is
+kept in the store, with the attribute, its error and since when, so a restart keeps it. It ends
+by itself once the rule evaluates again for the entity.
+
+| Where | Shows |
+|---|---|
+| `syncd status` | A count per view, and up to 20 entities with the attribute and the error |
+| `syncd quarantine` | All of them, read from the store (works while the engine runs) |
+| The console's engine page | **Held back by a failing rule**, with up to 100 of them (`GET /api/v1/engines/{id}/quarantine`) |
+| `syncd_view_quarantined{view}`, alert `SyncdQuarantined` | The count per view; the alert fires after 30 minutes |
+
+To release them, fix the source data the rule reads (the next change to the entity releases it),
+or fix the rule and publish it (the full sync that follows releases the entities). See
 [Troubleshooting](troubleshooting.md).
 
 ## Certificates
@@ -337,19 +413,41 @@ Nothing outside the host trusts this CA.
 | `cli.crt`, `cli.key` | The command line's client certificate (`CN=syncd command line`) | Key: root and the `syncd` group |
 
 All are ECDSA P-256 and valid for **10 years** from installation. The engine's configuration names
-`engine.crt`, `engine.key` and `ca.crt` (as the client CA) in its `api.tls` section.
+`engine.crt`, `engine.key` and `ca.crt` (as the client CA) in its `api.tls` section. Upgrades do
+not reissue certificates that exist.
 
-**Renewal.** There is no renewal command, and upgrades do not reissue certificates that exist:
-`syncdctl` issues the CA and the engine's and console's certificates only when `ca.crt` is missing,
-and `cli-cert` issues the command line's only when it is missing. Note also that registering an
-engine copies the CA, the console's client certificate and its key into the console's database
-(the key encrypted). The console uses those copies, not the files: after replacing the
-certificates, remove the engine in the console and register it again with the new files (see
-[Registering engines](install.md#registering-engines)). ENS has not published a tested replacement
-procedure; practise on a test installation first.
+**Expiry.** `sudo syncdctl status` shows when the first of them expires, and warns within 60 days.
+The console's engine page warns too, when its client certificate for the engine has less than 60
+days left, and once it has expired (then the console cannot reach the engine).
 
-The certificate in front of the console, for browsers, is nginx's (`/etc/nginx/tls/`), and is
-yours to renew.
+**Renewal** (new in 0.3.0):
+
+```bash
+sudo syncdctl renew-certs            # new certificates from the same CA
+sudo syncdctl renew-certs --new-ca   # a new CA too, when the CA itself expires
+```
+
+It asks before it starts (`--yes` asks nothing), then:
+
+1. copies the current certificates and keys to `/etc/syncd/pki/before-renewal-<UTC time>`;
+2. issues the engine's certificate and the console's and the command line's client certificates
+   (and, with `--new-ca`, the CA first);
+3. restarts the engine with them, and waits for it (`SYNCD_HEALTH_TIMEOUT`). If it does not
+   start, it puts the previous certificates back, restarts the engine and stops with
+   `certificates not renewed`;
+4. gives the console its new credentials for the engine:
+   `syncd-console admin register-engine --name local --address 127.0.0.1:7443 ... --update`,
+   which the audit log records as `engine.update`;
+5. restarts the console and checks both services, then prints when the new certificates expire.
+
+The services are down for a few seconds. Without `--new-ca`, it warns when the CA itself expires
+within 400 days, since certificates from it cannot outlive it. It needs the CA's key
+(`/etc/syncd/pki/ca.key`): certificates syncdctl did not issue are refused. It renews the
+installed `local` engine only: an engine registered in another console, or under another name,
+must be registered there again with `--update`.
+
+The certificate browsers see is yours to renew: nginx's (`/etc/nginx/tls/`), or the console's own
+(`CONSOLE_TLS_CERT`), which it picks up within a minute.
 
 ## The master key
 
@@ -361,9 +459,134 @@ up`.
 
 - **Back it up** apart from the database: a database dump without the key cannot be decrypted.
   `syncdctl backup` includes it, so treat backups as secrets.
-- **If it is lost**, the console creates a new one at its next start and can no longer open the
-  stored engine keys. Remove each engine in the console and register it again.
+- **The console checks it at every start** (from 0.3.0) against a secret its database holds. It
+  refuses to start, and says to restore the key, when:
+    - `master.key` is missing while the database holds sealed secrets (a restore that missed it,
+      a new data directory). Before 0.3.0 it created a new key over them;
+    - the key, from the file or `CONSOLE_MASTER_KEY`, does not open them.
+- **If it is lost for good**, start the console with a new key on purpose:
+  `CONSOLE_NEW_MASTER_KEY=true` in `/etc/syncd/console.env` (or `--new-master-key`), then restart.
+  The stored secrets are lost, and the console logs that engines registered with mTLS must be
+  registered again: register each one again with `syncd-console admin register-engine --update`
+  (for the installed engine, `sudo syncdctl renew-certs` does it), or remove it and register it in
+  **Engines**. Then remove the setting, so that a later lost key is refused again.
 - There is no key rotation command.
+- **On Kubernetes** the key is in the `syncd-console` Secret (see
+  [Running on Kubernetes](#running-on-kubernetes)).
+
+## Running on Kubernetes
+
+With the [Helm chart](install.md#install-with-helm), the engine runs in the pod `syncd-engine-0`
+(for a release named `syncd`) and the console in the Deployment `syncd-console`. There is no
+systemd and no `syncdctl`: Kubernetes restarts the pods, and Helm installs, upgrades and removes
+them.
+
+| | Engine | Console |
+|---|---|---|
+| Kind | StatefulSet, one replica | Deployment (`console.replicas`, 1) |
+| Ports | 7443 control API (mutual TLS), 9464 metrics (plain HTTP); Service `syncd-engine` | 8080 plain HTTP; Service `syncd-console` |
+| Probes | Startup: the control API accepts connections (every 5 s, up to 10 minutes, for opening a large store). Readiness: the same. Liveness: `GET /metrics` on 9464 | `GET /healthz`, readiness and liveness |
+| Volumes | `data` (the PersistentVolumeClaim) at `/var/lib/syncd`; the `syncd-pki` Secret at `/etc/syncd/pki`; `/run/syncd` (memory) for the control socket; `/tmp` | `/var/lib/syncd/console` and `/tmp`, both `emptyDir` |
+| Stopping | 90 s to finish its batch (`engine.terminationGracePeriodSeconds`) | |
+
+### The command line
+
+The image has no shell, but `syncd` is its entry point and finds its configuration
+(`SYNCD_CONFIG`) and store by itself. Commands reach the running engine through its control
+socket, without certificates:
+
+```bash
+kubectl -n syncd exec syncd-engine-0 -- syncd status
+kubectl -n syncd exec syncd-engine-0 -- syncd quarantine
+kubectl -n syncd exec syncd-engine-0 -- syncd dlq
+kubectl -n syncd exec syncd-engine-0 -- syncd retry --publication people_out
+kubectl -n syncd exec syncd-engine-0 -- syncd reconcile
+kubectl -n syncd exec syncd-engine-0 -- syncd test-connection hr_db
+```
+
+Every command in [The syncd command line](#the-syncd-command-line) works this way, with the
+secrets from `engine.envFromSecret` in the pod's environment. The console's own commands run in
+its pod: `kubectl -n syncd exec deploy/syncd-console -- syncd-console admin reset-password --user
+admin`.
+
+Logs go to the containers' standard output: `kubectl -n syncd logs syncd-engine-0`,
+`kubectl -n syncd logs deploy/syncd-console`. Set `RUST_LOG` in `engine.env` or `console.env`.
+
+### The engine's configuration file
+
+The engine's configuration is on its volume, `/var/lib/syncd/engine.yaml`. At the first start it is
+a copy of the image's `/etc/syncd/engine.yaml` (`SYNCD_INITIAL_CONFIG`), which has no sources;
+after that the console replaces it when it publishes a configuration. The `engine` and `api`
+sections stay as the image sets them, and the engine refuses a published configuration that
+changes them:
+
+| Setting | In the image |
+|---|---|
+| `engine.data_dir` | `/var/lib/syncd/engine` |
+| `api.listen` | `0.0.0.0:7443`, with `api.tls` from `/etc/syncd/pki` (`engine.crt`, `engine.key`, `ca.crt` as the client CA) |
+| `api.control_socket` | `/run/syncd/control.sock` |
+| `api.metrics_listen` | `0.0.0.0:9464` |
+
+### Monitoring on Kubernetes
+
+Metrics are always on, on port 9464 (`/metrics`, Service port `metrics`). With the Prometheus
+Operator, set `engine.metrics.serviceMonitor.enabled=true`, with the `labels` your Prometheus
+selects ServiceMonitors by. It scrapes every 30 seconds (`interval`).
+
+The chart has no alert rules. Load `deploy/packaging/monitoring/syncd-alerts.yaml` from the source
+repository (the same file the packages ship) into Prometheus, or wrap its `groups` in a
+PrometheusRule. The rules match `job="syncd"`, but a ServiceMonitor's job is the Service's name,
+`syncd-engine` for a release named `syncd`: change `job="syncd"` in the rules to match, or relabel
+the job.
+
+The pod's memory limit (`engine.resources.limits.memory`, 4Gi by default) is the engine's
+`syncd_memory_limit_bytes`, so `SyncdMemoryNearLimit` works as on a host, and a CPU limit, if you
+set one, caps the CPUs the console shows the engine may use.
+
+### Upgrades
+
+`helm upgrade` with the new chart version (see [Upgrade with Helm](install.md#helm-upgrade)).
+Back up first: the chart takes no backup. The engine migrates its store when it starts, if the new
+release changed its format, and the console migrates its database. `helm rollback` restores no data
+(see [Rollback](install.md#on-kubernetes)).
+
+### Certificates on Kubernetes
+
+The chart issues the control API's certificates into the `syncd-pki` Secret, from a CA of its own
+(`syncd control API CA`), valid for `pki.days` (3650, ten years). The engine's certificate names
+the engine's Service (`syncd-engine`, `syncd-engine.<namespace>`, `.svc`, `.svc.cluster.local`) and
+`localhost`. There is no command-line certificate: `kubectl exec` uses the control socket.
+
+The console's engine page warns 60 days before the console's client certificate expires. To issue
+new ones, delete the Secret and upgrade:
+
+```bash
+kubectl -n syncd delete secret syncd-pki
+helm upgrade syncd oci://ghcr.io/winllc/charts/syncd --version X.Y.Z -n syncd -f syncd-values.yaml
+```
+
+The upgrade issues a new CA and new certificates. The engine pod restarts with them (its template
+carries a checksum of the Secrets), and the registration Job gives the console its new credentials
+(`register-engine --update`). `syncdctl renew-certs` does not apply here.
+
+### The master key Secret
+
+The `syncd-console` Secret holds the console's master key (`master-key`), which seals the
+engine's client key in the console's database, with the initial admin password. It is generated
+at install, kept by upgrades, and kept by `helm uninstall` (`helm.sh/resource-policy: keep`).
+
+- **Back it up** with the database: `kubectl -n syncd get secret syncd-console -o yaml`, stored as
+  a secret.
+- **If it is deleted**, the next `helm upgrade` generates a new key, and the console refuses to
+  start, saying the master key does not open the secrets the database holds. Put the old Secret
+  back (`kubectl apply` the backup), then restart the console
+  (`kubectl -n syncd rollout restart deploy/syncd-console`).
+- **If it is lost for good**, add `CONSOLE_NEW_MASTER_KEY=true` to `console.env` and upgrade. The
+  console then starts, but the registration Job does not: it gets only the database URL and the
+  master key, not `console.env`, so it still refuses the key and fails. In the console, remove the
+  engine under **Engines** (this also removes its configuration versions in the console; export
+  the configuration first), then remove `CONSOLE_NEW_MASTER_KEY` and run `helm upgrade` again.
+  With no sealed secrets left, the Job registers the engine afresh.
 
 ## Files and paths
 
@@ -378,6 +601,8 @@ up`.
 | `/var/lib/syncd/engine/` | The engine's store |
 | `/var/lib/syncd/console/` | The console's master key (`master.key`) and, until first used, `initial-admin-password` |
 | `/var/lib/syncd/backups/` | Backups, taken before every upgrade and on request. Root only |
+| `/etc/syncd/pki/before-renewal-<time>/` | The certificates replaced by `syncdctl renew-certs`. Root only |
+| `/run/syncd/control.sock` | The engine's control socket, when `api.control_socket` is set. `/run/syncd` exists while the engine runs |
 | `/opt/syncd/current/share/nginx/syncd.conf` | An nginx configuration for HTTPS in front of the console |
 | `/opt/syncd/current/share/monitoring/syncd-alerts.yaml` | Prometheus alerting rules |
 | `/opt/syncd/current/share/doc/INSTALL.md` | The installation notes shipped with the release |
@@ -391,12 +616,14 @@ in the console by importing the running one, which copies them.
 ## Routine checklist
 
 - **Daily:** `sudo syncd status`, or the console's engine page: no source `RETRYING` or `FAILED`,
-  no unreachable target, no deletes held back, dead letters not growing. Alerts quiet.
+  no unreachable target, no deletes held back, no entities quarantined, dead letters not growing.
+  Alerts quiet.
 - **After publishing a configuration:** `syncd status` shows the new `configuration version`, and
   the log has no `did not start`. `syncd_rule_errors_total` is not climbing.
 - **Weekly:** `sudo syncd dlq`, and fix or discard dead letters that keep failing. Check disk use
   of `/var/lib/syncd` and of PostgreSQL. Verify the console's audit chain (**Audit log** →
-  **Verify chain**).
+  **Verify chain**), against an `audit log head` line kept from the console's log.
+- **Monthly:** `sudo syncdctl status` shows the certificates are not near expiry.
 - **Before an upgrade:** read the release notes (store format changes, `SYNCD_HEALTH_TIMEOUT`),
   and take and copy off a backup.
 - **Regularly:** copy backups and the master key off the host; practise a restore on a test host.

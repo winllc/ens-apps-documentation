@@ -62,7 +62,11 @@ use the access token, so the role claim must be in the ID token.
   collide (`email`, for example) or keep such names apart from the start.
 - **A disabled account stays out**, whatever the provider says.
 - Accounts that sign in through single sign-on cannot change a password in the console or be
-  marked break-glass, and an admin cannot reset their password.
+  marked break-glass, and an admin cannot reset their password on the **Users** page.
+  `syncd-console admin reset-password` on the host refuses them too, since a password would let
+  the account sign in without the provider (and its MFA). With `--allow-single-sign-on` it gives
+  one anyway, for recovery while the provider is down; the audit log records that it did. Before
+  0.3.0 the command line gave such an account a password without asking.
 
 ## What is checked
 
@@ -112,8 +116,12 @@ account in the console (**Users**).
 | Scopes | `openid profile email`, plus what your provider needs to put the role claim in the ID token |
 | Front-channel or back-channel logout URI | None: the console has none |
 
-The console must be reached over HTTPS, through a TLS proxy, for its `Secure` session cookie to
-be kept; see [Installation](install.md).
+The console must be reached over HTTPS for its `Secure` session cookie to be kept: its own
+(`CONSOLE_TLS_CERT` and `CONSOLE_TLS_KEY`), or a TLS proxy in front of it. `CONSOLE_PUBLIC_URL`
+is the address users reach, so with the console's own HTTPS on a port other than 443 it includes
+the port: `CONSOLE_PUBLIC_URL=https://syncd.example.com:8443`, and the redirect URI is then
+`https://syncd.example.com:8443/api/v1/auth/oidc/callback`. See [Installation](install.md) and
+[Security](security.md#https-for-the-console).
 
 ## Settings
 
@@ -126,7 +134,7 @@ command-line flag (`syncd-console --help`).
 | `CONSOLE_OIDC_CLIENT_ID` | | The client id. Required with an issuer; also the expected audience |
 | `CONSOLE_OIDC_CLIENT_SECRET` | | The client secret |
 | `CONSOLE_OIDC_CLIENT_SECRET_FILE` | | A file holding the client secret instead (a trailing newline is dropped). The secret variable wins when both are set |
-| `CONSOLE_PUBLIC_URL` | | The console's address as users reach it, for example `https://syncd.example.com`. Required for single sign-on: the redirect URI is built from it |
+| `CONSOLE_PUBLIC_URL` | | The console's address as users reach it, for example `https://syncd.example.com`, or `https://syncd.example.com:8443` for the console's own HTTPS on that port. Required for single sign-on: the redirect URI is built from it |
 | `CONSOLE_OIDC_SCOPES` | `openid profile email` | Scopes requested, space-separated |
 | `CONSOLE_OIDC_ROLE_CLAIM` | `groups` | The ID token claim with the user's groups or roles: a string or an array of strings |
 | `CONSOLE_OIDC_ROLE_MAP` | empty | Claim values to console roles: `syncd-admins=admin,syncd-ops=operator`. See [Roles](#roles) |
@@ -134,6 +142,37 @@ command-line flag (`syncd-console --help`).
 | `CONSOLE_OIDC_USERNAME_CLAIM` | `preferred_username` | The claim used as the console username; `email`, then `sub`, when it is missing |
 | `CONSOLE_OIDC_LABEL` | `single sign-on` | The button says "Sign in with &lt;label&gt;" |
 | `CONSOLE_OIDC_CA_FILE` | | PEM CA certificates for a provider whose certificate is not from a public CA |
+
+### On Kubernetes
+
+The Helm chart has no single sign-on values of its own. Pass the settings as console
+environment variables in `console.env`, with the client secret from a Secret, and set
+`CONSOLE_PUBLIC_URL` to the ingress address:
+
+```sh
+kubectl create secret generic syncd-oidc -n syncd --from-literal=client-secret=...
+```
+
+```yaml
+console:
+  env:
+    - name: CONSOLE_PUBLIC_URL
+      value: https://syncd.example.com
+    - name: CONSOLE_OIDC_ISSUER
+      value: https://login.example.com/realms/staff
+    - name: CONSOLE_OIDC_CLIENT_ID
+      value: syncd-console
+    - name: CONSOLE_OIDC_CLIENT_SECRET
+      valueFrom:
+        secretKeyRef: { name: syncd-oidc, key: client-secret }
+    - name: CONSOLE_OIDC_ROLE_MAP
+      value: syncd-admins=admin,syncd-operators=operator
+```
+
+The chart cannot mount files into the console, so use `CONSOLE_OIDC_CLIENT_SECRET` rather than
+`CONSOLE_OIDC_CLIENT_SECRET_FILE`, and a provider whose certificate the Mozilla root set trusts
+(`CONSOLE_OIDC_CA_FILE` needs a mounted file). Set `console.trustedProxies` to the ingress
+controller's addresses.
 
 ## Roles
 
@@ -169,7 +208,7 @@ provider; the sign-in page keeps the local form behind "Break-glass sign-in".
 - Switching signs out the local accounts that can no longer sign in. Their attempts get the usual
   refusal; the audit log records why.
 - Keep the break-glass password somewhere safe: it is the way in when the provider is down.
-  `syncd-console admin reset-password` on the host recovers it.
+  `syncd-console admin reset-password --user NAME` on the host recovers it.
 
 ## Provider walkthroughs
 

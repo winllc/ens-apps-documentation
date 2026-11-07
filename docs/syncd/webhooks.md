@@ -9,7 +9,7 @@ Integrators watch and drive syncd through these instead:
 
 | Need | Use |
 |---|---|
-| Alerting on failures (a source down or stalled, a target unreachable, dead letters, held deletes, rule errors, memory) | The engine's Prometheus metrics at `GET /metrics` and the shipped alert rules (`share/monitoring/syncd-alerts.yaml`). Route the alerts through Alertmanager to e-mail, chat or a ticketing system. See [Operator guide](operator-guide.md) |
+| Alerting on failures (a source down or stalled, a target unreachable, dead letters, held deletes, entities quarantined by a failing rule, rule errors, memory) | The engine's Prometheus metrics at `GET /metrics` and the shipped alert rules (`share/monitoring/syncd-alerts.yaml`). Route the alerts through Alertmanager to e-mail, chat or a ticketing system. On Kubernetes, the Helm chart can add a `ServiceMonitor`. See [Operator guide](operator-guide.md) and [API reference](api-reference.md#prometheus-metrics) |
 | A live feed of the engine's state in another tool | The console's server-sent events stream, `GET /api/v1/engines/{id}/status/stream`: a `status` event with the engine's status every second. See [API reference](api-reference.md#engines) |
 | The same, without the console | The engine's gRPC `WatchStatus` stream (`syncd.v1.EngineControl`), with a control API client certificate. See [API reference](api-reference.md#engine-control-api-grpc) |
 | Polling status, dead letters and configuration versions, or starting runs and approvals | The console REST API (`/api/v1`), signed in as an account with the right role |

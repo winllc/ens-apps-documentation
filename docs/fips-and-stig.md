@@ -39,7 +39,7 @@ use is RSA's to state.
 have no FIPS variant yet), and it takes its cryptography from rustls with aws-lc-rs (AWS-LC). A FIPS build (`-fips` in the release
 file's name; built from source, since the published release has none), installed with `--fips`, uses the AWS-LC FIPS 140-3 module and refuses to start in
 FIPS mode on a standard build. The console then hashes passwords with PBKDF2-HMAC-SHA512 instead of
-Argon2id. The optional JDBC bridge is Java and takes its cryptography from its Java runtime. See
+Argon2id, and its own HTTPS (when it serves it rather than a proxy) uses the same FIPS provider. The optional JDBC bridge is Java and takes its cryptography from its Java runtime. See
 [syncd's page](syncd/fips-and-stig.md).
 
 **Turning FIPS mode on.** Run the images on a RHEL host with FIPS mode enabled
