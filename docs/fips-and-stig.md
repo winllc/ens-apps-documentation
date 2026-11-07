@@ -35,8 +35,8 @@ use is RSA's to state.
 | ReadyRoom | `ubi9/openjdk-21-runtime` | Red Hat OpenJDK 21 |
 | RSA Operations Portal | `ubi9/ubi` with `java-17-openjdk-headless`, for the Portal and the Connector | Red Hat OpenJDK 17 |
 
-**syncd** is the exception: it is written in Rust, runs on the host rather than in an image, and
-takes its cryptography from rustls with aws-lc-rs (AWS-LC). A FIPS build (`-fips` in the release
+**syncd** is the exception: it is written in Rust, its images are distroless rather than UBI (and
+have no FIPS variant yet), and it takes its cryptography from rustls with aws-lc-rs (AWS-LC). A FIPS build (`-fips` in the release
 file's name; built from source, since the published release has none), installed with `--fips`, uses the AWS-LC FIPS 140-3 module and refuses to start in
 FIPS mode on a standard build. The console then hashes passwords with PBKDF2-HMAC-SHA512 instead of
 Argon2id. The optional JDBC bridge is Java and takes its cryptography from its Java runtime. See
@@ -185,7 +185,7 @@ Settings worth fixing for every STIG deployment:
 | Directory Services Portal | Yes, on release tags | In the download, and attested on the images | Yes | `SHA256SUMS`, signed with GPG |
 | ReadyRoom | Yes, on release tags | In the download, and attested on the image | Yes | `SHA256SUMS`, signed with GPG |
 | RSA Operations Portal | Yes, on release tags (both images) | In the download, and attested on the images | Yes, both images | `SHA256SUMS`, signed with GPG |
-| syncd | No images or chart yet | CycloneDX, built by CI | `cargo-audit` and `cargo-deny` on every build | `SHA256SUMS` and a `.sha256` per bundle, not signed yet |
+| syncd | Not yet: images and chart are pushed unsigned | CycloneDX, built by CI (not attached to releases) | `cargo-audit` and `cargo-deny` on every build; no image scan | `SHA256SUMS` and a `.sha256` per bundle, not signed yet |
 
 Each scan fails the build on a HIGH or CRITICAL vulnerability that has a fix; accepted risks are
 listed in the repository's `.trivyignore`, each with its reason and a review date. For the RSA

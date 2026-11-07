@@ -1,6 +1,8 @@
 # Architecture
 
-syncd has two programs, installed together on one Linux host as systemd services:
+syncd has two programs. They are installed together on one Linux host as systemd services,
+or run on Kubernetes from their container images with the Helm chart (see
+[Running on Kubernetes](#running-on-kubernetes)):
 
 - **`syncd`**, the engine: it reads sources, merges their records into views, and writes
   the results to LDAP directories. It keeps its state in an embedded RocksDB store.
@@ -35,7 +37,7 @@ flowchart LR
         PG[("PostgreSQL<br/>accounts, sessions, versions, audit")]
     end
     TGT[("LDAP targets<br/>AD · OpenLDAP · 389 DS · Ping/UnboundID")]
-    NGX["nginx (TLS)"]
+    NGX["nginx or an ingress (TLS)"]
     BR["Browser"]
     CLI["syncd CLI"]
     OIDC["OpenID Connect provider"]
@@ -49,7 +51,8 @@ flowchart LR
     PIPE <--> STORE
     API --> LOOP
     API -.read-only lookups.-> STORE
-    BR -->|HTTPS| NGX -->|"HTTP, loopback"| SRV
+    BR -->|HTTPS| NGX -->|"HTTP"| SRV
+    BR -.->|"HTTPS, the console's own certificate"| SRV
     SRV --> UI
     SRV --> PG
     SRV -->|"gRPC, mTLS"| API
@@ -59,19 +62,21 @@ flowchart LR
 
 | Component | Responsibility | Source |
 |---|---|---|
-| Source connectors | Read objects from a source in full (`scrape`), as a stream of changes (`stream`: PostgreSQL logical replication, MySQL binlog, SQL Server change data capture, MongoDB change streams, LDAP syncrepl, AD DirSync, LDAP changelogs), or by a watermark (`delta`). Streaming sources send a checkpoint at each transaction boundary | `engine/crates/connectors` |
+| Source connectors | Read objects from a source in full (`scrape`), as a stream of changes (`stream`: PostgreSQL logical replication, MySQL binlog, SQL Server change data capture, MongoDB change streams, LDAP syncrepl, AD DirSync, LDAP changelogs), or by a watermark (`delta`). Full reads run on an interval or a cron `schedule`. Streaming sources send a checkpoint at each transaction boundary. A database connect (TCP, TLS and login) fails after 10 seconds without an answer, so a hung server restarts the source rather than stalling it | `engine/crates/connectors` |
 | Wire decoders | Decoders of what sources send (`pgoutput`, DirSync, syncrepl), fuzzed in CI | `engine/crates/wire` |
 | Run loop | One loop owns the engine. It batches changes from every source, plans and applies exports, and commits each batch with its source checkpoints. It also runs the long operations and the commands that come from the control API | `engine/bin/syncd/src/run.rs` |
 | Pipeline | Staging, correlation, precedence merge, computed attributes, groups, export planning, drift decisions | `engine/crates/engine` |
 | Rules | The CEL rule compiler, function library and computed-attribute transforms. The console's previews link the same crate | `engine/crates/rules` |
 | Store | RocksDB column families for staging, entities, links, exported state, checkpoints, the dead-letter queue and history | `engine/crates/store` |
 | LDAP writer | Applies planned operations to a target, parent entries first, with a bounded number of entities in flight per connection | `engine/crates/connectors/src/ldap.rs` |
-| Control API | gRPC service `syncd.v1.EngineControl`: status, the status stream, runs, approvals, dead letters, configuration, previews, the object explorer | `engine/crates/api`, `proto/syncd/v1/engine.proto` |
+| Control API | gRPC service `syncd.v1.EngineControl`: status, the status stream, runs, approvals, dead letters, quarantined entities, configuration, previews, the object explorer | `engine/crates/api`, `proto/syncd/v1/engine.proto` |
 | Metrics | Prometheus text format at `GET /metrics` on `api.metrics_listen`, off unless set | `engine/crates/api/src/metrics.rs` |
+| Process statistics | The engine's own CPU time, the CPUs it may use, resident and peak memory, its cgroup's memory limit, threads and open files, read from `/proc` and the cgroup with each status (Linux only). The console's dashboard and metrics page chart them live | `engine/crates/api/src/process.rs` |
 | Crypto | Installs the process-wide TLS crypto provider: aws-lc-rs, or its FIPS module | `engine/crates/crypto` |
 | Console server | Accounts, sessions, roles, single sign-on, the audit log, configuration versions, the proxy to each engine's control API, the REST API and its OpenAPI document | `console/server` |
 | Console UI | The single-page application, served by the console server from `CONSOLE_UI_DIR` | `console/web` |
-| `syncdctl` | Install, upgrade with rollback, backup, restore, status, uninstall | `deploy/packaging/syncdctl` |
+| `syncdctl` | Install, upgrade with rollback, backup, restore, status, renewing the control API certificates, uninstall | `deploy/packaging/syncdctl` |
+| Container images and Helm chart | The engine and console images, and the chart that runs them on Kubernetes | `deploy/container`, `deploy/helm/syncd` |
 
 ## The pipeline
 
@@ -105,7 +110,9 @@ flowchart LR
    flows, then per-attribute precedence between sources.
 5. **Computed attributes.** Rules compiled from CEL run in dependency order. Rules that read
    other entities (references, `referrers()`, groups) are re-evaluated across entities, up to
-   16 rounds per change.
+   16 rounds per change. When a rule with `on_error: quarantine` fails, the entity's exports
+   are held back. The hold is recorded in the store (`quarantine/<view>`), so it lasts across
+   restarts, and ends once the rule evaluates again for the entity.
 6. **Export planning.** For each publication, the entity is projected into a target entry
    (DN template, object classes, attribute mapping) and diffed against the last exported
    entry. The result is the smallest set of LDAP operations: add, modify, rename or delete.
@@ -119,6 +126,46 @@ The CPU-bound, read-only stages (recomputing entities, planning exports) run on
 `engine.shards` worker threads (one per CPU by default). The run loop's own thread applies
 their results, so writes to the store stay single-threaded and ordered.
 
+## Renames and moves
+
+Since 0.3.0, the engine follows entries that move, whoever moves them.
+
+- **Target ids.** The writer reads each entry's id in the target after it adds the entry, or
+  at its first write if it was exported before ids were kept: `objectGUID` on Active
+  Directory, `nsUniqueId` on 389 Directory Server, `entryUUID` elsewhere. The id is kept in
+  the exported state (as `syncd-target-id`) and never written to the target. Reading it is
+  best effort: a target that does not give it works as before.
+- **Entries moved or renamed in the target by someone else.** When an entry is not at the DN
+  last written, the writer looks for it by its id. On Active Directory that is a base search
+  for `<GUID=…>`; elsewhere a subtree search of the entry's naming context. A modify moves the
+  entry back to the DN the publication places it at and changes it there; a rename or delete
+  acts where the entry was found. Each is logged as a warning naming both DNs. Only an entry
+  found nowhere is added again. Two entries with the same id fail the export (dead letter).
+- **Renames into a DN that is taken.** When two entries of one batch swap DNs, or rename in a
+  chain, the writer parks a blocked entry under an RDN of its own (its RDN with `~` and the
+  entity's number, for example `CN=Jon Smith~1a`). Once the rest of the batch is written, it
+  renames the parked entries to their DNs, in rounds. An entry moved aside (`move_to`,
+  `disable_and_move_to`) into a container where its RDN is taken gets such an RDN for good,
+  and the engine records it there. Any other rename into a taken DN fails, as a real
+  conflict.
+- **Containers renamed in an LDAP source.** A directory reports only the container, not the
+  entries under it. So an LDAP object read with `mode: stream` or `mode: delta` and subtree
+  scope has its containers checked every `container_check_secs` (60 by default; 0 turns it
+  off). The entries under a container renamed since the last check are read again, as
+  updates. The last check's DNs are kept as a checkpoint of their own
+  (`<connector>/<object>#containers`), so a rename made while the engine was stopped is found
+  at the next start.
+- **Case-only renames** (`jdoe` to `JDoe`) are renames, tested on OpenLDAP and 389.
+- **Containers left empty.** The writer records each container it creates
+  (`containers/<target>` in the store). With a publication's `remove_empty_containers` (off
+  by default, needs `create_containers`), a plan that moves or deletes an entry lists the
+  containers it leaves, and the writer deletes those that are empty once the batch is
+  written, deepest first. A container syncd did not create, or that holds anything, stays. A
+  failure to delete one is logged and fails no export.
+
+See [Configuration](configuration.md) for the settings, and
+[Troubleshooting](troubleshooting.md) for the log messages.
+
 ## The store
 
 The store is a RocksDB database in `engine.data_dir` (`/var/lib/syncd/engine` on a packaged
@@ -130,9 +177,12 @@ install), with LZ4 compression and a shared block cache of `engine.cache_mb`.
 | `staging/<source id>` | anchor | Staged record |
 | `entities/<view>` | entity id | Merged entity |
 | `links` | source id and anchor | Entity id |
-| `exported/<publication>` | entity id | Last exported entry |
-| `checkpoints` | source name | Opaque source position |
+| `exported/<publication>` | entity id | Last exported entry, with the entry's target id (`syncd-target-id`) when known |
+| `checkpoints` | source name | Opaque source position; for an LDAP object whose containers are checked, also the containers' DNs (`<connector>/<object>#containers`) |
 | `unique/<scope>` | claimed value | Entity id |
+| `permanent/<view>/<attribute>` | normalized key | The entity that has (or last had) the key of a `permanent` computed attribute, and its values. Kept when the entity is deleted, so an entity that comes back with the key gets them again |
+| `quarantine/<view>` | entity id | The rule with `on_error: quarantine` that failed, its error, and since when |
+| `containers/<target>` | normalized DN | A container the writer created, for `remove_empty_containers` |
 | `dlq/<publication>` | entity id | Last failed export of that entity |
 | `pinned_joins` | source and anchor | Entity an operator joined the record to |
 | `exclusions` | link key and entity id | A record an operator kept from joining that entity |
@@ -225,9 +275,11 @@ is refused.
   `syncd check-drift`) reads each exported entry back from the target and compares the
   attributes the engine manages with what it last wrote. Per attribute, the policy is `flag`
   (report it), `revert` (write the engine's value back) or `accept` (keep the target's value
-  until the engine computes a different one). Missing entries are flagged or reverted.
+  until the engine computes a different one). Missing entries are flagged or reverted. An
+  entry moved by hand is reported as missing; reverting it moves it back by its target id
+  rather than adding a second one.
 - **Adoption** (`adopt`) takes over entries the target already has instead of adding
-  duplicates.
+  duplicates. It compares DNs as DNs, not as text.
 
 ## Writeback
 
@@ -274,8 +326,20 @@ sequenceDiagram
     C-->>B: 200
 ```
 
-The console server is one process. It listens on `CONSOLE_LISTEN` (`127.0.0.1:8080`) over plain
-HTTP; nginx in front of it terminates TLS. It serves:
+The console server is one process. It listens on `CONSOLE_LISTEN` (`127.0.0.1:8080`; `0.0.0.0:8080`
+in the container image):
+
+- **over plain HTTP** by default, with nginx (or a Kubernetes ingress) in front of it to
+  terminate TLS, as in the diagram above;
+- **over HTTPS itself** when `CONSOLE_TLS_CERT` and `CONSOLE_TLS_KEY` name a PEM certificate
+  (with its chain) and key. TLS is rustls on the process crypto provider, TLS 1.2 and 1.3,
+  HTTP/1.1. Each handshake runs in a task of its own with a 10-second limit, so a client
+  that stalls holds up no other. The files are checked every minute and loaded again when
+  they change, so a renewal (certbot, cert-manager) needs no restart; a renewal that does
+  not load is logged and the previous certificate kept. A certificate that does not load at
+  startup stops the console. See [Security](security.md#https-for-the-console).
+
+It serves:
 
 - the REST API at `/api/v1` and its OpenAPI document at `/api/openapi.json` (see
   [API reference](api-reference.md));
@@ -292,7 +356,7 @@ time it starts.
 | `users` | Accounts: username, display name, role, password hash (PHC string, or none for single sign-on accounts), forced change, disabled, failed sign-ins, lock time, OIDC subject, break-glass flag | `0001_init`, `0004_oidc`, `0005_local_sign_in` |
 | `sessions` | The SHA-256 of each session token, its account, last activity and end | `0001_init` |
 | `audit_log` | The append-only, hash-chained audit log. Triggers refuse `UPDATE`, `DELETE` and `TRUNCATE` | `0001_init` |
-| `engines` | Registered engines: name, `host:port`, the server CA and client certificate, and the client key sealed with the master key | `0002_engines` |
+| `engines` | Registered engines: name, `host:port` or `unix:<socket path>`, the server CA and client certificate, and the client key sealed with the master key | `0002_engines` |
 | `engine_configs` | Configuration versions per engine: YAML, comment, author, publication, approval, pending publish. A trigger refuses changes to a saved version; a constraint refuses an approval by the author; another trigger makes an approval final | `0003_engine_configs`, `0006_config_approval`, `0007_publish_pending` |
 | `oidc_logins` | Single sign-on requests in flight: state, nonce, PKCE verifier, where to go next | `0004_oidc` |
 | `settings` | One row: who may sign in locally (`everyone` or `break_glass`), configuration approval (`off` or `required`), and the top and bottom banners | `0005_local_sign_in`, `0006_config_approval`, `0008_banners` |
@@ -300,13 +364,31 @@ time it starts.
 Every ten minutes the console deletes ended or idle sessions and single sign-on requests older
 than an hour.
 
+At startup, and then every hour when it has changed, the console writes the head of the audit
+chain (the newest entry's id, time and hash) to its own log, as `audit log head`. That copy
+lives outside the database, so a verification against it finds entries removed from the end
+of the log. See [Security](security.md#audit-log).
+
+Also at startup, the console checks its master key against a secret the database holds (an
+engine's sealed client key). A missing key file is not replaced by a new key while such
+secrets exist, and a key that does not open them is refused: the console does not start
+unless `CONSOLE_NEW_MASTER_KEY=true`. See
+[Security](security.md#console-secrets-and-the-master-key).
+
 ### The engine control API
 
 The console holds one gRPC client per registered engine. An engine off loopback must be
 registered with mTLS (the engine's CA, and a client certificate and key); plain text is
-allowed only to a loopback address. The installer registers the local engine at
-`127.0.0.1:7443` with mTLS, using certificates from a CA of the host's own. See
+allowed only to a loopback address, or to the engine's control socket (`unix:/run/syncd/control.sock`)
+when the console runs on the engine's host as a user that may open it. The installer registers
+the local engine at `127.0.0.1:7443` with mTLS, using certificates from a CA of the host's own;
+`syncdctl renew-certs` issues new ones and updates the registration
+(`syncd-console admin register-engine --update`). On Kubernetes the Helm chart issues the
+certificates and a Job registers the engine. See
 [Security](security.md#the-engine-control-api).
+
+The console reads each mTLS client certificate's expiry and returns it with the engine
+(`certificate_expires_at`); the engine's page warns from 60 days before it.
 
 Each operation the console proxies (runs, approvals, drift checks, dead-letter actions, joins
 and unjoins, publishes) is checked against the user's role and recorded in the console's audit
@@ -321,6 +403,56 @@ console checks that the session is still valid (not signed out, expired, idle, o
 and ends the stream otherwise. The shipped nginx configuration turns off proxy buffering and
 keeps the stream open for up to an hour.
 
+Each status also carries the engine process's CPU and memory (`process`, on Linux). The console
+computes CPU in use from the CPU time over the last five statuses, as a share of the CPUs the
+engine may use, and shows it with memory (against the cgroup's limit, when there is one) on the
+engines dashboard and each engine's metrics page.
+
+## Running on Kubernetes
+
+From 0.3.0, each release also publishes two container images and a Helm chart:
+
+| Artifact | Where |
+|---|---|
+| Engine image | `ghcr.io/winllc/syncd:<version>` |
+| Console image | `ghcr.io/winllc/syncd-console:<version>` |
+| Helm chart | `oci://ghcr.io/winllc/charts/syncd`, the same version as the images |
+
+Both images are built from one Dockerfile (`deploy/container/Dockerfile`) on
+`gcr.io/distroless/cc-debian12:nonroot`: no shell, no package manager, running as uid and gid
+65532. They are built for amd64 only, and there is no FIPS image.
+
+```mermaid
+flowchart LR
+    BR["Browser"] -->|HTTPS| ING["Ingress<br/>(your controller, TLS)"]
+    ING -->|HTTP| CON["Console Deployment<br/>syncd-console, port 8080"]
+    CON --> PG[("PostgreSQL<br/>(yours)")]
+    CON -->|"gRPC, mTLS, port 7443"| ENG["Engine StatefulSet<br/>1 replica"]
+    ENG <--> PVC[("Volume<br/>/var/lib/syncd")]
+    JOB["Registration Job<br/>(post-install, post-upgrade)"] --> PG
+    PROM["Prometheus"] -->|"/metrics, port 9464"| ENG
+    ENG --> SRC[("Sources and targets")]
+```
+
+Resource names below are for a release named `syncd`. The chart names them `<release>-syncd-…`,
+or `<release>-…` when the release name contains `syncd`.
+
+| Part | What the chart makes |
+|---|---|
+| Engine | A StatefulSet with one replica: one engine per store. Its volume (`data-syncd-engine-0`) holds the store (`/var/lib/syncd/engine`) and the configuration file it runs (`/var/lib/syncd/engine.yaml`). The file starts as a copy of the image's (`SYNCD_INITIAL_CONFIG`), and the console replaces it when it publishes. The image fixes the `engine` and `api` sections: the control API on `0.0.0.0:7443` with mTLS, the control socket at `/run/syncd/control.sock` (an in-memory volume), metrics on `0.0.0.0:9464`. Secrets the configuration refers to come from a Secret you name (`engine.envFromSecret`) |
+| Console | A Deployment (`console.replicas`, 1 by default) on port 8080, plain HTTP, with an optional Ingress. Its data directory is an `emptyDir`: the master key comes from a Secret |
+| Certificates | The `syncd-pki` Secret: a CA of the chart's own, the engine's server certificate (named for its Service) and the console's client certificate, issued by Helm at install (`pki.days`, ten years by default) and kept across upgrades |
+| Console secrets | The `syncd-console` Secret: the master key (32 random bytes) and the initial admin password, generated at install, kept across upgrades, and kept when the release is uninstalled |
+| Registration | A Job after each install and upgrade runs `syncd-console admin register-engine --update` with the chart's certificates |
+| Monitoring | An optional `ServiceMonitor` for the Prometheus operator |
+
+Probes: the engine's startup and readiness probes connect to the control API port, and its
+liveness probe fetches `/metrics`; the console's probes fetch `/healthz`. The PostgreSQL server
+for the console is yours; the chart does not bundle one. Upgrades and rollbacks are `helm
+upgrade` and `helm rollback`; a store or database that the newer release migrated must be
+restored from backups before rolling back. See [Installation](install.md) and
+[Security](security.md#container-images-and-the-helm-chart).
+
 ## Tech stack
 
 | Layer | Technology |
@@ -333,13 +465,12 @@ keeps the stream open for up to an hour.
 | Control API | gRPC (`tonic` 0.14, `prost`), mTLS through rustls |
 | TLS and cryptography | rustls 0.23 with aws-lc-rs; optional FIPS build with the AWS-LC FIPS module |
 | Metrics | Prometheus text format from the engine's own HTTP listener; alert rules shipped |
-| Console server | Rust, Axum 0.8, `sqlx` 0.8 on PostgreSQL 13+, `utoipa` (OpenAPI), `jsonwebtoken` and `reqwest` (OpenID Connect), `argon2` |
+| Console server | Rust, Axum 0.8, `sqlx` 0.8 on PostgreSQL 13+, `tokio-rustls` (its own HTTPS), `utoipa` (OpenAPI), `jsonwebtoken` and `reqwest` (OpenID Connect), `argon2` |
 | Console UI | React 19, TypeScript, Vite, TanStack Router and Query, Tailwind CSS 4, Monaco editor, React Flow (`@xyflow/react`), `openapi-fetch` with types generated from the OpenAPI document |
 | Packaging | systemd units; `.tar.gz` bundle, `.deb` and `.rpm` (nfpm), RHEL 8 `.rpm`; `syncdctl` (bash) |
-| Front proxy | nginx configuration shipped for TLS in front of the console |
-| CI | GitHub Actions: fmt and clippy, tests, the console UI with a Playwright smoke test and a Keycloak sign-in, end-to-end suites per source and target, benchmarks, fuzzing, the FIPS build, `cargo-deny`, `cargo-audit`, a CycloneDX SBOM, and package lifecycle tests |
-
-There are no container images or Helm chart yet.
+| Containers | Images on `gcr.io/distroless/cc-debian12:nonroot` (amd64), built from `rust:1.97.0-bookworm` and `node:22-bookworm-slim`; a Helm 3 chart (`deploy/helm/syncd`), published to GHCR as an OCI chart |
+| Front proxy | Optional: the console serves HTTPS itself, or behind the shipped nginx configuration or a Kubernetes ingress |
+| CI | GitHub Actions: fmt and clippy, tests, the console UI with a Playwright smoke test and a Keycloak sign-in, end-to-end suites per source and target, benchmarks, fuzzing, the FIPS build, `cargo-deny`, `cargo-audit`, a CycloneDX SBOM, package lifecycle tests, and the container images built and the chart installed, upgraded and uninstalled in a kind cluster |
 
 ## Code layout
 
@@ -349,8 +480,8 @@ the source to install or run syncd: install it from a release, as described in
 
 | Path | Contents |
 |---|---|
-| `engine/bin/syncd` | The daemon and command line (`run`, `status`, `reconcile`, `full-sync`, `dlq`, `approve`, `retry`, `discard`, `apply-config`, `check-drift`, `test-connection`, `discover`, `simulate`, ...) and the run loop |
-| `engine/crates/api` | The control API server and client, the status board, the explorer, the metrics listener |
+| `engine/bin/syncd` | The daemon and command line (`run`, `status`, `reconcile`, `full-sync`, `dlq`, `quarantine`, `approve`, `retry`, `discard`, `apply-config`, `check-drift`, `test-connection`, `discover`, `simulate`, ...) and the run loop |
+| `engine/crates/api` | The control API server and client, the status board, the explorer, the metrics listener, process statistics |
 | `engine/crates/config` | The YAML configuration model and its validation |
 | `engine/crates/core` | Values, records, attribute maps, attribute-level diffs |
 | `engine/crates/rules` | The CEL compiler, function library and computed-attribute transforms |
@@ -364,4 +495,7 @@ the source to install or run syncd: install it from a release, as described in
 | `proto/syncd` | gRPC definitions: `v1/engine.proto` (the control API) and `bridge/v1/jdbc.proto` (the JDBC bridge) |
 | `bridge/jdbc` | The JDBC bridge (Java, Gradle) |
 | `deploy/packaging` | The release build, systemd units, `syncdctl`, nginx configuration, alert rules, package tests |
+| `deploy/container` | The Dockerfile of both images, and the engine's initial configuration in its image |
+| `deploy/helm/syncd` | The Helm chart |
+| `tests/helm` | The chart's test in a kind cluster |
 | `docs/adr` | Architecture decision records |

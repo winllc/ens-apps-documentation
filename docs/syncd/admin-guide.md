@@ -159,7 +159,9 @@ Accounts are never deleted; disable those that should no longer sign in.
 
 The key button issues a new one-time password for a local account. It also clears the failed
 sign-in count, unlocks the account, and ends its sessions. Recorded as `user.password_reset`. An
-account that signs in through single sign-on has no console password and cannot be reset here.
+account that signs in through single sign-on has no console password and cannot be reset here (nor
+from the command line, unless told to; see
+[`syncd-console admin reset-password`](#syncd-console-admin-reset-password)).
 
 Sign-in limits, which are fixed in the code:
 
@@ -203,7 +205,7 @@ With OpenID Connect set up, the first sign-in through the identity provider crea
 marked **SSO**. Such an account:
 
 - has no console password: it cannot be reset, cannot change a password here, and cannot be
-  break-glass;
+  break-glass. Only `syncd-console admin reset-password --allow-single-sign-on` gives it one;
 - gets its role from the provider's group claim at every sign-in. Changing it on the **Users** page
   lasts only until the account next signs in;
 - stays out if it is disabled here, whatever the provider says.
@@ -283,22 +285,52 @@ Banners are console settings, kept in the database; they are not environment var
 ## Engines
 
 The console manages one or more engines. Each is registered by name and the address of its gRPC
-control API.
+control API, or of its control socket.
 
 ### Registering an engine
 
-A packaged install registers the local engine itself, as `local` at `127.0.0.1:7443` with the
-certificates `syncdctl` issued. To add another, choose **Register engine** on the **Engines** page:
+The local engine is registered for you:
+
+| Install | Registered as |
+|---|---|
+| Package or bundle (`syncdctl install`) | `local` at `127.0.0.1:7443`, with the certificates `syncdctl` issued |
+| Helm chart | The release's name (or `engine.name`) at the engine's service, port 7443, with the chart's certificates. A Job does it after each install and upgrade, with `--update` |
+
+To add another, choose **Register engine** on the **Engines** page:
 
 | Field | Meaning |
 |---|---|
 | **Name** | 1–64 letters, digits, `.`, `_`, `-`; unique in this console |
-| **Control API address** | `host:port`, as in the engine's `api.listen` |
-| **Mutual TLS** | Required unless the engine is on a loopback address. Then paste the **engine CA certificate**, the **console client certificate** and the **console client key** (PEM) |
+| **Control API address** | `host:port`, as in the engine's `api.listen`; or `unix:` and the absolute path of the engine's control socket (`api.control_socket`), such as `unix:/run/syncd/control.sock` |
+| **Mutual TLS** | Ticked by default. Required unless the engine is on a loopback address. Then paste the **engine CA certificate**, the **console client certificate** and the **console client key** (PEM). Untick it for a `unix:` address: the control socket takes no TLS, and the console refuses certificates with one |
 
 The console connects and asks the engine for its status before saving; an engine that does not
 answer is not registered. The client key is stored encrypted with the console's master key and is
 never shown again. Recorded as `engine.register`, with the address and whether mTLS is used.
+
+A `unix:` address works only when the console runs on the engine's host as a user that may open
+the socket. On a packaged install the socket is mode 0600 (root and the engine's own user), so the
+`syncd-console` user cannot open it; the packaged console keeps using `127.0.0.1:7443`.
+
+### Certificate expiry and renewal
+
+For an engine registered with mutual TLS, the console reads when its client certificate expires.
+The engine's page warns from 60 days before (in red under 14 days), and says when it has expired:
+the console then cannot reach the engine.
+
+- **Package or bundle installs:** run `sudo syncdctl renew-certs` on the engine's host
+  (`--new-ca` to replace the CA too). It issues new certificates, restarts the engine, gives the
+  console its new ones with `syncd-console admin register-engine --update`, and restarts the
+  console. `syncdctl status` shows when the certificates expire. See the
+  [Install guide](install.md).
+- **Helm installs:** the registration Job gives the console new credentials after each upgrade
+  that issued new certificates.
+- **Other engines:** issue new certificates for the engine and the console, then register the
+  engine again with [`register-engine --update`](#syncd-console-admin-register-engine). The page
+  cannot replace a registration.
+
+Replacing a registration keeps the engine's configuration versions, and is recorded as
+`engine.update`.
 
 ### Removing an engine
 
@@ -332,9 +364,9 @@ The client address is the connection's, or, behind a reverse proxy listed in
 |---|---|
 | `auth.login`, `auth.logout`, `auth.oidc.login` | Sign-ins (with the reason for a failure or refusal) and sign-outs |
 | `user.bootstrap`, `bootstrap.password_file_removed` | The first `admin` account, and the initial password file being deleted |
-| `user.create`, `user.update`, `user.password_reset`, `user.password_change`, `user.password_change_skipped` | Account changes (role, disabled and break-glass before and after). A reset from the command line has the actor `system` |
+| `user.create`, `user.update`, `user.password_reset`, `user.password_change`, `user.password_change_skipped` | Account changes (role, disabled and break-glass before and after). A reset from the command line has the actor `system`, and says whether the account signs in through single sign-on |
 | `settings.local_sign_in`, `settings.config_approval`, `settings.banners` | Console settings, before and after |
-| `engine.register`, `engine.remove` | Engines added and removed (`system` when the installer registers one) |
+| `engine.register`, `engine.update`, `engine.remove` | Engines added, registered again with new credentials, and removed (`system` when the installer or `syncdctl renew-certs` does it) |
 | `engine.run`, `engine.approve_deletions`, `engine.check_drift`, `engine.dead_letters.retry`, `engine.dead_letters.discard` | Operator commands, with the request and the engine's answer or error |
 | `correlation.join`, `correlation.unjoin` | Records joined or unjoined by hand |
 | `config.save`, `config.import`, `config.import_file`, `config.export` | Versions saved, imported or exported |
@@ -356,14 +388,28 @@ The table is append-only: database triggers refuse updates, deletes and truncati
 stores `SHA-256(previous entry's hash ‖ the entry)`, so an entry changed or removed behind the
 triggers (by someone with direct database access) breaks the chain.
 
-**Verify chain** recomputes the whole chain (`GET /api/v1/audit/verify`) and shows either
-**All N entries are intact** or **The log was altered**, naming the first entry that does not
-match. Verification starts from the first entry and can take a while on a large log.
+**Verify chain** recomputes the whole chain (`GET /api/v1/audit/verify`). Verification starts
+from the first entry and can take a while on a large log.
 
-!!! note
-    The chain shows edits and removals of entries that have later entries after them. Removing
-    the newest entries leaves a shorter chain that still verifies; compare the entry count with an
-    earlier verification, or keep database backups, to catch that.
+The chain shows edits and removals of entries that have later entries after them. Removing the
+newest entries leaves a shorter chain that still verifies on its own. To catch that, the console
+records the chain's **head** (its newest entry's id, time and hash) outside the database:
+
+- every hour, while the log has changed, the console writes a line `audit log head` with `id`,
+  `at` and `hash` to its own log (on a host, the journal: `journalctl -u syncd-console | grep
+  'audit log head'`). Keep those lines outside the console database, in a SIEM or log archive;
+- each successful verification shows the head too (**Head: entry N, &lt;hash&gt;**).
+
+To verify against a head recorded earlier, fill in **Recorded head: entry** and **Its hash** above
+the log before choosing **Verify chain** (the API takes `anchor_id` and `anchor_hash`, both or
+neither). The result is one of:
+
+| Result | Meaning |
+|---|---|
+| **All N entries are intact** (with the head; with a recorded head, "up to and past the recorded head") | The chain matches, and so does the recorded head |
+| **The log was altered**: entry N does not match the chain | An entry, or an earlier one, was changed outside the console |
+| **Entries were removed** | The recorded head's entry is no longer in the log: entries were removed from its end |
+| **The log was altered**: entry N no longer has the recorded hash | It, or an earlier entry, was changed |
 
 ## Command-line administration (`syncd-console admin`)
 
@@ -384,31 +430,36 @@ The environment file matters: it carries the database URL and, on a FIPS install
 ### `syncd-console admin reset-password`
 
 ```sh
-syncd-console admin reset-password [--user NAME]
+syncd-console admin reset-password [--user NAME] [--allow-single-sign-on]
 ```
 
 Issues a new 24-character one-time password for the account (`admin` by default), prints it, and
 requires it to be changed at the next sign-in. It also unlocks the account and ends its sessions.
-Recorded as `user.password_reset` by `system`, with `"via": "command line"`. Use it when every
-administrator is locked out, or when the identity provider and every break-glass password are
-unavailable.
+Recorded as `user.password_reset` by `system`, with `"via": "command line"` and whether the
+account signs in through single sign-on. Use it when every administrator is locked out, or when the
+identity provider and every break-glass password are unavailable.
 
-!!! warning
-    Unlike the **Users** page, the command does not refuse accounts that sign in through single
-    sign-on: it gives such an account a local password, and it can then sign in with it. Run it for
-    local accounts only.
+Like the **Users** page, it refuses an account that signs in through single sign-on: a password
+would let it sign in without the identity provider (and its multi-factor authentication).
+`--allow-single-sign-on` gives such an account a password anyway, for recovery while the provider
+is down. The account can then sign in with the password as well as through the provider, until
+it is disabled.
 
 ### `syncd-console admin register-engine`
 
 ```sh
-syncd-console admin register-engine --name NAME --address HOST:PORT \
-  [--server-ca CA.pem --client-cert CERT.pem --client-key KEY.pem]
+syncd-console admin register-engine --name NAME --address HOST:PORT|unix:/PATH \
+  [--server-ca CA.pem --client-cert CERT.pem --client-key KEY.pem] [--update]
 ```
 
 Registers an engine as the **Register engine** page does, checking that it answers first. The three
-PEM files are needed together, and are required unless the address is a loopback one. When an
-engine with the name is registered already, the command says so and changes nothing. `syncdctl
-install` uses it to register the local engine. Recorded as `engine.register` by `system`.
+PEM files are needed together, and are required unless the address is a loopback one or a `unix:`
+control socket (which takes none). When an engine with the name is registered already, the command
+says so and changes nothing, unless given `--update`: then it replaces the engine's address and
+credentials, keeping its configuration versions, and the console's next call uses them.
+`syncdctl install` uses it to register the local engine, and `syncdctl renew-certs` and the Helm
+chart's registration Job use it with `--update`. Recorded as `engine.register` (or `engine.update`)
+by `system`.
 
 There is no command to create accounts, change roles or change the console settings; those are done
 in the console or through the [API](api-reference.md).
@@ -425,4 +476,28 @@ take effect when the console restarts. See [Configuration](configuration.md).
 | `CONSOLE_SESSION_IDLE_MINUTES`, `CONSOLE_SESSION_MAX_HOURS` | Session idle timeout (default 30 minutes) and maximum length (default 12 hours) |
 | `CONSOLE_TRUSTED_PROXIES` | Reverse proxies whose `X-Forwarded-For` names the client |
 | `CONSOLE_ADMIN_PASSWORD`, `CONSOLE_ADMIN_PASSWORD_FILE` | The first `admin` password, on an empty database only |
+| `CONSOLE_TLS_CERT`, `CONSOLE_TLS_KEY` | A certificate (PEM, with its chain) and key for the console to serve HTTPS itself, without a TLS reverse proxy. Both or neither. The files are read again within a minute when they change, so a renewal needs no restart |
+| `CONSOLE_MASTER_KEY`, `CONSOLE_NEW_MASTER_KEY` | The master key that seals the engines' client keys (otherwise `$CONSOLE_DATA_DIR/master.key`), and whether to start without the right one; see [The master key](#the-master-key) |
 | `SYNCD_FIPS_MODE` | FIPS mode, which changes password hashing |
+
+### The master key
+
+The console seals the client keys of engines registered with mutual TLS with its master key:
+`CONSOLE_MASTER_KEY`, or the file `$CONSOLE_DATA_DIR/master.key` (`/var/lib/syncd/console/master.key`
+on a host; the `syncd-console` Secret under Helm). The console creates the file on its first
+start. Back it up with the database: the sealed keys cannot be recovered without it.
+
+At each start the console checks the key against a sealed key in its database. It refuses to start
+when:
+
+- `master.key` is missing while the database holds sealed keys (a restore that missed it, a new
+  data directory). It does not create a new key over them;
+- the key does not open them: it is not the key they were sealed with.
+
+Either way, restore `master.key` from a backup, or set `CONSOLE_MASTER_KEY` to the old key. To
+start anyway, set `CONSOLE_NEW_MASTER_KEY=true` (or pass `--new-master-key`): the console starts
+with a new key if it has none, the sealed keys are lost, and every engine registered with mutual
+TLS must be registered again (`register-engine --update`, or `sudo syncdctl renew-certs` for the
+local engine). Keep the setting until they are: until then the old sealed keys are still in the
+database, and the console, and the `syncd-console admin` commands run with its environment, refuse
+to start without it. Remove it afterwards, so that a lost key is caught again.

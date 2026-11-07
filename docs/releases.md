@@ -11,9 +11,12 @@ ways to install it:
   at `oci://ghcr.io/winllc/charts/<chart>` and included in the download.
 
 !!! note "syncd"
-    syncd ships differently: as an offline bundle (`.tar.gz`), a `.deb` and an `.rpm` for a Linux host
-    with systemd, with no container images or Helm chart yet, and its releases are not on the
-    licensing portal. Its `SHA256SUMS` is not signed yet. See
+    syncd ships differently. Its releases go to GitHub on a version tag, not to the licensing portal
+    (no syncd release has been tagged yet, so none is published): an offline bundle
+    (`.tar.gz`), a `.deb` and an `.rpm` for a Linux host with systemd, plus the container images
+    `ghcr.io/winllc/syncd` and `ghcr.io/winllc/syncd-console` and the Helm chart
+    `oci://ghcr.io/winllc/charts/syncd`. Its `SHA256SUMS`, images and chart are not signed yet, so
+    the cosign checks below don't apply to it. See
     [syncd's install guide](syncd/install.md#getting-the-release).
 
 ## For customers: downloading and verifying a release

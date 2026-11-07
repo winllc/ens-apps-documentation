@@ -6,26 +6,31 @@
 |---|---|---|
 | [Offline bundle](#install-from-the-bundle) | Any Linux distribution with systemd (glibc 2.34 or newer), including hosts with no internet access | `install.sh`, then `syncdctl` |
 | [Package](#install-from-a-package) | Debian and Ubuntu (`.deb`); RHEL, Rocky, Alma 9 and newer and Fedora (`.rpm`); RHEL, Rocky, Alma 8 (`.el8.rpm`) | `apt` or `dnf`, then `syncdctl install` |
+| [Helm chart](#install-with-helm) | Kubernetes, from the container images (amd64) | `helm install` |
 
-syncd runs as two systemd services on one Linux host:
+syncd has two parts:
 
-- `syncd`: the engine. It reads the sources, merges identities into views and exports them to
-  the target directories. It keeps its state in a store of its own on local disk.
-- `syncd-console`: the web console, with its PostgreSQL database.
+- **The engine** (`syncd`). It reads the sources, merges identities into views and exports them
+  to the target directories. It keeps its state in a store of its own on local disk.
+- **The web console** (`syncd-console`), with its PostgreSQL database.
 
-Every form of a release installs the same files, and `syncdctl` does the rest: service accounts,
-configuration, the control API's certificates, the services, and registering the engine in the
-console.
+On a host, they run as two systemd services. Every form of a release installs the same files,
+and `syncdctl` does the rest: service accounts, configuration, the control API's certificates,
+the services, and registering the engine in the console.
 
-!!! note "What syncd does not have yet"
-    There are no container images and no Helm chart: syncd is installed on a host, as systemd
-    services. There is no ENS license check yet (licensing is on the roadmap), so there is no
-    license to add. See [Licensing](../licensing.md).
+On Kubernetes, the engine is a StatefulSet with one replica and the console a Deployment. The
+chart issues the certificates and registers the engine.
+
+!!! note "No license to add"
+    There is no ENS license check yet (licensing is on the roadmap), so there is no license to
+    add. See [Licensing](../licensing.md).
 
 For the settings referred to here, see [Configuration](configuration.md). Day-to-day running is in
 the [Operator guide](operator-guide.md).
 
 ## Prerequisites
+
+The requirements for the [Helm chart](#install-with-helm) are listed with it.
 
 | Requirement | Notes |
 |---|---|
@@ -56,15 +61,48 @@ each, checks the tag against the version in the source, and only then publishes 
 | `syncd-<version>-1.el8.x86_64.rpm` | RHEL, Rocky and Alma 8, through dnf |
 | `SHA256SUMS` | The checksums of the four files above |
 
+The RHEL 8 package is new in 0.3.0. The release's notes on GitHub are the release notes from the
+source repository (`docs/releases/<version>.md`).
+
 Verify what you downloaded before you install it:
 
 ```bash
 sha256sum -c SHA256SUMS --ignore-missing
-sha256sum -c syncd-0.2.1-linux-x86_64.tar.gz.sha256      # the bundle alone
+sha256sum -c syncd-0.3.0-linux-x86_64.tar.gz.sha256      # the bundle alone
 ```
 
 Inside the bundle, every file is listed in `MANIFEST.sha256`, and the installer checks the release
 against it before it copies anything.
+
+### Container images and the Helm chart
+
+From 0.3.0, a second workflow (`Container`) builds two images and the Helm chart on every `v*`
+tag, installs them in a kind cluster, and then pushes them to the GitHub container registry:
+
+| What | Where |
+|---|---|
+| The engine's image | `ghcr.io/winllc/syncd:<version>` |
+| The console's image | `ghcr.io/winllc/syncd-console:<version>` (with the web UI) |
+| The Helm chart | `oci://ghcr.io/winllc/charts/syncd`, version `<version>` |
+
+- **Tags.** Each release is tagged with its version only, for example `0.3.0`. There is no
+  `latest`. The chart's version and `appVersion` are the release's.
+- **Platforms.** amd64 only. There is no arm64 image and no FIPS image.
+- **Base.** Distroless (`gcr.io/distroless/cc-debian12:nonroot`): no shell and no package
+  manager. Both images run as uid and gid 65532, and work on a read-only root file system.
+- **Not signed.** The images and the chart carry no cosign signatures or SBOMs, and the chart is
+  not attached to the GitHub release. Pin the versions you have checked, or mirror them (see
+  [Air-gapped clusters](#air-gapped-clusters)).
+
+**Images you build yourself**, from the source repository:
+
+```bash
+docker build -f deploy/container/Dockerfile --target engine -t registry.example.com/syncd:0.3.0 .
+docker build -f deploy/container/Dockerfile --target console -t registry.example.com/syncd-console:0.3.0 .
+```
+
+Then set `image.engine.repository`, `image.console.repository` and their `tag` in the chart's
+values.
 
 !!! note "Not yet in the ENS licensing portal"
     Unlike the other ENS applications, syncd releases are not yet delivered through the
@@ -80,9 +118,9 @@ are not FIPS builds. See [FIPS 140-3 and DISA STIG](fips-and-stig.md).
 ## Install from the bundle
 
 ```bash
-sha256sum -c syncd-0.2.1-linux-x86_64.tar.gz.sha256
-tar -xzf syncd-0.2.1-linux-x86_64.tar.gz
-sudo ./syncd-0.2.1-linux-x86_64/install.sh --local-database
+sha256sum -c syncd-0.3.0-linux-x86_64.tar.gz.sha256
+tar -xzf syncd-0.3.0-linux-x86_64.tar.gz
+sudo ./syncd-0.3.0-linux-x86_64/install.sh --local-database
 ```
 
 `install.sh` runs `bin/syncdctl install` with the options you give it. On a host where syncd is
@@ -115,7 +153,7 @@ The URL is written to `CONSOLE_DATABASE_URL` in `/etc/syncd/console.env`, which 
 |---|---|
 | `--local-database` | Creates the console's role and database on this host's PostgreSQL (above) |
 | `--database-url URL` | Uses this PostgreSQL database for the console |
-| `--listen ADDR` | The console's address. Default `127.0.0.1:8080`. For other machines, put nginx in front rather than listening beyond loopback (see [HTTPS in front of the console](#https-in-front-of-the-console)) |
+| `--listen ADDR` | The console's address. Default `127.0.0.1:8080`. For other machines, give the console a certificate or put nginx in front (see [HTTPS in front of the console](#https-in-front-of-the-console)) |
 | `--fips` | Runs both services with the FIPS 140-3 module (`SYNCD_FIPS_MODE=true` in both environment files). Refused unless the release is a FIPS build |
 | `--no-start` | Installs everything but starts nothing. Start later with `systemctl enable --now syncd syncd-console` |
 
@@ -144,9 +182,9 @@ At the end it prints the console's address and the `admin` account's one-time pa
 ## Install from a package
 
 ```bash
-sudo apt install ./syncd_0.2.1_amd64.deb            # Debian, Ubuntu
-sudo dnf install ./syncd-0.2.1-1.x86_64.rpm         # RHEL, Rocky, Alma 9+, Fedora
-sudo dnf install ./syncd-0.2.1-1.el8.x86_64.rpm     # RHEL, Rocky, Alma 8
+sudo apt install ./syncd_0.3.0_amd64.deb            # Debian, Ubuntu
+sudo dnf install ./syncd-0.3.0-1.x86_64.rpm         # RHEL, Rocky, Alma 9+, Fedora
+sudo dnf install ./syncd-0.3.0-1.el8.x86_64.rpm     # RHEL, Rocky, Alma 8
 sudo syncdctl install --local-database              # or --database-url ...
 ```
 
@@ -162,9 +200,54 @@ upgrade`, `rollback` and `uninstall` refuse to run there and say so.
 
 The console serves plain HTTP on `127.0.0.1:8080`. Its session cookie is `Secure`, so browsers
 keep it only over HTTPS, or on `localhost`. Opened at `http://<server>:8080` from another machine,
-sign-in cannot stick, and the sign-in page says so. To use the console from other machines, put
-nginx with TLS in front of it. The release ships an nginx configuration in
-`/opt/syncd/current/share/nginx/syncd.conf`.
+sign-in cannot stick, and the sign-in page says so. To use the console from other machines, give
+it HTTPS, in one of two ways:
+
+| | [The console's own HTTPS](#the-consoles-own-https) | [nginx in front](#nginx-in-front-of-the-console) |
+|---|---|---|
+| Port | 1024 or above (for example 8443): the console doesn't run as root | 443 |
+| Certificate | PEM files the console reads, picked up again within a minute when renewed | nginx's |
+| HTTP/2, a certificate shared with other sites | No (HTTP/1.1 only) | Yes |
+| Extra software | None | nginx |
+
+### The console's own HTTPS
+
+From 0.3.0 the console serves HTTPS itself when it is given a certificate. In
+`/etc/syncd/console.env`:
+
+```bash
+CONSOLE_LISTEN=0.0.0.0:8443
+CONSOLE_TLS_CERT=/etc/syncd/console-tls/fullchain.pem    # the certificate, followed by its chain
+CONSOLE_TLS_KEY=/etc/syncd/console-tls/privkey.pem
+CONSOLE_PUBLIC_URL=https://syncd.example.com:8443         # for single sign-on
+```
+
+```bash
+sudo chown root:syncd-console /etc/syncd/console-tls/*
+sudo chmod 0640 /etc/syncd/console-tls/privkey.pem
+sudo firewall-cmd --permanent --add-port=8443/tcp && sudo firewall-cmd --reload   # RHEL
+sudo systemctl restart syncd-console
+```
+
+- **Both or neither.** `CONSOLE_TLS_CERT` and `CONSOLE_TLS_KEY` go together; the console refuses
+  to start with one alone. It also refuses a file it cannot read, a certificate file with no
+  certificate in it, and a key that does not go with the certificate, and names the file.
+- **Renewals** (certbot's deploy hook copying the new files there, say) are picked up within a
+  minute, without a restart, and logged as `TLS certificate loaded again`. A renewal that does
+  not load is logged (`the changed TLS certificate does not load; keeping the previous one`), and
+  the previous certificate stays in use.
+- **Connections.** Each TLS handshake has 10 seconds, and a client that stalls holds up no other.
+  The console offers HTTP/1.1 only.
+- **`CONSOLE_TRUSTED_PROXIES`** is not needed: clients connect to the console directly, and the
+  audit log records their addresses.
+- **New files on upgrade.** A host installed before 0.3.0 keeps its `console.env`, so the
+  commented `CONSOLE_TLS_CERT` and `CONSOLE_TLS_KEY` lines of a new install's file are not in it.
+  Add the settings yourself.
+
+### nginx in front of the console
+
+For port 443, a certificate shared with other sites, or HTTP/2, put nginx with TLS in front of the
+console. The release ships an nginx configuration in `/opt/syncd/current/share/nginx/syncd.conf`.
 
 Below, replace `syncd.example.com` and `192.0.2.10` with the server's name and address.
 
@@ -246,9 +329,9 @@ accept it, or import `/etc/nginx/tls/syncd.crt` into the clients' trusted certif
 copy it to `/usr/local/share/ca-certificates/` and run `update-ca-certificates`).
 
 !!! warning "Listening beyond loopback without HTTPS"
-    If `CONSOLE_LISTEN` is not a loopback address and `CONSOLE_PUBLIC_URL` is not an `https://`
-    address, the console logs a warning at startup: browsers on other machines will not keep its
-    session cookie. It still starts.
+    If `CONSOLE_LISTEN` is not a loopback address, the console has no certificate of its own, and
+    `CONSOLE_PUBLIC_URL` is not an `https://` address, the console logs a warning at startup:
+    browsers on other machines will not keep its session cookie. It still starts.
 
 ## First sign-in
 
@@ -273,7 +356,11 @@ sudo runuser -u syncd-console -- env -C / \
 ```
 
 It prints the password, unlocks the account, signs out its sessions and records
-`user.password_reset` in the audit log. Next steps: add accounts and roles, and set up
+`user.password_reset` in the audit log. From 0.3.0 it refuses an account that signs in through
+single sign-on, as the **Users** page does: a password would let it sign in without the identity
+provider and its MFA. To give one anyway, while the provider is unavailable say, add
+`--allow-single-sign-on`; the audit record then notes `single_sign_on: true`. On Kubernetes, run
+the same command in the console's pod (see [Install with Helm](#install-with-helm)). Next steps: add accounts and roles, and set up
 [single sign-on](single-sign-on.md) if you use it ([Admin guide](admin-guide.md)).
 
 ## Registering engines
@@ -284,20 +371,32 @@ an administrator registers each one under **Engines** → **Register engine**, w
 | Field | |
 |---|---|
 | Name | 1 to 64 letters, digits, `.`, `_` or `-` |
-| Control API address | `host:port`, as in the engine's `api.listen` |
-| Engine CA certificate, console client certificate and key (PEM) | For mutual TLS. Required unless the address is on loopback. The key is stored encrypted with the console's master key and never shown again |
+| Control API address | `host:port`, as in the engine's `api.listen`; or, from 0.3.0, `unix:` and the absolute path of its control socket (`unix:/run/syncd/control.sock`, as in `api.control_socket`) |
+| Engine CA certificate, console client certificate and key (PEM) | For mutual TLS. Required unless the address is on loopback or a `unix:` socket, and refused with a `unix:` address. The key is stored encrypted with the console's master key and never shown again |
 
 The console checks that the engine answers before it saves it, and records `engine.register` in
 the audit log. On the host, `syncd-console admin register-engine --name N --address HOST:PORT
 --server-ca FILE --client-cert FILE --client-key FILE` does the same; it does nothing when an
-engine with that name is registered already.
+engine with that name is registered already. With `--update` it replaces that engine's address
+and credentials instead, keeping its configuration versions, and records `engine.update`:
+`syncdctl renew-certs` and the Helm chart's registration Job use it.
+
+A `unix:` address only works for a console on the engine's host, running as a user that may open
+the socket. The socket is mode 0600, owned by the engine's user, so the packaged
+`syncd-console` account cannot open it: the installer keeps registering the engine at
+`127.0.0.1:7443` with mutual TLS.
+
+The engine's page in the console warns when the console's client certificate for the engine has
+less than 60 days left, and when it has expired. See
+[Certificates](operator-guide.md#certificates) for renewing them.
 
 !!! note "Engines on other hosts"
     The installed engine's control API listens on `127.0.0.1:7443`, and its certificate (from the
     host's own CA) names only `localhost`, `127.0.0.1` and `::1`. For a console on another host to
     manage it, the engine needs an `api.listen` that host can reach, and a certificate for the name
     the console uses. `api` can only be changed in the engine's file on its host (see
-    [Configuration](configuration.md)). syncdctl does not issue such certificates.
+    [Configuration](configuration.md)). syncdctl does not issue such certificates, and
+    `syncdctl renew-certs` renews them for `localhost` only.
 
 ## The JDBC bridge
 

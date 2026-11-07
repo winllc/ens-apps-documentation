@@ -7,6 +7,9 @@ syncd has two programs, and each is configured in its own way:
 | `syncd`, the engine | One YAML document: connectors, views, rules and publications, plus the engine's own settings. Secrets are never written in it; it names environment variables or files that hold them. | `/etc/syncd/engine/engine.yaml`, with the secrets in `/etc/syncd/engine.env` |
 | `syncd-console`, the web console | Environment variables (or the matching command-line flags). | `/etc/syncd/console.env` |
 
+The container images and the Helm chart configure the same two programs; see
+[Container images and Helm](#container-images-and-helm) for what differs there.
+
 This page is the reference for both. For the how-to detail of each source and target, see
 [Connectors](connectors.md). For the rule language used in flows, computed attributes and
 publication mappings, see [Computed attributes and rules](rules.md).
@@ -17,7 +20,7 @@ publication mappings, see [Computed attributes and rules](rules.md).
 |---|---|---|
 | `/etc/syncd/engine/engine.yaml` | The engine configuration. Publishing a configuration in the console, or `syncd apply-config`, replaces it. | `syncd:syncd`, `0640` |
 | `/etc/syncd/engine.env` | Secrets the engine configuration refers to (`password: { env: NAME }`), and `SYNCD_FIPS_MODE`. A systemd `EnvironmentFile`. | `root:syncd`, `0640` |
-| `/etc/syncd/console.env` | The console's settings: database URL, listen address, proxies, single sign-on. A systemd `EnvironmentFile`. | `root:syncd-console`, `0640` |
+| `/etc/syncd/console.env` | The console's settings: database URL, listen address, its own HTTPS certificate, proxies, single sign-on. A systemd `EnvironmentFile`. | `root:syncd-console`, `0640` |
 | `/etc/syncd/pki/` | The control API's CA, the engine's certificate, and the client certificates of the console and the command line. Issued by the installer. | |
 
 `syncdctl install` writes each file only if it does not exist yet, so an upgrade keeps
@@ -99,6 +102,10 @@ engine:
 # from a CA of its own (/etc/syncd/pki) and registered this engine in the console.
 api:
   listen: 127.0.0.1:7443
+  # Uncomment for administration on this host without certificates: `syncd` commands
+  # run as root (or as syncd) use the socket, which only the engine's own user and root
+  # can open.
+  # control_socket: /run/syncd/control.sock
   tls:
     cert_file: /etc/syncd/pki/engine.crt
     key_file: /etc/syncd/pki/engine.key
@@ -185,11 +192,14 @@ own CA; `sudo syncdctl cli-cert` issues a command-line certificate on a host tha
 one.
 
 !!! note "A control socket on a package install"
-    The packaged configuration does not set `control_socket`. The `syncd` unit makes the
-    file system read-only apart from `/var/lib/syncd/engine` and `/etc/syncd/engine`
-    (`ProtectSystem=strict`, `ReadWritePaths=`). To use a socket in another directory,
-    such as `/run/syncd/control.sock`, also give the service that directory with
-    `systemctl edit syncd` (for example `RuntimeDirectory=syncd`).
+    The packaged configuration has `control_socket: /run/syncd/control.sock` commented
+    out. The `syncd` unit creates `/run/syncd` for it (`RuntimeDirectory=syncd`, mode
+    `0750`) and removes it when the engine stops, so uncommenting the line and restarting
+    the engine is enough. The rest of the file system stays read-only to the engine apart
+    from `/var/lib/syncd/engine` and `/etc/syncd/engine` (`ProtectSystem=strict`); a socket
+    anywhere else needs that directory given to the service with `systemctl edit syncd`.
+    The console can also register an engine at its socket, as `unix:/run/syncd/control.sock`,
+    when both run on the same host.
 
 ## Attribute hints (`attributes`)
 
@@ -308,6 +318,7 @@ on the connector type:
 | `schedule` | scrape, delta | unset | When full reads start, as a [cron schedule](#schedules). Replaces `interval_secs` (scrape) or `full_interval_secs` (delta); setting both is refused. Not for streams. |
 | `schedule_zone` | with `schedule` | `UTC` | The schedule's time zone, an IANA name (`Europe/Paris`). |
 | `full_interval_secs` | delta | one day | Seconds between full reads, which also find deletes. |
+| `container_check_secs` | `ldap`, `active_directory` with `mode: stream` or `delta` | `60` | Seconds between checks for containers renamed under `base`, whose entries are then read again; `0` turns the check off. Only objects with `scope: sub` are checked. See [Containers renamed in a source](connectors.md#containers-renamed-in-a-source). |
 | `watermark` | delta | `modifyTimestamp` (LDAP), `uSNChanged` (AD); required for databases and MongoDB | What marks a change: a column or field that grows with every change, or a directory attribute. |
 | `binary` | all | empty | Attributes or columns that hold binary data beyond those the connector recognises by type: LDAP attributes the built-in list misses, and Debezium columns, which arrive as base64 text. |
 | `timestamps` | all | empty | Attributes or columns to send as timestamps instead of text. Listed values are read as rules' `timestamp()` reads text, so rules get a timestamp and LDAP targets GeneralizedTime. A value that does not read as one stays text. |
@@ -338,7 +349,7 @@ How each type reads, and what it needs on the source side, is in
 | Key | Database | Default | What |
 |---|---|---|---|
 | `slot` | PostgreSQL (required) | | The logical replication slot, created if missing. |
-| `publication` | PostgreSQL (required) | | The PostgreSQL publication, created if missing. |
+| `publication` | PostgreSQL (required) | | The PostgreSQL publication, created if missing. Tables the object follows that an existing publication lacks are added to it, or the stream fails naming them. |
 | `server_id` | MySQL (required) | | The replica id this stream uses, unique among the server's replicas and other binlog readers. |
 | `poll_ms` | SQL Server | `1000` | How often the change tables are read, in milliseconds. At least `1`. |
 | `change_tracking` | SQL Server | `false` | Follow change tracking instead of change data capture. |
@@ -470,6 +481,7 @@ precedence:
 | `output` | CEL | required | The final value. May read `e` and step variables. |
 | `on_error` | `skip`, `default`, `quarantine` | `skip` | What a failed evaluation does; see [Error policies](rules.md#error-policies). |
 | `default` | text | unset | The fallback for `on_error: default`, which requires it. |
+| `permanent` | map | unset | `{ key: <attribute> }`: the values belong to that key for good, are never given to another entity, and come back to an entity that returns with the same key. Needs `mode: assign_once`; the key is another attribute of the view. See [Permanent values](rules.md#permanent-values). |
 | `tests` | list | empty | Test cases: `input`, optional `lookups`, `expect`; see [Test cases](rules.md#test-cases). |
 
 Computed attributes are evaluated in dependency order; a cycle is refused.
@@ -522,6 +534,7 @@ A publication writes a view's entities to an LDAP or Active Directory target.
 | `deprovision` | see below | `delete` | What happens to an entry whose entity leaves scope or is deleted. |
 | `deletion_threshold` | map | unset | `percent` and/or `count`, as for connectors, for the deletes this publication makes. |
 | `create_containers` | boolean | `false` | Create the missing parents of an entry, as many levels as are missing, instead of failing the export. |
+| `remove_empty_containers` | boolean | `false` | Delete a container this publication created once the last entry has left it, and its parents in turn when syncd created them too. Needs `create_containers`. |
 | `groups` | list | empty | Computed groups; below. |
 | `adopt` | map | unset | Take over entries already in the target; below. |
 | `drift` | map | unset | Read the target back and act on changes made there; below. |
@@ -565,7 +578,20 @@ A changed DN value moves the entry (a modify DN), so it keeps its identity. With
 | `cn=` | `container` (Active Directory targets only) |
 
 Up to 16 levels are created. Any other RDN type fails the export with a dead letter.
-Containers are created, never deleted.
+
+syncd records every container it creates, per target, whether or not
+`remove_empty_containers` is set. With it set, a container is deleted once an entry that
+syncd moves or deletes leaves it empty, deepest first and after the rest of the batch
+is written, so a container another entry moves into is kept. A container syncd did not
+create, or one that still holds anything (entries syncd does not manage, or those of
+other publications), is never deleted. A failure to delete one is logged and fails no
+export. It is off by default because an empty OU can still matter: delegated rights on
+it, or Group Policy linked to it on Active Directory.
+
+- Containers created before 0.3.0, or by an export that then failed, are not recorded, so
+  they are never removed.
+- Containers left empty by someone else moving or deleting entries in the target stay.
+- `syncd simulate` does not show container removals.
 
 ### Deprovisioning
 
@@ -739,14 +765,17 @@ above, a configuration is refused when:
 - a `debezium` object is not `mode: stream`, or a `jdbc` object is;
 - `schedule` is set on a stream, together with the interval it replaces, or
   `schedule_zone` is set without it;
+- `container_check_secs` is set on an object that is not an LDAP or Active Directory
+  object read with `mode: stream` or `delta`;
 - a view has no source that projects, a source neither projects nor joins, a join rule
   mixes `entity`/`source` with `all`, precedence names a connector that is not a source,
   or a reference names an unknown view;
-- a computed attribute uses `on_error: default` without `default`;
+- a computed attribute uses `on_error: default` without `default`, or has `permanent`
+  without `mode: assign_once`, or with a key that is not another attribute of the view;
 - a publication names an unknown view or a target that is not an LDAP directory, its DN
   template uses an unknown placeholder, `object_classes` is empty, a group's DN is not
-  fixed, a drift policy names an attribute it does not export, or `adopt.match` names one
-  it does not export;
+  fixed, a drift policy names an attribute it does not export, `adopt.match` names one
+  it does not export, or `remove_empty_containers` is set without `create_containers`;
 - every expression is also compiled: syntax and type errors, unknown functions,
   `unique()` outside computed attributes, more than one `unique()` scope in one computed
   attribute, and cycles between computed attributes.
@@ -759,6 +788,7 @@ The `syncd` command reads these; a flag wins over its variable.
 |---|---|---|---|
 | `SYNCD_CONFIG` | `-c`, `--config` | `./syncd.yaml`, else `/etc/syncd/engine/engine.yaml` | The configuration file. |
 | `SYNCD_ENV_FILE` | `--env-file` | `/etc/syncd/engine.env` with the packaged configuration | Environment file with the secrets the configuration refers to. Variables already set win. |
+| `SYNCD_INITIAL_CONFIG` | `--initial-config` | unset | When the configuration file does not exist yet, create it as a copy of this one. The container image uses it to seed a configuration on the data volume from a read-only file. |
 | `SYNCD_DATA_DIR` | `--data-dir` | `engine.data_dir` | Overrides the data directory. |
 | `SYNCD_FIPS_MODE` | `--fips` | off | Use the FIPS 140-3 crypto provider; set to `true`. Requires a FIPS build. See [FIPS 140-3 and STIG](fips-and-stig.md). |
 | `SYNCD_API` | `--api` | `api.control_socket` if it exists here, else `api.listen` | How commands reach the running engine: `host:port`, or `unix:/path`. |
@@ -779,10 +809,13 @@ The console reads its settings from environment variables, or from the matching 
 | Variable | Flag | Default | What |
 |---|---|---|---|
 | `CONSOLE_DATABASE_URL` | `--database-url` | required | PostgreSQL connection string for the console database. The installer fills it in. |
-| `CONSOLE_LISTEN` | `--listen` | `127.0.0.1:8080` | Where the console listens. It serves plain HTTP: put a TLS reverse proxy in front of it for access from other machines. |
+| `CONSOLE_LISTEN` | `--listen` | `127.0.0.1:8080` | Where the console listens. It serves plain HTTP unless `CONSOLE_TLS_CERT` is set. For access from other machines it needs HTTPS: its own, or a TLS reverse proxy in front of it. |
+| `CONSOLE_TLS_CERT` | `--tls-cert` | unset | Serve HTTPS with this certificate: a PEM file, the certificate followed by its chain. Needs `CONSOLE_TLS_KEY`. Readable by `syncd-console`. |
+| `CONSOLE_TLS_KEY` | `--tls-key` | unset | The certificate's private key, PEM. Needs `CONSOLE_TLS_CERT`. |
 | `CONSOLE_DATA_DIR` | `--data-dir` | `./console-data`; the unit sets `/var/lib/syncd/console` | Local files: the master key and the initial admin password. |
 | `CONSOLE_UI_DIR` | `--ui-dir` | unset; the unit sets `/opt/syncd/current/share/console-ui` | The built web UI, served at `/`. Without it only the API is served. |
-| `CONSOLE_MASTER_KEY` | `--master-key` | read from, or created in, `<data dir>/master.key` | Master key for stored secrets (base64, 32 bytes). Back it up: stored secrets cannot be decrypted without it. |
+| `CONSOLE_MASTER_KEY` | `--master-key` | read from, or created in, `<data dir>/master.key` | Master key for stored secrets (base64, 32 bytes). Back it up: stored secrets cannot be decrypted without it. The console refuses to start when the key does not open the secrets the database holds, or when `master.key` is missing while the database holds secrets. |
+| `CONSOLE_NEW_MASTER_KEY` | `--new-master-key` | off | Set to `true` to start anyway when the master key does not open the stored secrets, creating a new key if there is none. Those secrets are lost: every engine registered with mutual TLS must be registered again. Only for starting over on purpose; restore `master.key` instead when you can. |
 | `CONSOLE_ADMIN_PASSWORD` | `--admin-password` | generated | Initial admin password for a production install. `admin` and empty passwords are refused. |
 | `CONSOLE_ADMIN_PASSWORD_FILE` | `--admin-password-file` | unset | A file holding the initial admin password, instead. |
 | `CONSOLE_SESSION_IDLE_MINUTES` | `--session-idle-minutes` | `30` | Minutes a session stays valid without activity. |
@@ -796,8 +829,19 @@ The console reads its settings from environment variables, or from the matching 
 
 Session cookies carry `Secure` outside development mode, so browsers send them over HTTPS,
 or to localhost, only. The console warns at startup when it listens beyond loopback over
-plain HTTP without an `https://` `CONSOLE_PUBLIC_URL`. See [Install](install.md) for the
-nginx configuration the packages ship.
+plain HTTP, with no certificate and no `https://` `CONSOLE_PUBLIC_URL`. See
+[Install](install.md) for setting up its own HTTPS, and for the nginx configuration the
+packages ship.
+
+With a certificate:
+
+- a certificate or key that does not load refuses the start;
+- the two files are checked every minute and read again when they change, so a renewal
+  (certbot, cert-manager) takes effect without a restart. A renewal that does not load is
+  logged, and the previous certificate kept;
+- each TLS handshake has 10 seconds, and a client that stalls holds up no other;
+- the console does not run as root, so on a package install it cannot listen on port 443
+  itself: use a port such as 8443, or nginx in front.
 
 ### Single sign-on
 
@@ -828,12 +872,19 @@ The redirect URI to register with the provider is
 CONSOLE_DATABASE_URL=postgres://...
 
 # Where the console listens (syncdctl install --listen; 127.0.0.1:8080 by default).
+# It serves plain HTTP unless given a certificate below.
 CONSOLE_LISTEN=127.0.0.1:8080
+
+# The console's own HTTPS: a certificate (PEM, followed by its chain) and its key,
+# readable by syncd-console. A renewed certificate is picked up within a minute.
+#CONSOLE_TLS_CERT=/etc/syncd/console-tls/fullchain.pem
+#CONSOLE_TLS_KEY=/etc/syncd/console-tls/privkey.pem
 
 # The address users reach the console at, through the proxy (needed for single sign-on).
 #CONSOLE_PUBLIC_URL=https://syncd.example.com
 
-# Proxies whose X-Forwarded-For names the client.
+# Proxies whose X-Forwarded-For names the client (addresses or CIDR ranges, comma-
+# separated). Only list proxies you run.
 #CONSOLE_TRUSTED_PROXIES=127.0.0.1
 
 # Single sign-on (OpenID Connect).
@@ -847,6 +898,115 @@ CONSOLE_LISTEN=127.0.0.1:8080
 
 `syncdctl install --fips` adds `SYNCD_FIPS_MODE=true` to both `console.env` and
 `engine.env`.
+
+## Container images and Helm
+
+The images (`ghcr.io/winllc/syncd` and `ghcr.io/winllc/syncd-console`) and the Helm chart
+(`oci://ghcr.io/winllc/charts/syncd`) run the same two programs with the settings on this
+page. This section is a reference for what differs; [Install](install.md) has the
+procedure.
+
+### The engine image
+
+| Path or variable | What |
+|---|---|
+| `/etc/syncd/engine.yaml` | The image's initial configuration, below. Read-only. |
+| `/var/lib/syncd` | The data volume: the store in `engine/`, and the configuration the engine runs with, `engine.yaml`. |
+| `SYNCD_CONFIG=/var/lib/syncd/engine.yaml` | The configuration file, on the data volume, since the engine rewrites it when the console publishes a configuration. |
+| `SYNCD_INITIAL_CONFIG=/etc/syncd/engine.yaml` | Copied to `SYNCD_CONFIG` when that file does not exist yet. |
+| `SYNCD_DATA_DIR=/var/lib/syncd/engine` | The store. |
+| Ports | `7443` (control API, mutual TLS), `9464` (metrics and health checks). |
+
+The image's `engine.yaml`:
+
+```yaml
+version: 1
+
+engine:
+  data_dir: /var/lib/syncd/engine
+
+api:
+  # The control API, for the console, with mutual TLS. Mount the certificates at
+  # /etc/syncd/pki (the Helm chart issues them).
+  listen: 0.0.0.0:7443
+  tls:
+    cert_file: /etc/syncd/pki/engine.crt
+    key_file: /etc/syncd/pki/engine.key
+    client_ca_file: /etc/syncd/pki/ca.crt
+  # `kubectl exec ... -- syncd status` and the other commands use the socket, without
+  # certificates.
+  control_socket: /run/syncd/control.sock
+  # Prometheus metrics, and the health checks.
+  metrics_listen: 0.0.0.0:9464
+```
+
+`engine.data_dir` and `api` are host-only, as on a package install, so the console cannot
+change them. To set them otherwise, mount a file of your own at `/etc/syncd/engine.yaml`
+before the first start: once the copy on the data volume exists, that copy is the one the
+engine reads. The chart uses the image's file as it is. There is no `engine.env` in a container: the secrets a
+configuration refers to (`{ env: NAME }`) are ordinary environment variables of the
+container, which the chart takes from a Secret (`engine.envFromSecret`).
+
+### The console image
+
+| Variable | Value |
+|---|---|
+| `CONSOLE_LISTEN` | `0.0.0.0:8080` |
+| `CONSOLE_UI_DIR` | `/usr/share/syncd/console` |
+| `CONSOLE_DATA_DIR` | `/var/lib/syncd/console` |
+
+Every other [console setting](#console-settings) is an environment variable of the
+container. The image serves plain HTTP; on Kubernetes TLS is the ingress's job.
+
+Both images run as uid and gid `65532`, need no root and work with a read-only root file
+system.
+
+### Helm chart values
+
+The chart's `values.yaml`, by key. The chart's version is the release's (`0.3.0`).
+
+| Key | Default | What |
+|---|---|---|
+| `image.engine.repository`, `image.console.repository` | `ghcr.io/winllc/syncd`, `ghcr.io/winllc/syncd-console` | The images. |
+| `image.*.tag` | the chart's `appVersion` | |
+| `image.*.pullPolicy` | `IfNotPresent` | |
+| `imagePullSecrets` | `[]` | |
+| `podSecurityContext`, `securityContext` | uid and gid `65532`, non-root, `RuntimeDefault` seccomp, read-only root file system, no capabilities | Used for both. |
+| `engine.name` | the release name | The name the console knows the engine by. |
+| `engine.envFromSecret` | empty | A Secret whose keys become the engine's environment variables: the secrets the configuration refers to. |
+| `engine.env` | `[]` | More environment variables (`RUST_LOG`). |
+| `engine.persistence.size` | `10Gi` | The store's volume; size it as [Availability and sizing](availability-and-sizing.md) says. |
+| `engine.persistence.storageClass` | the cluster's default | |
+| `engine.persistence.accessModes` | `[ReadWriteOnce]` | |
+| `engine.resources` | requests `250m` CPU, `512Mi`; limit `4Gi` | |
+| `engine.terminationGracePeriodSeconds` | `90` | Time to finish the batch and stop. |
+| `engine.service.type` | `ClusterIP` | Ports `7443` and `9464`. |
+| `engine.metrics.serviceMonitor.enabled` | `false` | A ServiceMonitor for the Prometheus operator (`interval` `30s`, `labels`). |
+| `engine.nodeSelector`, `tolerations`, `affinity`, `podAnnotations` | empty | |
+| `console.replicas` | `1` | |
+| `console.database.url` | empty | The console's PostgreSQL URL, kept in a Secret the chart makes. This or `existingSecret` is required. |
+| `console.database.existingSecret`, `existingSecretKey` | empty, `url` | A Secret of your own holding the URL, instead. |
+| `console.adminPassword` | generated | The initial admin password, changed at first sign-in; `helm status` says how to read a generated one. |
+| `console.trustedProxies` | empty | `CONSOLE_TRUSTED_PROXIES`: the ingress controller's addresses or ranges. |
+| `console.env` | `[]` | More environment variables (`CONSOLE_SESSION_IDLE_MINUTES`, the single sign-on settings). |
+| `console.resources` | requests `100m` CPU, `128Mi`; limit `512Mi` | |
+| `console.service.type`, `port` | `ClusterIP`, `8080` | |
+| `console.ingress.enabled` | `false` | An Ingress for the console, with `className`, `annotations`, `host` (`syncd.example.com`) and `tls`. |
+| `console.nodeSelector`, `tolerations`, `affinity`, `podAnnotations` | empty | |
+| `pki.days` | `3650` | Validity of the control API certificates the chart issues. |
+
+What the chart makes on its own:
+
+- **Secrets, generated at install and kept across upgrades:** the console's master key
+  (`CONSOLE_MASTER_KEY`, so the console's data directory needs no volume) and initial
+  admin password, in `<release>-console`, which `helm uninstall` keeps; and a CA with the
+  engine's and the console's control API certificates, in `<release>-pki`. Deleting
+  `<release>-pki` and upgrading issues new certificates.
+- **The engine** as a StatefulSet of one, with its store on a volume, the certificates at
+  `/etc/syncd/pki` and the control socket in `/run/syncd`. One engine per store: there is
+  no second replica.
+- **A registration Job** after each install and upgrade, which registers the engine in the
+  console at `<release>-engine:7443` with the chart's certificates.
 
 ## Complete example
 
