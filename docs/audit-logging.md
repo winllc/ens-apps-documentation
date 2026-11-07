@@ -16,7 +16,8 @@ and the ENS licensing portal.
     syncd's console keeps its own audit log, not this one. It records every sign-in, account change,
     configuration action, engine command and object-explorer search in PostgreSQL, append-only and
     hash-chained, and auditors and administrators read and verify it on the console's **Audit** page
-    (`/audit`). It does not use the event format, the settings or the Splunk add-on on this page,
+    (`/audit`). The console logs the chain's head every hour, and verifying against a recorded head
+    also finds entries removed from the end. It does not use the event format, the settings or the Splunk add-on on this page,
     and has no SIEM forwarder or pull API yet. See [syncd's admin guide](syncd/admin-guide.md) and
     [Security](syncd/security.md).
 

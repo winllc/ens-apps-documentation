@@ -35,7 +35,7 @@ the host's memory (`MemoryMax=80%`). See [syncd's page](syncd/availability-and-s
 
 ## High availability
 
-**Every application except syncd can run as several replicas** behind one Service or load balancer, with
+**Every application except syncd's engine can run as several replicas** behind one Service or load balancer, with
 the Helm chart. Sessions, scheduled-job locks, single sign-on requests in progress and the license
 state (installation id, license, revisions seen) are kept in the database, so any replica serves any
 request, each scheduled job runs on one replica at a time, and a restart or rolling update signs
@@ -65,8 +65,9 @@ Also:
 - **Cold standby** remains an option for a site without Kubernetes: a second host with the same
   release installed and stopped, with backups copied to it. Never run it while the primary could
   still be running.
-- **syncd** runs on one host, as two systemd services that restart on failure. It has no Helm chart
-  and no standby yet: run a cold standby as above. After a restart the engine resumes each source
+- **syncd** runs its engine as one instance: on a host, as a systemd service that restarts on
+  failure, or with its Helm chart as a StatefulSet with one replica, since each engine needs a store
+  of its own. It has no standby yet: on hosts, run a cold standby as above. After a restart the engine resumes each source
   from its checkpoint.
 
 ## Backups and disaster recovery
@@ -77,7 +78,7 @@ Also:
 | Directory Services Portal | The data directory (configuration, audit store, analysis results); the license directory | `./portal.sh backup` and `./portal.sh restore` (Docker package; the license volume is not included). Native and Helm: `tar` or volume snapshots |
 | ReadyRoom | The PostgreSQL database; the license volume | `./backup.sh` (database and license volume, kept 14 days) and `./restore.sh`. Helm: a backup CronJob, off by default (`backup.enabled`) |
 | RSA Operations Portal | The MySQL database; the license volume; the AM trust store and the Connector's certificates | `util/backupdb.sh`. Helm: a backup CronJob, off by default (`backup.enabled`) |
-| syncd | The engine store (`/var/lib/syncd/engine`), the console's PostgreSQL database, its master key (`/var/lib/syncd/console/master.key`) and `/etc/syncd` | `syncdctl backup` and `syncdctl restore`; `syncdctl upgrade` takes one first and keeps the last three |
+| syncd | The engine store (`/var/lib/syncd/engine`), the console's PostgreSQL database, its master key (`/var/lib/syncd/console/master.key`) and `/etc/syncd` | `syncdctl backup` and `syncdctl restore`; `syncdctl upgrade` takes one first and keeps the last three. Helm: none; snapshot the engine's volume, `pg_dump` the database and keep the `syncd-console` Secret |
 
 For every product, also keep the settings (`.env` files, or your values file and the Secrets it
 names), the release you installed (or the image digests and chart version), and the license file

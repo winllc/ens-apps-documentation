@@ -1,8 +1,8 @@
 # Security
 
 This page summarises syncd's security controls and the settings that affect them: the
-console's sign-in, sessions and roles, the engine's control API, secrets, the audit log,
-the systemd hardening and the supply chain.
+console's sign-in, sessions and roles, its HTTPS, the engine's control API, secrets, the
+audit log, the systemd hardening, the container images and Helm chart, and the supply chain.
 
 ## Trust model
 
@@ -10,7 +10,8 @@ the systemd hardening and the supply chain.
   accounts its configuration names. The configuration never holds a secret: each password or
   token is a reference to an environment variable (`password: { env: NAME }`) or a file
   (`{ file: /path }`). On a packaged install, the variables are in `/etc/syncd/engine.env`,
-  readable by root and the `syncd` group only.
+  readable by root and the `syncd` group only. On Kubernetes, they come from a
+  Secret you name (`engine.envFromSecret`).
 - **The console holds no source or target passwords.** It stores configuration versions
   (references only), accounts, sessions, the audit log, and each engine's control API client
   key, which is encrypted with the console's master key.
@@ -36,7 +37,7 @@ no SAML, no client-certificate (X.509, CAC/PIV) sign-in and no API tokens.
 | Per-address throttle | 20 sign-in attempts per client address in 5 minutes, then 429 `too_many_requests`, audited as `auth.login` denied (`rate limited`). The counters are in memory and reset when the console restarts |
 | Account lockout | 5 consecutive wrong passwords lock the account for 15 minutes, audited with `"locked": true`. A successful sign-in resets the count. These numbers are fixed |
 | Uniform refusals | Every failed sign-in gets the same 401 `sign_in_failed`, whether the account is unknown, disabled, locked, has no local password, or is outside break-glass. An unknown account spends as long as a real password check. The audit log records the real reason |
-| Account recovery | `syncd-console admin reset-password [--user NAME]` on the host issues a one-time password. It needs the console's database settings (`console.env`) |
+| Account recovery | `syncd-console admin reset-password [--user NAME]` on the host issues a one-time password. It needs the console's database settings (`console.env`). It refuses an account that signs in with single sign-on, as the **Users** page does, since a password would let it sign in without the identity provider (and its MFA). `--allow-single-sign-on` gives it one anyway, for recovery while the provider is down; the audit entry (`user.password_reset`) then records `"single_sign_on": true`. Before 0.3.0 the command line gave such accounts a password without asking |
 | Single sign-on | OpenID Connect authorization code flow with PKCE, state and nonce; ID token signature (asymmetric algorithms only), issuer, audience and expiry checked. Accounts are bound to the provider's subject, never taken over by username. Roles come from a claim at every sign-in. See [Single sign-on](single-sign-on.md) |
 | Break-glass | With single sign-on configured, an admin can limit local sign-in to accounts marked break-glass (**Users** → Local sign-in). At least one enabled break-glass admin with a password must remain; switching signs out the local accounts that can no longer sign in |
 | Disabling an account | Takes effect at the account's next request: its sessions are refused, and single sign-on cannot sign it in. The last enabled admin cannot be disabled or demoted |
@@ -66,8 +67,9 @@ client certificate, can still apply a configuration directly.
 - There is no limit on concurrent sessions per account, and no separate idle timeout for
   admins.
 - Browsers keep `Secure` cookies only over HTTPS or on localhost. The console warns at startup
-  when it listens beyond loopback without an `https://` `CONSOLE_PUBLIC_URL`, and the sign-in
-  page says so when the browser drops the cookie.
+  when it listens beyond loopback over plain HTTP, with no certificate of its own
+  (`CONSOLE_TLS_CERT`) and no `https://` `CONSOLE_PUBLIC_URL`, and the sign-in page says so
+  when the browser drops the cookie.
 
 ## CSRF and browser security headers
 
@@ -87,8 +89,9 @@ client certificate, can still apply a configuration directly.
 | `Referrer-Policy` | `no-referrer` |
 | `Cache-Control` | `no-store`, except the UI's hashed assets (cached for good) and its other files (`no-cache`) |
 
-- Neither the console nor the shipped nginx configuration sends `Strict-Transport-Security`.
-  Add it in nginx if your policy requires it.
+- Neither the console (also when it serves HTTPS itself) nor the shipped nginx configuration
+  sends `Strict-Transport-Security`. If your policy requires HSTS, put a proxy in front that
+  adds it (nginx, or your ingress controller).
 - Error responses carry a code and a message only. Internal errors answer `internal error`; the
   details go to the console's log.
 
@@ -107,12 +110,38 @@ Every account has one role. Roles are checked on every API call.
 Revealing sensitive values is separate: see [Sensitive attributes](#sensitive-attributes-and-reveal).
 The per-route roles are in the [API reference](api-reference.md#console-rest-api).
 
-## Behind a reverse proxy
+## HTTPS for the console
 
-The console serves plain HTTP. For access from other machines, put nginx with TLS in front of it;
-the release ships `share/nginx/syncd.conf`, which redirects HTTP to HTTPS, allows TLS 1.2 and 1.3,
-sets `X-Forwarded-For` to the connection's address (replacing whatever the client sent), and
-passes server-sent events through unbuffered. See [Installation](install.md).
+The console serves plain HTTP unless it is given a certificate. For access from other
+machines it needs HTTPS, for its `Secure` session cookie: its own, or a TLS proxy in front of
+it.
+
+### The console's own HTTPS
+
+With `CONSOLE_TLS_CERT` and `CONSOLE_TLS_KEY`, the console serves HTTPS itself on
+`CONSOLE_LISTEN`. Each needs the other.
+
+| Aspect | Behaviour |
+|---|---|
+| Files | `CONSOLE_TLS_CERT`: a PEM certificate followed by its chain. `CONSOLE_TLS_KEY`: its private key, PEM. Readable by `syncd-console` (on a packaged install, `root:syncd-console`, key mode 0640) |
+| Protocols | TLS 1.2 and 1.3 (rustls's safe defaults), on the process crypto provider, so FIPS mode applies. HTTP/1.1 only (ALPN `http/1.1`); no HTTP/2 |
+| Client certificates | None requested: the console has no certificate sign-in |
+| Handshakes | 10 seconds each, in a task of its own, so a client that stalls holds up no other connection |
+| Startup | A certificate or key that does not load, or a key that does not match, stops the console |
+| Renewal | The files are checked every minute and loaded again when either changes, without a restart (certbot's deploy hook, cert-manager). A renewal that does not load (half-written, say) is logged as a warning and the previous certificate kept, until the next check |
+| Port | The packaged console does not run as root, so it cannot listen on 443. Use a port such as 8443, or nginx for 443 |
+| HSTS | Not sent (see above) |
+
+Set `CONSOLE_PUBLIC_URL` to the `https://` address for single sign-on. See
+[Installation](install.md).
+
+### Behind a reverse proxy
+
+Put nginx with TLS in front of the console for port 443, a certificate shared with other
+sites, HTTP/2 or HSTS. The release ships `share/nginx/syncd.conf`, which redirects HTTP to
+HTTPS, allows TLS 1.2 and 1.3, sets `X-Forwarded-For` to the connection's address (replacing
+whatever the client sent), and passes server-sent events through unbuffered. On Kubernetes, the
+Helm chart's ingress does the same job. See [Installation](install.md).
 
 `CONSOLE_TRUSTED_PROXIES` lists the proxies (addresses or CIDR ranges) whose `X-Forwarded-For`
 names the client. The console reads the header from the right, past trusted proxies, to the first
@@ -145,9 +174,22 @@ encryption:
 
 The master key is 32 bytes, from `CONSOLE_MASTER_KEY` (base64) or `$CONSOLE_DATA_DIR/master.key`
 (`/var/lib/syncd/console/master.key` on a packaged install), which the console creates (mode 0600)
-on first start and logs a warning to back it up. **Without it, stored secrets cannot be
-decrypted.** Backups taken by `syncdctl` include it, so protect them accordingly. There is no KMS or
-Vault integration.
+on first start and logs a warning to back it up. On Kubernetes, the Helm chart generates it into
+the `syncd-console` Secret and passes it as `CONSOLE_MASTER_KEY`. **Without it, stored secrets
+cannot be decrypted.** Backups taken by `syncdctl` include it, so protect them accordingly. There
+is no KMS or Vault integration.
+
+At every start the console checks the key against a secret the database holds:
+
+- if `master.key` is missing while the database holds sealed secrets, it does not create a new key
+  over them;
+- if the key does not open them (the wrong file, or the wrong `CONSOLE_MASTER_KEY`), it is refused.
+
+Either way the console does not start, and says to restore the key. To start over on purpose, set
+`CONSOLE_NEW_MASTER_KEY=true` (`--new-master-key`): the console starts (with a new key if there is
+none), the stored secrets are lost, and engines registered with mTLS must be registered again.
+Before 0.3.0 a lost key file was silently replaced, and the failure showed only when the console
+next called an engine.
 
 Client keys are never returned by the API.
 
@@ -159,7 +201,7 @@ The engine serves its gRPC control API on `api.listen` (default `127.0.0.1:7443`
 |---|---|
 | Plain text on a loopback address (no `api.tls`) | Read-only by default: status, the status stream, dead letters, the running configuration, the object explorer without sensitive values. `api.local_control: true` also allows commands; `api.local_reveal: true` also allows sensitive values. Any local account on the host can connect |
 | mTLS (`api.tls`: `cert_file`, `key_file`, `client_ca_file`) | Everything, to clients whose certificate chains to `client_ca_file`. Required for any address that is not loopback; the engine refuses to start otherwise |
-| `api.control_socket` (a Unix socket path) | Everything, to the engine's own user and root only: the socket is created under a temporary name, set to mode 0600, then moved into place |
+| `api.control_socket` (a Unix socket path) | Everything, to the engine's own user and root only: the socket is created under a temporary name, set to mode 0600, then moved into place. The packaged unit creates `/run/syncd` for it (`RuntimeDirectory`, mode 0750). The console can be registered at it (`unix:/run/syncd/control.sock`, without mTLS) only when it runs as a user that may open it; the packaged console runs as `syncd-console`, so it keeps mTLS |
 
 - **Commands** are the calls that change something or reach out from the engine: runs, deletion
   approvals, drift checks, dead-letter retry and discard, `ApplyConfig`, `SimulateConfig`, connector
@@ -192,6 +234,48 @@ other files. `--api-key` is the certificate's private key file, not a token.
 Membership of the `syncd` group therefore grants full control of the engine. Keep it to
 administrators.
 
+### Renewing the certificates
+
+`syncdctl status` shows when the first of the control API's certificates expires
+(`certificates:`), and warns within 60 days. The console's engine page warns from 60 days
+before the console's client certificate for that engine expires (and shows it as expired
+after), and the console API returns the date (`certificate_expires_at`).
+
+```sh
+sudo syncdctl renew-certs            # new certificates from the same CA
+sudo syncdctl renew-certs --new-ca   # a new CA too
+```
+
+It issues the engine's certificate and the console's and the command line's client
+certificates again (and the CA with `--new-ca`; it warns when the CA itself expires within
+400 days), restarts the engine, gives the console its new credentials
+(`syncd-console admin register-engine --update`, audited as `engine.update`), and restarts
+the console. The previous files are kept in `/etc/syncd/pki/before-renewal-<time>` (mode
+0700), and put back if the engine does not start with the new ones. A `syncdctl restore` or
+rollback that keeps the console database also keeps the current certificates, which the
+database's credentials match.
+
+### Certificates on Kubernetes
+
+The Helm chart issues the control API's certificates itself, at install, with Helm's own
+functions (`genCA`, `genSignedCert`: RSA keys, not ECDSA), into the `syncd-pki` Secret (for a release named
+`syncd`; otherwise `<release>-syncd-pki`):
+
+| Key | For |
+|---|---|
+| `ca.crt`, `ca.key` | The chart's CA (`syncd control API CA`) |
+| `engine.crt`, `engine.key` | The engine's server certificate, for its Service's names and `localhost` |
+| `console.crt`, `console.key` | The console's client certificate (`syncd console`) |
+
+They last `pki.days` (3650 by default) and are kept across upgrades. The engine mounts only
+`ca.crt`, `engine.crt` and `engine.key`, and the registration Job only `ca.crt`, `console.crt`
+and `console.key` (mode 0440). The CA key stays in the Secret, so anyone who can read Secrets
+in the namespace can issue a certificate with full control of the engine: restrict that with
+RBAC. To renew, delete the Secret and run `helm upgrade`; the engine restarts with the new
+certificates, and the registration Job updates the console. Unlike the console's Secret, this
+one is not kept when the release is uninstalled. There is no command-line client certificate:
+`kubectl exec … -- syncd status` uses the engine's control socket.
+
 ## Sensitive attributes and reveal
 
 `attributes.sensitive` in the engine configuration lists attributes whose values are personal
@@ -221,10 +305,18 @@ outcome (`success`, `failure` or `denied`), details and client address.
 - **Hash-chained.** Each row stores SHA-256 of the previous row's hash followed by its own
   canonical content (time in microseconds, actor, action, target, outcome, details text, client
   address). Appends are serialised with a transaction-scoped advisory lock.
-- **Verification.** `GET /api/v1/audit/verify` (admins and auditors) recomputes the chain from the
-  first row and returns the number of entries checked and the id of the first entry whose hash does
-  not match, if any. This finds history edited past the triggers, by someone with direct database
-  access.
+- **Verification.** `GET /api/v1/audit/verify` (admins and auditors, or *Verify chain* on the
+  Audit page) recomputes the chain from the first row and returns the number of entries checked,
+  the id of the first entry whose hash does not match, if any, and the chain's head (the newest
+  entry's id, time and hash). This finds history edited, or removed from the middle, past the
+  triggers, by someone with direct database access.
+- **Entries removed from the end.** Removing the newest entries leaves a chain that still
+  verifies, since nothing follows them. So the console writes the chain's head to its log (the
+  journal) as `audit log head`, with the id, time and hash, at startup and every hour when it has
+  changed. Keep those lines outside the database (forward the journal). Verifying against a
+  recorded head (`anchor_id` and `anchor_hash`, or the Audit page's fields) reports whether that
+  entry is still there (`found`) with that hash (`matches`). An entry not found means entries were
+  removed from the end. Before 0.3.0 such a truncation went undetected.
 - **Recorded first where it matters.** A publish (`config.publish.start`), a reveal, and settings
   and account changes are refused when their record cannot be written; other events log an error
   and carry on.
@@ -267,6 +359,24 @@ Both units (`syncd.service`, `syncd-console.service`) run as their own system ac
 `/etc/syncd/console.env` and `/etc/syncd/engine.env` are readable by root and the service's group
 only. Backups under `/var/lib/syncd/backups` are readable by root only.
 
+## Container images and the Helm chart
+
+The engine and console images (`deploy/container/Dockerfile`) and the Helm chart
+(`deploy/helm/syncd`) are hardened as follows:
+
+| Control | Implementation |
+|---|---|
+| Base | `gcr.io/distroless/cc-debian12:nonroot`: glibc and the C++ runtime, no shell, no package manager. The binaries are stripped |
+| User | uid and gid 65532, set in the images (`USER 65532:65532`); CI checks it. The chart also sets `runAsNonRoot`, `runAsUser`/`runAsGroup`/`fsGroup` 65532 |
+| File system | `readOnlyRootFilesystem: true` in the chart. Writes go only to volumes: the engine's store and configuration (`/var/lib/syncd`), its control socket (`/run/syncd`, in memory), and `/tmp`; the console's data directory and `/tmp` (`emptyDir`) |
+| Privileges | `allowPrivilegeEscalation: false`, all capabilities dropped, seccomp `RuntimeDefault`, no service account token mounted (`automountServiceAccountToken: false`) |
+| Secrets | The console's database URL, master key and initial admin password come from Secrets, as environment variables; the engine's source and target secrets from a Secret you name (`engine.envFromSecret`) |
+| Network | The engine listens on `0.0.0.0:7443` (control API, mTLS required) and `0.0.0.0:9464` (metrics, plain HTTP, unauthenticated); the console on `0.0.0.0:8080`, plain HTTP. The chart makes ClusterIP Services and no NetworkPolicy: add one that lets only the console reach 7443 and only Prometheus reach 9464 |
+| TLS to browsers | Through the chart's Ingress and your controller; inside the cluster the console serves plain HTTP. The chart has no setting for the console's own HTTPS, and no way to mount a certificate into the console |
+
+Set `console.trustedProxies` to the ingress controller's addresses, so that the audit log and the
+sign-in limit see client addresses.
+
 ## Supply chain
 
 - **Dependencies.** `cargo-deny` runs on every change (`deny.toml`): licences on an allow-list,
@@ -276,12 +386,26 @@ only. Backups under `/var/lib/syncd/backups` are readable by root only.
 - **SBOM.** CI produces a CycloneDX SBOM (`cargo cyclonedx --all-features`) as a build artifact. It
   is not attached to releases.
 - **Fuzzing.** The decoders of what sources send (`pgoutput`, DirSync, syncrepl) are fuzzed in CI.
-- **Releases.** A release is built in CI from a `v*` tag (Rocky Linux 9, and Rocky Linux 8 for the
-  RHEL 8 `.rpm`), after the package lifecycle tests pass. It carries a `SHA256SUMS` for the bundle,
-  `.deb`, `.rpm` and RHEL 8 `.rpm`, and a `.sha256` for the bundle. Inside the bundle,
+- **Releases.** A release is built in CI from a `v*` tag (Rocky Linux 9, and Rocky Linux 8 for
+  the RHEL 8 `.rpm`), after the package lifecycle tests pass. No tag has been pushed yet, so
+  nothing is published so far. Its notes are `docs/releases/<version>.md` when the release has
+  them. It carries a `SHA256SUMS` for the bundle, `.deb`, `.rpm` and RHEL 8 `.rpm`, and a
+  `.sha256` for the bundle. Inside the bundle,
   `MANIFEST.sha256` lists every file, and the installer checks it. Releases are not signed (no GPG
   or cosign signature yet): get the checksums from the release page and verify them before
   installing. The packaging scripts fetch the pinned nfpm and check its SHA-256.
+- **Container images and chart.** A `v*` tag also pushes `ghcr.io/winllc/syncd:<version>`,
+  `ghcr.io/winllc/syncd-console:<version>` and the chart (`oci://ghcr.io/winllc/charts/syncd`)
+  from `.github/workflows/container.yml`. No release has been tagged yet, so none of them is
+  published so far; build the images yourself (see [Architecture](architecture.md#running-on-kubernetes)).
+  The images are amd64 only, and tagged by version only (no `latest`). They are **not signed**
+  (no cosign), the workflow asks for no SBOM or provenance attestation (BuildKit may add its
+  default minimal provenance), no SBOM of the images is published, and CI does not scan them
+  for vulnerabilities. The base images are referenced by tag, not by digest. The CycloneDX
+  SBOM above covers the Rust crates only. On every pull request, CI builds both images, checks that
+  they run as uid 65532, lints the chart, and installs, upgrades, restarts and uninstalls it in a
+  kind cluster (`tests/helm/kind.sh`). Mirror the images to your own registry and pin them by
+  digest.
 
 See [Releases](../releases.md) for the suite's release process.
 
@@ -292,8 +416,9 @@ is not validated, and the settings a STIG deployment needs.
 
 ## Hardening checklist
 
-- [ ] HTTPS in front of the console (the shipped nginx configuration), `CONSOLE_LISTEN` on
-      `127.0.0.1`, and `CONSOLE_PUBLIC_URL` set to the `https://` address
+- [ ] HTTPS for the console: its own certificate (`CONSOLE_TLS_CERT`, `CONSOLE_TLS_KEY`), or the
+      shipped nginx configuration with `CONSOLE_LISTEN` on `127.0.0.1`; and `CONSOLE_PUBLIC_URL`
+      set to the `https://` address
 - [ ] `CONSOLE_TRUSTED_PROXIES` set to your proxy only
 - [ ] `SYNC_DEV_MODE` unset in production
 - [ ] The initial admin password changed, and further admins named rather than shared
@@ -310,3 +435,9 @@ is not validated, and the settings a STIG deployment needs.
 - [ ] The console database reached over TLS when it is on another host
       (`sslmode=require` or stricter in `CONSOLE_DATABASE_URL`), and its owner role kept private
 - [ ] Release checksums verified before every install and upgrade
+- [ ] The control API certificates renewed before they expire (`syncdctl status` shows when)
+- [ ] The `audit log head` lines kept outside the console's database, and the chain verified
+      against them regularly
+- [ ] On Kubernetes: the images mirrored and pinned by digest, a NetworkPolicy around the engine's
+      ports, read access to the namespace's Secrets restricted, and the `syncd-console` Secret
+      backed up

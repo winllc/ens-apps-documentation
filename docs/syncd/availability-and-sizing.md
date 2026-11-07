@@ -1,7 +1,8 @@
 # Sizing, availability and recovery
 
-This page covers how big to make the syncd host, what high availability syncd supports (today, a
-single host), how to recover it after losing the host, and how to go back to the previous release.
+This page covers how big to make the syncd host or pod, what high availability syncd supports
+(today, one engine), how to recover it after losing the host or the cluster's volume, and how to go
+back to the previous release.
 Backups themselves are in the [Operator guide](operator-guide.md#backups). For the suite-wide
 picture, see [Sizing, availability and recovery](../availability-and-sizing.md).
 
@@ -67,24 +68,56 @@ How to check and adjust:
 
 - **Memory.** `process_resident_memory_bytes` against `syncd_memory_limit_bytes`; the shipped alert
   `SyncdMemoryNearLimit` fires above 90% for 10 minutes. Memory freed after a simulation is not all
-  returned to the system.
+  returned to the system. `syncd status` prints memory with its peak since the start, which shows
+  how close the first load came to the limit.
+- **CPU.** `rate(process_cpu_seconds_total[5m])` is the CPUs the engine uses. The console shows
+  it live on the engines dashboard and the live metrics page, as a share of the CPUs the engine
+  may use (its CPU affinity, capped by `CPUQuota` or a container's CPU limit); threads and open
+  files are `process_threads` and `process_open_fds`. A full sync uses every core for its
+  recompute; a CPU limit lengthens it.
 - **Disk.** The size of `/var/lib/syncd/engine` as entities and history grow; lower
   `engine.history.keep_days` if history dominates.
 - **Long operations.** `syncd_engine_busy_seconds`; `SyncdEngineBusy` fires after an hour.
 - **Sources keeping up.** `SyncdSourceStalled`, and for PostgreSQL sources the replication slot's
   retained WAL (`pg_replication_slots`), so the database's disk doesn't fill.
 
+### Sizing on Kubernetes
+
+The [Helm chart](install.md#install-with-helm) gives the engine's pod:
+
+| Value | Default | Size it as |
+|---|---|---|
+| `engine.resources.limits.memory` | `4Gi` | The memory limit above: at least the initial-load peak, about 2.3 GiB per million entities, plus room for simulations. 4Gi covers about 1.5 million entities |
+| `engine.resources.requests` | 250m CPU, `512Mi` | Raise the memory request towards the steady figure, so the scheduler places the pod where that memory is |
+| `engine.persistence.size` | `10Gi` | The store and its history; the volume also holds the configuration file. Allow about half the store's size again for a simulation's copy |
+| `console.resources` | 100m CPU, `128Mi` requested; `512Mi` limit | Enough for the console alone |
+
+The memory limit acts as `MemoryMax` does on a host: past it the kernel stops the engine, and
+Kubernetes restarts the pod from its last commit. The engine reports the limit as
+`syncd_memory_limit_bytes`. To grow the volume, resize the PersistentVolumeClaim itself, where
+its StorageClass allows expansion. Changing `engine.persistence.size` on an installed release
+fails, since a StatefulSet's volume claim template cannot be changed.
+
 ## High availability
 
-syncd runs on **one host**, as one engine. There is no active/passive pair, no shared lease and no
-clustering yet: active/passive failover with checkpoint shipping is on the roadmap, not in the
-current release. Do not run two engines against the same sources and targets: each keeps its own
-store and both would export.
+syncd runs as **one engine**, on one host or in one pod. There is no active/passive pair, no shared
+lease and no clustering yet: active/passive failover with checkpoint shipping is on the roadmap,
+not in the current release. Do not run two engines against the same sources and targets: each
+keeps its own store and both would export.
+
+**On Kubernetes** the engine is a StatefulSet with one replica, fixed in the chart, and its store
+is on a `ReadWriteOnce` volume. If its node fails, Kubernetes starts the pod again where the volume
+can be attached, and the engine carries on from its last commit. A StatefulSet does not replace a
+pod on a node that stops answering until the node is known to be gone, so that two engines never
+share the volume; that wait, and attaching the volume elsewhere, is your outage. The console's
+Deployment can be rescheduled anywhere, as it keeps nothing in its pod.
 
 What it has instead:
 
-- **Automatic restart.** Both systemd units restart on failure after 5 seconds. The engine starts
-  again from its last commit; a full sync that was interrupted resumes where it stopped.
+- **Automatic restart.** Both systemd units restart on failure after 5 seconds; on Kubernetes,
+  the pods restart, and the engine's liveness probe restarts an engine that stops answering
+  `/metrics`. The engine starts again from its last commit; a full sync that was interrupted
+  resumes where it stopped.
 - **Supervised sources.** A source that fails is restarted from its last committed checkpoint,
   with waits that double from 1 second up to `engine.source_retry_max_secs` (60). Other sources
   keep flowing.
@@ -113,12 +146,14 @@ Never start it while the primary could still be running, or both engines export.
 | The console's database | Accounts, roles, settings, registered engines, configuration versions, the audit log | `syncdctl backup` (`pg_dump`), or your database's own backups |
 | The master key, `/var/lib/syncd/console/master.key` (or `CONSOLE_MASTER_KEY`) | Decrypts the stored client keys of registered engines | `syncdctl backup`, and a copy kept apart from the database dumps |
 | `/etc/syncd` | `console.env`, `engine.env` (secrets), `engine/engine.yaml`, and the control API's CA and certificates | `syncdctl backup`, or your configuration management. It holds secrets |
-| nginx's configuration and certificate | HTTPS in front of the console | Your configuration management |
+| nginx's configuration and certificate, or the console's own (`CONSOLE_TLS_CERT`) | HTTPS for the console | Your configuration management |
 | The release | The bundle or package you installed | Keep the download |
 | People, accounts, groups | The source systems and the target directories | Their own backups. The engine reads the sources again |
 
 Backups stay on the host, under `/var/lib/syncd/backups`, until you copy them elsewhere: copy them
 off the host for disaster recovery.
+
+On Kubernetes, see [Backups on Kubernetes](#backups-on-kubernetes).
 
 Your recovery point is your backup interval for what syncd owns: configuration versions, accounts
 and audit events recorded after the last backup are lost. The identity data itself is not: after a
@@ -156,7 +191,8 @@ restore, the engine reads its sources again and catches up.
     sudo systemctl restart syncd syncd-console
     ```
 
-4. Set up nginx and its certificate again ([Installation](install.md#https-in-front-of-the-console)),
+4. Set up nginx and its certificate again, or the console's own certificate
+   ([Installation](install.md#https-in-front-of-the-console)),
    and check `CONSOLE_PUBLIC_URL`; update your identity provider's redirect URI if the address
    changed.
 5. Check: `sudo syncdctl status`; `sudo syncd status` shows every source running and no
@@ -168,15 +204,63 @@ restore, the engine reads its sources again and catches up.
 
 **Without an engine store backup**, the engine starts empty and reads every source in full, then
 exports. Expect the [initial-load](#starting-figures) memory and time. **Without the master key**,
-the console cannot open the stored engine client keys: remove the engine in the console and
-register it again.
+the console refuses to start over the stored engine client keys. Restore the key; if it is lost
+for good, start it with `CONSOLE_NEW_MASTER_KEY=true` and register the engine again (see
+[The master key](operator-guide.md#the-master-key)).
+
+### Backups on Kubernetes
+
+The chart takes no backups, and `syncdctl` does not run there. Back up three things:
+
+| Item | How |
+|---|---|
+| The engine's volume (`data-syncd-engine-0`) | A VolumeSnapshot, or your backup tool's copy of the volume. Stop the engine for it, as `syncdctl backup` does, so that the copy is consistent: `kubectl -n syncd scale statefulset syncd-engine --replicas=0`, take the snapshot, then `--replicas=1` (the next `helm upgrade` sets it back to 1 too) |
+| The console's database | `pg_dump --format=custom`, or your database's own backups |
+| The `syncd-console` Secret | `kubectl -n syncd get secret syncd-console -o yaml`, kept as a secret. It holds the master key |
+
+The `syncd-pki` Secret is worth keeping with them, but need not be: without it the chart issues new
+certificates and its registration Job gives the console the new credentials.
+
+**Restoring**, into the same release name and namespace:
+
+1. Put the `syncd-console` Secret back (`kubectl apply -f`) before installing, so the chart reuses
+   its master key instead of generating one.
+2. Restore the console's database (`pg_restore --clean --if-exists --no-owner`) into the database
+   `console.database` names.
+3. Create the PersistentVolumeClaim `data-syncd-engine-0` from the snapshot (its `dataSource`)
+   before installing, so the StatefulSet uses it. With the release installed, scale the engine to
+   0 and delete the claim first.
+4. `helm install` (or `helm upgrade`) the **same chart version** that took the backups, then check:
+   `kubectl -n syncd exec syncd-engine-0 -- syncd status`, sign in, and **Verify chain**.
+
+The volume keeps the files' owner, uid 65532, which is what the images run as, so no `chown` is
+needed. The engine then catches up from its checkpoints, as on a host.
+
+### Moving from a host to Kubernetes
+
+There is no tested procedure for moving a host install's store and console database into the
+chart. The simple way is a fresh start:
+
+1. Install the chart (see [Install with Helm](install.md#install-with-helm)), with the secrets the
+   configuration refers to in the engine's Secret.
+2. Export the running configuration from the host's console and import it into the new console,
+   then publish it there. Its `engine` and `api` sections are the image's, not the host's.
+3. Stop the host's engine (`sudo systemctl stop syncd`) before the new engine's first full read,
+   so that only one engine exports.
+
+The new engine reads every source in full, with the [initial-load](#starting-figures) memory and
+time. Accounts, the audit log and configuration versions stay in the host's console database; keep
+its backups.
 
 ### The audit trail after a restore
 
 The console's audit log is a hash-chained table in its database, restored with the same dump, so
 the chain is intact but ends at the backup. Events recorded after the backup are lost: syncd has no
-SIEM forwarder or audit export yet, so there is no second copy elsewhere. See
-[Security](security.md) and [Audit logging](../audit-logging.md).
+SIEM forwarder or audit export yet, so there is no second copy elsewhere. What is outside the
+database, from 0.3.0, is the chain's head: the console logs `audit log head` (the newest entry's
+id and hash) every hour when it moved. Verifying the restored log against the last head logged
+before the backup shows the chain is intact up to it; a head logged after the backup names an
+entry the restore lost. See [Security](security.md) and [Audit logging](../audit-logging.md).
 
 ## Rolling back an upgrade
 
@@ -191,8 +275,10 @@ sudo syncdctl rollback
   backup taken before the upgrade. The engine picks up changes made since when it next reads its
   sources.
 - The console's database is restored only if the newer release changed its schema. Otherwise its
-  contents are kept: configuration versions, accounts and audit events written since the upgrade.
-  The 0.2.1 release has no console schema changes since 0.2.0.
+  contents are kept: configuration versions, accounts and audit events written since the upgrade,
+  and so are the control API's certificates, which the console's stored credentials match. 0.3.0
+  changes the console's schema (7 to 8), so a rollback from 0.3.0 to 0.2.1 restores the database
+  and loses what was recorded in the console since the upgrade.
 - `--keep-data` switches the programs back and restores nothing. It is refused when the newer
   release migrated the store to a format the previous one cannot read.
 
@@ -200,6 +286,14 @@ sudo syncdctl rollback
 `sudo syncdctl restore /var/lib/syncd/backups/<time>-upgrade-<old>-to-<new>`. A full restore
 always restores the console's database, so anything recorded in the console since the upgrade is
 lost.
+
+**Kubernetes:** `helm rollback` puts back the previous images and values only. It restores neither
+the engine's volume nor the console's database, nor any Secret. A rollback to a release that
+cannot read the store's format leaves the engine refusing to start (`the store has format N,
+written by a newer syncd`), and a console older than its database's schema may not start either:
+restore the backups taken before the upgrade (see [Backups on Kubernetes](#backups-on-kubernetes)),
+then roll back. 0.3.0 is the first release with a chart, so there is no earlier chart version to
+go back to.
 
 Details are in [Installation](install.md#rollback). The release build tests upgrade, failed
 upgrade, rollback, backup and restore on every release, under systemd; still, practise a rollback

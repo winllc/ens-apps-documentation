@@ -35,12 +35,13 @@ repository records the decision.
 
 | Connection or operation | Notes |
 |---|---|
-| Browsers to the console | TLS ends at your proxy. With the shipped nginx configuration, that is nginx with the host's OpenSSL (TLS 1.2 and 1.3), not syncd's module: validate the proxy, or the host's OpenSSL in FIPS mode |
+| Browsers to the console, the console's own HTTPS | With `CONSOLE_TLS_CERT` and `CONSOLE_TLS_KEY`, the console terminates TLS itself, with rustls on the process provider (TLS 1.2 and 1.3): in FIPS mode, the FIPS module and its approved cipher suites. The certificate's key is generated outside syncd (by your CA, certbot or cert-manager) |
+| Browsers to the console, through a proxy | TLS ends at your proxy. With the shipped nginx configuration, that is nginx with the host's OpenSSL (TLS 1.2 and 1.3), not syncd's module: validate the proxy, or the host's OpenSSL in FIPS mode. On Kubernetes, it is your ingress controller's TLS |
 | Console to engine (control API) | mTLS through rustls on the process provider, on loopback in the packaged layout |
 | Console to its PostgreSQL | `sqlx` with rustls on aws-lc-rs, when `CONSOLE_DATABASE_URL` asks for TLS. The packaged `--local-database` setup uses the local Unix socket, with no TLS |
 | Console to the OpenID Connect provider | rustls on the process provider |
 | Engine to sources and targets | rustls with aws-lc-rs for PostgreSQL, MySQL and MariaDB, SQL Server, MongoDB, LDAP and Active Directory, and an `https://` JDBC bridge, when TLS is configured for them |
-| Control API certificates | Issued by `syncdctl` at install time with the host's `openssl` command (ECDSA P-256 keys): key generation happens outside syncd's module |
+| Control API certificates | Issued by `syncdctl` at install time and by `syncdctl renew-certs` with the host's `openssl` command (ECDSA P-256 keys); on Kubernetes, by the Helm chart with Helm's own Go cryptography (RSA keys). Either way, key generation happens outside syncd's module |
 | Local account passwords | Argon2id normally; PBKDF2-HMAC-SHA512 (210 000 iterations) in FIPS mode |
 | SHA-256 | Session tokens (only their hash is stored), the audit chain, PKCE, search digests, the export file checksum |
 | AES-256-GCM | Stored secrets (engine client keys), under the master key |
@@ -53,7 +54,8 @@ FIPS mode needs **both** a FIPS build **and** the runtime switch. The host's own
 (`fips-mode-setup --enable`) does not switch syncd on: syncd does not read the kernel's FIPS
 flag.
 
-1. **Build** a FIPS release yourself; published releases are standard builds.
+1. **Build** a FIPS release yourself; the release workflow builds standard builds only (and no
+   release has been tagged and published yet).
 
     ```sh
     scripts/package.sh --fips                      # bundle, .deb and .rpm, with -fips in the name
@@ -122,13 +124,22 @@ That admin can then reset the other local accounts (**Users** → Reset password
       operation and enables only approved cipher suites. No end-to-end suite runs the engine or
       the console as a FIPS build, and no connector is tested against a source or target in
       FIPS mode.
-    - **Published releases.** The release workflow builds and publishes standard builds only.
-      A FIPS build is one you make with `--fips`.
+    - **Published releases.** The release workflow builds standard builds only. A FIPS build
+      is one you make with `--fips`.
+    - **Container images.** There is no FIPS image. The Dockerfile builds without the `fips`
+      feature, so setting `SYNCD_FIPS_MODE=true` (the `engine.env` or `console.env` list in
+      the chart's values) on the standard images stops them at startup. A FIPS image means changing the
+      Dockerfile's build to `--features fips` (and adding CMake and Go to its build stage); that
+      has not been done or tested.
     - **Argon2id** comes from the `argon2` crate, not from AWS-LC. It is not used in FIPS mode.
 
 Outside syncd, and outside what it can vouch for:
 
-- **nginx**, which terminates browsers' TLS with the host's OpenSSL;
+- **nginx** or an ingress controller, when one terminates browsers' TLS;
+- the certificate tooling that generates the console's own HTTPS key, and **Helm**, which
+  generates the control API's keys on Kubernetes;
+- the **distroless base image** (Debian 12's glibc and C++ runtime), which takes no part in
+  syncd's cryptography;
 - **PostgreSQL**, the console's database server;
 - the **JDBC bridge** (Java) and a **Debezium Server** sidecar (Java), when used: their
   cryptography is the Java runtime's;
@@ -148,6 +159,7 @@ Password synchronisation, whose payload encryption the plan describes, is not bu
 | A JDBC bridge at `http://` | | Database credentials and rows in plain text (allowed on loopback only) | `https://` with `ca_file` |
 | A Debezium sink listener | | Plain HTTP, with the token in the URL path | Keep it on loopback |
 | `CONSOLE_DATABASE_URL` to another host without `sslmode=require` (or stricter) | | Console data, including password hashes and the audit log, in plain text | TLS to a PostgreSQL server you have configured for FIPS |
+| The console on plain HTTP beyond loopback, with no certificate of its own and no TLS proxy | Packaged: `127.0.0.1` | Session cookies and passwords in plain text (browsers also drop the `Secure` cookie) | `CONSOLE_TLS_CERT` and `CONSOLE_TLS_KEY`, or a TLS proxy |
 | `SYNC_DEV_MODE=true` | off | `admin`/`admin`, cookies without `Secure`, the password change skippable | Leave it off |
 
 ### The license check in FIPS mode
@@ -176,8 +188,8 @@ to decide for a STIG deployment. The console settings are environment variables 
 | Least privilege | roles, `CONSOLE_REVEAL_ROLES` | `admin` may reveal | Assign the narrowest role; `CONSOLE_REVEAL_ROLES=none` if nobody needs sensitive values |
 | Separation of duties | **Users** → Configuration approval | off | Required, where more than one designer works |
 | Secure session cookie | `SYNC_DEV_MODE` | off (cookie `Secure`) | Keep development mode off |
-| Transport encryption to browsers | nginx `ssl_protocols` | TLS 1.2 and 1.3 in the shipped configuration | Keep; add HSTS at nginx if required |
-| Audit trail | the console's audit log | on, in PostgreSQL | Back up the database, verify the chain (`GET /api/v1/audit/verify`) regularly, and export or collect it by your own means: syncd does not forward to a SIEM yet ([Audit logging](../audit-logging.md)) |
+| Transport encryption to browsers | The console's own HTTPS (`CONSOLE_TLS_CERT`, `CONSOLE_TLS_KEY`), or nginx `ssl_protocols` | Plain HTTP on loopback; TLS 1.2 and 1.3 with either | Either. The console sends no HSTS and its protocols are not configurable: where HSTS or a narrower protocol list is required, use nginx (or an ingress) and add it there |
+| Audit trail | the console's audit log | on, in PostgreSQL | Back up the database, collect the hourly `audit log head` lines from the journal, verify the chain against the latest of them (`GET /api/v1/audit/verify?anchor_id=…&anchor_hash=…`) regularly, and export or collect the log by your own means: syncd does not forward to a SIEM yet ([Audit logging](../audit-logging.md)) |
 | Client addresses in the audit log | `CONSOLE_TRUSTED_PROXIES` | none | Your proxy's address |
 | FIPS 140-3 | `SYNCD_FIPS_MODE` with a FIPS build | off | See [Turning FIPS mode on](#turning-fips-mode-on) |
 
@@ -192,6 +204,8 @@ Already in place on a packaged install, without settings:
   `/etc/syncd/pki` readable by root and the service that uses them; the CA key by root only;
 - backups under `/var/lib/syncd/backups` readable by root only;
 - the console on `127.0.0.1:8080` and the control API on `127.0.0.1:7443` with mTLS;
+- `/run/syncd` created by systemd for the engine's control socket (mode 0750), when you turn
+  the socket on, and removed when the engine stops;
 - logs to the journal (`journalctl -u syncd -u syncd-console`).
 
 For a STIG host, also:
@@ -205,4 +219,37 @@ For a STIG host, also:
 - keep the `syncd` group (which can read the command line's client key, and so control the
   engine) to administrators;
 - protect and store apart the console's master key and the `syncdctl` backups, which hold it
-  and the secrets in `/etc/syncd`.
+  and the secrets in `/etc/syncd`;
+- renew the control API's certificates before they expire (`syncdctl status` shows when;
+  `syncdctl renew-certs`), and choose `--new-ca` when your policy limits the CA's lifetime.
+
+### Containers and the Helm chart
+
+The chart's defaults already meet the usual Kubernetes STIG and benchmark checks for workloads:
+
+- non-root (uid and gid 65532, `runAsNonRoot`), a read-only root file system, no privilege
+  escalation, all capabilities dropped, seccomp `RuntimeDefault`, and no service account token
+  mounted;
+- a distroless base, with no shell or package manager;
+- resource requests and memory limits on both containers;
+- secrets in Kubernetes Secrets, not in the values or the images.
+
+Decide, for a STIG cluster:
+
+- **Images:** published images are not signed and have no image SBOM (see
+  [Security](security.md#supply-chain)), and none is published until a release is tagged.
+  Build them, or mirror them, into a registry you trust, scan them, and pin them by digest
+  (`image.engine.repository`, `image.engine.tag`, and the same for `console`).
+- **FIPS:** there is no FIPS image (above).
+- **TLS to browsers:** at your ingress controller (`console.ingress.tls`), configured to your
+  policy, with HSTS if required. Inside the cluster the console serves plain HTTP; set
+  `console.trustedProxies` to the controller's addresses.
+- **Network:** the chart makes no NetworkPolicy. Allow only the console (and the registration
+  Job) to reach the engine's port 7443, and only Prometheus its port 9464.
+- **Secrets:** the `syncd-pki` Secret (for a release named `syncd`) holds the control API's
+  CA key, and the `syncd-console` Secret the master key. Restrict who can read Secrets in the namespace, use
+  encryption at rest for Secrets, and back up the console Secret.
+- **Logs:** collect the pods' logs (the engine's control requests and reveals, and the console's
+  `audit log head` lines).
+- **Banners and sessions:** as above, in the console's environment (the `console.env` list in the
+  chart's values, for example `CONSOLE_SESSION_IDLE_MINUTES`).

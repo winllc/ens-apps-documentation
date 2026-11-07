@@ -177,8 +177,11 @@ data is compiled at run time, limited to 1 000 characters.
 |---|---|---|
 | `lookup(table, key, default)` | The value for `key` in one of the view's lookup tables, or `default`. | `lookup("dept_codes", e.department, "GEN")` |
 | `unique(scope, candidates)` | The first candidate not yet taken in the scope; `{n}` in a candidate counts up. Use with `mode: assign_once`. | `unique("uid", [lower(e.sn), lower(e.sn) + "{n}"])` |
+| `uuid()` | A new random UUID (version 4), in lower case with hyphens: `0f8fad5b-d9cb-469f-a165-70867728950e`. Different on every call: use with `mode: assign_once`, and `permanent` to keep it for good. | `uuid()` |
+| `ulid()` | A new ULID, 26 characters that sort by when they were made: `01ARZ3NDEKTSV4RRFFQ69G5FAV`. Different on every call, like `uuid()`. | `ulid()` |
 
-See [Lookup tables](#lookup-tables) and [Unique values](#unique-values).
+See [Lookup tables](#lookup-tables), [Unique values](#unique-values) and
+[Permanent values](#permanent-values).
 
 ### Relations
 
@@ -234,8 +237,7 @@ Functions that take a timestamp also take text, read as `timestamp()` reads it. 
 zone, format or duration is checked when the rule compiles.
 
 !!! note "Not in the library"
-    The product plan also lists padding, hashing, UUID generation, `userAccountControl`
-    flag helpers, DN parsing, reading a named source's value (`src.hr_db.title`) and
+    The product plan also lists padding, hashing, `userAccountControl` flag helpers, DN parsing, reading a named source's value (`src.hr_db.title`) and
     custom WASM functions. None of these is built: the table above is the whole library.
 
 ## Computed attributes
@@ -259,6 +261,7 @@ computed:
 | `output` | required | The final value. |
 | `on_error` | `skip` | `skip`, `default` or `quarantine`. |
 | `default` | | The fallback text for `on_error: default`. |
+| `permanent` | | `{ key: <attribute> }`: keep the values for good, by that key; see [Permanent values](#permanent-values). Needs `mode: assign_once`. |
 | `tests` | none | Test cases. |
 
 ### Evaluation order
@@ -266,8 +269,8 @@ computed:
 - Computed attributes may read each other. They are evaluated in dependency order, and a
   cycle is refused with the path it takes.
 - On a change, the engine evaluates again only the attributes whose inputs changed.
-  Attributes that call `now()` or `unique()`, read other entities, or quarantine on error
-  are always evaluated when their entity is recomputed.
+  Attributes that call `now()`, `unique()`, `uuid()` or `ulid()`, read other entities, or
+  quarantine on error are always evaluated when their entity is recomputed.
 - A computed attribute with the same name as a flowed attribute replaces the flowed value,
   unless its mode is `only_if_empty`.
 - `now()` is the run's logical time, not the wall clock, so previews and replays are
@@ -314,7 +317,7 @@ is an error. The console's preview shows each step's value, numbered as `2` or `
 | `mode` | Behaviour |
 |---|---|
 | `recompute` | Evaluated again whenever its inputs change. |
-| `assign_once` | Keeps the first value ever assigned; never evaluated again once set. For generated logins and mail addresses, so they and their `unique()` claim stay stable when names change. |
+| `assign_once` | Keeps the first value ever assigned; never evaluated again once set. For generated logins, mail addresses and ids, so they and their `unique()` claim stay stable when names change. With `permanent`, the values also outlive the entity; see [Permanent values](#permanent-values). |
 | `only_if_empty` | Only set when no source gives the attribute a value; a source value wins. |
 
 ### Error policies
@@ -327,6 +330,17 @@ value left. An absent input is not an error (the attribute simply gets no value)
 | `skip` | The attribute keeps the value it had. |
 | `default` | The attribute gets `default`, a literal text. |
 | `quarantine` | The attribute keeps the value it had, and the entity's exports are held until the rule succeeds again. |
+
+A quarantine is kept in the store, with the attribute that failed, its error and since
+when, so a restart keeps it. It ends by itself once the rule evaluates again for the
+entity: fix the source data and the next change releases it, or fix the rule and publish
+it, and the full sync that follows releases the entities. Quarantined entities show in:
+
+- `syncd quarantine`, which lists them with the view, the attribute and the error, and
+  `syncd status` (`view people: 3 quarantined`);
+- the console's engine page, under *Held back by a failing rule*;
+- the metric `syncd_view_quarantined` (per view) and the alert `SyncdQuarantined`, which
+  fires after 30 minutes with any.
 
 Every rule error counts in the `syncd_rule_errors_total` metric (alert `SyncdRuleErrors`)
 and is logged at debug level with the view, attribute and error. A failing flow is
@@ -388,7 +402,8 @@ scope, and claims it for this entity.
 - `{n}` in a candidate is replaced by a counter from 2 up to 9 999: `jdoe2`, `jdoe3`, ...
   A value the entity already holds is kept while it is still a candidate.
 - Claims are case-insensitive, as LDAP naming attributes are, and stored by the engine.
-  They are released when the entity is deleted. Claims are checked against the engine's
+  They are released when the entity is deleted, except those of a
+  [permanent](#permanent-values) attribute, which are never released. Claims are checked against the engine's
   own index, not against the live target.
 - When no candidate is free, the rule fails with "no unique value left", and the error
   policy applies.
@@ -398,6 +413,62 @@ scope, and claims it for this entity.
   join rules. Generate values in a computed attribute and map that attribute in
   publications.
 - Previews and test cases treat every candidate as free, so the first candidate wins.
+
+## Permanent values
+
+A computed attribute can belong to a key, such as an employee number, for good. Its
+values are never given to another entity, even once their entity is deleted, and an entity
+that comes back with the same key gets them again. That makes a stable person id, or a
+login, that survives a leaver being rehired under a new HR record.
+
+```yaml
+computed:
+  - name: personId
+    mode: assign_once
+    output: uuid()                  # or ulid(), or unique("people.id", ["P{n}"])
+    permanent: { key: employeeNumber }
+  - name: uid
+    mode: assign_once
+    output: unique("uid", [lower(e.givenName.substring(0, 1) + e.sn), lower(e.givenName.substring(0, 1) + e.sn) + "{n}"])
+    permanent: { key: employeeNumber }
+```
+
+- `permanent` needs `mode: assign_once`. The key is another attribute of the view, from a
+  flow or computed; it is read like an input, so a computed key is settled first.
+- The engine keeps a record per view and attribute: the key, matched ignoring case, and
+  which entity has it with which values. It is written when the entity gets its values,
+  kept when the entity is deleted, and is part of the store, so backups and restores carry
+  it.
+
+An entity without values gets them by its key:
+
+| The entity's key | What it gets |
+|---|---|
+| None | No values, since they could not be given back. They come once the key does. |
+| Recorded for an entity since deleted | That entity's values: a rehire. |
+| Held by another live entity | None, and a rule error under the attribute's `on_error` (`its permanent key "e100" belongs to another entity`). Once that entity is deleted, or its key changes, the waiting one gets the values at once. |
+| Several values | None, and a rule error. |
+| Not recorded | New values from the rule. |
+
+- **Never reused.** `unique()` claims of a permanent attribute are not released when its
+  entity is deleted, so no candidate list hands them out again. `uuid()` and `ulid()` are
+  random.
+- **A changed key** (a corrected employee number) keeps the entity's values, which move to
+  the new key. The old key is forgotten, so someone else who has it gets values of their
+  own.
+- **Parallel computes** (full syncs, batches of updates) check that no other entity took
+  the key meanwhile before a result is applied, as they do for `unique()` claims.
+- Two live entities with the same key are reported as a rule error, not merged: joining
+  them on the key is the view's join rules' job.
+
+!!! note "Limits"
+    Values given before `permanent` was set are recorded when their entity is next
+    recomputed after a source change, or when it is deleted, so a leaver's values are still
+    given back on rehire. A full sync that changes nothing does not record them, and until
+    they are recorded another entity with the same key is not seen as sharing it. Records
+    are never removed: turning `permanent` off, or removing the attribute, leaves them in
+    the store, and its `unique()` claims stay taken. No console page lists the records or
+    releases one by hand.
 
 ## Reading other entities
 
@@ -566,7 +637,9 @@ configuration version:
 - steps, with each step's value shown in a live preview on a real entity or on
   hand-written input, which can be kept as a test case;
 - the test cases, run as you edit;
-- what the attribute reads and what reads it.
+- what the attribute reads and what reads it;
+- for `assign_once` attributes, the `permanent` setting ("Keep for good, by key"), also in
+  the visual editor.
 
 Compiler errors and warnings (an attribute nothing sets, an unknown lookup table) appear as
 you type. See the [user guide](user-guide.md) for the workflow, and simulate a version

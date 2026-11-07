@@ -58,7 +58,7 @@ curl -sS -b cookies.txt -X POST https://syncd.example.com/api/v1/auth/logout
 
 | Status | `error` | When |
 |---|---|---|
-| 400 | `bad_request` | The request is not valid, or the engine refused it as invalid |
+| 400 | `bad_request` | The request is not valid (for example `anchor_id` without `anchor_hash`), or the engine refused it as invalid |
 | 401 | `unauthenticated` | No session, or it has ended |
 | 401 | `sign_in_failed` | Any failed sign-in, whatever the reason |
 | 403 | `forbidden` | The role cannot do this, or the engine refused the call on its listener |
@@ -116,19 +116,21 @@ curl -sS -b cookies.txt -X POST https://syncd.example.com/api/v1/auth/logout
 
 | Method | Path | Role | Purpose |
 |---|---|---|---|
-| GET | `/api/v1/engines` | any | Registered engines |
-| POST | `/api/v1/engines` | admin | Register an engine: `name`, `address` (`host:port`), and for mTLS `server_ca_pem`, `client_cert_pem`, `client_key_pem` (required off loopback; the key is stored encrypted and never returned). Checks that it answers unless `verify` is false |
+| GET | `/api/v1/engines` | any | Registered engines, with `certificate_expires_at`: when the console's client certificate for the engine expires (mTLS only) |
+| POST | `/api/v1/engines` | admin | Register an engine: `name`, `address` (`host:port` of `api.listen`, or `unix:` and the absolute path of the engine's `api.control_socket`), and for mTLS `server_ca_pem`, `client_cert_pem`, `client_key_pem` (required off loopback, refused with `unix:`; the key is stored encrypted and never returned). Checks that it answers unless `verify` is false. `replace: true` replaces the address and credentials of an engine with that name (after its certificates were renewed), keeping its id and configuration versions, instead of answering 409 |
 | DELETE | `/api/v1/engines/{id}` | admin | Remove the registration (the engine keeps running) |
-| GET | `/api/v1/engines/{id}/status` | any | The engine's status: sources, publications, targets, counters, holds, what it is busy with |
+| GET | `/api/v1/engines/{id}/status` | any | The engine's status: sources, publications, targets, counters, holds, what it is busy with, quarantined entities per view (`quarantined`), and the engine process's CPU and memory (`process`: CPU seconds, CPUs it may use, resident and peak memory, cgroup memory limit, host memory, threads, open files; absent off Linux) |
 | GET | `/api/v1/engines/{id}/status/stream` | any | Server-sent events: a `status` event every second, an `error` event if the engine goes away. Ends when the session does |
 | GET | `/api/v1/engines/{id}/dead-letters` | any | Failed exports waiting (`publication`, `limit`) |
+| GET | `/api/v1/engines/{id}/quarantine` | any | Entities whose exports a failing rule (`on_error: quarantine`) holds back, with the attribute, its error and since when (`view`, `limit` up to 500); `truncated` when there are more |
 | POST | `/api/v1/engines/{id}/runs` | operator | `{"kind": "reconcile" \| "full_sync", "publication": ...}`; returns when done |
 | POST | `/api/v1/engines/{id}/approvals` | operator | Let deletes held back by a threshold through once (`scope`, as the status lists it) |
 | POST | `/api/v1/engines/{id}/drift-check` | operator | Read a publication's entries (or every checking publication's) back from the target now |
 | POST | `/api/v1/engines/{id}/dead-letters/retry` | operator | Export dead letters again now (all, a publication's, or one entity's) |
 | POST | `/api/v1/engines/{id}/dead-letters/discard` | operator | Remove one dead letter without retrying it |
 
-Operator calls are audited with their request and outcome (`engine.run`,
+Registrations are audited as `engine.register`, replacements as `engine.update`. Operator calls are
+audited with their request and outcome (`engine.run`,
 `engine.approve_deletions`, `engine.check_drift`, `engine.dead_letters.retry`,
 `engine.dead_letters.discard`).
 
@@ -183,7 +185,7 @@ See [Computed attributes and rules](rules.md).
 | Method | Path | Role | Purpose |
 |---|---|---|---|
 | GET | `/api/v1/audit` | auditor | The audit log, newest first (`before`, `limit` up to 500) |
-| GET | `/api/v1/audit/verify` | auditor | Recompute the hash chain: `{"entries": n, "first_broken": id or null}` |
+| GET | `/api/v1/audit/verify` | auditor | Recompute the hash chain: `entries`, `first_broken` (an id, or null), and `head` (`id`, `at`, `hash` of the newest entry). With `anchor_id` and `anchor_hash` (a head recorded earlier, such as an `audit log head` line in the console's log), also `anchor`: `found` (the entry is still there) and `matches` (with that hash). Give both or neither |
 
 See [Security](security.md#audit-log).
 
@@ -196,15 +198,16 @@ its clients. It listens on `api.listen` (default `127.0.0.1:7443`), and optional
 
 | Access | Calls |
 |---|---|
-| Always (read-only) | `GetStatus`, `WatchStatus`, `ListDeadLetters`, `GetConfig`, `SearchEntities`, `GetEntity`, `GetEntityHistory` |
+| Always (read-only) | `GetStatus`, `WatchStatus`, `ListDeadLetters`, `ListQuarantined`, `GetConfig`, `SearchEntities`, `GetEntity`, `GetEntityHistory` |
 | Commands: mTLS, the control socket, or `api.local_control: true` on loopback | `StartRun`, `ApproveDeletions`, `CheckDrift`, `RetryDeadLetters`, `DiscardDeadLetter`, `ApplyConfig`, `SimulateConfig`, `TestConnector`, `DiscoverSchema`, `PreviewConfig`, `ListUnjoined`, `JoinRecord`, `UnjoinRecord` |
 | Sensitive values (`reveal`): mTLS, the control socket, or `api.local_reveal: true` on loopback | The explorer calls, `ListUnjoined`, `SimulateConfig`, `DiscoverSchema`, `PreviewConfig` |
 
 | RPC | Purpose |
 |---|---|
-| `GetStatus` | A snapshot: version, FIPS mode, start time, counters, sources, publications, targets, orphans, held deletes, configuration version, views, what the engine is busy with |
+| `GetStatus` | A snapshot: version, FIPS mode, start time, counters, sources, publications, targets, orphans, held deletes, configuration version, views, what the engine is busy with, quarantined entities per view (`quarantined`), and the process's CPU and memory (`process`, Linux only) |
 | `WatchStatus` | Snapshots every `interval_ms` (at least 100 ms; 0 means one second) until the client disconnects |
 | `ListDeadLetters` | Failed exports waiting to be retried |
+| `ListQuarantined` | Entities whose exports a failing rule (`on_error: quarantine`) holds back, with the attribute, its error and since when (`view`, or every view; `limit`, 0 meaning 1 000) |
 | `StartRun` | Run a reconciliation (`RUN_KIND_RECONCILE`, optionally one publication) or a full sync (`RUN_KIND_FULL_SYNC`) now; returns when done |
 | `ApproveDeletions` | Let deletes held by a deletion threshold through once. A publication is reconciled at once; a source applies them at its next full read |
 | `CheckDrift` | Read a publication's entries (or every checked publication's) back from the target and act by policy |
@@ -223,7 +226,10 @@ seconds first), has too many commands waiting, or is stopping, `INVALID_ARGUMENT
 and `INTERNAL` for a command that failed.
 
 The `syncd` command line wraps these calls (`syncd status`, `dlq`, `reconcile`, `full-sync`,
-`approve`, `retry`, `discard`, `check-drift`, `apply-config`, ...). See
+`approve`, `retry`, `discard`, `check-drift`, `apply-config`, ...). `syncd quarantine` reads the
+store directly (read-only), not through the API. On the engine's host the command line uses the
+control socket when it is configured, without a certificate; on Kubernetes,
+`kubectl exec syncd-engine-0 -- syncd status` (for a release named `syncd`) does the same. See
 [Operator guide](operator-guide.md). For its certificates, see
 [Security](security.md#the-engine-control-api).
 
@@ -236,5 +242,19 @@ protocol between the engine and the JDBC bridge. It is internal to that connecto
 When the engine's host configuration sets `api.metrics_listen` (for example `127.0.0.1:9464`), the
 engine serves `GET /metrics` there in the Prometheus text format, over plain HTTP, without
 authentication. It carries counters and states only, no attribute values or configuration. It cannot
-be set from the console. The metrics, the shipped alert rules and how to scrape them are in the
-[Operator guide](operator-guide.md).
+be set from the console. The engine's container image sets it to `0.0.0.0:9464`, and the Helm
+chart's `engine.metrics.serviceMonitor.enabled` adds a `ServiceMonitor` for it.
+
+Added in 0.3.0:
+
+| Metric | Type | Meaning |
+|---|---|---|
+| `syncd_view_quarantined{view}` | gauge | Entities whose exports a failing rule (`on_error: quarantine`) holds back; 0 for views with none |
+| `process_cpu_seconds_total` | counter | User and system CPU time of the engine process; its rate is the CPUs in use |
+| `process_threads` | gauge | Threads of the engine process |
+| `process_open_fds` | gauge | Open file descriptors of the engine process |
+
+The shipped alert rules gain `SyncdQuarantined` (`syncd_view_quarantined > 0` for 30 minutes,
+warning). The process metrics, like `process_resident_memory_bytes` and
+`syncd_memory_limit_bytes`, are served on Linux only. All the metrics, the alert rules and how to
+scrape them are in the [Operator guide](operator-guide.md).

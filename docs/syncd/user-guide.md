@@ -83,8 +83,15 @@ A card per registered engine, showing:
 - a badge: **checking**, **running**, **attention** (a source failed, or a deletion threshold held
   deletes back) or **unreachable**;
 - the number of **Sources** (and how many failed), **Exports** and **Dead letters**;
+- the engine process's **CPU** (a percentage of the CPUs it may use, "of 2") and **Memory**
+  (resident memory, and its memory limit when it has one), each with a small chart of the last
+  minute. They are shown in amber at 90% or more (memory: of its limit). Engines that do not report
+  their process (off Linux) show neither;
 - how long the engine has been up, the configuration version it runs (`v3`), and the number of
   deletion thresholds hit.
+
+The cards follow each engine's live status stream, so these update about once a second. CPU is
+averaged over the last five seconds or so.
 
 Choose a card to open the engine. Administrators also have **Register engine** here.
 
@@ -99,6 +106,11 @@ If the stream drops, a red notice says it is reconnecting and the last status st
 
 Notices at the top:
 
+- **Certificate expires soon** (amber, red under 14 days), from 60 days before the console's
+  client certificate for the engine expires, or **Certificate expired**, when the console can no
+  longer reach the engine. Tell whoever runs the engine host: `sudo syncdctl renew-certs` there
+  issues new certificates and gives the console its new ones. See
+  [Admin guide → Certificate expiry and renewal](admin-guide.md#certificate-expiry-and-renewal).
 - **Target X is unreachable**, with how long it has been down. Exports to it wait in the
   dead-letter queue while sources keep flowing; once it is back, a reconciliation or a retry sends
   them.
@@ -139,6 +151,11 @@ once, now. The threshold stays in force for later changes.
   the target and the value exported, and the action taken. Flagged differences stay in the target
   until someone corrects them there or the publication's drift policy changes. Sensitive values are
   not shown.
+- **Held back by a failing rule** (when there are some): entities whose exports a computed
+  attribute with **On error: quarantine** holds back. It gives the count per view, then up to 100
+  entities with the view, the entity id (a link to the object explorer), the rule, its error and
+  since when. Their exports wait until the rule evaluates again: fix the data or the rule. The
+  engine keeps them across restarts. `syncd quarantine` on the engine host lists them all.
 
 ## Dead letters (`/engines/{id}/dead-letters`)
 
@@ -159,6 +176,11 @@ Rates from the live status stream, per second and updated every second, over the
 
 - tiles for source events, entity changes, export operations and export failures (the last five
   seconds' average and the window's peak), and the current dead letters and orphans;
+- **Engine process**: tiles for **CPU** (a percentage of the CPUs the engine may use, the CPUs in
+  use, and the window's peak), **Memory** (resident, against its limit or the host's memory, and its
+  peak since it started), **Threads** and **Open files**, and charts of CPU and resident memory
+  (in MiB, or GiB from 4 GiB) over the window. CPU at 90% or more, and memory at 90% of a limit,
+  are shown in amber. An engine that does not report its process says so instead;
 - charts of throughput, source events by source, export failures and dead letters queued;
 - a **Sources** table with each source's rate, peak, total events, last event and last checkpoint.
 
@@ -212,9 +234,9 @@ auditors every field is read-only.
 | Item | The form covers |
 |---|---|
 | **Engine and attributes** | Multi-valued and sensitive attributes, seconds between full reads and between reconciliations, the longest retry wait, entity history (days and entries per entity), worker shards, store cache, data directory. The control API (`api`) is set on each engine host and is not edited here |
-| **Connector** | **Connection** settings for its type (PostgreSQL, MySQL / MariaDB, SQL Server, MongoDB, LDAP directory, Active Directory, Debezium Server, JDBC bridge), its **Objects** (what is read and how: scrape, delta or stream) and **Deletion safety** |
-| **View** | **Sources** (each with its join rules and attribute flows), **Computed attributes** (steps, value mode, error policy and test cases), **References**, **Lookup tables**, **Precedence**, and a **Dependency graph** |
-| **Publication** | Target directory, view, which entities (a CEL filter), DN and container, object classes and attributes, DN attributes, references, creating missing containers, **Leaving scope** (delete or disable, and the deletion thresholds), **Groups**, **Existing entries** (how entries already in the target are matched) and **Drift** |
+| **Connector** | **Connection** settings for its type (PostgreSQL, MySQL / MariaDB, SQL Server, MongoDB, LDAP directory, Active Directory, Debezium Server, JDBC bridge), its **Objects** (what is read and how: scrape, delta or stream; for directory objects read by delta or stream, **Renamed container check (s)**, default 60, 0 off) and **Deletion safety** |
+| **View** | **Sources** (each with its join rules and attribute flows), **Computed attributes** (steps, value mode, error policy and test cases; for **assign once**, **Keep for good, by key**), **References**, **Lookup tables**, **Precedence**, and a **Dependency graph** |
+| **Publication** | Target directory, view, which entities (a CEL filter), DN and container, object classes and attributes, DN attributes, references, **Create missing containers** (and, with it, **Remove containers left empty**), **Leaving scope** (delete or disable, and the deletion thresholds), **Groups**, **Existing entries** (how entries already in the target are matched) and **Drift** |
 
 New connectors, views and publications start from a template for their type, with placeholders to
 fill in. Renaming an item carries the new name over to everything that refers to it. Each change in
@@ -355,8 +377,10 @@ and designers can edit.
 
 - **Left**: each view's computed attributes. Designers can add one with **Computed attribute**.
 - **Middle (Rule)**: the attribute's name, its **Value** mode (**recompute** whenever its inputs
-  change, **assign once** to keep the first value for good, **only if empty** when no source
-  supplies one), **On error** (**skip**, **default** with a **Default value**, or **quarantine** to
+  change, **assign once** to keep the first value while the entity exists, **only if empty** when no source
+  supplies one; with **assign once**, **Keep for good, by key** names an attribute such as the
+  employee number: the values are never given to anyone else, and someone who comes back with the
+  same key gets them again), **On error** (**skip**, **default** with a **Default value**, or **quarantine** to
   hold the entity's exports for review), its **Steps** (move them up and down) and its **Output**.
   Each expression can be written as **CEL**, in an editor with completions, hover help and error
   markers, or as **Blocks** (if / then / else). The test cases kept with the rule are listed with

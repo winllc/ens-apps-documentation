@@ -11,7 +11,7 @@ readers, and there is no self-audit or accessibility conformance report.
 |---|---|
 | Automated accessibility scan (axe-core or similar) | **None.** The console's CI runs no accessibility scan |
 | Accessibility lint rules | **None** |
-| Browser tests | The Playwright smoke test (`console/web/e2e/smoke.spec.ts`, run in CI) finds controls by their role and accessible name (`getByRole`, `getByLabel`), so a control that loses its name or label fails it. It also moves through a metrics chart with the keyboard. These are functional tests, not accessibility audits |
+| Browser tests | The Playwright smoke test (`console/web/e2e/smoke.spec.ts`, run in CI) finds controls by their role and accessible name (`getByRole`, `getByLabel`), so a control that loses its name or label fails it. It also moves through a metrics chart with the keyboard, and finds the engine CPU and memory charts and the dashboard's sparklines by their names. These are functional tests, not accessibility audits |
 | Screen-reader testing | Not done |
 | Banner colours | The server refuses any banner whose text-to-background contrast is below 4.5:1; a unit test covers the calculation |
 
@@ -38,8 +38,12 @@ readers, and there is no self-audit or accessibility conformance report.
 - **Charts** (live metrics): each chart is an image with a name, can be focused, and is read with
   the arrow keys, **Home** and **End** (**Escape** clears); the values at the chosen point are
   announced as a status message. Each series is named in a legend, and a **Sources** table under
-  the charts gives the same rates as numbers. The series colours are a fixed palette that a comment
+  the charts gives the same rates as numbers. The **Engine process** charts (CPU and memory) work
+  the same way, with the current values as text in tiles above them. The series colours are a fixed palette that a comment
   in the stylesheet describes as checked for colour-vision deficiency; no test checks it.
+- **Dashboard sparklines**: the small CPU and memory charts on each engine card are images named
+  **CPU over the last minute** and **Memory over the last minute**. They cannot be focused or read
+  point by point; the current CPU and memory are shown beside them as text.
 - **Data flow alternative**: the configuration editor's **Data flow** graph is edited by dragging,
   but everything it does can also be done in the **Forms** view and in the **YAML** tab.
 - **Expression editors**: CEL expressions can be built as **Blocks** (made of drop-downs, fields and
@@ -65,6 +69,8 @@ readers, and there is no self-audit or accessibility conformance report.
   instead.
 - **Entity history**: an attribute's old value is shown struck through in red and the new one in
   green; the difference is visual only.
+- **High CPU and memory**: CPU at 90% or more, and memory at 90% of its limit, are marked only by
+  turning the value amber, on the dashboard and the live metrics page.
 - **Motion**: loading spinners animate whatever the operating system's reduced-motion setting is.
 - **No session warning**: a session ends after its idle timeout without warning; the console then
   asks you to sign in again and returns you to the page you were on.

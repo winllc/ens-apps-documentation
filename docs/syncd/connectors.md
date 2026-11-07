@@ -53,6 +53,15 @@ deletes.
 A source that fails is restarted with a wait that doubles from one second up to
 `engine.source_retry_max_secs` (60 by default).
 
+Connecting to PostgreSQL, MySQL, SQL Server or MongoDB fails after 10 seconds when the
+server does not answer. The limit covers the whole connect, TCP, TLS and login, so a server
+that accepts the connection and then never answers (a hung process, a proxy whose backend
+is gone) fails the source, which is then restarted, instead of leaving it starting for
+good. The error names the server: `postgres: db1:5432: no answer within 10s`. For MySQL the
+limit also covers the binary log request and its first event; once a stream is open, a
+quiet binary log is normal and has no limit. LDAP and Active Directory connections are
+bounded by their `operation_timeout_secs`.
+
 ## PostgreSQL
 
 ### What it reads
@@ -100,9 +109,12 @@ On the source side:
   publication, what PostgreSQL requires to publish those tables). Otherwise, have a DBA
   create the publication and the slot under the configured names: syncd uses existing
   ones as they are.
-- A publication syncd finds already present is not altered. If you add tables to an
-  object's `cdc.watch` later, add them to the publication (`ALTER PUBLICATION ... ADD
-  TABLE`) or use a new publication name.
+- A publication syncd finds already present is checked when the stream starts. Tables
+  the object follows (its `table`, or the tables in `cdc.watch`) that the publication
+  lacks are added with `ALTER PUBLICATION <publication> ADD TABLE <tables>`, and the
+  addition is logged. When the account may not alter it, the stream fails, naming the
+  missing tables and the statement for a DBA to run. A publication `FOR ALL TABLES`
+  covers everything and is left alone.
 - Deletes are matched by the anchor in the row before the change. Make the anchor the
   table's primary key, or set `REPLICA IDENTITY FULL` on the table.
 - Each streamed object names its own slot in `cdc.slot`. A slot keeps WAL on the server while syncd is
@@ -330,6 +342,36 @@ results control, 500 entries per page. `failover_urls` lists replicas tried in o
 ```
 
 The bind account needs read access to the entries and attributes the objects read.
+
+### Containers renamed in a source
+
+Renaming a container (`ou=Contractors` to `ou=Vendors`) changes the DN of every entry
+under it, but a directory reports only the container. syncrepl sends nothing for the
+entries under it, delta reads miss them (their `modifyTimestamp` and `uSNChanged` do not
+change), and DirSync reports the container only. Without help, the entries' `source.dn`
+would stay stale until the next full read, which a stream never makes, and anything
+matching on a source DN (a group's `member` values, say) would go wrong.
+
+So an `ldap` or `active_directory` object read with `mode: stream` or `delta` and
+`scope: sub` has its containers checked every `container_check_secs` (60 by default; `0`
+turns it off):
+
+- The check reads the `organizationalUnit`, `container`, `organization`, `locality`,
+  `domain`, `nsContainer` and `builtinDomain` entries under the base, with their ids
+  (`entryUUID`, `objectGUID` or `nsUniqueId`), and compares their DNs with the last
+  check's. A change of spelling alone is not a rename.
+- The object's entries under each container renamed since are read again, as updates;
+  for nested renames, only those under the outermost one. Each re-read is logged:
+  `container renamed in the source; its entries were read again`.
+- The last check's DNs are kept as a checkpoint of their own, committed with the entries
+  it read again, so a rename made while the engine was stopped is found when it starts.
+- The check runs alongside the object's reader on its own connection. Either failing
+  restarts both. `syncd run --once` makes no check.
+
+A rename is found within `container_check_secs`, not at once. Containers of other object
+classes are not checked; a full read still corrects their entries' DNs. Change log streams
+also read the entries below a renamed container themselves; see
+[Streaming from a change log](#streaming-from-a-change-log).
 
 ### Delta reads
 
@@ -568,7 +610,10 @@ target needs no `objects` unless it is also read.
   attributes, add and delete of values for those in `attributes.multi_valued`), a modify
   DN for a rename or move, or a delete.
 - **Order.** Parents are written before children. With `create_containers`, missing
-  parents are created on demand, as many levels as are missing.
+  parents are created on demand, as many levels as are missing. With
+  `remove_empty_containers` as well, the containers syncd created are deleted once the
+  batch has left them empty; see
+  [DN template](configuration.md#dn-template).
 - **Concurrency.** Up to `max_inflight` entities (32 by default) are written at once over
   a single multiplexed connection, under an adaptive limit.
 - **Converging.** An entry that already exists is updated in place, a delete of a missing
@@ -582,8 +627,85 @@ target needs no `objects` unless it is also read.
   [Drift detection](configuration.md#drift-detection-drift).
 
 The bind account needs the rights to add, modify, rename and delete entries under the
-publication's DNs (and to create containers, with `create_containers`), and read access
-there for adoption and drift checks.
+publication's DNs (and to create containers, with `create_containers`, and delete them,
+with `remove_empty_containers`), and read access there for adoption and drift checks,
+and to the entries' ids (below).
+
+### Entries moved or renamed in the target
+
+The engine finds an exported entry by the DN it last wrote it at. When someone else (an
+administrator, another tool) moves or renames the entry in the target, that DN no longer
+exists. So the writer also records the target's own id of each entry it exports:
+
+| Directory | Id |
+|---|---|
+| Active Directory | `objectGUID` |
+| 389 Directory Server, Red Hat Directory Server | `nsUniqueId` |
+| OpenLDAP, Ping, UnboundID and any other | `entryUUID` (RFC 4530) |
+
+The directory is the one the target's `profile` names, or the one detected when it
+connects. The id is read after an entry is added, or after the first write of an entry
+exported before 0.3.0. It is kept in the exported state, never written to the target or
+shown as an exported attribute. Reading it is best effort: a target that does not give it,
+or does not let the account read it, works as without it.
+
+An entry not at its DN is then looked for by its id: on Active Directory with a base search
+for `<GUID=...>`, elsewhere with a subtree search for `(entryUUID=...)` or
+`(nsUniqueId=...)` in the entry's naming context.
+
+| Operation | With the entry found elsewhere |
+|---|---|
+| Modify, enable, disable | The entry is moved back to the DN the publication places it at (containers created with `create_containers`) and changed there. |
+| Rename | The entry is renamed from where it was found. |
+| Delete | The entry is deleted where it was found. |
+| Add, with a known id (drift reverting a missing entry) | The entry is moved back and converged, not added a second time. |
+
+An entry found nowhere is added again. Each case is logged as a warning naming both DNs.
+Two entries with the same id fail the export with both DNs, into the dead-letter queue.
+Adoption compares DNs as DNs, so a DN spelt differently (spaces after commas, escapes) is
+not taken for one elsewhere.
+
+- An entry exported before 0.3.0 and not written since has no id yet, so a move made
+  before its next write is handled as before: a second entry is added, or the export is
+  dead-lettered.
+- A drift check still reports an entry moved by hand as missing. With `revert`, the revert
+  puts it back as above.
+
+### Renames into a DN that is taken
+
+- **Swaps and chains.** When an entry's new DN is held by another entry that the same
+  batch renames away (two people swapping names, or A renamed into B's DN while B moves
+  on), the writer parks the entry under an RDN of its own, its RDN with `~` and the
+  entity's number appended (`CN=Jon Smith~1a`), in its own container. Once the batch's
+  other entries are written, it renames the parked ones to their DNs, in rounds while any
+  succeeds, so chains complete one link a round. One that still cannot move (the other
+  entry's export failed) is renamed back and fails as before. Parking is logged:
+  `rename blocked by an entry this batch renames away; parked until it has moved`.
+- **Moves aside.** `move_to` and `disable_and_move_to` keep the entry's RDN. When a leaver's
+  RDN is already taken in that container (a second `CN=Bob Ray`, a reused `uid`), the
+  entry gets an RDN of its own (`uid=jdoe~1a,ou=Disabled`), logged as a warning. The engine
+  records it there, so it is not moved again while out of scope; coming back into scope
+  renames it to its own RDN again.
+- **Anything else** renamed into a taken DN still fails: an entry the batch does not move
+  away is a real conflict, such as two entities computing one DN, or an entry nobody
+  manages.
+- **A replayed rename** counts as already done only when the entry at the new DN has the
+  entry's id.
+
+The halves of a swap that reach the writer in different batches still fail the first
+time; `syncd retry` puts the dead letters in one batch, which resolves them. A crash while
+an entry is parked leaves it at its parked DN, where the replay finds it by its id; without
+an id, the export fails with "no such object". While parked, the entry's RDN attribute
+holds the parked value.
+
+### Changes of case
+
+A change of case in the attribute an RDN is built from (`jdoe` to `JDoe`) is a rename: the
+entry's DN and its RDN attribute both take the new case, and groups naming the entry
+follow. OpenLDAP, 389 Directory Server and Active Directory all take it, from a source
+modify DN or from a database change. A change of case in a parent only (`ou=Research` to
+`ou=research`) renames nothing: parents compare as DNs, case-insensitively, so the entry
+stays under the container as it is spelt in the target.
 
 ### Target profiles
 
@@ -704,18 +826,32 @@ repository):
 
 | Connector | Tested against | What is covered |
 |---|---|---|
-| PostgreSQL | PostgreSQL 16 | Logical replication of tables and a query with watched tables, delta reads |
+| PostgreSQL | PostgreSQL 16 | Logical replication of tables and a query with watched tables, a publication completed with a watched table it lacked, delta reads |
 | MySQL / MariaDB | The MySQL 8 and MariaDB packages of Ubuntu 24.04 | Binary log streaming and delta reads |
 | SQL Server | SQL Server 2019 and 2022 (Microsoft's container images) | Change data capture, change tracking, delta reads, lost history |
 | MongoDB | MongoDB 8.0 | Change streams and delta reads |
-| LDAP source | OpenLDAP 2.6 | Full reads, delta reads, syncrepl, failover to a second URL, the access log |
+| LDAP source | OpenLDAP 2.6 | Full reads, delta reads, syncrepl, failover to a second URL, the access log, a container renamed under the base, case-only renames |
 | LDAP source | 389 Directory Server 2.4 | Retro Changelog (`cn=changelog`), anchored on `nsUniqueId` |
 | Active Directory source | Samba AD DC (4.19 in the benchmarks) | DirSync streaming |
-| LDAP target | OpenLDAP 2.6, with and without ppolicy | Adds, renames, moves, containers, groups, references, adoption, drift, write-back, `openldap` profile |
-| LDAP target | 389 Directory Server 2.4 | `389ds` profile: disable and re-enable |
-| Active Directory target | Samba AD DC | Users and groups, containers, disable and move, group membership following moves |
+| LDAP target | OpenLDAP 2.6, with and without ppolicy | Adds, renames, moves, case-only renames, containers created and removed when empty, groups, references, adoption, drift, write-back, entries moved by hand put back (`entryUUID`), permanent values, `openldap` profile |
+| LDAP target | 389 Directory Server 2.4 | `389ds` profile: disable and re-enable, case-only renames, entries moved by hand put back (`nsUniqueId`), a move aside into a taken RDN |
+| Active Directory target | Samba AD DC | Users and groups, containers, disable and move, group membership following moves, entries moved by hand put back (`objectGUID`), two users swapping names, a move aside into a taken RDN |
 | Debezium | Debezium Server 3.0, with PostgreSQL standing in for Oracle and Db2 | Snapshot, changes, tokens, either side stopping |
 | JDBC bridge | PostgreSQL and Apache Derby through their JDBC drivers | Scrape and delta reads, tokens, TLS, the bridge stopping |
+
+What a connector does when its server fails is also tested without real servers, against
+servers the tests run themselves (in the `test` job): one that accepts connections and
+never answers, a port nothing listens on, and a scripted LDAP server that answers,
+returns a result code, goes silent or drops the connection per request. They cover:
+
+- **LDAP:** a refused connection or rejected bind failing over to the next URL; a silent
+  server timing out a connection, a search or a full read; a write that times out or
+  loses its connection marking the target down, so the rest of the batch fails at once;
+  a result code failing only its own export; reconnecting at most once per wait; a held
+  target writing nothing; a probe clearing a target marked down.
+- **PostgreSQL, MySQL, SQL Server:** a silent server failing the connect at the 10-second
+  limit, naming the server; a refused one failing at once.
+- **MongoDB:** a silent server failing the first operation at the limit.
 
 Not tested against a real server:
 
