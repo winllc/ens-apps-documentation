@@ -956,7 +956,9 @@ container, which the chart takes from a Secret (`engine.envFromSecret`).
 | `CONSOLE_DATA_DIR` | `/var/lib/syncd/console` |
 
 Every other [console setting](#console-settings) is an environment variable of the
-container. The image serves plain HTTP; on Kubernetes TLS is the ingress's job.
+container. The image serves plain HTTP unless given `CONSOLE_TLS_CERT` and
+`CONSOLE_TLS_KEY`. With the chart, TLS is the ingress's job: its health checks call the
+console over plain HTTP, so leave those two unset there.
 
 Both images run as uid and gid `65532`, need no root and work with a read-only root file
 system.

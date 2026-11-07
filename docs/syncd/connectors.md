@@ -60,7 +60,7 @@ is gone) fails the source, which is then restarted, instead of leaving it starti
 good. The error names the server: `postgres: db1:5432: no answer within 10s`. For MySQL the
 limit also covers the binary log request and its first event; once a stream is open, a
 quiet binary log is normal and has no limit. LDAP and Active Directory connections are
-bounded by their operation timeout.
+bounded by their `operation_timeout_secs`.
 
 ## PostgreSQL
 
