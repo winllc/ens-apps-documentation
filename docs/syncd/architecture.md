@@ -410,9 +410,12 @@ engines dashboard and each engine's metrics page.
 
 ## Running on Kubernetes
 
-From 0.3.0, each release also publishes two container images and a Helm chart:
+From 0.3.0, the release workflow publishes two container images and a Helm chart when a
+release is tagged (`v*`). No release has been tagged yet, so none is published so far: build
+the images yourself from the source (`docker build -f deploy/container/Dockerfile --target engine`,
+or `--target console`) and install the chart from `deploy/helm/syncd`.
 
-| Artifact | Where |
+| Artifact | Where a tagged release publishes it |
 |---|---|
 | Engine image | `ghcr.io/winllc/syncd:<version>` |
 | Console image | `ghcr.io/winllc/syncd-console:<version>` |
