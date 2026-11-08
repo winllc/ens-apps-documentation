@@ -1,8 +1,10 @@
 # Connectors
 
 A connector is one system syncd reads, writes, or both. Sources are SQL databases,
-MongoDB, LDAP directories and Active Directory, plus any database that Debezium Server can
-capture or that has a JDBC driver. Targets are LDAP directories and Active Directory.
+MongoDB, LDAP directories, Active Directory, CSV and other delimited files, and Microsoft
+Entra ID, plus any database that Debezium Server can capture or that has a JDBC driver.
+Targets are LDAP directories, Active Directory, SaaS applications that speak SCIM 2.0, and
+Entra ID.
 
 This page says how each connector reads, what it needs on the source side, and which
 settings matter. Every key is listed in [Configuration](configuration.md#connectors-connectors);
@@ -21,9 +23,12 @@ the rules that turn source records into entities are in
 | `active_directory` | Entries under a base | DirSync | `uSNChanged` | DirSync cookie, or USN, per domain controller |
 | `debezium` | Change events from a Debezium Server sidecar (Oracle, Db2 and others) | Always streams | | Debezium keeps its own offsets |
 | `jdbc` | Tables and queries through the JDBC bridge (Db2, Informix, Oracle, any JDBC database) | Not supported; use `debezium` | A column | Watermark |
+| `csv` | A delimited file (CSV, TSV), or the newest file matching a glob | Not supported: every read is a full snapshot (`watch: true` reads again when the file changes) | | None |
+| `entra` | Entra ID users and groups, through Microsoft Graph | Delta queries (always streams) | | Delta link |
+| `scim` | Nothing: a target only | | | |
 
-Only `ldap` and `active_directory` connectors can be publication targets. One connector
-can be both a source and a target.
+Publication targets are `ldap`, `active_directory`, `scim` and `entra` connectors. One
+connector can be both a source and a target.
 
 ## Read modes
 
@@ -44,6 +49,8 @@ Every object has a `mode`:
   follows the change feed from a position taken before the read, so nothing is missed in
   between. Each checkpoint is committed in the same write as the changes before it, so a
   restart resumes where it left off, and a change delivered twice is harmless.
+
+A `csv` object is always `scrape`, and an `entra` object always `stream`.
 
 When a stream's position is no longer available on the server (a purged binary log, CDC
 cleanup, an expired resume token, a trimmed change log, a failover to a server with
@@ -341,7 +348,11 @@ results control, 500 entries per page. `failover_urls` lists replicas tried in o
       attributes: [uid, mail, employeeNumber, telephoneNumber, title, jpegPhoto]
 ```
 
-The bind account needs read access to the entries and attributes the objects read.
+The bind account needs read access to the entries and attributes the objects read. An
+`ldap` or `active_directory` connection takes no CA file: an `ldaps://` or StartTLS
+server's certificate is checked against the system's trust store, so a directory with a
+private CA needs that CA installed on the engine's host (or, in a container, mounted
+into the system trust store).
 
 ### Containers renamed in a source
 
@@ -579,6 +590,69 @@ syncd builds with the database's own driver and streams the rows back over gRPC.
     The bridge is not in the release bundle or the packages yet: it is built from
     `bridge/jdbc` in the source repository (`gradle installDist`) and run on its own.
 
+## CSV and flat files
+
+Some systems export a CSV or TSV file to a directory, and that file is the only way to
+read them. A `csv` connector reads such a file in full (keys in
+[Configuration](configuration.md#csv-files-csv)):
+
+```yaml
+- name: contractors
+  type: csv
+  connection:
+    path: /var/lib/syncd/in/contractors-*.csv   # the newest matching file
+    delimiter: ","            # one character, "\t" for TSV, or auto
+    encoding: utf-8           # utf-8, latin1 or utf-16
+    header: true
+    columns:                  # optional with a header: types for some columns
+      - id
+      - { name: active, type: bool }
+      - { name: contract_end, type: date }
+      - { name: groups, type: "multi:;" }
+    watch: true               # read again when the file changes
+    done_file: .done          # read only once contractors-<date>.csv.done exists
+    on_error: fail            # a bad row fails the whole read
+  objects:
+    - type: contractor
+      anchor: id              # the key column
+      schedule: "*/15 * * * *"
+  deletion_threshold: { percent: 20, count: 200 }
+```
+
+- **One file, read in full.** Each object is one file: its own `file`, or the
+  connection's `path`. A glob reads the newest matching file, by modification time. A
+  file has no change log, so every read is a full snapshot (`mode: scrape` only): the
+  engine compares it with the last one and finds what was added, changed or removed. The
+  connector's and the publications' deletion thresholds apply as to any full read.
+  `interval_secs` or `schedule` say when it is read.
+- **Parsing.** The delimiter is one character, or `auto`, which sniffs `,`, `;`, tab and
+  `|` from the first lines. UTF-8 (a byte order mark is stripped), Latin-1
+  (Windows-1252) and UTF-16 are read. With `header: true` the first row names the
+  columns; without it, `columns` names them in order.
+- **Typed columns.** Cells are text unless typed: `int`, `bool`, `date`, `timestamp`,
+  or `multi:<separator>` for a cell holding several values (split and trimmed). Dates and
+  timestamps are read as `timestamp()` reads text. An empty cell is no value.
+- **Bad rows.** A row with the wrong number of columns, a value not of its type, or an
+  empty key is a bad row. `on_error: fail` (the default) fails the whole read, so a
+  half-good file never deletes half a directory. `on_error: skip` skips the row and
+  counts it: the source's status shows a warning, `syncd status` prints it, and
+  `syncd_source_rows_skipped_total` counts the rows. A clean read clears the warning.
+- **Complete files only.** The file is parsed into memory and nothing is sent until the
+  end. A file whose size changes between two looks a second apart is still being
+  written: the read waits up to a minute, then gives up until next time. With
+  `done_file` (`.done` for `<file>.done`, or an absolute path), the file is read only
+  once the done file exists, and the done file is deleted after the read. `max_bytes`
+  (1 GiB by default) refuses a larger file.
+- **Watch.** `watch: true` reads the file again two seconds after it stops changing, or
+  when its done file appears, on top of the schedule.
+- **Probes.** `syncd test-connection` names the file, its size and age, whether its done
+  file is there, the encoding, the delimiter and the header's columns, reading only the
+  first 64 KiB. `syncd discover` lists the files a glob matches, and for one file its
+  columns with the kind of values sampled and a few records.
+
+The engine's user must be able to read the inbox, and to delete done files. On Kubernetes
+the inbox is mounted through `engine.extraVolumes`.
+
 ## Binary values and dates from sources
 
 - **Binary data** passes through rules as bytes. Connectors recognise binary columns by
@@ -600,7 +674,9 @@ See [Dates and times](rules.md#dates-and-times) and [Binary values](rules.md#bin
 ## LDAP and Active Directory as targets
 
 A publication writes a view's entities to an `ldap` or `active_directory` connector. The
-target needs no `objects` unless it is also read.
+target needs no `objects` unless it is also read. SCIM applications and Entra ID are
+targets too; see [SCIM targets](#scim-targets) and
+[Microsoft Entra ID](#microsoft-entra-id).
 
 ### How the writer works
 
@@ -720,6 +796,8 @@ their own type.
 | `389ds` (alias `rhds`) | 389 Directory Server, Red Hat Directory Server | `nsAccountLock: TRUE` |
 | `unboundid` (aliases `ping`, `pingdirectory`) | Ping Identity Directory Server, UnboundID | `ds-pwp-account-disabled: true` |
 | *(type `active_directory`)* | Active Directory | The ACCOUNTDISABLE bit of `userAccountControl`, read first so the other flags stay |
+| *(type `scim`)* | A SCIM application | `active: false` |
+| *(type `entra`)* | Entra ID | `accountEnabled: false` |
 
 With `deprovision: disable` (or `{ disable_and_move_to: <container> }`), an entity that
 leaves scope or is deleted has its account disabled and the entry kept and managed. Changes
@@ -737,8 +815,11 @@ records that the entry is disabled.
     profile: openldap
 ```
 
-Not yet built: stripping the group memberships of disabled entries, hard deletes after a
-grace period, and re-enabling an entry recreated under a new entity.
+A staged leaver policy (`disable_after`, `strip_groups_after`, `move_to`,
+`delete_after`) disables, strips the groups syncd manages, moves and deletes at set times
+after the entity left; see [Change safety and lifecycle](change-safety.md#staged-leaver-policy).
+An entry recreated under a new entity is not re-enabled, and memberships in groups syncd
+does not manage are not stripped.
 
 ### Active Directory targets
 
@@ -746,9 +827,12 @@ grace period, and re-enabling an entry recreated under a new entity.
   `l=`, `dc=` and `c=` parents.
 - Groups are ordinary publications of a group view with `member` as a reference, or
   computed groups with `object_classes: [group]` and `when_empty: keep`.
-- syncd does not set passwords: password synchronisation is not built yet. The end-to-end
-  configuration creates users with `userAccountControl` `544` (a normal account that does
-  not require a password), mapped from a computed attribute.
+- Accounts can be created with a password (below), and captured password changes are
+  delivered as `unicodePwd`; see
+  [How a change travels](password-sync.md#how-a-change-travels). Both need
+  `ldaps://` or `starttls`.
+- Disabling and enabling read the `userAccountControl` the directory holds and set or
+  clear ACCOUNTDISABLE on it, so the other flags stay, whether mapped or set by hand.
 - `writeback` is refused for Active Directory targets, which have no change log syncd can
   read.
 
@@ -772,6 +856,110 @@ grace period, and re-enabling an entry recreated under a new entity.
     manager: manager
   deprovision: { disable_and_move_to: "OU=Disabled,OU=Synced,DC=corp,DC=example,DC=com" }
 ```
+
+### Active Directory conveniences
+
+Publishing to Active Directory means writing the same attributes the same way every time.
+A publication to an `active_directory` target can say what it means instead, and the
+engine writes the attributes (keys in
+[Configuration](configuration.md#active-directory-conveniences)):
+
+```yaml
+- name: people_to_ad
+  view: people
+  target: ad
+  dn: CN={displayName},OU=Staff,DC=corp,DC=example,DC=com
+  object_classes: [user]
+  attributes:
+    cn: e.displayName
+    givenName: e.givenName
+    sn: e.sn
+    displayName: e.displayName
+  sam_account_name: { from: e.login, max_length: 20 }
+  user_principal_name: { from: e.login, suffix: corp.example.com }
+  exchange:
+    proxy_addresses: { primary: e.mail, aliases: e.aliases, keep_existing: true }
+    mail_nickname: e.login
+    target_address: '"SMTP:" + e.login + "@example.mail.onmicrosoft.com"'
+  account_control:
+    flags: [NORMAL_ACCOUNT]
+    password_never_expires: e.status == "leave"
+    must_change_password: "false"
+  home:
+    directory: '"\\\\files.corp.example.com\\home\\" + e.login'
+    drive: "H:"
+  drift:
+    attributes: { proxyAddresses: revert, pwdLastSet: accept }
+```
+
+| Block | Writes |
+|---|---|
+| `exchange.proxy_addresses` | `proxyAddresses`: one upper-case `SMTP:` primary, then the lower-case `smtp:` aliases sorted, duplicates and the primary itself left out. With `keep_existing` (the default) the attribute is diffed as a set, so `x500:`, `X400:`, `SIP:` and addresses other tools put there stay, and only syncd's own are added and removed. `false` replaces the whole attribute. |
+| `exchange.mail_nickname`, `target_address` | `mailNickname`, `targetAddress`, as given. |
+| `account_control` | `userAccountControl` from flag names (or an int expression), `NORMAL_ACCOUNT` when unset; `password_never_expires` sets or clears `DONT_EXPIRE_PASSWORD`; `must_change_password` writes `pwdLastSet` `0` (change at next logon) or `-1`. Once the person changes their password the directory keeps its own clock in `pwdLastSet`, so a drift policy of `accept` suits it. |
+| `home` | `homeDirectory`, `homeDrive` (a letter and a colon), `profilePath`, `scriptPath`: plain attributes. No share is created. |
+| `user_principal_name` | `userPrincipalName` as `<from>@<suffix>`. |
+| `sam_account_name` | `sAMAccountName`, cut to `max_length` characters (20, the directory's limit, at most). |
+
+Each block is sugar for the attributes it writes. The planner, drift checks, adoption,
+the object explorer and previews see plain attributes, so a drift policy or an `adopt`
+match may name them. Drift on `proxyAddresses` compares the address without case and the
+prefix with it, so `SMTP:` (the primary) and `smtp:` (an alias) differ. The same
+functions are available in rules: `uac()`, `uac_has()`, `uac_set()`, `uac_flags()`,
+`proxyAddresses()` and `truncate()`; see [Active Directory values](rules.md#active-directory-values).
+
+The blocks are refused on any other target, and so is mapping an attribute both in
+`attributes` and through a block.
+
+!!! note "`sAMAccountName` must be unique"
+    The directory enforces it, and a duplicate fails the export into the dead-letter
+    queue: there is no `on_conflict: unique`. Mint the login once as a computed attribute
+    with `unique()` and `mode: assign_once`, then write it with `sam_account_name`:
+
+    ```yaml
+    - name: login
+      mode: assign_once
+      output: >-
+        unique("sAMAccountName", [
+          truncate(lower(ascii(e.givenName.substring(0, 1) + e.sn)), 20),
+          truncate(lower(ascii(e.givenName.substring(0, 1) + e.sn)), 18) + "{n}"
+        ])
+    ```
+
+### Initial passwords
+
+A publication can give each entry it creates a password, read from the entity or
+generated (`passwords.initial`; keys in
+[Configuration](configuration.md#publication-passwords), the whole story in
+[Password synchronisation](password-sync.md#initial-passwords)). It is set right after a
+**fresh** add, and only then: an entry that was already there (adopted, replayed after a
+crash, put back after a move) keeps the password it has.
+
+On Active Directory, syncd sets `unicodePwd` as it creates the account:
+
+1. The entry is added with ACCOUNTDISABLE set in its `userAccountControl` (the exported
+   value with bit 2, or `514` when none is exported), because Active Directory refuses an
+   enabled account without a password.
+2. `unicodePwd` is set.
+3. `pwdLastSet` is set to `0` when `must_change` is on.
+4. `userAccountControl` is set to the exported value, which enables the account when it
+   says so. An entry exported disabled stays disabled.
+
+Other directories get the password with RFC 3062 Password Modify, or a `userPassword`
+replace with `write: replace`, after the add.
+
+- **TLS is required.** Active Directory takes passwords only over LDAPS or StartTLS. A
+  `passwords` block on an Active Directory target whose connection is `ldap://` without
+  `starttls` is refused when the configuration is validated, and the writer refuses again
+  before anything is sent.
+- **A refused password** (the directory's password policy) does not fail the export. The
+  entry stays without the password, disabled on Active Directory. It is counted
+  (`initial passwords: N set, N refused` in `syncd status`), logged by DN and publication,
+  never by value, and not retried.
+- **A change captured later** replaces the initial password.
+- An entry a drift check puts back is re-added without one.
+- Telling the person their password is out of scope: the log and the status say that one
+  was set, never what it is.
 
 ### Write-back after a target outage
 
@@ -801,6 +989,172 @@ while it lasted) is not replayed; drift detection covers those changes.
 
 The target's bind account needs read access to its change log, and the source connector's
 account write access to the mapped attributes.
+
+## SCIM targets
+
+SaaS applications take their users and groups through SCIM 2.0 (RFC 7643, RFC 7644). A
+`scim` connector is a publication target like a directory, with the same planner, leaver
+stages, drift checks and password delivery, against `/Users` and `/Groups` (keys in
+[Configuration](configuration.md#scim-scim)):
+
+```yaml
+connectors:
+  - name: saas-app
+    type: scim
+    connection:
+      base_url: https://app.example.com/scim/v2
+      auth: { token: { file: /run/secrets/scim-token } }
+      # or basic: { username: syncd, password: { env: SCIM_PASSWORD } }
+      # or oauth2: { token_url: https://login.example.com/oauth2/token, client_id: syncd,
+      #              client_secret: { file: /run/secrets/scim-client-secret }, scope: scim }
+      rate_limit: 20
+publications:
+  - name: people_to_saas
+    view: people
+    target: saas-app
+    resource: User
+    external_id: e.employeeId
+    attributes:
+      userName: e.login
+      name.givenName: e.givenName
+      'emails[type eq "work"].value': e.mail
+      active: e.status == "active"
+      urn:ietf:params:scim:schemas:extension:enterprise:2.0:User:department: e.department
+    deprovision: disable
+    groups:
+      - { name: engineering, filter: e.department == "Engineering", dn: displayName=Engineering, member_attribute: members }
+```
+
+- **Resources, not DNs.** `external_id` gives the resource's `externalId`, by which syncd
+  finds it again (`GET /Users?filter=externalId eq "..."`); its id is then remembered.
+  There is no `dn`, `object_classes`, container, move, `writeback` or `adopt`. A computed
+  group is named `displayName=<name>`, with `members` as its member attribute. A changed
+  `external_id` renames the resource.
+- **Attribute names are SCIM paths:** `userName`, `name.givenName`, a filtered element of
+  a multi-valued attribute (`emails[type eq "work"].value`: created when missing, replaced
+  in place, dropped when its value goes), or an extension attribute by its URN. Names
+  ignore case. The provider's `/Schemas`, read at connect, type the values: `active`
+  becomes a JSON boolean, an integer an integer, a multi-valued attribute an array.
+- **Writes.** An add is a `POST`; a change is a `PATCH` when the provider supports it,
+  else a read, a merge and a `PUT` with `If-Match` when it supports ETags; a delete is a
+  `DELETE`. Disabling is `active: false`. An initial password goes into the `POST`.
+- **Resources that already exist.** A `409` on create looks the resource up by
+  `externalId`, then `userName`, adopts it and brings it up to date.
+- **Throttling.** Requests are paced to `rate_limit` per second. A `429` waits for
+  `Retry-After` (a minute at most, three times). A `412` reads again and retries once. A
+  lost connection marks the target down until a probe of `/ServiceProviderConfig` finds
+  it again.
+- **Authentication** is a bearer token, basic credentials, or an OAuth 2.0
+  client-credentials token fetched from `token_url` and renewed before it expires.
+  `base_url` and `token_url` must be `https://` unless on loopback.
+- **Passwords.** A captured password replaces `password` (see
+  [What is built](password-sync.md#what-is-built)). A provider that does not
+  announce `changePassword` support is refused at connect when a publication delivers
+  passwords to it.
+
+`syncd test-connection` reports what the provider supports (patch, change password,
+ETags, filter) and its resource types. `syncd discover` lists the resource types, and for
+one, the attribute paths its schemas declare, with a few resources as records.
+
+## Microsoft Entra ID
+
+An `entra` connector reaches a tenant through Microsoft Graph. It is a target for users,
+groups, licences and app roles, and a source of users and groups through delta queries
+(keys in [Configuration](configuration.md#entra-id-entra)):
+
+```yaml
+connectors:
+  - name: entra
+    type: entra
+    connection:
+      tenant: contoso.onmicrosoft.com
+      auth: { client_id: 00000000-0000-0000-0000-000000000000, client_secret: { file: /run/secrets/entra-client-secret } }
+      cloud: global               # usgov, usgovdod, china
+    objects:                      # as a source
+      - type: user
+        anchor: id
+        mode: stream
+        poll_interval_secs: 60
+        attributes: [id, userPrincipalName, displayName, mail, accountEnabled, onPremisesSyncEnabled, department]
+publications:
+  - name: people_to_entra
+    view: people
+    target: entra
+    external_id: e.upn            # names the user by userPrincipalName (key: employeeId for the other way)
+    attributes:
+      displayName: e.displayName
+      givenName: e.givenName
+      surname: e.sn
+      usageLocation: e.country    # needed for a licence to be assignable
+      accountEnabled: e.status == "active"
+    licenses:
+      assign: e.skus              # SKU part numbers, such as ["ENTERPRISEPACK"]
+      disabled_plans: [YAMMER_ENTERPRISE]
+    passwords:
+      initial: { generate: { length: 16 } }
+    deprovision: disable
+    groups:
+      - { name: engineering, filter: e.department == "Engineering", dn: displayName=Engineering, member_attribute: members }
+```
+
+**Authentication** is OAuth 2.0 client credentials with a client secret, against the
+cloud's sign-in host; the token is renewed a minute before it expires. A certificate
+(client assertion) is not supported. The application needs Graph application
+permissions for what the publications do: `User.ReadWrite.All`, `Group.ReadWrite.All`,
+`Directory.ReadWrite.All` for licences, `AppRoleAssignment.ReadWrite.All` for app roles.
+
+**National clouds.** `cloud` picks the Graph and sign-in hosts:
+
+| `cloud` | Graph | Sign-in |
+|---|---|---|
+| `global` (default) | `graph.microsoft.com` | `login.microsoftonline.com` |
+| `usgov` | `graph.microsoft.us` | `login.microsoftonline.us` |
+| `usgovdod` | `dod-graph.microsoft.us` | `login.microsoftonline.us` |
+| `china` | `microsoftgraph.chinacloudapi.cn` | `login.chinacloudapi.cn` |
+
+### As a target
+
+- **Users and groups** are named as for SCIM: `external_id` gives the user's
+  `userPrincipalName` (or `employeeId` with `key: employeeId`), and a group is
+  `displayName=<name>`. Attribute names are Graph property names, typed where Graph is
+  strict (`accountEnabled` a boolean, `businessPhones` and `otherMails` arrays).
+- **Creating a user** needs `userPrincipalName`, `displayName`, a `mailNickname` (taken
+  from the UPN when not mapped) and a password: the publication's `passwords.initial`, or
+  a random one nobody keeps, which the person must change. A user or group that already
+  exists is adopted by its name and brought up to date.
+- **Licences.** `licenses` writes `assignedLicenses` from SKU part numbers
+  (`ENTERPRISEPACK`), with `disabled_plans` turned off in each. They are matched with the
+  tenant's `/subscribedSkus` and sent as one `assignLicense` with what to add and remove.
+  A user needs `usageLocation` for a licence to be assignable.
+- **App roles.** `appRoleAssignments` takes `<servicePrincipalId>:<appRoleId>` values,
+  compared with the user's assignments and added or removed.
+- **Members** are added and removed in `$batch` calls of twenty; `manager` takes a user's
+  resource name.
+- **Leavers.** Disabling is `accountEnabled: false`; a delete is a `DELETE`. Resources
+  have no containers, so the leaver policy cannot move them.
+- **Users synced from on-premises.** Before every write to a user's properties (a change,
+  `accountEnabled`, a password, a delete), syncd reads `onPremisesSyncEnabled`. A user
+  that Entra Connect (or Cloud Sync) syncs from Active Directory is left alone: the write
+  is skipped with a warning and counted, and the export still succeeds. Its group
+  memberships, licences and app roles, which live in the cloud, are written. A password
+  for such a user is refused. The count shows in `syncd status`, on the console's engine
+  page and in the metric `syncd_entra_skipped_synced_users{target}`.
+- **Throttling.** A `429` waits for `Retry-After` (a minute at most, three times). A lost
+  connection marks the target down until a probe finds it again.
+
+### As a source
+
+An object `{ type: user | group, anchor: id, mode: stream, attributes: [...] }` is read
+with `/users/delta` (or `/groups/delta`), selecting the listed properties. The first pass
+reads everything, as a full read; the delta link is then the checkpoint, polled every
+`poll_interval_secs` (30 by default). Changed users and groups come back whole, removed
+ones as deletes. Arrays become several values, objects are flattened to `name.field`, and
+a group's members are read whole as `members`. `onPremisesSyncEnabled` is a property like
+any other, so a view can tell synced users from cloud-only ones.
+
+`syncd test-connection` gets a token, lists the tenant's licence SKUs and repeats the
+guard on synced users. `syncd discover` lists `users` and `groups`, and for one, a few
+records as the engine reads them.
 
 ## Checking a connector
 
@@ -838,6 +1192,11 @@ repository):
 | Active Directory target | Samba AD DC | Users and groups, containers, disable and move, group membership following moves, entries moved by hand put back (`objectGUID`), two users swapping names, a move aside into a taken RDN |
 | Debezium | Debezium Server 3.0, with PostgreSQL standing in for Oracle and Db2 | Snapshot, changes, tokens, either side stopping |
 | JDBC bridge | PostgreSQL and Apache Derby through their JDBC drivers | Scrape and delta reads, tokens, TLS, the bridge stopping |
+| CSV | Files written by the test | A glob, a done file, `watch`, a byte order mark, a sniffed delimiter, quoted and multi-valued cells; a replaced file applying its changes and deletes; skipped rows in the metrics and the status; a partial file not read until its done file appears; the probes |
+| SCIM target | Two instances of syncd's fake SCIM provider (`syncd-fakes scim`): one with every feature, one without `PATCH` and with strict ETags | Users with e-mail addresses and booleans, a group with members, a changed row patched, a leaver disabled on one and deleted on the other, a resource that already existed adopted, drift reverted, the probes |
+| Entra ID | syncd's fake Microsoft Graph (`syncd-fakes graph`), seeded with SKUs, a synced and a cloud-only user | Users with licences and a group; the synced user's properties skipped and counted (no dead letter) while its group and licence are written; the tenant read back as a source into OpenLDAP, and a change in the tenant following through the delta query |
+| Active Directory conveniences | `syncd preview` against the running engine | The attributes computed from CSV records; `syncd validate` refusing the blocks on an LDAP target |
+| Initial passwords | OpenLDAP with PostgreSQL streaming (`tests/e2e/passwords.sh`) | A person provisioned with an initial password binds with it; a change captured later replaces it; `generate` creates every entry with a password; the counts in `syncd status`; no password in the engine's log |
 
 What a connector does when its server fails is also tested without real servers, against
 servers the tests run themselves (in the `test` job): one that accepts connections and
@@ -857,6 +1216,11 @@ Not tested against a real server:
 
 - **Ping Identity / UnboundID** (`unboundid` profile): only the mapping is unit-tested.
 - **Microsoft Active Directory** itself: Active Directory is tested through Samba AD DC.
+- **Initial passwords on Active Directory**: the Samba scenario is not run, because the
+  LDAP connector cannot take a CA file yet and the Samba DC's certificate is self-signed.
+  The sequence Active Directory needs is tested against a scripted LDAP server.
+- **Microsoft Entra ID** and **real SCIM applications**: the end-to-end tests use syncd's
+  fake Graph and fake SCIM provider, which implement the subset syncd uses.
 - **Oracle and Db2**: their container images do not fit the CI runners, so PostgreSQL
   (Debezium) and Apache Derby (JDBC) stand in. Debezium's change events have the same
   shape for every database it captures.
@@ -866,8 +1230,12 @@ Not tested against a real server:
 
 ## Not supported
 
-- **Other source families**: files, HR or SaaS APIs, Kafka, Entra ID and inbound SCIM
-  are not planned until a customer needs them.
-- **Targets other than LDAP and Active Directory**: syncd publishes to directories only.
+- **Other source families**: HR or SaaS APIs, Kafka and inbound SCIM are not planned until
+  a customer needs them.
+- **Other targets**: databases, files, and applications that do not speak SCIM 2.0.
 - **eDirectory's change cache** as a stream.
-- **Password synchronisation** to or from any directory is not built yet.
+- **Entra ID with a certificate**: the connector takes a client secret only.
+- **Password capture plugins** for the Windows password filter and the 389 and OpenLDAP
+  directories are not built: changes come from the console's self-service page,
+  `syncd password set` and capture agents; see
+  [What is built](password-sync.md#what-is-built).

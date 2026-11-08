@@ -7,7 +7,8 @@ limit local sign-in to [break-glass accounts](#break-glass-accounts). The sign-i
 "Sign in with &lt;label&gt;" button when it is configured.
 
 syncd supports **OpenID Connect only**. SAML 2.0 and client-certificate (X.509) sign-in are not
-supported; see [SAML identity providers](#saml-identity-providers).
+supported; see [SAML identity providers](#saml-identity-providers). Single sign-on is for people
+in a browser: other systems call the API with [API tokens](#api-tokens-and-single-sign-on).
 
 ## How a sign-in goes
 
@@ -145,9 +146,9 @@ command-line flag (`syncd-console --help`).
 
 ### On Kubernetes
 
-The Helm chart has no single sign-on values of its own. Pass the settings as console
-environment variables in `console.env`, with the client secret from a Secret, and set
-`CONSOLE_PUBLIC_URL` to the ingress address:
+From chart 0.4.0 the Helm chart has single sign-on values of its own, under `console.oidc`. The
+client secret comes from a Secret of your own, mounted into the console as a file
+(`CONSOLE_OIDC_CLIENT_SECRET_FILE`), never from the chart's values:
 
 ```sh
 kubectl create secret generic syncd-oidc -n syncd --from-literal=client-secret=...
@@ -155,24 +156,41 @@ kubectl create secret generic syncd-oidc -n syncd --from-literal=client-secret=.
 
 ```yaml
 console:
-  env:
-    - name: CONSOLE_PUBLIC_URL
-      value: https://syncd.example.com
-    - name: CONSOLE_OIDC_ISSUER
-      value: https://login.example.com/realms/staff
-    - name: CONSOLE_OIDC_CLIENT_ID
-      value: syncd-console
-    - name: CONSOLE_OIDC_CLIENT_SECRET
-      valueFrom:
-        secretKeyRef: { name: syncd-oidc, key: client-secret }
-    - name: CONSOLE_OIDC_ROLE_MAP
-      value: syncd-admins=admin,syncd-operators=operator
+  publicUrl: https://syncd.example.com      # https://<console.ingress.host> when empty and the ingress is on
+  oidc:
+    issuer: https://login.example.com/realms/staff
+    clientId: syncd-console
+    existingSecret: syncd-oidc
+    existingSecretKey: client-secret        # the default
+    roleClaim: groups
+    roleMap: syncd-admins=admin,syncd-operators=operator
+    defaultRole: ""                         # unset: users no entry matches are refused
+    ca:                                     # for a provider without a public certificate
+      configMap: ""                         # or secret: ...
+      key: ca.crt
 ```
 
-The chart cannot mount files into the console, so use `CONSOLE_OIDC_CLIENT_SECRET` rather than
-`CONSOLE_OIDC_CLIENT_SECRET_FILE`, and a provider whose certificate the Mozilla root set trusts
-(`CONSOLE_OIDC_CA_FILE` needs a mounted file). Set `console.trustedProxies` to the ingress
-controller's addresses.
+| Value | Setting |
+|---|---|
+| `console.publicUrl` | `CONSOLE_PUBLIC_URL`; `https://<console.ingress.host>` when empty and the ingress is enabled |
+| `console.oidc.issuer` | `CONSOLE_OIDC_ISSUER`. Single sign-on is off while it is empty |
+| `console.oidc.clientId` | `CONSOLE_OIDC_CLIENT_ID` |
+| `console.oidc.existingSecret`, `.existingSecretKey` | A Secret and key holding the client secret, mounted as `CONSOLE_OIDC_CLIENT_SECRET_FILE` |
+| `console.oidc.roleClaim`, `.roleMap`, `.defaultRole` | `CONSOLE_OIDC_ROLE_CLAIM`, `CONSOLE_OIDC_ROLE_MAP`, `CONSOLE_OIDC_DEFAULT_ROLE` |
+| `console.oidc.ca.configMap` or `.ca.secret`, with `.ca.key` (`ca.crt`) | A PEM CA bundle from a ConfigMap or a Secret, mounted as `CONSOLE_OIDC_CA_FILE` |
+
+- The chart refuses to render an `issuer` without `clientId`, `existingSecret`, or a public URL
+  (`console.publicUrl`, or the ingress's host).
+- Scopes, the username claim and the button's label have no values of their own: set
+  `CONSOLE_OIDC_SCOPES`, `CONSOLE_OIDC_USERNAME_CLAIM` and `CONSOLE_OIDC_LABEL` in `console.env`.
+- Register the redirect URI `<console.publicUrl>/api/v1/auth/oidc/callback` with the provider.
+- With the console's own HTTPS (`console.tls.existingSecret`) behind the ingress, the public URL
+  is still the ingress's address.
+- Set `console.trustedProxies` to the ingress controller's addresses.
+
+Releases of the chart before 0.4.0 had no such values: the settings went in `console.env`, with
+the client secret as `CONSOLE_OIDC_CLIENT_SECRET` from a `secretKeyRef`. That still works, but the
+chart could not mount a CA file then; `console.oidc.ca` (or `console.extraVolumes`) now can.
 
 ## Roles
 
@@ -283,6 +301,27 @@ example, Keycloak with the SAML provider as an identity provider of its realm). 
 that broker is an ordinary OpenID Connect provider, configured as above. This set-up has not been
 tested with syncd.
 
+## API tokens and single sign-on
+
+[API tokens](api-reference.md#api-tokens) are for other systems, not people, and do not go
+through the identity provider.
+
+- **An account that signs in through single sign-on can create tokens** when its role allows (an
+  admin creates them on **Integrations**). The token then acts with no more than that account's
+  role.
+- **The creator's role is the one stored on the account**, which single sign-on writes at each
+  sign-in. A change at the provider (a user removed from the admins' group) therefore reaches a
+  token only when its creator next signs in. To stop a person's tokens at once, disable the account
+  in the console (they stop within a minute) or revoke the tokens.
+- No API token can sign in through single sign-on or call the sign-in endpoints, and a token
+  carries no session.
+- **Prefer tokens to local accounts for automation.** With local sign-in limited to break-glass
+  accounts, a script has no password account to sign in as; a token needs none.
+
+The public self-service password page (`/password`) is not behind single sign-on either: people
+prove who they are with their current directory password. See
+[Security](security.md#self-service-password-change).
+
 ## Multi-factor authentication
 
 The console has no multi-factor authentication of its own. Require it at the identity provider
@@ -291,7 +330,9 @@ that everyone else goes through it.
 
 ## Audit
 
-Every single sign-on is recorded as `auth.oidc.login`: `success` with the role it gave, or `denied`
-with the reason (the provider refused, the state did not match this browser, the token was not
-valid, no role matched, the account is disabled, a local account has that name). Changes to who may
-sign in locally are recorded as `settings.local_sign_in`. See [Security](security.md#audit-log).
+Every single sign-on is recorded in the audit trail (`ens-audit/1`, category `authentication`) as
+`auth.oidc.login`: `success` with the role it gave, or `denied` with the reason (the provider
+refused, the state did not match this browser, the token was not valid, no role matched, the
+account is disabled, a local account has that name). Changes to who may sign in locally are
+recorded as `settings.local_sign_in`. See [Security](security.md#audit-trail) and
+[Audit logging](../audit-logging.md).

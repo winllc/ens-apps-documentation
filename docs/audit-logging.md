@@ -10,16 +10,16 @@ Every application in the suite keeps an audit trail of who did what, from where,
 
 The trail is the same in every product: one event format, one set of settings, one Splunk add-on. The
 applications covered are CertAlert, the Directory Services Portal, ReadyRoom, the RSA Operations Portal,
-and the ENS licensing portal.
+syncd (from 0.4.0; its console's trail, `product` `syncd`) and the ENS licensing portal.
 
 !!! note "syncd"
-    syncd's console keeps its own audit log, not this one. It records every sign-in, account change,
-    configuration action, engine command and object-explorer search in PostgreSQL, append-only and
-    hash-chained, and auditors and administrators read and verify it on the console's **Audit** page
-    (`/audit`). The console logs the chain's head every hour, and verifying against a recorded head
-    also finds entries removed from the end. It does not use the event format, the settings or the Splunk add-on on this page,
-    and has no SIEM forwarder or pull API yet. See [syncd's admin guide](syncd/admin-guide.md) and
-    [Security](syncd/security.md).
+    syncd's console joined the format in 0.4.0. Entries written before the upgrade keep their older
+    chain; at the first start the console records `audit.format-upgraded`, and the first new event
+    continues the old chain's head, so **Verify integrity** checks both. Exports and the pull API carry
+    only `ens-audit/1` events. Its audit page has no filters or CSV export: it lists events, verifies
+    the chain (also against a recorded head, which finds entries removed from the end), shows each
+    output's delivery and exports NDJSON. Pull-API tokens are made on its **Integrations** page with
+    the `audit:read` scope. See [syncd's admin guide](syncd/admin-guide.md).
 
 ## For administrators: the audit page
 
@@ -31,6 +31,7 @@ Each application has an **Audit log** page for its administrators:
 | Directory Services Portal | `/admin/audit` | Administrators |
 | ReadyRoom | `/app/admin/audit` | Administrators (ADMIN) |
 | RSA Operations Portal | `/admin/audit` | PMO |
+| syncd | `/audit` (**Audit log**) | Admins and auditors |
 | ENS licensing portal | `/admin/audit` | ENS staff administrators. Customers see their own account's events on their account page. |
 
 The page lists events newest first. You can filter by:
@@ -192,8 +193,10 @@ environment. Spring-based applications also accept them as `ens.audit.*` propert
 | `ENS_AUDIT_CHAIN_MILLIS` | `500` | ReadyRoom only, from the next release: how often, in milliseconds, each instance looks for recorded events still to be added to the chain. See [ReadyRoom configuration](readyroom/configuration.md#audit-trail). |
 | `ENS_AUDIT_QUERY_MAX_SCAN` | `2000000` | Directory Services Portal only, which keeps its trail in files: the most events one search or export on the audit page reads. The page says when a search stopped at this limit. |
 
-Splunk's certificate is checked against the JVM trust store for the Java applications, and Node's
-(plus `NODE_EXTRA_CA_CERTS`) for the licensing portal. Add your internal CA there.
+Splunk's certificate is checked against the JVM trust store for the Java applications, Node's
+(plus `NODE_EXTRA_CA_CERTS`) for the licensing portal, and the public root certificates for syncd.
+syncd's console reads the settings from `/etc/syncd/console.env` (or the Helm chart's `console.env`)
+and also takes `ENS_AUDIT_DELIVERY_ALERT_SECONDS` (`900`), the delay before `audit.delivery-failed`. Add your internal CA there.
 
 ### Splunk setup
 

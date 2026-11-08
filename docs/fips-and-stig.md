@@ -35,8 +35,8 @@ use is RSA's to state.
 | ReadyRoom | `ubi9/openjdk-21-runtime` | Red Hat OpenJDK 21 |
 | RSA Operations Portal | `ubi9/ubi` with `java-17-openjdk-headless`, for the Portal and the Connector | Red Hat OpenJDK 17 |
 
-**syncd** is the exception: it is written in Rust, its images are distroless rather than UBI (and
-have no FIPS variant yet), and it takes its cryptography from rustls with aws-lc-rs (AWS-LC). A FIPS build (`-fips` in the release
+**syncd** is the exception: it is written in Rust, its images are distroless rather than UBI (with `-fips`
+images for amd64 from 0.4.0), and it takes its cryptography from rustls with aws-lc-rs (AWS-LC). A FIPS build (`-fips` in the release
 file's name; built from source, since the published release has none), installed with `--fips`, uses the AWS-LC FIPS 140-3 module and refuses to start in
 FIPS mode on a standard build. The console then hashes passwords with PBKDF2-HMAC-SHA512 instead of
 Argon2id, and its own HTTPS (when it serves it rather than a proxy) uses the same FIPS provider. The optional JDBC bridge is Java and takes its cryptography from its Java runtime. See
@@ -162,10 +162,10 @@ product's page has the full table.
 | Prometheus metrics on a separate management port (`MANAGEMENT_SERVER_PORT`) | Yes | Yes | Yes | Yes |
 | Helm chart: non-root, read-only root file system, no capabilities | Yes | Yes | Yes | Yes |
 
-syncd does not implement this baseline or its `ENS_*` settings. Its console has its own
-classification banners, idle (30 minutes) and absolute (12 hours) session limits, sign-in
-throttling and lockout, and a hash-chained audit log, and its services run as hardened systemd
-units; [its page](syncd/fips-and-stig.md) maps them to the STIG.
+syncd implements only part of this baseline: from 0.4.0 its audit trail is the ENS one, with the
+`ENS_AUDIT_*` settings and SIEM outputs, but not the other `ENS_*` settings. Its console has its own
+classification banners, idle (30 minutes) and absolute (12 hours) session limits, and sign-in
+throttling and lockout, and its services run as hardened systemd units or in a hardened Helm chart; [its page](syncd/fips-and-stig.md) maps them to the STIG.
 
 Settings worth fixing for every STIG deployment:
 
@@ -185,7 +185,7 @@ Settings worth fixing for every STIG deployment:
 | Directory Services Portal | Yes, on release tags | In the download, and attested on the images | Yes | `SHA256SUMS`, signed with GPG |
 | ReadyRoom | Yes, on release tags | In the download, and attested on the image | Yes | `SHA256SUMS`, signed with GPG |
 | RSA Operations Portal | Yes, on release tags (both images) | In the download, and attested on the images | Yes, both images | `SHA256SUMS`, signed with GPG |
-| syncd | Not yet: images and chart are pushed unsigned | CycloneDX, built by CI (not attached to releases) | `cargo-audit` and `cargo-deny` on every build; no image scan | `SHA256SUMS` and a `.sha256` per bundle, not signed yet |
+| syncd | Yes, on release tags (images keyless, from the workflow) | SPDX attested on the images; CycloneDX files in the release | Yes, plus `cargo-audit` and `cargo-deny` | `SHA256SUMS`, signed with GPG when the release key is set |
 
 Each scan fails the build on a HIGH or CRITICAL vulnerability that has a fix; accepted risks are
 listed in the repository's `.trivyignore`, each with its reason and a review date. For the RSA

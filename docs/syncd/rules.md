@@ -7,22 +7,29 @@ a configuration is loaded, into native code that reads attributes directly, so r
 at pipeline speed.
 
 This page describes the rule language, the function library, computed attributes and
-their test cases. The YAML keys are listed in
+their test cases, and rule packages: functions and lookup tables shared between
+configurations. The YAML keys are listed in
 [Configuration](configuration.md#views-views); where the values come from is in
 [Connectors](connectors.md).
 
 ## Where expressions are used
 
-Each expression reads one root variable: `source`, the staged record of one source, or
-`e`, the merged entity.
+Each expression reads one root variable: `source`, the staged record of one source; `e`,
+the merged entity; or, for a group's owner, `group`.
 
 | Where | Reads | Lookup tables | `unique()` | Other entities (`ref()` ...) |
 |---|---|---|---|---|
 | View source `flows` | `source` | Yes | No | No |
 | Join rule `source` and `when` | `source` | Yes | No | No |
+| Correlation hint `source` (`correlation.suggest`) | `source` | Yes | No | No |
 | Computed attribute `steps` and `output` | `e`, step variables | Yes | Yes | Yes |
-| Publication `filter`, `attributes`, `dn_attributes` | `e` | Yes | No | No |
+| Data-quality `check` and `unique` | `e` | Yes | No | Yes |
+| Publication `filter`, `attributes`, `dn_attributes`, `external_id` | `e` | Yes | No | No |
+| Publication `passwords.initial.from`, `licenses.assign`, and the Active Directory conveniences' expressions | `e` | Yes | No | No |
 | Computed group `filter` | `e` | Yes | No | No |
+| Computed group `owner_from` | `group` (`group.name`, `group.dn`, `group.members`) | No | No | No |
+
+[Package functions](#rule-packages) can be called in any of them.
 
 ```yaml
 flows:
@@ -151,6 +158,7 @@ Arguments ending in `?` are optional. Time zone arguments are IANA names
 | `matches(s, regex)` | Whether a regular expression matches somewhere in `s`. | `matches(e.employeeId, "^E[0-9]+$")` |
 | `regexReplace(s, regex, replacement)` | Replaces every match. `$1` in a literal replacement is the first group; a replacement read from data is used as it is. | `regexReplace(e.phone, "[^0-9+]", "")` |
 | `regexExtract(s, regex)` | The first group of the first match (or the whole match); empty when nothing matches. | `regexExtract(e.mail, "@(.+)$")` |
+| `truncate(s, n)` | The first `n` characters of `s`, or all of it when shorter. On a list, each value. A negative `n` is an error. | `truncate(lower(e.sn), 20)` |
 
 A regular expression written as a literal is checked when the rule compiles. One read from
 data is compiled at run time, limited to 1 000 characters.
@@ -208,11 +216,35 @@ Computed attributes only. See [Reading other entities](#reading-other-entities).
 | `sid(b)` | A security identifier (`objectSid`) as text, `S-1-5-21-...`. | `sid(e.objectSid)` |
 | `fromSid(s)` | The bytes of a security identifier written as text: the inverse of `sid()`. | `fromSid(e.sidText)` |
 
+### Active Directory values
+
+| Function | What it does | Example |
+|---|---|---|
+| `uac(flag, ...)` | A `userAccountControl` value from flag names, ignoring case. A list of names, or an int, is taken too. | `uac("NORMAL_ACCOUNT", "DONT_EXPIRE_PASSWORD")` (66048) |
+| `uac_has(value, flag)` | Whether a `userAccountControl` value has the flag. The value may be an int or the text Active Directory sends. | `uac_has(e.userAccountControl, "ACCOUNTDISABLE")` |
+| `uac_set(value, flag, on)` | The value with the flag set (`true`) or cleared (`false`); the other flags stay. | `uac_set(e.userAccountControl, "SMARTCARD_REQUIRED", e.smartcard)` |
+| `uac_flags(value)` | The names of the flags a value has, as a list. | `uac_flags(e.userAccountControl)` |
+| `proxyAddresses(primary, aliases)` | Exchange's `proxyAddresses`: `SMTP:<primary>` first, then `smtp:<alias>` for each alias, sorted ignoring case, with duplicates and the primary itself left out. A list as the primary gives its first value; an empty primary is an error. | `proxyAddresses(e.mail, [e.login + "@example.com"])` |
+| `licenses(skus, disabled_plans)` | Entra ID licences for `assignedLicenses`: each SKU part number with the service plans to turn off, as `ENTERPRISEPACK[-YAMMER_ENTERPRISE]`. A publication's `licenses` block writes this for you. | `licenses(["ENTERPRISEPACK"], ["YAMMER_ENTERPRISE"])` |
+
+The flag names are `SCRIPT`, `ACCOUNTDISABLE`, `HOMEDIR_REQUIRED`, `LOCKOUT`,
+`PASSWD_NOTREQD`, `PASSWD_CANT_CHANGE`, `ENCRYPTED_TEXT_PWD_ALLOWED`,
+`TEMP_DUPLICATE_ACCOUNT`, `NORMAL_ACCOUNT`, `INTERDOMAIN_TRUST_ACCOUNT`,
+`WORKSTATION_TRUST_ACCOUNT`, `SERVER_TRUST_ACCOUNT`, `DONT_EXPIRE_PASSWORD`,
+`MNS_LOGON_ACCOUNT`, `SMARTCARD_REQUIRED`, `TRUSTED_FOR_DELEGATION`, `NOT_DELEGATED`,
+`USE_DES_KEY_ONLY`, `DONT_REQ_PREAUTH`, `PASSWORD_EXPIRED`,
+`TRUSTED_TO_AUTH_FOR_DELEGATION` and `PARTIAL_SECRETS_ACCOUNT`. An unknown name is an
+error that lists them. A publication's Active Directory conveniences
+(`account_control`, `exchange.proxy_addresses`, `sam_account_name`) are written with
+these functions; see [Connectors](connectors.md#active-directory-conveniences).
+
 ### Time
 
 | Function | What it does | Example |
 |---|---|---|
-| `now()` | The time of the run, as a timestamp. | `e.contractEnd > now()` |
+| `now()` | The time of the pass, as a timestamp. Every rule of one pass sees the same `now()`. | `e.contractEnd > now()` |
+| `effective(from, value, before)` | `value` once `now()` has reached the timestamp `from`, `before` until then. The engine evaluates the rule again at `from`. | `effective(timestamp(e.startDate) - duration("3d"), "active", "pending")` |
+| `effective_until(until, value, after)` | `value` while `now()` is before the timestamp `until`, `after` from then on. The engine evaluates the rule again at `until`. | `effective_until(e.contractEnd, e.mail, null)` |
 | `timestamp(x)` | A timestamp from text in any form sources send, or from seconds since 1970. | `timestamp(e.hireDate)` |
 | `duration(text)` | A span of time: `"90d"`, `"1h30m"`, `"3600s"`; an int is seconds. | `now() - duration("90d")` |
 | `parseTime(s, format, zone?)` | A timestamp from text in a strftime format (`%d/%m/%Y`). Without an offset in the text, a local time in the zone. | `parseTime(e.startDate, "%d/%m/%Y", "Europe/Paris")` |
@@ -237,8 +269,10 @@ Functions that take a timestamp also take text, read as `timestamp()` reads it. 
 zone, format or duration is checked when the rule compiles.
 
 !!! note "Not in the library"
-    The product plan also lists padding, hashing, `userAccountControl` flag helpers, DN parsing, reading a named source's value (`src.hr_db.title`) and
-    custom WASM functions. None of these is built: the table above is the whole library.
+    The product plan also lists padding, hashing, DN parsing, reading a named source's
+    value (`src.hr_db.title`) and custom WASM functions. None of these is built: the
+    tables above are the whole built-in library. Functions of your own go in
+    [rule packages](#rule-packages).
 
 ## Computed attributes
 
@@ -269,13 +303,19 @@ computed:
 - Computed attributes may read each other. They are evaluated in dependency order, and a
   cycle is refused with the path it takes.
 - On a change, the engine evaluates again only the attributes whose inputs changed.
-  Attributes that call `now()`, `unique()`, `uuid()` or `ulid()`, read other entities, or
-  quarantine on error are always evaluated when their entity is recomputed.
+  Attributes that call `now()`, `effective()`, `effective_until()`, `unique()`, `uuid()`
+  or `ulid()`, read other entities, or quarantine on error are always evaluated when their
+  entity is recomputed.
 - A computed attribute with the same name as a flowed attribute replaces the flowed value,
   unless its mode is `only_if_empty`.
-- `now()` is the run's logical time, not the wall clock, so previews and replays are
-  deterministic. A rule that uses it changes value only when its entity is recomputed
-  (a change to the entity, or a full sync).
+- `now()` is the pass's logical time, not the wall clock, so previews and replays are
+  deterministic. All rules of one pass share it: a batch of changes, a reconciliation
+  page, a command or a timer firing each take one time for everything they evaluate, so
+  two rules of one pass never disagree on whether a date has been reached.
+- A rule that uses `now()` alone changes value only when its entity is recomputed (a
+  change to the entity, or a full sync). One that uses `effective()` or
+  `effective_until()` is also evaluated again at the instant its result changes; see
+  [Effective dates](#effective-dates).
 
 ### Multi-step transforms
 
@@ -380,6 +420,8 @@ views:
 - Tables are versioned with the configuration. The console's lookup table manager edits
   them, with search, CSV import (replacing or merging rows) and CSV export. Binding a table
   to a database table is not built.
+- A rule package's tables are read as `<namespace>.<table>`
+  (`lookup("gov_naming.titles", e.title, "")`); inside the package, by their own names.
 
 ## Unique values
 
@@ -541,6 +583,39 @@ Listing the attribute under the object's `timestamps` makes it arrive typed inst
 Any other form needs `parseTime(text, format, zone?)`. Durations take the units `d`,
 `h`, `m`, `s`, `ms`, `us` and `ns`, combined (`1h30m`) and optionally negative.
 
+### Effective dates
+
+`effective()` and `effective_until()` make a value apply from, or until, an instant:
+
+```yaml
+computed:
+  # Accounts appear three days before the start date.
+  - name: provisioned
+    output: effective(timestamp(e.startDate) - duration("3d"), true, false)
+publications:
+  - name: contractors
+    filter: e.provisioned == true
+    attributes:
+      # The mail address is removed at the end of the contract.
+      mail: effective_until(e.contractEnd, e.mail, null)
+```
+
+- `from` and `until` take a timestamp, or text that reads as one (`e.startDate`).
+- Only the branch that applies is evaluated, so the other may read an absent attribute or
+  be `null`.
+- The engine notes the instant a rule's result changes next and keeps a timer for it in
+  its store. At that instant the entity is computed again, and every publication of its
+  view plans it again, so the value appears in the target on time, whether the engine
+  ran all along or was restarted in between. A full recompute at that instant gives the
+  same values: the result depends on the engine's time, not on when it ran.
+- Pending timers show in `syncd status` (`timers: N pending, next due in ...`), on the
+  console's engine page and in the metric `syncd_timers_pending`.
+- They work in computed attributes and publication mappings. In a test case `now()` is
+  0 (1970), so `before` or `value` is what a test sees.
+
+See [Change safety and lifecycle](change-safety.md#effective-dates) for joiners and
+leavers built on them.
+
 ```yaml
 computed:
   # Contract ends within 30 days.
@@ -621,10 +696,154 @@ computed:
 - Rules that read other entities (`ref()`, `referrers()`) cannot be tested this way; their
   tests are reported as skipped.
 
-`syncd test -c config.yaml` runs every test and reports failures as
-`view <v>: computed <c>: test <n>: expected ..., got ...`. Publishing requires every test to
-pass: the console will save a version whose tests fail but not publish it, and the engine
-refuses to apply it.
+`syncd test -c config.yaml` runs every test, the [rule packages'](#package-tests) tests
+too, and reports failures as `view <v>: computed <c>: test <n>: expected ..., got ...`.
+Publishing requires every test to pass: the console will save a version whose tests fail
+but not publish it, and the engine refuses to apply it. `syncd test --golden DIR` also
+runs golden-file tests of whole publications; see
+[Golden-file tests](config-as-code.md#golden-file-tests).
+
+## Rule packages
+
+A rule package holds functions and lookup tables written once, versioned and tested, and
+shared between configurations: how a display name is formed, how a mail address or a
+login is made. A configuration lists the packages it uses under `packages` (keys in
+[Configuration](configuration.md#packages-packages)) and its rules call their functions.
+
+### Listing a package
+
+```yaml
+packages:
+  - name: gov-naming
+    version: 1.2.0
+    from: packages/gov-naming.yaml   # next to the configuration file
+    pin: "sha256:3f2a..."            # optional: the file's SHA-256
+views:
+  - name: people
+    computed:
+      - name: displayName
+        output: gov_naming.display_name(e)
+      - name: mail
+        mode: assign_once
+        output: gov_naming.mail(e, "example.gov")
+```
+
+- `from` is a file relative to the configuration file's directory. Instead of `from`, a
+  package can be written inline under the same entry, with `functions`, `lookups`,
+  `tests` and `requires` as in a file.
+- Reading the file checks the pin (`sha256:` and the file's SHA-256), that the file is
+  the package named and that it has the version the configuration expects. Any
+  difference is refused.
+- A configuration holds **one version of each package**: the same package at two
+  versions is refused, so there is nothing to resolve.
+- A configuration read from its file carries the package's content and the file's
+  `sha256` once loaded, so a loaded configuration travels without the file.
+
+### The package file
+
+```yaml
+name: gov-naming
+version: 1.2.0
+description: Display names, mail addresses and sAMAccountNames by the naming standard.
+lookups:
+  titles: { dr: Dr., prof: Prof. }
+functions:
+  translit:
+    params: [s: string]
+    description: Plain ASCII for a name (Zoë -> Zoe, Ærø -> AEro).
+    expr: s.ascii().trim()
+  display_name:
+    params: [p: entity]
+    description: '"Surname, Given name" with an honorific, as the address book shows it.'
+    expr: >-
+      p.sn.trim() + ", " + (has(p.preferredName) ? p.preferredName : p.givenName).trim()
+      + (has(p.honorific) ? " " + lookup("titles", p.honorific.lower(), p.honorific) : "")
+  sam:
+    params: [p: entity]
+    description: An sAMAccountName, first initial and surname, at most 20 characters.
+    expr: truncate((translit(p.givenName).substring(0, 1) + translit(p.sn)).lower(), 20)
+tests:
+  - expr: display_name(e)
+    input: { givenName: Zoë, sn: Ærø }
+    expect: Ærø, Zoë
+  - expr: translit("Ærø Łódź")
+    expect: AEro Lodz
+```
+
+| Key | What |
+|---|---|
+| `name` | Letters, digits and `-` (or `_`), starting with a letter. |
+| `version` | Semantic versioning: `1.2.0`, `2.0.0-rc.1` (a pre-release sorts before its release). |
+| `description` | Shown in the console. |
+| `functions` | Name to `{ params, expr, description }`. `params` is a list of one-entry maps, `name: type`, in order. |
+| `lookups` | Lookup tables, as a view's. |
+| `tests` | Test cases; [below](#package-tests). |
+| `requires` | Other packages this one calls, name to a version range: `requires: { gov-common: "^1.0" }`. |
+
+Parameter types are `entity`, `string`, `int`, `bool`, `list`, `timestamp` and `any`.
+
+A starter package is `examples/packages/gov-naming.yaml` in the source repository.
+
+### Versions and requirements
+
+A range in `requires` is one or more comparators joined by `,`, all of which must hold:
+
+| Range | Allows |
+|---|---|
+| `^1.2` (also `1.2`, with no operator) | 1.2.0 up to, not including, 2.0.0 |
+| `~1.2.3` | 1.2.3 up to, not including, 1.3.0 |
+| `>=1.0, <2` | What the comparators say; `=`, `>`, `>=`, `<` and `<=` are taken |
+| `*` | Any version |
+
+Missing minor and patch numbers are zero. A required package must be listed in the
+configuration too, at a version the range allows.
+
+### Calling package functions
+
+- A rule calls `<namespace>.<function>(...)`, the namespace being the package name with
+  `-` as `_` (`gov-naming` is `gov_naming`).
+- The compiler expands the call where it stands: the arguments are evaluated in the
+  caller's scope, and the body runs with only its parameters visible. So a package
+  function is as fast as the same expression written inline, and **the attributes its
+  body reads count as the calling rule's own dependencies**: a computed attribute that
+  calls `gov_naming.display_name(e)` is recomputed when `sn` or `preferredName` changes.
+- An `entity` parameter takes the rule's root variable (`e`, or `source` in a flow), and
+  the body reads attributes through it (`p.sn`); `has()`, `ref()` and the other entity
+  functions work on it. Passing anything else is a compile error.
+- Inside a package, its own functions are called without the namespace, and its own
+  lookup tables by their own names. Everyone else reads them as `<namespace>.<table>`.
+- A wrong number of arguments, a function calling itself (directly or through others),
+  or an unknown function is a compile error. A value of the wrong type is an evaluation
+  error. Absent values pass, a `list` parameter takes a single value as a one-element
+  list, and a `timestamp` parameter reads text as `timestamp()` does.
+
+### Package tests
+
+A package's `tests` are expressions evaluated inside the package over `input` as `e`,
+with every package's lookup tables and the test's own `lookups`. `now()` is 0 and
+`unique()` treats every candidate as free, as in other test cases. They run with the
+computed attributes' tests: in `syncd validate`, `syncd test`, the console's check and the
+publish gate. A failure is reported as `package gov-naming 1.2.0: test 3: expected ...,
+got ...`, and blocks publishing like any failing test.
+
+### Where packages show
+
+- `syncd status` lists the running configuration's packages:
+  `package gov-naming 1.2.0 (packages/gov-naming.yaml sha256:3f2a...): 6 functions, 6 tests`.
+- `syncd config diff` has a `packages` section: a version bump reads
+  `~ gov-naming 1.1.0 -> 1.2.0`, with the functions that changed. See
+  [Configuration as code](config-as-code.md#rule-packages).
+- The console's Studio lists package functions in its catalog and its previews call them.
+  The configuration editor's **Packages** panel lists a version's packages with their
+  version, pin, source and counts, and **Check for update** compares the file at the Git
+  branch's head with the version's.
+
+!!! note "Limits"
+    The console stores no package files of its own. A configuration it publishes uses
+    inline packages, packages from its Git repository, or files next to the engine's own
+    configuration file. The console's version compare shows a file package's name,
+    version, file and pin, not the functions that changed (`syncd config diff` shows
+    them). Custom functions in WASM are a separate piece of work.
 
 ## Authoring in the console
 
@@ -639,7 +858,12 @@ configuration version:
 - the test cases, run as you edit;
 - what the attribute reads and what reads it;
 - for `assign_once` attributes, the `permanent` setting ("Keep for good, by key"), also in
-  the visual editor.
+  the visual editor;
+- the function catalog, which lists the built-in functions and the functions of the
+  configuration's rule packages, grouped by package with their descriptions, and offers
+  them as completions;
+- a **Quality check** block, which tries a data-quality check on a sample of the view's
+  entities from the engine: how many fail, and which.
 
 Compiler errors and warnings (an attribute nothing sets, an unknown lookup table) appear as
 you type. See the [user guide](user-guide.md) for the workflow, and simulate a version
@@ -700,16 +924,20 @@ publications:
 
 ### Flags from a status
 
-From the Active Directory target test configuration: NORMAL_ACCOUNT (512) plus
-PASSWD_NOTREQD (32), and ACCOUNTDISABLE (2) while on leave.
+NORMAL_ACCOUNT (512) and SMARTCARD_REQUIRED when the person has a smart card, by name
+with `uac()` and `uac_set()`:
 
 ```yaml
 - name: accountControl
-  output: 'e.status == "leave" ? "546" : "544"'
+  output: 'uac_set(uac("NORMAL_ACCOUNT"), "SMARTCARD_REQUIRED", e.smartcard == "yes")'
   tests:
-    - { input: { status: active }, expect: "544" }
-    - { input: { status: leave }, expect: "546" }
+    - { input: { smartcard: "no" }, expect: "512" }
+    - { input: { smartcard: "yes" }, expect: "262656" }
 ```
+
+A publication's `account_control` block writes the same without a computed attribute
+(`flags: [NORMAL_ACCOUNT]`); see
+[Connectors](connectors.md#active-directory-conveniences).
 
 ### Multi-valued values from text
 

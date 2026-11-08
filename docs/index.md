@@ -73,7 +73,7 @@ for the files and how to verify them. syncd's releases are not on the portal yet
 
 Every application keeps the same tamper-evident audit trail. Administrators can search and export it
 in the application, and it can be sent to Splunk or any other SIEM. See [Audit logging](audit-logging.md).
-syncd's console keeps its own hash-chained audit log, in a different format, with no SIEM forwarder yet.
+syncd's console joined the format in 0.4.0; its audit page has no filters or CSV export yet.
 
 ## FIPS 140-3 and DISA STIG
 
@@ -88,7 +88,7 @@ uses the AWS-LC FIPS module. See [FIPS 140-3 and DISA STIG](fips-and-stig.md).
 
 Each application can run as several replicas on Kubernetes, with sessions, job locks and the
 license state in its database (the RSA Operations Portal's Connector stays at one). syncd's engine runs as
-one instance (on one host, or as a one-replica StatefulSet), with no standby yet. See
+one instance, or from 0.4.0 as an active/passive pair (on hosts or Kubernetes). See
 [Sizing, availability and recovery](availability-and-sizing.md) for sizing, what to back up,
 disaster recovery and rollback across the suite.
 
@@ -106,7 +106,8 @@ disaster recovery and rollback across the suite.
 Most sections also include **Architecture**, **Security**, **API reference** and
 **Troubleshooting** pages. Every section has **Single sign-on**, **Webhooks**, **Accessibility**,
 **Sizing, availability and recovery** and **FIPS 140-3 and DISA STIG** pages. The RSA Operations Portal adds an **RSA AM integration** page. ReadyRoom adds a
-**Windows client** page. syncd adds **Connectors** and **Computed attributes and rules** pages.
+**Windows client** page. syncd adds **Connectors**, **Computed attributes and rules**, **Password synchronisation**,
+**Change safety and lifecycle**, **Configuration as code** and **Reports, lineage and data quality** pages.
 
 ## At a glance
 
@@ -114,12 +115,12 @@ Most sections also include **Architecture**, **Security**, **API reference** and
 |---|---|---|---|---|---|
 | Server | Spring Boot 4 / Java 21 | Spring Boot 4 / Java 21 + React | Spring Boot 4 / Java 21 | Spring Boot 4 / Java 17 + Tomcat 9 connector | Rust engine (`syncd`) + Rust (Axum) console with a React UI |
 | Data store | PostgreSQL | JSON configuration and audit files, or PostgreSQL for several instances | PostgreSQL | MySQL 8.4 | Embedded RocksDB store (engine); PostgreSQL (console) |
-| Directory | LDAP (IC FSD schema) | LDAP (any schema) | LDAP | RSA Authentication Manager | Reads databases, LDAP and Active Directory; writes LDAP and Active Directory |
+| Directory | LDAP (IC FSD schema) | LDAP (any schema) | LDAP | RSA Authentication Manager | Reads databases, CSV files, LDAP, Active Directory and Entra ID; writes LDAP, Active Directory, Entra ID and SCIM applications |
 | Sign-in | X.509, directory password, or single sign-on (OIDC, SAML) | X.509, directory password, or single sign-on (OIDC, SAML) | X.509, LDAP password, single sign-on (OIDC, SAML), Kerberos (client) | RSA AM user ID + SecurID passcode; operators can start with single sign-on (OIDC, SAML) | Local accounts, or single sign-on (OIDC) |
 | Install | Release package (Docker or Podman Compose) or Helm chart | Release package (Docker or Podman Compose, or native systemd) or Helm chart | Release package (Docker or Podman Compose) or Helm chart, plus the Windows agent | Release package (Docker or Podman Compose) or Helm chart | Offline bundle, `.deb` or `.rpm` with systemd, or Helm chart |
-| Public API | `/api/v1` with scoped API tokens, OpenAPI document | `/api/v1` with scoped API tokens, OpenAPI document | Read-only `/api/v1` with scoped API tokens, OpenAPI document | `/api/v1` with scoped API tokens; changes are help-desk requests | Console REST API `/api/v1` with session sign-in, OpenAPI document; engine gRPC control API with mTLS |
-| Webhooks | Expiry alerts and job results (JSON, Slack, Teams), HMAC-signed | Entry, membership and form events, HMAC-signed | Absence alerts and status changes, HMAC-signed | Help-desk, token and account events, HMAC-signed | None; Prometheus metrics and shipped alert rules instead |
-| Exports | Certificate inventory as CSV or Excel, saved views, scheduled reports | Entries and group members as CSV or LDIF, import with a dry run | Group reports and people lists as CSV or Excel, scheduled reports | Trusted Agent and site reports; the audit log as CSV or NDJSON | Configuration versions as files, lookup tables as CSV |
+| Public API | `/api/v1` with scoped API tokens, OpenAPI document | `/api/v1` with scoped API tokens, OpenAPI document | Read-only `/api/v1` with scoped API tokens, OpenAPI document | `/api/v1` with scoped API tokens; changes are help-desk requests | Console `/api/v1` with scoped API tokens, OpenAPI document; engine gRPC control API with mTLS |
+| Webhooks | Expiry alerts and job results (JSON, Slack, Teams), HMAC-signed | Entry, membership and form events, HMAC-signed | Absence alerts and status changes, HMAC-signed | Help-desk, token and account events, HMAC-signed | Engine and target state, holds, dead letters, configuration lifecycle, backups and failovers (JSON, Slack, Teams, PagerDuty), HMAC-signed |
+| Exports | Certificate inventory as CSV or Excel, saved views, scheduled reports | Entries and group members as CSV or LDIF, import with a dry run | Group reports and people lists as CSV or Excel, scheduled reports | Trusted Agent and site reports; the audit log as CSV or NDJSON | Reconciliation reports as CSV or PDF, scheduled reports; lineage as JSON or PDF; configuration versions as files |
 | Accessibility | WCAG 2.1 AA target, draft VPAT | WCAG 2.1 A/AA checks, draft VPAT | WCAG 2.1 AA target, draft VPAT | WCAG A/AA checks, draft VPAT | No conformance target or VPAT yet; banner colours checked for 4.5:1 contrast |
 | Demo | `docker-compose.demo.yml` | `docker-compose.demo.yml` | `docker-compose.demo.yml` | `docker-compose.demo.yaml` | None; development scripts in the source repository |
 
