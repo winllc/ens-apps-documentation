@@ -307,10 +307,20 @@ The console serves HTTPS itself when it is given a certificate. In `/etc/syncd/c
 
 ```bash
 CONSOLE_LISTEN=0.0.0.0:8443
-CONSOLE_TLS_CERT=/etc/syncd/console-tls/fullchain.pem    # the certificate, followed by its chain
+# The certificate, followed by its chain
+CONSOLE_TLS_CERT=/etc/syncd/console-tls/fullchain.pem
 CONSOLE_TLS_KEY=/etc/syncd/console-tls/privkey.pem
-CONSOLE_PUBLIC_URL=https://syncd.example.com:8443         # for single sign-on
+# For single sign-on
+CONSOLE_PUBLIC_URL=https://syncd.example.com:8443
 ```
+
+!!! warning "Comments in `console.env` go on lines of their own"
+    systemd reads `console.env` as an `EnvironmentFile`, which takes everything after the `=` as
+    the value, a `# ...` at the end of the line included. Some commented lines of the release's
+    template (`/opt/syncd/current/share/config/console.env`) end with such a note, for example
+    `#CONSOLE_PUBLISH_HOOK_ON_ERROR=refuse   # or allow`. Uncommenting one as it is sets a wrong
+    value, and the console refuses it or fails to start. Delete the trailing note when you
+    uncomment a line. The same holds for `engine.env`.
 
 ```bash
 sudo chown root:syncd-console /etc/syncd/console-tls/*
@@ -390,9 +400,12 @@ live status stream (server-sent events).
 **4. Tell the console about the proxy** in `/etc/syncd/console.env`, then restart it:
 
 ```bash
-CONSOLE_LISTEN=127.0.0.1:8080                   # reachable through nginx only
-CONSOLE_PUBLIC_URL=https://syncd.example.com    # also the base of the single sign-on redirect URI
-CONSOLE_TRUSTED_PROXIES=127.0.0.1               # believe nginx's X-Forwarded-For
+# Reachable through nginx only
+CONSOLE_LISTEN=127.0.0.1:8080
+# Also the base of the single sign-on redirect URI
+CONSOLE_PUBLIC_URL=https://syncd.example.com
+# Believe nginx's X-Forwarded-For
+CONSOLE_TRUSTED_PROXIES=127.0.0.1
 ```
 
 ```bash
@@ -1209,7 +1222,9 @@ upgrade takes its local backup first, as before. What to know:
 - **Files kept.** `/etc/syncd/console.env` stays as you left it. The release's template,
   `/opt/syncd/current/share/config/console.env`, has commented lines for the new settings:
   `ENS_AUDIT_*`, `CONSOLE_API_*`, `CONSOLE_WEBHOOKS_*`, `CONSOLE_REPORTS_*`, `CONSOLE_SMTP_*`,
-  `CONSOLE_PUBLISH_*` and `CONSOLE_CONFIG_GIT_*`. None is needed.
+  `CONSOLE_PUBLISH_*` and `CONSOLE_CONFIG_GIT_*`. None is needed. When you copy one into your file, leave out
+  any `# ...` note at the end of the line (see
+  [Comments in `console.env`](#the-consoles-own-https)).
 - **New files.** The engine's data directory may hold `backups/` (a store checkpoint while a
   backup is taken), `restore/` and `replaced-<time>/` (left by `syncd restore`), and
   `ha/swap.json` and `ha/old-store` (only while an HA engine swaps a snapshot in). `syncd restore`
