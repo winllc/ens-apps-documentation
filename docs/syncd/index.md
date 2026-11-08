@@ -28,7 +28,9 @@ It has two parts:
     syncd is newer than the other applications in the suite, and some of what they share is
     still on its roadmap: an ENS license file, SAML and X.509 sign-in, and accessibility
     conformance documents. Password synchronisation is built except for the capture plugins
-    (the Windows password filter and the 389 and OpenLDAP plugins). The pages below say what syncd
+    (the Windows password filter and the 389 and OpenLDAP plugins), so passwords come only from
+    initial passwords, the self-service page and the command line; its threat model and
+    third-party penetration test, which the plan sets as release gates, are not done. The pages below say what syncd
     offers in each of those places today.
 
 ## Key features
