@@ -1222,8 +1222,8 @@ upgrade takes its local backup first, as before. What to know:
 - **Files kept.** `/etc/syncd/console.env` stays as you left it. The release's template,
   `/opt/syncd/current/share/config/console.env`, has commented lines for the new settings:
   `ENS_AUDIT_*`, `CONSOLE_API_*`, `CONSOLE_WEBHOOKS_*`, `CONSOLE_REPORTS_*`, `CONSOLE_SMTP_*`,
-  `CONSOLE_PUBLISH_*` and `CONSOLE_CONFIG_GIT_*`. None is needed. When you copy one into your file, leave out
-  any `# ...` note at the end of the line (see
+  `CONSOLE_PUBLISH_*` and `CONSOLE_CONFIG_GIT_*`. None is needed. When you copy one into your
+  file, leave out any `# ...` note at the end of the line (see
   [Comments in `console.env`](#the-consoles-own-https)).
 - **New files.** The engine's data directory may hold `backups/` (a store checkpoint while a
   backup is taken), `restore/` and `replaced-<time>/` (left by `syncd restore`), and

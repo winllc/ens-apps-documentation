@@ -407,6 +407,12 @@ backup` as the engine's user, and adds beside it:
 `--keep N` removes the oldest backups there beyond `N`. `--skip-db-backup` leaves the database
 out.
 
+!!! warning "The console's master key is not in an off-host backup"
+    `syncdctl backup --to` copies `/etc/syncd`, not `/var/lib/syncd/console`, so the console's
+    `master.key` is not in it (only `CONSOLE_MASTER_KEY`, if you set the key in `console.env`).
+    Without the key, the restored database's sealed secrets do not open. Keep a copy of
+    `master.key` elsewhere, apart from the backups (see [The master key](#the-master-key)).
+
 !!! warning "A backup is as sensitive as the store"
     The archive holds the entity data, and the password key and the agents' CA key as files.
     `syncdctl`'s copy of `/etc/syncd` holds the engine's secrets and the CA key. Protect the
