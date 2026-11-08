@@ -546,9 +546,10 @@ when the lease expires. How it works, its failover window and its limits are in
 5. **Register both engines in the console**, each at its host's address with mutual TLS (see
    [Registering engines](#registering-engines)). The console shows them as one pair.
 
-Both hosts need the same console master key or passphrase for the password key store, which the
-snapshots carry as it is on disk. `engine.ha` can only be changed on the host: the engine refuses a
-configuration published from the console that changes it, as it does `engine.data_dir` and `api`.
+The snapshots carry the engine's password key and the password agents' CA, so the engine that
+takes over opens the password changes queued in the store. `engine.ha` can only be changed on the
+host: the engine refuses a configuration published from the console that changes it, as it does
+`engine.data_dir` and `api`.
 
 The pair can also come from the environment alone, with a configuration file that says nothing
 of it: `SYNCD_HA_NAME` (the pair), `SYNCD_HA_LEASE_URL` or `SYNCD_HA_LEASE_PATH`, and optionally

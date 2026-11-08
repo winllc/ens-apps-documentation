@@ -80,8 +80,8 @@ What each role may do, from the role checks in the console's API handlers:
 | Approve a version (not your own) | ✓ | ✓ | | | |
 | Publish a version; promote one to another environment (API and `syncd config promote` only) | ✓ | ✓ | | | |
 | Reconcile, full sync, drift check | ✓ | | ✓ | | |
-| Let deletes held by a deletion threshold through; **Approve and apply** held changes | ✓ | | ✓ | | |
-| **Review** a group | ✓ | | ✓ | | |
+| Let deletes held by a deletion threshold through; **Approve and apply** held changes (windows, thresholds, canaries; see [Change safety](change-safety.md#approving)) | ✓ | | ✓ | | |
+| **Review** a group ([group lifecycle](change-safety.md#review)) | ✓ | | ✓ | | |
 | Retry or discard dead letters | ✓ | | ✓ | | |
 | Join a record to an entity, unjoin a record, accept correlation suggestions | ✓ | | ✓ | | |
 | See the scheduled reports | ✓ | | ✓ | | ✓ |
@@ -285,7 +285,7 @@ While approval is required:
   never held up;
 - approving needs the designer or admin role. Operators, viewers and auditors cannot approve, and
   no API token can approve;
-- versions that [Git sync](#git-sync) publishes, and versions [promoted](config-as-code.md) to
+- versions that [Git sync](#git-sync) publishes, and versions [promoted](config-as-code.md#promotion) to
   another environment's engines, wait for an approval on each engine like any other.
 
 !!! warning
@@ -500,7 +500,7 @@ token or client address), `api.request` for every request that changes something
 
 One base configuration can run in several installations. Where a value differs, the YAML says
 `{{ env.hr_host }}`, and each engine's **environment** fills it in when a version is published to
-that engine. How designers use this is in [Configuration as code](config-as-code.md).
+that engine. How designers use this is in [Configuration as code](config-as-code.md#environments).
 
 The **Environments** card lists each environment with its values (secret ones shown only as
 **(secret)**), the engines that run in it and when it was last saved. Administrators choose
@@ -552,7 +552,7 @@ The events, the formats, how to verify the signature, retries and every setting 
 
 The console can take its configuration from a Git repository, and put what is saved in the console
 back into it. It is off unless `CONSOLE_CONFIG_GIT_URL` is set. How designers work with it, the
-golden-file tests it runs and promotion are in [Configuration as code](config-as-code.md); the
+golden-file tests it runs and promotion are in [Configuration as code](config-as-code.md#git-sync); the
 settings are:
 
 | Setting | Default | Meaning |
@@ -584,7 +584,7 @@ settings are:
 
 Anyone may download an engine's reconciliation report from its page (**Report CSV**, **PDF**). The
 **Reports** page (`/reports`) sends it on a schedule, by e-mail or to a share. What a report holds
-is in [Reports, lineage and data quality](reports-and-data-quality.md); this section is what an
+is in [Reports, lineage and data quality](reports-and-data-quality.md#scheduled-reports); this section is what an
 administrator sets up and controls.
 
 Who may do what:
@@ -632,7 +632,7 @@ public page `/password`, without a console account. The console seals the reques
 password key and hands it to that engine, which checks the current password against the directory
 people sign in to, changes it there and delivers it to the other directories. The console keeps no
 password. How the engine side is set up (`passwords.self_service`) is in
-[Password synchronisation](password-sync.md).
+[Password synchronisation](password-sync.md#people-changing-their-own-password).
 
 To turn the page on, set `CONSOLE_SELF_SERVICE_ENGINE` to the name of a registered engine whose
 configuration has `passwords.self_service`. Without it, the page says "Password changes are not
