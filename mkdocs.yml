@@ -160,6 +160,10 @@ nav:
       - Additional guidance:
           - Connectors: syncd/connectors.md
           - Computed attributes and rules: syncd/rules.md
+          - Password synchronisation: syncd/password-sync.md
+          - Change safety and lifecycle: syncd/change-safety.md
+          - Configuration as code: syncd/config-as-code.md
+          - Reports, lineage and data quality: syncd/reports-and-data-quality.md
           - Single sign-on: syncd/single-sign-on.md
           - API reference: syncd/api-reference.md
           - Webhooks: syncd/webhooks.md

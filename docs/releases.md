@@ -12,11 +12,12 @@ ways to install it:
 
 !!! note "syncd"
     syncd ships differently. Its releases go to GitHub on a version tag, not to the licensing portal
-    (no syncd release has been tagged yet, so none is published): an offline bundle
-    (`.tar.gz`), a `.deb` and an `.rpm` for a Linux host with systemd, plus the container images
-    `ghcr.io/winllc/syncd` and `ghcr.io/winllc/syncd-console` and the Helm chart
-    `oci://ghcr.io/winllc/charts/syncd`. Its `SHA256SUMS`, images and chart are not signed yet, so
-    the cosign checks below don't apply to it. See
+    (no syncd release has been tagged yet, so none is published): offline bundles (`.tar.gz`, x86_64,
+    aarch64 and an x86_64 FIPS build), `.deb` and `.rpm` packages for a Linux host with systemd,
+    CycloneDX SBOMs, and `SHA256SUMS` with a GPG signature (`SHA256SUMS.asc`) when the release key is
+    set. The container images `ghcr.io/winllc/syncd` and `ghcr.io/winllc/syncd-console` (amd64 and
+    arm64, `-fips` tags for amd64) and the Helm chart `oci://ghcr.io/winllc/charts/syncd` are signed
+    with cosign as below, from the repository `winllc/ldap-sync-merge-view`. See
     [syncd's install guide](syncd/install.md#getting-the-release).
 
 ## For customers: downloading and verifying a release
@@ -86,6 +87,7 @@ image also gets its SPDX SBOM attached as a signed attestation.
 | Directory Services Portal | `ghcr.io/winllc/directory-services-portal-api`, `ghcr.io/winllc/directory-services-portal-web` | `ghcr.io/winllc/charts/directory-services-portal` | `winllc/directory-services-portal` |
 | ReadyRoom | `ghcr.io/winllc/in-n-out-work` | `ghcr.io/winllc/charts/readyroom` | `winllc/in-n-out-work` |
 | RSA Operations Portal | `ghcr.io/winllc/rsa-operations-portal`, `ghcr.io/winllc/rsa-operations-portal-connector` | `ghcr.io/winllc/charts/rsa-operations-portal` | `winllc/rsa-operations-portal` |
+| syncd | `ghcr.io/winllc/syncd`, `ghcr.io/winllc/syncd-console` | `ghcr.io/winllc/charts/syncd` | `winllc/ldap-sync-merge-view` |
 
 For example, for ReadyRoom:
 
