@@ -177,6 +177,31 @@ the next release also `directory`: the id of the LDAP directory the user signed 
 
 See [Import and export](import-export.md).
 
+## Group access
+
+From v0.0.7. Licensed by `directory-editor` **or** `self-service-profile` (either one; without both,
+403 `feature_not_licensed`). Any signed-in user; who may decide or manage members is checked per
+group (its owners, and editors of the definition). See
+[Admin guide → Group access](admin-guide.md#group-access).
+
+| Method | Path | Params / body | Description |
+|---|---|---|---|
+| GET | `/api/groups/directories` | — | The group directories the user can look groups up in |
+| GET | `/api/groups` | `q` (≤ 256 characters), `definition` | Search groups, each with the user's membership, ownership and request |
+| GET | `/api/groups/mine` | — | The user's groups |
+| GET | `/api/groups/{definitionId}/group` | `dn` | One group |
+| POST | `/api/groups/{definitionId}/requests` | `dn`; `{"reason"}` | Ask to join; returns 201. 409 when already a member, 403 when the group doesn't take requests |
+| POST | `/api/groups/{definitionId}/leave` | `dn` | Leave the group (when the directory allows it) |
+| GET | `/api/groups/{definitionId}/members` | `dn`, `q`, `page` | Owners: a page of members |
+| POST | `/api/groups/{definitionId}/members` | `dn`; `{"add": [], "remove": []}` | Owners: add and remove members |
+| GET | `/api/groups/{definitionId}/people` | `dn`, `q` | Owners: find people to add |
+| GET | `/api/groups/{definitionId}/group/requests` | `dn` | Owners: the group's requests |
+| GET | `/api/groups/requests` | `scope`: `mine` (default), `review` or `decided` | Requests |
+| GET | `/api/groups/requests/summary` | — | Counts for the menu: open requests to review, and the user's own |
+| POST | `/api/groups/requests/{id}/cancel` | — | Withdraw one's own open request |
+| POST | `/api/groups/requests/{id}/approve` | `{"note"}` | Approve: adds the requester to the member field |
+| POST | `/api/groups/requests/{id}/reject` | `{"note"}` | Reject |
+
 ## Metrics
 
 | Method | Path | Params / body | Description |

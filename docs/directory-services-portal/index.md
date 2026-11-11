@@ -22,6 +22,7 @@ their data for correct and unique values.
 | Directory definitions | A form bound to a base DN, scope (one level / subtree) and optional filter. Read/write or read-only white pages |
 | Permissions | View or view-and-edit grants per definition, for users or LDAP groups. A definition can also be readable by every signed-in user |
 | End users | Search, sort, page, view, create, edit (including rename) and delete entries. **My profile** lists the user's own entries |
+| Group access | Users look groups up and ask to join; the groups' owners approve and manage members without edit access to the directory. Licensed by `directory-editor` or `self-service-profile` ([Admin guide](admin-guide.md#group-access)) |
 | Metrics | Out-of-the-box overviews for every directory, shared dashboards, and an explorer for building ad-hoc charts. Every chart has a table view and CSV download |
 | Data analysis | Saved comparisons (2–6 sources) and quality checks (1–6 sources), run as background tasks, with paged findings and CSV export |
 | Background tasks | Long metrics and all analyses run on the server, with progress, cancellation and notifications |
