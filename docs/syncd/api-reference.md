@@ -35,8 +35,9 @@ From 0.4.0 the API takes either of:
 
 A request with `Authorization: Bearer` is checked as a token request only: it never reads or sets
 the session cookie. Some endpoints stay with people (accounts, settings, tokens, webhooks,
-approvals, simulations, previews, connector checks, the object explorer, scheduled reports, the
-support bundle): a valid token there gets `403 insufficient_scope`.
+changes to environments, approvals, simulations, previews, connector checks, the object
+explorer, scheduled reports, the support bundle): a valid token there gets
+`403 insufficient_scope`.
 
 ## API tokens
 
@@ -87,8 +88,8 @@ makes the last call from the command line (see [Configuration as code](config-as
   `false`.
 - **Out of scope** (`403`, `WWW-Authenticate: Bearer error="insufficient_scope"`) for an endpoint
   its scopes do not cover, one its creator's role no longer allows, or one that stays with people.
-  No token, whatever its scopes, can create or revoke tokens, manage accounts, settings, webhooks
-  or scheduled reports, sign in through single sign-on, approve a configuration, simulate or
+  No token, whatever its scopes, can create or revoke tokens, manage accounts, settings, webhooks,
+  environments or scheduled reports, sign in through single sign-on, approve a configuration, simulate or
   preview one, test connectors, use the object explorer, or download the support bundle.
 - **Rate-limited** per token: `CONSOLE_API_REQUESTS_PER_MINUTE` (300). Beyond it, `429
   rate_limited` with `Retry-After` (seconds). The count is kept in each console process, so with
@@ -103,11 +104,12 @@ makes the last call from the command line (see [Configuration as code](config-as
 | Scope | Needs the creator to be | Allows |
 |---|---|---|
 | `engines:read` | any role | The engines, their status, dead letters, quarantine, held changes, data quality, correlation suggestions, and the reconciliation report export |
-| `configs:read` | any role | Configuration versions, the running configuration, diffs, exports, packages, environments and the Git sync status |
+| `configs:read` | any role | Configuration versions, the running configuration, diffs, exports, packages, the environments' names and the Git sync status |
 | `configs:write` | designer or admin | Validate and save a configuration version, import one, start a Git sync (not publish) |
 | `configs:publish` | designer or admin | Publish a version, and promote one. Approval, when required, stays with people |
 | `runs:run` | operator or admin | Start runs and drift checks, approve held deletions and changes, review groups, accept correlation suggestions, retry and discard dead letters |
 | `audit:read` | auditor or admin | The audit log, its verification, the pull API, the export and the outputs' status |
+| `environments:read` | auditor or admin | From 0.4.1: the environments with their plain values, the names of their secret ones, and their engines. Before 0.4.1 `configs:read` read them; a script that reads values with a `configs:read` token needs this scope now |
 | `admin` | admin | Everything above |
 
 The tables below give each endpoint's scope in the **Token** column; `—` means session only.
@@ -192,7 +194,7 @@ curl -sS -b cookies.txt -X POST https://syncd.example.com/api/v1/auth/logout
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/v1/system` | Version, development and FIPS mode, the single sign-on label, who may sign in locally, whether configuration approval is required, the banners, and the publish policy (the ticket pattern, whether a pre-publish hook is asked) |
-| GET | `/api/v1/self-service` | Whether the self-service password page is on |
+| GET | `/api/v1/self-service` | Whether the self-service password page is on, and from 0.4.1 the engine's policy for a new password (`min_length`, `min_classes`; absent when the engine cannot be asked; read at most once a minute) |
 | POST | `/api/v1/self-service/password` | A person changes their own directory password: `{"login", "current_password", "new_password"}`. See [Self-service password change](#self-service-password-change) |
 | GET | `/api/openapi.json` | The OpenAPI document |
 | GET | `/healthz` | `ok` while the console runs |
@@ -231,10 +233,10 @@ Session only.
 | Method | Path | Role | Token | Purpose |
 |---|---|---|---|---|
 | GET | `/api/v1/engines` | any | `engines:read` | Registered engines, with their environment and `certificate_expires_at` (when the console's client certificate for the engine expires; mTLS only) |
-| POST | `/api/v1/engines` | admin | — | Register an engine: `name`, `address` (`host:port` of `api.listen`, or `unix:` and the absolute path of the engine's `api.control_socket`), `environment` (default `default`), and for mTLS `server_ca_pem`, `client_cert_pem`, `client_key_pem` (the key is stored encrypted and never returned). Checks that it answers unless `verify` is false. `replace: true` replaces the address and credentials of an engine with that name, keeping its id and versions. A name whose stored client key the master key no longer opens is refused with that reason unless `replace` is set (audited as `engine.re-registered`) |
+| POST | `/api/v1/engines` | admin | — | Register an engine: `name`, `address` (`host:port` of `api.listen`, or `unix:` and the absolute path of the engine's `api.control_socket`), `environment` (`default` for a new engine; from 0.4.1, with `replace`, the engine keeps its environment unless one is given), and for mTLS `server_ca_pem`, `client_cert_pem`, `client_key_pem` (the key is stored encrypted and never returned). Checks that it answers unless `verify` is false. `replace: true` replaces the address and credentials of an engine with that name, keeping its id and versions. A name whose stored client key the master key no longer opens is refused with that reason unless `replace` is set (audited as `engine.re-registered`) |
 | PATCH | `/api/v1/engines/{id}` | admin | — | Move an engine to another environment (`{"environment": "prod"}`). What it runs is not touched: the next publish renders for the new environment |
 | DELETE | `/api/v1/engines/{id}` | admin | — | Remove the registration (the engine keeps running) |
-| GET | `/api/v1/engines/{id}/status` | any | `engines:read` | The engine's status: sources, publications (with held changes, report mode, leavers by stage, groups), targets, counters, timers, history, backups, HA role, password delivery, quarantined entities, unmatched records per view, rule packages, the environment, and the process's CPU and memory (Linux only) |
+| GET | `/api/v1/engines/{id}/status` | any | `engines:read` | The engine's status: sources, publications (with held changes, report mode, leavers by stage, groups), targets, counters, timers, history, backups, HA role, password delivery (from 0.4.1 also per publication, and `keys_sealed`), quarantined entities, unmatched records per view, rule packages, the environment, the process's CPU and memory (Linux only), and from 0.4.1 `runs` (runs ended since the engine started, and the last one) and `self_service` (the self-service password policy) |
 | GET | `/api/v1/engines/{id}/status/stream` | any | — | Server-sent events: a `status` event every second, an `error` event if the engine goes away. Ends when the session does |
 | GET | `/api/v1/engines/{id}/dead-letters` | any | `engines:read` | Failed exports waiting (`publication`, `limit`) |
 | GET | `/api/v1/engines/{id}/quarantine` | any | `engines:read` | Entities whose exports a failing rule (`on_error: quarantine`) holds back (`view`, `limit` up to 500) |
@@ -246,7 +248,11 @@ Session only.
 | POST | `/api/v1/engines/{id}/dead-letters/retry` | operator | `runs:run` | Export dead letters again now (all, a publication's, or one entity's) |
 | POST | `/api/v1/engines/{id}/dead-letters/discard` | operator | `runs:run` | Remove one dead letter without retrying it |
 
-Registrations are audited as `engine.register`, replacements as `engine.update`. Operator calls are
+Registrations are audited as `engine.register`, replacements and environment moves as
+`engine.update`, and a replacement over a client key the master key no longer opens as
+`engine.re-registered`. From 0.4.1, `syncd-console admin rename-engine` (which the Helm chart runs
+when HA is turned on) renames a registration, keeping its id, and is audited as `engine.renamed`
+(see [Admin guide](admin-guide.md#syncd-console-admin-rename-engine)). Operator calls are
 audited with their request and outcome (`engine.run`, `engine.approve_deletions`,
 `engine.check_drift`, `engine.dead_letters.retry`, `engine.dead_letters.discard`, and the group
 review).
@@ -278,7 +284,7 @@ See [Reports, lineage and data quality](reports-and-data-quality.md) for the sug
 | POST | `/api/v1/engines/{id}/configs/{version}/packages/check` | any | `configs:read` | Compare each package read from a file with the file at the Git branch head now |
 | POST | `/api/v1/engines/{id}/configs/{version}/simulate` | designer | — | Dry-run the version on the engine: what each target would receive (`samples`, `reveal`). Nothing is applied |
 | POST | `/api/v1/engines/{id}/configs/{version}/approve` | designer | — | Approve a version for publishing, as someone other than its author |
-| POST | `/api/v1/engines/{id}/configs/{version}/publish` | designer | `configs:publish` | Publish, with an optional body `{"ticket", "note"}`: rendered for the engine's environment, checked against the ticket pattern, approval, test cases and the pre-publish hook, then the engine validates, saves, reloads and runs a full sync. Returns once the engine runs it (up to 60 seconds). Golden-file tests are not run here: only the editor's **Publish** button and Git sync run them |
+| POST | `/api/v1/engines/{id}/configs/{version}/publish` | designer | `configs:publish` | Publish, with an optional body `{"ticket", "note"}`: rendered for the engine's environment, checked against the ticket pattern, approval, test cases and the pre-publish hook, then the engine validates, saves, reloads and runs a full sync. Returns once the engine runs it (up to 60 seconds). From 0.4.1, with Git sync, the golden-file tests in the repository (`tests/golden` beside the configuration, at the branch head) run too, as the editor's check runs them, and a failure refuses the publish (409); 0.4.0 ran them only from the editor's **Publish** button. This covers Git auto-publish and promotion as well |
 | POST | `/api/v1/configs/promote` | designer | `configs:publish` | `{"engine", "version", "to", "ticket", "note"}`: publish a version published on one engine to every engine of another environment, each through its own gates. The answer lists each engine's outcome; 409 when the version was never published or no engine runs in that environment |
 | GET | `/api/v1/engines/{id}/configs/{version}/export` | any | `configs:read` | An export file of the version (without the `engine` and `api` sections), with a SHA-256 of the configuration |
 | POST | `/api/v1/engines/{id}/configs/import-file` | designer | `configs:write` | Import an export file as a new draft, keeping this engine's `engine` and `api` sections; returns what the host must provide |
@@ -295,8 +301,9 @@ pre-publish hook.
 
 | Method | Path | Role | Token | Purpose |
 |---|---|---|---|---|
-| GET | `/api/v1/environments` | any | `configs:read` | The environments: saved values, and the ones engines run in |
-| GET | `/api/v1/environments/{name}` | any | `configs:read` | One environment. A secret value shows as `{"secret": true}`, never its value |
+| GET | `/api/v1/environment-names` | any | `configs:read` | From 0.4.1: the environments' names (those with saved values, and those an engine runs in), for the Compare tab and the publish dialog |
+| GET | `/api/v1/environments` | admin, auditor | `environments:read` | The environments with their values, and the engines that run in each. Before 0.4.1 any role, or `configs:read`, could read them |
+| GET | `/api/v1/environments/{name}` | admin, auditor | `environments:read` | One environment. A secret value shows as `{"secret": true}`, never its value |
 | PUT | `/api/v1/environments/{name}` | admin | — | Replace its values: `{"values": {"hr_host": {"value": "..."}, "hr_password_file": {"value": "...", "secret": true}}}`. A secret value is sealed with the master key; a `PUT` that leaves its value out keeps it. Audited as `environment.changed` (the keys, never the values) |
 | DELETE | `/api/v1/environments/{name}` | admin | — | Remove its values; refused while an engine runs in it |
 | GET | `/api/v1/config-git` | any | `configs:read` | What the console last saw of the Git repository: last commit, sync time, last error |
@@ -392,7 +399,8 @@ account. `POST /api/v1/self-service/password` takes `{"login", "current_password
 | 503 | The engine cannot be reached or could not change it now |
 
 The console seals the request to the engine's password key and keeps nothing of it; each attempt is
-audited as `password.self_service` with its outcome. See
+audited as `password.self_service` with its outcome. From 0.4.1, when the named engine is one of an
+HA pair, the request goes to the member that holds the lease. See
 [Password synchronisation](password-sync.md) and [Security](security.md#password-synchronisation).
 
 ## Engine control API (gRPC)
@@ -407,11 +415,12 @@ the other engine of an HA pair are its clients. It listens on `api.listen` (defa
 | Always (read-only) | `GetStatus`, `WatchStatus`, `ListDeadLetters`, `ListQuarantined`, `ListQuality`, `ListHeld`, `GetConfig`, `SearchEntities`, `GetEntity`, `GetEntityHistory`, `GetLineage`, `ReconciliationReport`, `GetPasswordKey`, `ListPasswordAgents` |
 | Commands: mTLS, the control socket, or `api.local_control: true` on loopback | `StartRun`, `ApproveDeletions`, `CheckDrift`, `RetryDeadLetters`, `DiscardDeadLetter`, `ApplyConfig`, `SimulateConfig`, `TestConnector`, `DiscoverSchema`, `PreviewConfig`, `ListUnjoined`, `JoinRecord`, `UnjoinRecord`, `SuggestJoins`, `AcceptJoins`, `ReviewGroup`, `PruneHistory`, `SubmitPasswords`, `AddPasswordAgent`, `RevokePasswordAgent`, `ChangeOwnPassword` |
 | Sensitive values (`reveal`): mTLS, the control socket, or `api.local_reveal: true` on loopback | The explorer calls, `GetLineage`, `ListUnjoined`, `SuggestJoins`, `SimulateConfig`, `DiscoverSchema`, `PreviewConfig` |
-| The whole store: what a reveal needs, and command access | `Backup`, `PullSnapshot` |
+| The whole store: what a reveal needs | `PullSnapshot` (on the active engine of a pair) |
+| The whole store: what a reveal needs, and command access | `Backup` |
 
 | RPC | Purpose |
 |---|---|
-| `GetStatus` | A snapshot: version, FIPS mode, start time, counters, sources, publications (held changes, report mode, leavers by stage, groups), targets, orphans, held deletes, configuration version and environment, views (unmatched records), timers, history, backups, HA, password delivery, rule packages, what the engine is busy with, quarantined entities per view, and the process's CPU and memory (Linux only) |
+| `GetStatus` | A snapshot: version, FIPS mode, start time, counters, sources, publications (held changes, report mode, leavers by stage, groups), targets, orphans, held deletes, configuration version and environment, views (unmatched records), timers, history, backups, HA, password delivery, rule packages, what the engine is busy with, quarantined entities per view, and the process's CPU and memory (Linux only). From 0.4.1 also `runs` (`RunsStatus`: runs ended since the engine started, and the last one's activity, start, end and source failures), `self_service` (the self-service policy, when it is on), and in `passwords` (`PasswordStatus`) `keys_sealed` and per-publication counts (`publications`: delivered, failed, dropped, waiting) |
 | `WatchStatus` | Snapshots every `interval_ms` (at least 100 ms; 0 means one second) until the client disconnects |
 | `ListDeadLetters` | Failed exports waiting to be retried |
 | `ListQuarantined` | Entities whose exports a failing rule (`on_error: quarantine`) holds back |
@@ -437,7 +446,7 @@ the other engine of an HA pair are its clients. It listens on `api.listen` (defa
 | `SubmitPasswords` | Queue sealed password changes for delivery |
 | `AddPasswordAgent`, `ListPasswordAgents`, `RevokePasswordAgent` | A one-time enrollment token (and the agent CA's certificate) for a capture agent; the agents; revoking one |
 | `ChangeOwnPassword` | A person's own password change, sealed to the password key (the console's self-service page). `UNAUTHENTICATED` for a wrong user name or password, `FAILED_PRECONDITION` for the policy, `RESOURCE_EXHAUSTED` after too many failures |
-| `Backup` | A consistent backup of the running engine (store checkpoint, configuration file, password key and agent CA) as a streamed `tar.zst`, its manifest last |
+| `Backup` | A consistent backup of the running engine (store checkpoint, configuration file, password key and agent CA, as they are on disk: sealed when a passphrase is set) as a streamed `tar.zst`, its manifest last |
 | `PullSnapshot` | The active engine's newest store snapshot, for the passive engine of an HA pair |
 
 Errors are gRPC statuses: `PERMISSION_DENIED` for a command or reveal on a listener that does not
@@ -539,10 +548,19 @@ Added in 0.4.0:
 | `syncd_source_rows_skipped_total{source,mode}` | counter | Rows a full read skipped as bad (CSV sources with `on_error: skip`) |
 | `syncd_entra_skipped_synced_users{target}` | gauge | Exports to an Entra ID target refused because the user is synced from on-premises |
 
-The engine has no password-delivery metrics: `syncd status` and the status API count deliveries,
-failures and waiting changes.
+Added in 0.4.1:
 
-The shipped alert rules gain `SyncdChangesNeedApproval`, `SyncdCanaryFailed`,
+| Metric | Type | Meaning |
+|---|---|---|
+| `syncd_password_deliveries_total{publication,outcome}` | counter | Captured password changes since the engine started, per publication: `delivered`, `failed` (refused by the target, or expired) or `dropped` (the publication is in report mode). Every outcome of every publication delivering passwords is served, 0 until it moves. Failures no publication can be named for (a change that does not open, or from a source no publication delivers from) have an empty `publication` |
+| `syncd_password_waiting{publication}` | gauge | Changes waiting for the publication's target (the account not there yet, or the target unreachable), as of the last delivery pass |
+
+0.4.1 adds two alert rules, in both rule files and the chart's PrometheusRule:
+`SyncdPasswordDeliveryFailures` (a publication's failed deliveries rose in 15 minutes) and
+`SyncdPasswordChangesDropped` (changes were dropped in the last hour because the publication is
+in report mode), both `warning`.
+
+In 0.4.0 the shipped alert rules gained eight (the 0.4.0 release notes said seven): `SyncdChangesNeedApproval`, `SyncdCanaryFailed`,
 `SyncdGroupsExpired`, `SyncdUnmatchedRecordsAgeing`, `SyncdQualityErrors`, `SyncdBackupStale`,
 `SyncdHaNoActive` and `SyncdHaSnapshotStale`. `SyncdMemoryNearLimit` no longer selects
 `job="syncd"`; only `SyncdEngineDown` needs the scrape job's name. On Kubernetes,

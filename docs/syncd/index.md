@@ -1,10 +1,10 @@
 # syncd
 
 **syncd** is an identity synchronisation engine. It reads people, accounts and groups from
-databases, Active Directory and other LDAP directories, merges the records that describe the
-same person or object into one **view**, computes attributes from them with rules, and
-publishes the result to existing LDAP directories and Active Directory, keeping them in step
-as the sources change. It is in the same category as Microsoft Identity Manager (MIM) and
+databases, CSV files, Active Directory, Entra ID and other LDAP directories, merges the records
+that describe the same person or object into one **view**, computes attributes from them with
+rules, and publishes the result to existing LDAP directories, Active Directory, Entra ID and
+SCIM applications, keeping them in step as the sources change. It is in the same category as Microsoft Identity Manager (MIM) and
 RadiantLogic RadiantOne, without the virtual directory: syncd writes to directories you
 already run, it does not serve LDAP itself.
 
@@ -18,7 +18,7 @@ It has two parts:
 
 !!! info "Source of truth"
     Everything in this section comes from the `ldap-sync-merge-view` source repository
-    (version 0.4.0, as on `main` at commit `0f4e3f3`; no release has been tagged yet, so nothing is
+    (version 0.4.1, as on `main` at commit `7869f8b`; no release has been tagged yet, so nothing is
     published for download): the engine and console code, the packaging under `deploy/packaging/`, the
     container images and Helm chart under `deploy/container/` and `deploy/helm/`, and
     the repository's `docs/`. Where the code and a README disagree, these pages follow the
@@ -39,11 +39,11 @@ It has two parts:
 |---|---|
 | **Sources** | PostgreSQL, MySQL and MariaDB, Microsoft SQL Server, MongoDB, CSV and flat files, OpenLDAP and other LDAP directories, Active Directory, Entra ID, plus Oracle, Db2 and other databases through a Debezium Server sidecar or the JDBC bridge. See [Connectors](connectors.md). |
 | **Targets** | OpenLDAP, 389 Directory Server / Red Hat Directory Server, Ping / UnboundID and other LDAP directories, Active Directory (with Exchange addresses, account control, home paths, UPN and `sAMAccountName` helpers), Entra ID through Microsoft Graph (users, groups, licences, app roles), and SaaS applications through SCIM 2.0. |
-| **Full reads and live streams** | Each source object is read in full on a schedule (scrape), read incrementally (delta), or streamed from the source's change log: PostgreSQL logical replication, the MySQL binlog, SQL Server change data capture or change tracking, MongoDB change streams, LDAP syncrepl or a changelog, Active Directory DirSync. A stream resumes from its checkpoint after a restart. |
+| **Full reads and live streams** | Each source object is read in full on a schedule (scrape), read incrementally (delta), or streamed from the source's change log: PostgreSQL logical replication, the MySQL binlog, SQL Server change data capture or change tracking, MongoDB change streams, LDAP syncrepl or a changelog, Active Directory DirSync, Entra ID delta queries. A stream resumes from its checkpoint after a restart. |
 | **Correlation and merge** | Join rules link the records from each source that describe one entity. Attribute precedence decides which source wins for each attribute, and the console's correlation review shows the links and the records left unjoined. |
 | **Computed attributes** | Rules written in CEL, compiled to native code, with a function library, multi-step transforms, lookup tables, cross-entity references and computed groups. Effective dates, versioned rule packages shared between configurations, and data-quality checks. Each rule carries its own test cases, golden-file tests cover whole publications, and a configuration whose tests fail cannot be published. See [Computed attributes and rules](rules.md). |
 | **Publishing** | Publications write a view's entities to a target: DN templates, attribute mapping, renames and moves (including entries someone else moved or renamed in the target, found again by its own id), group membership with referential integrity, a staged leaver policy (disable, strip groups, move, delete, each after its own delay) with rehires restored, group lifecycle (manual members, owners, expiry), drift detection, reconciliation and write-back of changes made in the target. Target profiles for Active Directory, OpenLDAP, 389 Directory Server / Red Hat Directory Server and Ping / UnboundID. |
-| **Passwords** | Initial passwords set as accounts are created (on Active Directory with `unicodePwd`), people changing their own password on the console's self-service page, and captured password changes delivered to every linked target, encrypted end to end. See [Password synchronisation](password-sync.md). |
+| **Passwords** | Initial passwords set as accounts are created (on Active Directory with `unicodePwd`), people changing their own password on the console's self-service page, and captured password changes delivered to every linked target, encrypted end to end, with the engine's keys sealed at rest when a passphrase is set. See [Password synchronisation](password-sync.md). |
 | **Change safety** | Per publication: change windows, deletion, modification and add thresholds, canary publishing, and a report mode that writes nothing. Changes that wait are held and re-planned, never replayed. See [Change safety and lifecycle](change-safety.md). |
 | **Safe configuration changes** | Every configuration is a version: compiled by the engine as you type, compared with any other version or with what the engine runs, previewed on sample records, simulated against a copy of the engine's store to show what each target would receive, optionally approved by a second person (four eyes), then published, optionally only with a change ticket or a change-management system's approval. Configuration as code: semantic diff, environments, Git sync and promotion between environments. A configuration that does not start rolls back by itself. See [Configuration as code](config-as-code.md). |
 | **Evidence** | Reconciliation reports (CSV, PDF, scheduled by e-mail or to a share), one person's lineage (JSON, PDF), history retention, and the ENS audit trail with Splunk, syslog and file outputs. See [Reports, lineage and data quality](reports-and-data-quality.md) and [Audit logging](../audit-logging.md). |
@@ -116,7 +116,7 @@ flowchart LR
 | Console UI | React 19, TypeScript, Vite, TanStack Router and Query, Tailwind CSS, Monaco editor |
 | Cryptography | rustls with aws-lc-rs; the AWS-LC FIPS module in a FIPS build |
 | JDBC bridge (optional) | Java 17+, run separately, with your databases' JDBC drivers |
-| Delivery | Bundles for x86_64 and aarch64 plus an x86_64 FIPS bundle, `.deb` and `.rpm` packages (RHEL 8 and 9+), CycloneDX SBOMs, and `SHA256SUMS` signed with GPG; systemd units `syncd` and `syncd-console`. Container images `ghcr.io/winllc/syncd` and `ghcr.io/winllc/syncd-console` (amd64 and arm64, `-fips` for amd64; distroless, Trivy-scanned, cosign-signed with SPDX attestations) and the Helm chart `oci://ghcr.io/winllc/charts/syncd`, all published when a release is tagged (none is yet) |
+| Delivery | Bundles for x86_64 (and aarch64 when the release workflow's arm64 runners are enabled) plus an x86_64 FIPS bundle, `.deb` and `.rpm` packages (RHEL 8 and 9+), CycloneDX SBOMs, and `SHA256SUMS` signed with GPG; systemd units `syncd` and `syncd-console`. Container images `ghcr.io/winllc/syncd` and `ghcr.io/winllc/syncd-console` (amd64, arm64 with the same runners, `-fips` for amd64; distroless, Trivy-scanned, cosign-signed with SPDX attestations) and the Helm chart `oci://ghcr.io/winllc/charts/syncd`, all published when a release is tagged (none is yet) |
 
 ## Roles
 
@@ -124,9 +124,9 @@ flowchart LR
 |---|---|
 | **admin** | Everything, including users, engine registration, sign-in policy, configuration approval, banners, API tokens, webhooks, environments and Git sync |
 | **designer** | What a viewer can, plus edit, check, preview, simulate, approve and publish configurations, and run connector checks |
-| **operator** | What a viewer can, plus run and control engines: full syncs, reconciliations, drift checks, threshold approvals, dead-letter retry and discard, and manual joins and unjoins in correlation review |
-| **viewer** | Read engines, status, configurations and the object explorer |
-| **auditor** | What a viewer can, plus the audit log, and the lists of API tokens and webhooks with their delivery logs |
+| **operator** | What a viewer can, plus run and control engines: full syncs, reconciliations, drift checks, approving held changes, dead-letter retry and discard, group reviews, joins, unjoins and accepted suggestions in correlation review, and scheduled reports |
+| **viewer** | Read engines, status, configurations, environment names and the object explorer |
+| **auditor** | What a viewer can, plus the audit log, the lists of API tokens and webhooks with their delivery logs, and environment values |
 
 Roles do not stack: a designer cannot run engines, and an operator cannot publish. The
 [Admin guide](admin-guide.md) gives each role's exact permissions.

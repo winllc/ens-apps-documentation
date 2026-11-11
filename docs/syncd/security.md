@@ -16,8 +16,9 @@ supply chain.
   Secret you name (`engine.envFromSecret`).
 - **The engine also holds the password key.** With password synchronisation on, the engine's
   data directory holds the private key that opens every captured password change, and the key
-  of the CA that admits capture agents. Both are files in the clear, protected by their mode
-  (0600) only. See [Password synchronisation](#password-synchronisation).
+  of the CA that admits capture agents. From 0.4.1 both can be sealed with a passphrase
+  (`SYNCD_PASSWORD_KEY_PASSPHRASE_FILE`); without one they are files in the clear, protected by
+  their mode (0600) only, as in 0.4.0. See [Password synchronisation](#password-synchronisation).
 - **The console holds no source or target passwords.** It stores configuration versions
   (references only), accounts, sessions, the audit trail, API tokens (as hashes), and, sealed
   with the console's master key, each engine's control API client key, each webhook's URL and
@@ -78,9 +79,9 @@ From 0.4.0, scripts, pipelines and SIEM collectors call the console's API with a
 | Control | Implementation |
 |---|---|
 | The token | `sdt_` and 32 random bytes (base64url), from aws-lc-rs. Shown once, when it is created. The database keeps its SHA-256 and a four-character prefix; the token is never written to a log, the audit trail or a session |
-| Scopes | `engines:read`, `configs:read`, `configs:write`, `configs:publish`, `runs:run`, `audit:read`, `admin`. Each needs a role of the creator, to be granted and at every use |
+| Scopes | `engines:read`, `configs:read`, `configs:write`, `configs:publish`, `runs:run`, `audit:read`, `environments:read` (from 0.4.1), `admin`. Each needs a role of the creator, to be granted and at every use |
 | Never more than its creator, now | Each use reads the creator's account (a good answer is reused for at most a minute and dropped when the account changes; a refusal never is): a creator that is gone or disabled refuses the token, and a demoted creator's token loses what the new role cannot do |
-| Endpoints that stay with people | Accounts, settings, tokens, webhooks, environments' values, approvals, simulations, previews, connector checks, the object explorer and lineage, scheduled reports, the support bundle and single sign-on take a session only: a token gets `403 insufficient_scope` |
+| Endpoints that stay with people | Accounts, settings, tokens, webhooks, changes to environments, approvals, simulations, previews, connector checks, the object explorer and lineage, scheduled reports, the support bundle and single sign-on take a session only: a token gets `403 insufficient_scope` |
 | Lifetime | At most `CONSOLE_API_MAX_TOKEN_LIFETIME` (`365d`): the expiry of a token created without one, the most that may be asked for, and the age at which any token stops working |
 | Rate limit | `CONSOLE_API_REQUESTS_PER_MINUTE` (300) per token, per console process; then `429` with `Retry-After` |
 | No session, no cookie | A bearer request never reads or sets the session cookie, so tokens are not exposed to cross-site request forgery |
@@ -144,11 +145,17 @@ against its scopes and its creator's role.
 
 | Role | Can |
 |---|---|
-| `viewer` | Read engines, status, held changes, dead letters, data quality, configuration versions, diffs and environments (secret values never), the object explorer and lineage exports, the reconciliation report export, rule previews and the function catalogue |
-| `auditor` | What a viewer can, plus the audit trail (its verification, export and outputs), the lists of API tokens, webhooks and their deliveries, and scheduled reports |
+| `viewer` | Read engines, status, held changes, dead letters, data quality, configuration versions, diffs and the environments' names, the object explorer and lineage exports, the reconciliation report export, rule previews and the function catalogue |
+| `auditor` | What a viewer can, plus the audit trail (its verification, export and outputs), the lists of API tokens, webhooks and their deliveries, scheduled reports, and the environments' values (secret values never) |
 | `operator` | What a viewer can, plus runs (reconcile, full sync), approvals of held deletions and changes, group reviews, drift checks, dead-letter retry and discard, joining, unjoining and accepting correlation suggestions, and scheduled reports of their own |
 | `designer` | What a viewer can, plus validating, saving, importing, simulating, previewing, approving, publishing and promoting configuration versions, connector checks, and **Sync now** for Git |
-| `admin` | Everything, including accounts, sign-in settings, configuration approval, banners, registering and removing engines, environments' values, API tokens, webhooks, everyone's scheduled reports and the support bundle |
+| `admin` | Everything, including accounts, sign-in settings, configuration approval, banners, registering and removing engines, environments and their values, API tokens, webhooks, everyone's scheduled reports and the support bundle |
+
+Before 0.4.1 every role, and any token with `configs:read`, could read the environments' plain
+values through the API (#145). From 0.4.1 they need the admin or auditor role, as the console's
+pages showed them, or a token with `environments:read`; every role still reads the names
+(`GET /api/v1/environment-names`). A configuration rendered for display (the editor's check,
+the Compare tab) still shows the plain values it uses, never the secret ones.
 
 Revealing sensitive values is separate: see [Sensitive attributes](#sensitive-attributes-and-reveal).
 The per-route roles and token scopes are in the [API reference](api-reference.md#console-rest-api).
@@ -226,11 +233,15 @@ on first start and logs a warning to back it up. On Kubernetes, the Helm chart g
 the `syncd-console` Secret and passes it as `CONSOLE_MASTER_KEY`. **Without it, stored secrets
 cannot be decrypted.** There is no KMS or Vault integration.
 
-At every start the console checks the key against a secret the database holds:
+At every start the console checks the key against a secret the database holds: an engine's
+client key, or else a webhook's URL, or else a secret environment value. (0.4.0 looked at
+engines' client keys only, so a console holding only webhooks or secret values started with the
+wrong key; from 0.4.1 it does not.)
 
 - if `master.key` is missing while the database holds sealed secrets, it does not create a new key
   over them;
-- if the key does not open them (the wrong file, or the wrong `CONSOLE_MASTER_KEY`), it is refused.
+- if the key does not open the one it tries (the wrong file, or the wrong `CONSOLE_MASTER_KEY`), it
+  is refused, and the error names that secret.
 
 Either way the console does not start, and says to restore the key. To start over on purpose, set
 `CONSOLE_NEW_MASTER_KEY=true` (`--new-master-key`; Helm `console.newMasterKey`): the console starts
@@ -243,23 +254,25 @@ new secret, and secret environment values typing again.
 
 ### Other secret files of the console
 
-Each is read from a file at the moment it is used, so it can be rotated without a restart, and
-none appears in the support bundle:
+None appears in the support bundle. Most are read from their file each time they are used, so
+they can be rotated without a restart:
 
-| Setting | For |
-|---|---|
-| `CONSOLE_OIDC_CLIENT_SECRET_FILE` | The single sign-on client secret |
-| `CONSOLE_PUBLISH_HOOK_SECRET_FILE` | The pre-publish hook's HMAC secret |
-| `CONSOLE_CONFIG_GIT_SSH_KEY_FILE`, `CONSOLE_CONFIG_GIT_TOKEN_FILE` | Git sync's deploy key, or its HTTPS token |
-| `CONSOLE_SMTP_PASSWORD_FILE` | The mail server account's password |
-| `ENS_AUDIT_SPLUNK_TOKEN_FILE` | The Splunk HTTP Event Collector token (or `ENS_AUDIT_SPLUNK_TOKEN`) |
+| Setting | For | Read |
+|---|---|---|
+| `CONSOLE_OIDC_CLIENT_SECRET_FILE` | The single sign-on client secret | Once, at startup: restart the console after rotating it |
+| `CONSOLE_PUBLISH_HOOK_SECRET_FILE` | The pre-publish hook's HMAC secret | At each use |
+| `CONSOLE_CONFIG_GIT_SSH_KEY_FILE`, `CONSOLE_CONFIG_GIT_TOKEN_FILE` | Git sync's deploy key, or its HTTPS token | At each `git` command |
+| `CONSOLE_SMTP_PASSWORD_FILE` | The mail server account's password | At each use |
+| `ENS_AUDIT_SPLUNK_TOKEN_FILE` | The Splunk HTTP Event Collector token (or `ENS_AUDIT_SPLUNK_TOKEN`) | When the output connects, and again after a failed send |
 
 ### Git sync credentials
 
 With `CONSOLE_CONFIG_GIT_URL` set, the console takes configuration from a Git repository, and with
 `CONSOLE_CONFIG_GIT_PUSH_BACK=true` pushes to it. Whoever can push to that branch can propose
 configuration, and with `CONSOLE_CONFIG_GIT_AUTO_PUBLISH=publish` publish it through the usual
-gates (approval, test cases, the ticket pattern, the hook): protect the branch accordingly.
+gates (approval, test cases and golden tests, the ticket pattern, the hook): protect the branch
+accordingly. The golden tests come from the same repository, so whoever can push can change
+them too.
 
 - Plain `http://` is refused at startup. Give either a deploy key (`ssh://`, with
   `CONSOLE_CONFIG_GIT_KNOWN_HOSTS_FILE` so the server's host key is checked) or a token
@@ -291,7 +304,9 @@ The engine serves its gRPC control API on `api.listen` (default `127.0.0.1:7443`
   `ChangeOwnPassword`). Each is logged with its caller (the address and certificate common name,
   or the uid and pid on the control socket).
 - **`Backup` and `PullSnapshot`** hand out the whole store, the password key and the agent CA's
-  key. They need what a reveal needs (mTLS, the control socket, or `api.local_reveal: true`).
+  key (sealed, when a passphrase is set). They need what a reveal needs (mTLS, the control
+  socket, or `api.local_reveal: true`); `Backup` on the loopback listener also needs
+  `api.local_control: true`.
 - **The engine does not check which certificate a client presents** beyond its chain to
   `client_ca_file`: any certificate that CA issued has full access, including backups and
   password submission. Use a CA dedicated to the control API, as the installer does.
@@ -338,8 +353,8 @@ sudo syncdctl renew-certs --new-ca   # a new CA too
 It issues the engine's certificate and the console's and the command line's client
 certificates again (and the CA with `--new-ca`; it warns when the CA itself expires within
 400 days), restarts the engine, gives the console its new credentials
-(`syncd-console admin register-engine --update`, audited as `engine.update`), and restarts
-the console. The previous files are kept in `/etc/syncd/pki/before-renewal-<time>` (mode
+(`syncd-console admin register-engine --update`, audited as `engine.update`; from 0.4.1 the
+engine keeps its environment, where 0.4.0 moved it back to `default`), and restarts the console. The previous files are kept in `/etc/syncd/pki/before-renewal-<time>` (mode
 0700), and put back if the engine does not start with the new ones. A `syncdctl restore` or
 rollback that keeps the console database also keeps the current certificates, which the
 database's credentials match.
@@ -377,8 +392,9 @@ from the console's self-service page, and as initial passwords of new accounts. 
 | Part | Implementation |
 |---|---|
 | Envelope | HPKE (RFC 9180, base mode): DHKEM(P-256, HKDF-SHA256), HKDF-SHA256, AES-256-GCM, implemented by syncd on aws-lc-rs primitives (so the FIPS module in a FIPS build). The key's id is the additional data; captured changes and self-service requests use different HPKE `info` strings, so one can never be taken for the other. Checked against the RFC 9180 test vector |
-| The engine's password key | A P-256 key pair, created on first start as `password.key` in the data directory (`passwords.key_file`), mode 0600. **The private key is stored in the clear** (hex), protected by the file's mode and the host only: there is no master key or passphrase over it. Capture points get only the public half (`GetPasswordKey`) |
-| The agent CA | A P-256 key and a ten-year self-signed certificate (`password-agent-ca.key`, mode 0600, and `.crt` beside the password key), made with `rcgen` on aws-lc-rs. **Its key is also in the clear.** It issues each agent's client certificate (client authentication only, the subject is the agent's name whatever the request asked, `passwords.ingest.agent_cert_days`, 365 by default) and, at every start, the ingest listener's own server certificate |
+| The engine's password key | A P-256 key pair, created on first start as `password.key` in the data directory (`passwords.key_file`), mode 0600, sealed with the passphrase when one is set (below). Capture points get only the public half (`GetPasswordKey`) |
+| The agent CA | A P-256 key and a ten-year self-signed certificate (`password-agent-ca.key`, mode 0600, and `.crt` beside the password key), made with `rcgen` on aws-lc-rs. Its key is sealed like the password key. It issues each agent's client certificate (client authentication only, the subject is the agent's name whatever the request asked, `passwords.ingest.agent_cert_days`, 365 by default) and, at every start, the ingest listener's own server certificate |
+| The keys at rest | From 0.4.1, with `SYNCD_PASSWORD_KEY_PASSPHRASE_FILE` (a file holding the passphrase; `SYNCD_PASSWORD_KEY_PASSPHRASE`, the passphrase itself, is read when the file variable is unset), both key files are **sealed**: PBKDF2-HMAC-SHA256 (600,000 iterations, a random 16-byte salt) derives an AES-256-GCM key from the passphrase, both through aws-lc-rs, so a FIPS build uses its FIPS module. The file's format line and derivation parameters are the additional data. Plain files from before are sealed in place at the next start, with the same keys. A sealed file without the passphrase, or with the wrong one, stops the engine with an error naming the variable. **Without a passphrase the keys are stored in the clear** (the password key as hex, the CA key as PEM), protected by the file mode only, as in 0.4.0: the engine warns at start and `syncd status` says `password keys: stored in the clear`. The status API's `keys_sealed` and the console's engine page say which |
 | Enrollment tokens | `syncd password agent add <name>` (control access) prints a one-time token, good for an hour. The engine keeps only its SHA-256 and compares in constant time. The agent makes its own key, which never leaves its host, and sends a signing request with the token; the token is then spent, and an earlier certificate of the same agent stops working |
 | Agent access | The ingest listener is mutual TLS with the agent CA. Every call but `Enroll` needs a certificate whose fingerprint the engine recorded and has not revoked. `syncd password agent revoke` refuses it at once; the check is the fingerprint, not a CRL. A revoked name cannot be enrolled again |
 | Passwords in memory | Opened in memory only, just before delivery, and zeroized when dropped. Never logged, never in `Debug` output, status, metrics, lineage or history. The LDAP library's encoding buffers are not zeroized, and there is no locked memory or core-dump suppression |
@@ -387,12 +403,18 @@ from the console's self-service page, and as initial passwords of new accounts. 
 
 - **No rotation yet.** There is one password key and one agent CA. A new key file makes changes
   still queued under the old key unreadable (they are counted as failed), and a new agent CA
-  means enrolling every agent again.
-- **Protect the data directory** as you would the passwords themselves: whoever reads
-  `password.key` and the queued changes in the store can open them. Backups and HA snapshots carry
-  both key files as they are on disk (see [Backups](#backups)).
+  means enrolling every agent again. There is no command to change the passphrase either.
+- **Seal the keys, and keep the passphrase apart.** Whoever reads the key files and the queued
+  changes in the store can open the changes; with the keys sealed, they also need the passphrase.
+  Backups and HA snapshots carry both key files as they are on disk: sealed, or in the clear
+  (see [Backups](#backups)). Both engines of an HA pair, and an engine restored from a backup,
+  need the passphrase the keys were sealed with; a lost passphrase cannot be recovered (start
+  with new keys, and enroll the agents again). A rollback to 0.4.0 cannot open sealed keys:
+  restore the plain files from the upgrade's backup first.
+- **Protect the data directory** as you would the passwords themselves, sealed or not.
 - The ingest listener (`passwords.ingest.listen`) is a network port of its own. Open it only to
-  the hosts agents run on.
+  the hosts agents run on (on Kubernetes, `networkPolicy.passwordIngestFrom`). With HA, only the
+  active engine listens on it.
 - There are no capture plugins yet (the Windows password filter, the 389 and OpenLDAP plugins),
   and no threat model or penetration test of password synchronisation has been published.
 
@@ -404,13 +426,16 @@ own directory password without a console account.
 - The console checks nothing but rate (per client address, as for sign-in), seals the request
   (user name, current and new password) to the engine's password key, and sends it with
   `ChangeOwnPassword` over its control API connection. It keeps nothing of the passwords; the
-  audit trail records who, from where, and the outcome (`password.self_service`).
+  audit trail records who, from where, and the outcome (`password.self_service`). From 0.4.1,
+  when the named engine is one of an HA pair, the request goes to the member that holds the
+  lease.
 - The engine checks its policy (`passwords.self_service`: `min_length` 12, `min_classes` 3 of
   lower case, upper case, digits and others; not the current password; not containing the user
   name), finds the person's entry with the source connection's account, and **binds as the
   person** to prove the current password. An empty password is refused outright, never sent as
   an anonymous bind. It then changes the password **as the person**, so the directory's own
-  policy, history and minimum age apply.
+  policy, history and minimum age apply. From 0.4.1 the page shows the engine's `min_length`
+  and `min_classes` (0.4.0 showed a fixed 12).
 - A wrong user name, several matches and a wrong password all get the same answer (`401
   wrong_credentials`). After 5 failures in 15 minutes a user name is refused for the rest of that
   time, whatever the password, on top of the per-address limit.
@@ -561,28 +586,36 @@ password deliveries go to its journal with their caller.
 
 - **What a backup holds.** An engine backup (`syncd backup`, `engine.backup`) holds the store,
   which carries entity data, the configuration file, and the password key and the agent CA's key
-  **as they are on disk, in the clear**, and any password changes still queued (sealed). A
+  **as they are on disk**: sealed with the passphrase from 0.4.1 when one is set, otherwise in
+  the clear. Any password changes still queued are in it too (sealed to the password key). A
   `syncdctl backup --to` adds a dump of the console's database (with the sealed secrets and the
-  audit trail) and `/etc/syncd` (the service settings, the PKI with its keys, and `engine.env`
-  with the source and target secrets). An HA snapshot holds what an engine backup holds.
+  audit trail), an archive of all of `/etc/syncd` (the service settings, the PKI with its keys,
+  `engine.env` with the source and target secrets, and anything else kept there), and, from
+  0.4.1, the console's master key. An HA snapshot holds what an engine backup holds.
 - **Protect the destination accordingly.** syncd does not encrypt backups itself. Protect a
   directory destination, and the share it is on, as you would the data directory. For S3, ask for server-side
   encryption (`--sse AES256` or `aws:kms[:key]`, `engine.backup.sse`), restrict the bucket's
   policy, and prefer an IAM role (IRSA, EKS Pod Identity) to static keys. S3 credentials come
   from the engine's environment (`AWS_*` in `/etc/syncd/engine.env`) or the shared credentials
   file; the instance metadata service is not asked.
-- **The console's master key** is not in an off-host backup unless it is set as
-  `CONSOLE_MASTER_KEY` in `/etc/syncd/console.env` (then it is in the `/etc/syncd` archive, beside
-  the database it opens). Keep `master.key` backed up apart from the backups. The host-local
-  `syncdctl backup` (`/var/lib/syncd/backups`, root only) does hold it.
+- **The console's master key** is in an off-host backup from 0.4.1 (#141): `syncdctl backup
+  --to` writes it as `<name>.console-master.key` beside the database dump, or, when it is set as
+  `CONSOLE_MASTER_KEY` in `/etc/syncd/console.env`, says it is in the `/etc/syncd` archive.
+  `syncdctl restore --from` puts it back (the key it replaces is kept as `master.key.previous`).
+  A 0.4.0 off-host backup lacks it: without the key, a restored console database cannot open
+  what it sealed. So whoever can read the destination can open every secret the console seals.
+  The host-local `syncdctl backup` (`/var/lib/syncd/backups`, root only) has always held it.
+- **The password-key passphrase** travels with an off-host backup if its file is under
+  `/etc/syncd` (the runbook's example is `/etc/syncd/engine/password-key.passphrase`), since the
+  whole directory is archived. Keep it outside `/etc/syncd`, or accept that the destination then
+  holds what opens the keys. Backups taken before the keys were sealed hold them in the clear.
 - **Integrity.** Every file of a backup is listed in its manifest with its SHA-256; a restore
   refuses a backup whose files do not match, or whose store format is newer than it reads. The
   manifest is not signed: it catches damage, not a deliberate change by someone who can write
   the destination.
-- **The repository documentation disagrees with the code here.** The source's `INSTALL.md` and
-  the backup crate say the password key store is encrypted and that a restore needs "the same
-  master key or passphrase". In 0.4.0 the engine has no master key or passphrase: the key files
-  are plain, and a restore needs nothing but the backup.
+- **A restore of sealed keys needs the passphrase** of the engine they came from: without it the
+  restored engine does not start. 0.4.0's documentation said the key files were already
+  encrypted; they were not, and an unsealed engine's backups still hold them in the clear.
 
 ### Support bundle
 
@@ -618,7 +651,7 @@ The lease's database URL (`SYNCD_HA_LEASE_URL`) holds a database password: keep 
 it, unless the console's migrations already did). The
 passive engine pulls the whole store and key material from the active one over mTLS, so the two
 hosts' certificates come from one CA and their control API port (7443) is open between them
-only.
+only. With sealed password keys, both engines need the same passphrase.
 
 ## systemd hardening
 
@@ -651,8 +684,8 @@ The engine and console images (`deploy/container/Dockerfile`) and the Helm chart
 | User | uid and gid 65532, set in the images (`USER 65532:65532`); CI checks it. The chart also sets `runAsNonRoot`, `runAsUser`/`runAsGroup`/`fsGroup` 65532 |
 | File system | `readOnlyRootFilesystem: true` in the chart. Writes go only to volumes: the engine's store and configuration (`/var/lib/syncd`), its control socket (`/run/syncd`, in memory), and `/tmp`; the console's data directory and `/tmp` (`emptyDir`) |
 | Privileges | `allowPrivilegeEscalation: false`, all capabilities dropped, seccomp `RuntimeDefault`, no service account token mounted (`automountServiceAccountToken: false`) |
-| Secrets | The console's database URL, master key and initial admin password come from Secrets, as environment variables; the single sign-on client secret from a Secret of your own, mounted as a file (`console.oidc.existingSecret`); the engine's source and target secrets from a Secret you name (`engine.envFromSecret`). Other secret files (a Splunk token, a Git key) come in through `console.extraVolumes` |
-| Network | The engine listens on `0.0.0.0:7443` (control API, mTLS required) and `0.0.0.0:9464` (metrics, plain HTTP, unauthenticated); the console on `0.0.0.0:8080`. With `networkPolicy.enabled`, one NetworkPolicy per component lets only the console and the registration Job reach 7443, only the namespaces and pods you select reach 9464 (`monitoringNamespaceSelector`, `monitoringPodSelector`) and 8080 (`ingressNamespaceSelector`, `ingressControllerSelector`, `console.extraIngressFrom`), and, for an HA pair, the engines reach each other. Egress stays open unless `networkPolicy.egress.enabled`, which closes it to DNS and the control API plus your `networkPolicy.egress.extra` rules (add the console's database, sources and targets, the identity provider, webhook receivers and the audit outputs). Your CNI must enforce them |
+| Secrets | The console's database URL, master key and initial admin password come from Secrets, as environment variables; the single sign-on client secret from a Secret of your own, mounted as a file (`console.oidc.existingSecret`); the engine's source and target secrets from a Secret you name (`engine.envFromSecret`); from chart 0.4.1, the password-key passphrase from a Secret of your own, mounted as a file (`engine.passwordKeyPassphrase.existingSecret`, key `passphrase`). Other secret files (a Splunk token, a Git key) come in through `console.extraVolumes` |
+| Network | The engine listens on `0.0.0.0:7443` (control API, mTLS required) and `0.0.0.0:9464` (metrics, plain HTTP, unauthenticated); the console on `0.0.0.0:8080`. With `networkPolicy.enabled`, one NetworkPolicy per component lets only the console and the registration Job reach 7443, only the namespaces and pods you select reach 9464 (`monitoringNamespaceSelector`, `monitoringPodSelector`) and 8080 (`ingressNamespaceSelector`, `ingressControllerSelector`, `console.extraIngressFrom`), and, for an HA pair, the engines reach each other. From chart 0.4.1, `engine.passwordIngest.enabled` opens the password ingest port (7445 by default) on a Service of its own (`<release>-syncd-engine-ingest`), reached from `networkPolicy.passwordIngestFrom` (from anywhere when that is empty; agents still need a certificate the engine issued). Egress stays open unless `networkPolicy.egress.enabled`, which closes it to DNS and the control API plus your `networkPolicy.egress.extra` rules (add the console's database, sources and targets, the identity provider, webhook receivers and the audit outputs). Your CNI must enforce them |
 | TLS to browsers | Through the chart's Ingress and your controller. With `console.tls.existingSecret` the console also serves HTTPS itself, so the hop from the controller is encrypted |
 
 Set `console.trustedProxies` to the ingress controller's addresses, so that the audit trail and
@@ -694,7 +727,7 @@ the sign-in limit see client addresses.
     - **Scanned:** on every pull request CI builds the standard, FIPS and (with arm64 runners)
       arm64 images and scans the amd64 ones with Trivy; a fixable HIGH or CRITICAL finding fails
       the build. Accepted risks are listed in `.trivyignore`, each with its reason, who accepted it
-      and until when. At 0.4.0 it holds one: CVE-2026-84782 (OpenSSL's DTLS, in the distroless
+      and until when. At 0.4.1 it still holds one: CVE-2026-84782 (OpenSSL's DTLS, in the distroless
       base's `libssl3`, which syncd does not link), accepted until 2026-12-08.
     - **Pinned:** the base images are referenced by digest, and Dependabot proposes updates.
 
@@ -727,13 +760,15 @@ is not validated, and the settings a STIG deployment needs.
 - [ ] Webhooks limited with `CONSOLE_WEBHOOKS_ALLOWED_HOSTS`, and private networks left blocked
 - [ ] The control API on loopback with mTLS (as packaged), `local_control` and `local_reveal` off,
       and the `syncd` group kept to administrators
-- [ ] With password synchronisation: the engine's data directory (`password.key`, the agent CA's
-      key) readable by the engine only, the ingest listener open only to agent hosts, unused
-      agents revoked
-- [ ] The master key (`/var/lib/syncd/console/master.key`) stored securely and apart from the
-      backups
+- [ ] With password synchronisation: the keys sealed (`SYNCD_PASSWORD_KEY_PASSPHRASE_FILE`, its
+      file outside `/etc/syncd` and kept where a restore can find it), the engine's data directory
+      readable by the engine only, the ingest listener open only to agent hosts, unused agents
+      revoked
+- [ ] The master key (`/var/lib/syncd/console/master.key`) stored securely, with a copy kept
+      apart from the backups
 - [ ] Off-host backups to a protected destination: S3 with server-side encryption and a narrow
-      bucket policy; they hold entity data, the password key and the engine's secrets
+      bucket policy; they hold entity data, the password keys, the engine's secrets and the
+      console's master key
 - [ ] Source and target connections with `tls: verify_full`, `ldaps://` or `starttls: true`
 - [ ] `api.metrics_listen` on loopback or a management network
 - [ ] The console database reached over TLS when it is on another host

@@ -28,7 +28,7 @@ and why:
 | Path | What | Owner and mode |
 |---|---|---|
 | `/etc/syncd/engine/engine.yaml` | The engine configuration. Publishing a configuration in the console, or `syncd apply-config`, replaces it. | `syncd:syncd`, `0640` |
-| `/etc/syncd/engine.env` | Secrets the engine configuration refers to (`password: { env: NAME }`), `SYNCD_FIPS_MODE`, and the other [engine variables](#engine-environment-variables-and-options). A systemd `EnvironmentFile`. | `root:syncd`, `0640` |
+| `/etc/syncd/engine.env` | Secrets the engine configuration refers to (`password: { env: NAME }`), `SYNCD_FIPS_MODE`, `SYNCD_PASSWORD_KEY_PASSPHRASE_FILE`, and the other [engine variables](#engine-environment-variables-and-options). A systemd `EnvironmentFile`. | `root:syncd`, `0640` |
 | `/etc/syncd/console.env` | The console's settings: database URL, listen address, its own HTTPS certificate, proxies, single sign-on, the audit trail's outputs, API tokens, webhooks, reports and mail, the pre-publish hook and Git sync. A systemd `EnvironmentFile`. | `root:syncd-console`, `0640` |
 | `/etc/syncd/pki/` | The control API's CA, the engine's certificate, and the client certificates of the console and the command line. Issued by the installer. | |
 
@@ -43,10 +43,17 @@ sudo systemctl restart syncd-console   # after console.env
 ```
 
 !!! warning "No comments after a value"
-    systemd reads everything after the `=` as the value, a `#` included. When you
-    uncomment a line of the templates, remove the comment at its end too:
-    `CONSOLE_PUBLISH_HOOK_ON_ERROR=refuse   # or allow` would set the value
-    `refuse   # or allow`, and the console would refuse to start.
+    systemd reads everything after the `=` as the value, a `#` included. Since 0.4.1 the
+    templates put every explanation on a line of its own, but `syncdctl install` never
+    rewrites an existing file, so a `console.env` or `engine.env` written by an earlier
+    release still has comments after some commented-out values. Before you uncomment
+    such a line, move its comment to a line of its own:
+    `CONSOLE_PUBLISH_HOOK_ON_ERROR=refuse   # or allow` sets the value
+    `refuse   # or allow`, and the console refuses to start. Since 0.4.1 the console
+    follows such an error with a line naming the setting:
+    ``CONSOLE_PUBLISH_HOOK_ON_ERROR holds ` #` (a comment at the end of the line becomes part of the value)``.
+    The engine has no such hint: a secret in `engine.env` with a comment after it is
+    just the wrong value.
 
 ## The engine configuration file
 
@@ -121,7 +128,10 @@ A string value anywhere in the configuration may hold `{{ env.<name> }}`, or
 then serves several installations. The engine renders the file with
 `--env FILE` (`SYNCD_ENVIRONMENT`) at every start, and `syncd config render` prints the
 result. The console fills the placeholders from its own Environments when it publishes.
-See [Environments](config-as-code.md#environments).
+Since 0.4.1 only administrators and auditors, or an API token with the `environments:read`
+scope (or `admin`), read an environment's values (`GET /api/v1/environments`); every role
+reads the names (`GET /api/v1/environment-names`). See
+[Environments](config-as-code.md#environments).
 
 ### The packaged configuration
 
@@ -151,8 +161,16 @@ api:
 and this `/etc/syncd/engine.env`, which defines nothing until you add your secrets:
 
 ```sh
+# Environment for the syncd engine (systemd EnvironmentFile; KEY=value, no quotes needed).
+# Everything after `=` is the value, a `#` included: comments go on lines of their own.
+#
+# Configurations refer to secrets by name, e.g. `password: { env: LDAP_BIND_PASSWORD }`;
+# define them here. This file is readable by root and the syncd group only.
+#
 # LDAP_BIND_PASSWORD=...
-# SYNCD_FIPS_MODE=true      # only with a FIPS build of syncd
+#
+# Only with a FIPS build of syncd:
+# SYNCD_FIPS_MODE=true
 ```
 
 The `syncd` unit starts the engine as
@@ -177,15 +195,20 @@ directory is fixed whatever a configuration says.
   copies them; an exported configuration file leaves them out.
 - **Checks.** `syncd validate -c file.yaml` checks structure and compiles every
   expression. `syncd test -c file.yaml` runs the test cases of every computed attribute
-  and every rule package, and with `--golden DIR` the golden-file tests. A configuration
-  whose tests fail can be saved in the console but not published, and the engine refuses
-  to apply it.
+  and every rule package, and the golden-file tests in `--golden DIR` (by default
+  `tests/golden` next to the configuration): its `*.yaml` files and, since 0.4.1, those
+  one directory level down. A configuration whose tests fail can be saved in the console
+  but not published. With Git sync the golden tests beside the configuration in the
+  repository count too, for every publish: the editor's, the API's, Git auto-publish and
+  promotion (in 0.4.0 only the editor ran them). The engine refuses to apply a
+  configuration whose test cases fail.
 - **Warnings.** A rule that reads an attribute nothing in its view sets (a misspelt
   `e.departmnet`), or a lookup table the view does not have, is reported as a warning by
   `syncd validate`, in the reply to `apply-config`, in the log at start and in the
   console. It is not an error: the rule reads the attribute as absent.
-- **Rolling back to 0.3.0.** syncd 0.3.0 refuses settings it does not know. Before a
-  rollback that keeps the store, publish a configuration without the settings new in
+- **Rolling back.** 0.4.1 adds no configuration settings, so a configuration for 0.4.1
+  works on 0.4.0. syncd 0.3.0 refuses settings it does not know: before a rollback to
+  0.3.0 that keeps the store, publish a configuration without the settings new in
   0.4.0.
 
 ### Spans of time
@@ -206,7 +229,11 @@ Settings that take a span of time as text (`soak`, `max_delay`, the leaver stage
 | `source_retry_max_secs` | integer | `60` | Longest wait before restarting a source that failed. Waits double from one second up to this. |
 | `history.keep_days` | integer | `30` | Days of entity history to keep: what changed, what caused it, what was exported. `0` records no history. |
 | `history.keep_per_entity` | integer | `100` | History entries kept per entity (the newest). |
-| `history.min_per_entity` | integer | `10` | The newest entries of each entity kept past `keep_days`, so no entity's story is empty. Every entry of an entity with an open held change or a dead letter is kept, whatever its age, until it clears. See [History retention](reports-and-data-quality.md#history-retention). |
+| `history.min_per_entity` | integer | `10` | The newest entries of each entity kept past `keep_days`, so no entity's story is empty. See [History retention](reports-and-data-quality.md#history-retention). |
+
+Every entry of an entity with an open held change or a dead letter is kept until it
+clears, past both `keep_days` and `keep_per_entity` (0.4.0 still cut such an entity's
+entries at `keep_per_entity`).
 | `cache_mb` | integer | `256` | MiB of memory caching the store's decompressed blocks. At most `32768`. Takes effect when syncd restarts. See [Availability and sizing](availability-and-sizing.md). |
 | `backup` | map | unset | Scheduled backups of the running engine; [below](#scheduled-backups-enginebackup). |
 | `ha` | map | unset | An active/passive pair; [below](#high-availability-engineha). Host-only. |
@@ -224,8 +251,8 @@ engine:
 ### Scheduled backups (`engine.backup`)
 
 The engine takes a consistent checkpoint of its store while it runs, archives it with its
-configuration and password key, and writes it to a directory or to S3. `syncd backup`
-takes one on request. See [Backups](operator-guide.md#backups).
+configuration, its password key and the capture agents' CA, and writes it to a directory
+or to S3. `syncd backup` takes one on request. See [Backups](operator-guide.md#backups).
 
 | Key | Type | Default | What |
 |---|---|---|---|
@@ -240,8 +267,10 @@ takes one on request. See [Backups](operator-guide.md#backups).
 S3 credentials come from the engine's environment, never from the configuration; see the
 `AWS_*` [variables](#engine-environment-variables-and-options). The status and the
 metrics say when the last backup succeeded, and the `SyncdBackupStale` alert fires when
-none has for two intervals. A restore needs the same master key or passphrase the engine
-had.
+none has for two intervals. The password keys go into the archive as they are on disk:
+sealed when the engine has a passphrase (`SYNCD_PASSWORD_KEY_PASSPHRASE_FILE`, see
+[Passwords](#passwords-passwords)), and then a restore needs that passphrase; in the
+clear otherwise, so protect the destination like a secret.
 
 ```yaml
 engine:
@@ -262,7 +291,7 @@ active engine's snapshots, and takes over when the lease expires. See
 | Key | Type | Default | What |
 |---|---|---|---|
 | `name` | text | required | The pair's name: the lease's key, the same on both engines. 1 to 64 letters, digits, `.`, `_` or `-`. |
-| `member` | text | `SYNCD_HA_MEMBER`, else the host name | This engine's name in the pair. |
+| `member` | text | the host name | This engine's name in the pair, up to 64 characters without spaces. `SYNCD_HA_MEMBER`, when set and not empty, overrides it. |
 | `role` | `auto`, `active`, `passive` | `auto` | `auto` competes for the lease. `passive` never takes it: a standby that only follows. `active` is `auto` by another name. |
 | `lease.backend` | `postgres`, `file` | required | Where the lease is. |
 | `lease.url` | secret | | `postgres`: the database URL. The console's database works. |
@@ -270,14 +299,17 @@ active engine's snapshots, and takes over when the lease expires. See
 | `lease.ca_file` | path | | `postgres`: PEM CA certificates for `tls_verify`. |
 | `lease.path` | path | | `file`: the lease file, on a file system both engines share. |
 | `lease.ttl_secs` | integer | `15` | How long the lease holds without a renewal; renewed every third of it. At least `3`. A failover takes at most this, plus the new engine's reconciliation. |
-| `advertise` | `host:port` | `SYNCD_HA_ADVERTISE`, else `api.listen` | Where the other engine reaches this one's control API, recorded in the lease. |
+| `advertise` | `host:port` | `api.listen` (an unspecified address as the host name) | Where the other engine reaches this one's control API, recorded in the lease. `SYNCD_HA_ADVERTISE`, when set and not empty, overrides it. |
 | `snapshot_every_secs` | integer | `300` | Seconds between the store snapshots the active engine takes for the passive one. At least `10`. The failover window: what was exported since the last snapshot is found again by the reconciliation after a takeover. |
 | `peer.address` | `host:port` | the address in the lease | The other engine's control API, for snapshot pulls. |
 | `peer.ca_file`, `peer.cert_file`, `peer.key_file` | path | `api.tls`'s files | The CA the peer's certificate chains to, and this engine's client certificate and key. `cert_file` and `key_file` go together. |
 
 `engine.ha` can also come from `SYNCD_HA_*` variables, for hosts whose configuration file
 the console publishes (the Helm chart does this). A file with an `engine.ha` of its own
-keeps it.
+keeps it, and `SYNCD_HA_NAME` is then ignored with a warning. `SYNCD_HA_MEMBER` and
+`SYNCD_HA_ADVERTISE` are different: since 0.4.1 they override `member` and `advertise`
+whichever way `engine.ha` was given (0.4.0 used the file's values first). With sealed
+password keys, both engines need the same passphrase.
 
 !!! note "Limits"
     The lease is in PostgreSQL or a file: there is no etcd or Kubernetes Lease backend.
@@ -1143,7 +1175,7 @@ publication has `passwords`. See
 
 | Key | Type | Default | What |
 |---|---|---|---|
-| `key_file` | path | `password.key` in the data directory | The engine's password key, created on first start, readable by the engine's user only. Backups carry it. |
+| `key_file` | path | `password.key` in the data directory | The engine's password key, created on first start, readable by the engine's user only (mode `0600`). With `ingest`, the capture agents' CA key (`password-agent-ca.key`) is kept in the same directory. Both are sealed with a passphrase when `SYNCD_PASSWORD_KEY_PASSPHRASE_FILE` is set, and in the clear otherwise; backups and HA snapshots carry them as they are on disk. |
 | `ttl_secs` | integer | `86400` | How long a captured change may wait, sealed, for its account to be provisioned or its target to answer. Then it is dropped and counted as failed. At least `1`. |
 | `ingest.listen` | `host:port` | | Where capture agents enroll and submit changes: a listener of its own, with mutual TLS against the engine's agent CA. Off unless `ingest` is set. Needs a publication that delivers passwords. |
 | `ingest.names` | list | required with `ingest` | Host names and addresses agents reach the listener by; its certificate is issued for them. |
@@ -1166,8 +1198,23 @@ passwords:
     login: uid
 ```
 
-The console's self-service page also needs `CONSOLE_SELF_SERVICE_ENGINE`. There is no
-rotation of the password key or of the agent CA.
+The console's self-service page also needs `CONSOLE_SELF_SERVICE_ENGINE`, and since
+0.4.1 shows the engine's `min_length` and `min_classes`.
+
+**Sealing the keys.** Without a passphrase the two key files are plain, protected by
+their mode only: the engine warns at start that `the password keys are stored in the
+clear`, and `syncd status` says `password keys: stored in the clear`. Set
+`SYNCD_PASSWORD_KEY_PASSPHRASE_FILE` to a file holding a passphrase (in
+`/etc/syncd/engine.env`, or `engine.passwordKeyPassphrase` in the Helm chart) and restart:
+both files are sealed in place with the same keys (PBKDF2-HMAC-SHA256 with 600,000
+iterations, AES-256-GCM). A sealed file without the passphrase, or with another one, stops
+the engine with an error naming the variable. Both engines of an HA pair, and a restore,
+need the passphrase the keys were sealed with; a lost one cannot be recovered. syncd 0.4.0
+cannot open sealed keys: before rolling back, put back the plain files from the upgrade's
+backup. See [Password synchronisation](password-sync.md).
+
+There is no rotation of the password key or of the agent CA, and no command to change the
+passphrase.
 
 ## Schedules
 
@@ -1297,8 +1344,10 @@ The `syncd` command reads these; a flag wins over its variable.
 | `SYNCD_HA_LEASE_PATH` | | unset | With `SYNCD_HA_NAME`: a file lease at this path, when there is no URL. |
 | `SYNCD_HA_LEASE_TTL_SECS` | | `15` | With `SYNCD_HA_NAME`: `lease.ttl_secs`. |
 | `SYNCD_HA_SNAPSHOT_EVERY_SECS` | | `300` | With `SYNCD_HA_NAME`: `snapshot_every_secs`. |
-| `SYNCD_HA_MEMBER` | | the host name | This engine's name in the pair, when `engine.ha.member` is not set. |
-| `SYNCD_HA_ADVERTISE` | | `api.listen` | Where the other engine reaches this one, when `engine.ha.advertise` is not set. |
+| `SYNCD_HA_MEMBER` | | `engine.ha.member`, else the host name | This engine's name in the pair. When set and not empty it overrides `engine.ha.member` (since 0.4.1; 0.4.0 used the file's value first). |
+| `SYNCD_HA_ADVERTISE` | | `engine.ha.advertise`, else `api.listen` | Where the other engine reaches this one. When set and not empty it overrides `engine.ha.advertise` (since 0.4.1). |
+| `SYNCD_PASSWORD_KEY_PASSPHRASE_FILE` | | unset | A file holding the passphrase the password key and the agent CA key are sealed with (line breaks at its end are not part of it). Unset: the keys are stored in the clear, with a warning. See [Passwords](#passwords-passwords). |
+| `SYNCD_PASSWORD_KEY_PASSPHRASE` | | unset | The passphrase itself, read only when `SYNCD_PASSWORD_KEY_PASSPHRASE_FILE` is not set: for tests and containers that cannot mount a file. Prefer the file. |
 | `SYNCD_CONSOLE` | `--console` | unset | `syncd config promote`: the console's address. |
 | `SYNCD_CONSOLE_TOKEN_FILE` | `--token-file` | unset | `syncd config promote`: a file holding an API token with `configs:publish`. |
 | `SYNCD_AGENT_TOKEN` | `--token` | unset | `syncd password agent enroll`: the one-time token `syncd password agent add` printed. |
@@ -1326,8 +1375,8 @@ The console reads its settings from environment variables, or from the matching 
 | `CONSOLE_TLS_KEY` | `--tls-key` | unset | The certificate's private key, PEM. Needs `CONSOLE_TLS_CERT`. |
 | `CONSOLE_DATA_DIR` | `--data-dir` | `./console-data`; the unit sets `/var/lib/syncd/console` | Local files: the master key, the initial admin password, and with Git sync the clone (`git/`). |
 | `CONSOLE_UI_DIR` | `--ui-dir` | unset; the unit sets `/opt/syncd/current/share/console-ui` | The built web UI, served at `/`. Without it only the API is served. |
-| `CONSOLE_MASTER_KEY` | `--master-key` | read from, or created in, `<data dir>/master.key` | Master key for stored secrets (base64, 32 bytes). Back it up: stored secrets cannot be decrypted without it. The console refuses to start when the key does not open the secrets the database holds, or when `master.key` is missing while the database holds secrets. |
-| `CONSOLE_NEW_MASTER_KEY` | `--new-master-key` | off | Set to `true` to start anyway when the master key does not open the stored secrets, creating a new key if there is none. Those secrets are lost: every engine registered with mutual TLS must be registered again (`syncd-console admin register-engine --update`). Only for starting over on purpose; restore `master.key` instead when you can. |
+| `CONSOLE_MASTER_KEY` | `--master-key` | read from, or created in, `<data dir>/master.key` | Master key for stored secrets (base64, 32 bytes). Back it up: stored secrets cannot be decrypted without it. The console refuses to start when the key does not open the secrets the database holds, or when `master.key` is missing while the database holds secrets. Since 0.4.1 the check covers every kind of sealed secret: engine client keys, webhook URLs and secret environment values (0.4.0 checked engine keys only). |
+| `CONSOLE_NEW_MASTER_KEY` | `--new-master-key` | off | Set to `true` to start anyway when the master key does not open the stored secrets, creating a new key if there is none. Those secrets are lost: every engine registered with mutual TLS must be registered again (`syncd-console admin register-engine --update`), webhooks need their URL and secret again, and secret environment values must be entered again. Only for starting over on purpose; restore `master.key` instead when you can. |
 | `CONSOLE_ADMIN_PASSWORD` | `--admin-password` | generated | Initial admin password for a production install. `admin` and empty passwords are refused. |
 | `CONSOLE_ADMIN_PASSWORD_FILE` | `--admin-password-file` | unset | A file holding the initial admin password, instead. |
 | `CONSOLE_SESSION_IDLE_MINUTES` | `--session-idle-minutes` | `30` | Minutes a session stays valid without activity. |
@@ -1335,7 +1384,7 @@ The console reads its settings from environment variables, or from the matching 
 | `CONSOLE_REVEAL_ROLES` | `--reveal-roles` | `admin` | Roles that may reveal sensitive attributes (each reveal is audited), comma-separated, or `none`. |
 | `CONSOLE_TRUSTED_PROXIES` | `--trusted-proxies` | empty | Reverse proxies whose `X-Forwarded-For` names the client: addresses or CIDR ranges, comma-separated (`127.0.0.1` for nginx on the same host). The client address goes to the audit log and the per-address sign-in limit. Only list proxies you run. |
 | `CONSOLE_PUBLIC_URL` | `--public-url` | unset | The console's address as users reach it, through the proxy (`https://syncd.example.com`). Needed for single sign-on; with an `https://` value, the startup warning about plain-HTTP remote access is not shown. |
-| `CONSOLE_SELF_SERVICE_ENGINE` | `--self-service-engine` | unset | The registered engine (by name) that changes people's own passwords, for the public self-service page (`/password`). The page is off unless set; the engine needs `passwords.self_service`. See [Password synchronisation](password-sync.md). |
+| `CONSOLE_SELF_SERVICE_ENGINE` | `--self-service-engine` | unset | The registered engine (by name) that changes people's own passwords, for the public self-service page (`/password`). The page is off unless set; the engine needs `passwords.self_service`. When it names one engine of an HA pair, a change goes to the member that holds the lease (since 0.4.1). After `syncd-console admin rename-engine`, change it by hand. See [Password synchronisation](password-sync.md). |
 | `SYNC_DEV_MODE` | `--dev` | off | Development mode: `admin`/`admin` is allowed, the password change can be skipped, cookies work over plain HTTP, and the UI shows a warning banner. Never in production. Note the name: `SYNC_`, not `SYNCD_`. |
 | `SYNCD_FIPS_MODE` | `--fips` | off | Use the FIPS 140-3 crypto provider; passwords are hashed with PBKDF2 instead of Argon2id. |
 | `RUST_LOG` | | `info` | Log level filter. |
@@ -1479,7 +1528,7 @@ packages recommend it; the console image has it). See
 | `CONSOLE_CONFIG_GIT_POLL` | `60s` | How often the repository is fetched. |
 | `CONSOLE_CONFIG_GIT_AUTO_PUBLISH` | `off` | What a new commit does besides becoming a version: `off` (a draft), `validate` (a draft with its test cases run) or `publish` (published when valid and approved). |
 | `CONSOLE_CONFIG_GIT_PUSH_BACK` | `false` | Commit a version saved or published in the console to the branch, as the console user, and push it. A rejected push is reported, never forced. |
-| `CONSOLE_CONFIG_GIT_ENGINES` | every engine | The engines the repository is for, by name, comma-separated. |
+| `CONSOLE_CONFIG_GIT_ENGINES` | every engine | The engines the repository is for, by name, comma-separated. `syncd-console admin rename-engine` does not change it. |
 | `CONSOLE_CONFIG_GIT_BINARY` | `git` | *(hidden)* The `git` program. |
 
 ### Exports and scheduled reports
@@ -1570,22 +1619,28 @@ CONSOLE_LISTEN=@LISTEN@
 #ENS_AUDIT_SPLUNK_TOKEN_FILE=/etc/syncd/splunk-hec-token
 #ENS_AUDIT_SPLUNK_INDEX=ens_audit
 #ENS_AUDIT_SYSLOG_HOST=syslog.example.com
-#ENS_AUDIT_SYSLOG_PROTOCOL=tls      # udp, tcp or tls (port 514, or 6514 for tls)
-#ENS_AUDIT_RETENTION_DAYS=365       # 0 (the default) keeps events forever
+# udp, tcp or tls (port 514, or 6514 for tls):
+#ENS_AUDIT_SYSLOG_PROTOCOL=tls
+# 0 (the default) keeps events forever:
+#ENS_AUDIT_RETENTION_DAYS=365
 
 # API tokens (Integrations in the console), for a SIEM or a pipeline. See
 # console/README.md, "API tokens".
 #CONSOLE_API_TOKENS_ENABLED=true
-#CONSOLE_API_MAX_TOKEN_LIFETIME=365d   # 0 for no limit
-#CONSOLE_API_REQUESTS_PER_MINUTE=300   # per token; 0 for no limit
+# 0 for no limit:
+#CONSOLE_API_MAX_TOKEN_LIFETIME=365d
+# Per token; 0 for no limit:
+#CONSOLE_API_REQUESTS_PER_MINUTE=300
 
 # Outbound webhooks (Integrations in the console): signed HTTPS posts to a Slack channel,
 # a Teams workflow, PagerDuty or an integration of your own. Nothing is sent until an
 # administrator adds one. See console/README.md, "Webhooks".
 #CONSOLE_WEBHOOKS_ENABLED=true
 #CONSOLE_WEBHOOKS_ALLOWED_HOSTS=hooks.slack.com,*.webhook.office.com,events.pagerduty.com,relay.example.gov
-#CONSOLE_WEBHOOKS_BLOCK_PRIVATE_NETWORKS=true   # unset: refused for new webhooks; false: allowed
-#CONSOLE_WEBHOOKS_CA_FILE=/etc/syncd/receivers-ca.pem   # a private CA some receivers use
+# Unset: refused for new webhooks; false: allowed.
+#CONSOLE_WEBHOOKS_BLOCK_PRIVATE_NETWORKS=true
+# A private CA some receivers use:
+#CONSOLE_WEBHOOKS_CA_FILE=/etc/syncd/receivers-ca.pem
 
 # Scheduled reconciliation reports (Reports in the console), e-mailed or written to a
 # share. Nothing is e-mailed until the recipient domains and a mail server are set. See
@@ -1605,7 +1660,8 @@ CONSOLE_LISTEN=@LISTEN@
 #CONSOLE_PUBLISH_HOOK_URL=https://itsm.example.gov/syncd
 #CONSOLE_PUBLISH_HOOK_SECRET_FILE=/etc/syncd/publish-hook-secret
 #CONSOLE_PUBLISH_HOOK_TIMEOUT=10s
-#CONSOLE_PUBLISH_HOOK_ON_ERROR=refuse   # or allow
+# refuse or allow:
+#CONSOLE_PUBLISH_HOOK_ON_ERROR=refuse
 
 # Configuration as code (console/README.md, "Git sync"): commits on a branch become
 # configuration versions, optionally published; versions saved here pushed back. Needs
@@ -1616,19 +1672,24 @@ CONSOLE_LISTEN=@LISTEN@
 #CONSOLE_CONFIG_GIT_ENV_PATH=environments
 #CONSOLE_CONFIG_GIT_SSH_KEY_FILE=/etc/syncd/git-deploy-key
 #CONSOLE_CONFIG_GIT_KNOWN_HOSTS_FILE=/etc/syncd/git-known-hosts
-#CONSOLE_CONFIG_GIT_TOKEN_FILE=/etc/syncd/git-token   # for https://, instead of the key
+# For https://, instead of the key:
+#CONSOLE_CONFIG_GIT_TOKEN_FILE=/etc/syncd/git-token
 #CONSOLE_CONFIG_GIT_POLL=60s
-#CONSOLE_CONFIG_GIT_AUTO_PUBLISH=off   # off | validate | publish
+# off | validate | publish:
+#CONSOLE_CONFIG_GIT_AUTO_PUBLISH=off
 #CONSOLE_CONFIG_GIT_PUSH_BACK=false
-#CONSOLE_CONFIG_GIT_ENGINES=dev        # the engines the repository is for; all when unset
+# The engines the repository is for; all when unset:
+#CONSOLE_CONFIG_GIT_ENGINES=dev
 
-#SYNCD_FIPS_MODE=true       # only with a FIPS build of syncd
+# Only with a FIPS build of syncd:
+#SYNCD_FIPS_MODE=true
 ```
 
 `syncdctl install` fills in the database URL and the listen address, and
 `syncdctl install --fips` adds `SYNCD_FIPS_MODE=true` to both `console.env` and
-`engine.env`. Remember to drop the trailing comment of a line you uncomment (see
-[Files](#files)).
+`engine.env`. Since 0.4.1 the template has no comment after a value, and a CI check keeps
+it so. A `console.env` written by an earlier release may still have some: move each to a
+line of its own before uncommenting the setting (see [Files](#files)).
 
 ## Container images and Helm
 
@@ -1703,7 +1764,7 @@ system. Their base images are pinned by digest.
 
 ### Helm chart values
 
-The chart's `values.yaml`, by key. The chart's version is the release's (`0.4.0`).
+The chart's `values.yaml`, by key. The chart's version is the release's (`0.4.1`).
 
 | Key | Default | What |
 |---|---|---|
@@ -1713,15 +1774,20 @@ The chart's `values.yaml`, by key. The chart's version is the release's (`0.4.0`
 | `imagePullSecrets` | `[]` | |
 | `podSecurityContext`, `securityContext` | uid and gid `65532`, non-root, `RuntimeDefault` seccomp, read-only root file system, no capabilities | Used for both. |
 | `engine.name` | the release name | The name the console knows the engine by. An HA pair is registered as `<name>-0` and `<name>-1`. |
+| `engine.environment` | empty | The console environment the engine runs in, passed at each registration (`--environment`). Empty: a new engine runs in `default`, and a registered one keeps the environment it has. |
 | `engine.envFromSecret` | empty | A Secret whose keys become the engine's environment variables: the secrets the configuration refers to. |
 | `engine.env` | `[]` | More environment variables (`RUST_LOG`, `SYNCD_FIPS_MODE`, `AWS_*` for backups). |
 | `engine.extraVolumes`, `engine.extraVolumeMounts` | `[]` | More volumes on the engine's pod: a CSV inbox, a CA bundle for a source's TLS. |
+| `engine.passwordKeyPassphrase.existingSecret`, `key` | empty, `passphrase` | A Secret holding the passphrase that seals the password key and the agent CA key, under `key`. Mounted read-only in `/run/secrets/syncd-password-key`, and named by `SYNCD_PASSWORD_KEY_PASSPHRASE_FILE`. Empty: the keys are plain files on the data volume. |
 | `engine.persistence.size` | `10Gi` | The store's volume; size it as [Availability and sizing](availability-and-sizing.md) says. |
 | `engine.persistence.storageClass` | the cluster's default | |
 | `engine.persistence.accessModes` | `[ReadWriteOnce]` | |
 | `engine.resources` | requests `250m` CPU, `512Mi`; limit `4Gi` | |
 | `engine.terminationGracePeriodSeconds` | `90` | Time to finish the batch and stop. |
 | `engine.service.type` | `ClusterIP` | Ports `7443` and `9464`. |
+| `engine.passwordIngest.enabled` | `false` | Expose the password ingest listener (`passwords.ingest`): the pods' port and a Service of its own, `<fullname>-engine-ingest`. The configuration must listen on the same port. With `engine.ha`, the Service routes to both pods but only the active engine listens. |
+| `engine.passwordIngest.port` | `7445` | The ingest port. |
+| `engine.passwordIngest.service.type`, `annotations` | `ClusterIP`, `{}` | `LoadBalancer` or `NodePort` for agents outside the cluster; the control API and the metrics stay on the engine's own Service. |
 | `engine.ha.enabled` | `false` | An active/passive pair: two engine pods, a headless Service, the lease in the console's database, anti-affinity and a PodDisruptionBudget. |
 | `engine.ha.leaseTtlSeconds` | `15` | `SYNCD_HA_LEASE_TTL_SECS`. |
 | `engine.ha.snapshotEverySeconds` | `300` | `SYNCD_HA_SNAPSHOT_EVERY_SECS`. |
@@ -1750,10 +1816,11 @@ The chart's `values.yaml`, by key. The chart's version is the release's (`0.4.0`
 | `console.ingress.enabled` | `false` | An Ingress for the console, with `className`, `annotations`, `host` (`syncd.example.com`) and `tls`. |
 | `console.nodeSelector`, `tolerations`, `affinity`, `podAnnotations` | empty | |
 | `pki.days` | `3650` | Validity of the control API certificates the chart issues. |
-| `networkPolicy.enabled` | `false` | NetworkPolicies: the engine's control API from the console and the registration Job only, its metrics from the monitoring selectors, the console's port from the ingress controller selectors. |
+| `networkPolicy.enabled` | `false` | NetworkPolicies: the engine's control API from the console and the registration Job only, its metrics from the monitoring selectors, its password ingest port from `passwordIngestFrom`, the console's port from the ingress controller selectors. |
 | `networkPolicy.monitoringNamespaceSelector`, `monitoringPodSelector` | empty | Where Prometheus runs. Empty means from anywhere, for that port. |
 | `networkPolicy.ingressNamespaceSelector`, `ingressControllerSelector` | empty | Where the ingress controller runs. |
 | `networkPolicy.console.extraIngressFrom` | `[]` | More `from` entries for the console's port. |
+| `networkPolicy.passwordIngestFrom` | `[]` | With `engine.passwordIngest.enabled`: the `from` entries allowed to the ingest port, such as the domain controllers' range. Empty: from anywhere (agents still need a certificate the engine issued). |
 | `networkPolicy.egress.enabled` | `false` | Limit egress to DNS and the engine's control API, plus `egress.extra`. |
 | `networkPolicy.egress.extra` | `[]` | More egress rules, applied to all three: the sources and targets, the database, the identity provider, webhook receivers. |
 
@@ -1772,12 +1839,23 @@ What the chart makes on its own:
   in an existing release changes fields Kubernetes does not update in place: delete the
   StatefulSet without its pods first, and the PKI Secret too.
 - **A registration Job** after each install and upgrade, which registers the engine (or
-  each engine of a pair) in the console with the chart's certificates, with `--update`.
+  each engine of a pair) in the console with the chart's certificates, with `--update`,
+  and with `--environment` when `engine.environment` is set. Since 0.4.1 a registered
+  engine otherwise keeps its environment (0.4.0 moved it back to `default` at each
+  upgrade). With `engine.ha.enabled`, an init container first runs
+  `syncd-console admin rename-engine --from <name> --to <name>-0`, so an engine
+  registered before HA was turned on keeps its configuration versions, reports and
+  history as `<name>-0`; it does nothing when there is no `<name>` or `<name>-0` exists.
+  The rename does not change engine names in `CONSOLE_SELF_SERVICE_ENGINE` or
+  `CONSOLE_CONFIG_GIT_ENGINES`: change them by hand.
+- **A Service for password ingest**, `<fullname>-engine-ingest`, with
+  `engine.passwordIngest.enabled`.
 - **A PrometheusRule** with `engine.metrics.prometheusRule.enabled`, and
   **NetworkPolicies** with `networkPolicy.enabled`.
 
 The chart's HA templates are linted and rendered in CI, but no test installs a pair on
-Kubernetes or fails one over.
+Kubernetes or fails one over; the HA rename init container was likewise checked with
+`helm template` and `helm lint` only.
 
 ## Complete example
 

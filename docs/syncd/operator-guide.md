@@ -60,15 +60,15 @@ sudo syncd status                          # what the engine is doing
 `syncdctl status` prints:
 
 ```text
-release:   0.4.0
-previous:  0.3.0
+release:   0.4.1
+previous:  0.4.0
 engine:    active, control API answers
-store:     format 1 (syncd 0.4.0 reads up to 1)
+store:     format 1 (syncd 0.4.1 reads up to 1)
 console:   active, http://127.0.0.1:8080 answers
 certificates: valid until Nov  4 10:15:00 2036 GMT (ca.crt expires first)
 users:     https://syncd.example.com
 backups:
-  /var/lib/syncd/backups/20261108T101500Z-upgrade-0.3.0-to-0.4.0
+  /var/lib/syncd/backups/20261110T101500Z-upgrade-0.4.0-to-0.4.1
 ```
 
 The `backups:` it lists are the host-local ones. Off-host and scheduled backups show in
@@ -95,12 +95,13 @@ running totals. It also shows:
 
 | Line | What it says |
 |---|---|
-| `engine 0.4.0  up 3d2h  fips off`, `configuration version ...` | The version, uptime, FIPS mode and the configuration running |
+| `engine 0.4.1  up 3d2h  fips off`, `configuration version ...` | The version, uptime, FIPS mode and the configuration running |
 | `environment prod` | The environment the configuration was rendered for (see [Configuration as code](config-as-code.md)) |
 | `package gov-naming 1.2.0 (...)` | The rule packages in use |
 | `ha: pair idm, this engine idm1 is ACTIVE (lease postgres, held until in 12s)`, `ha: last snapshot taken 2m3s ago (1.5 MiB), every 5m0s` | An [active/passive pair](#high-availability): this engine's role, the lease and the snapshots |
 | `process: memory ...  cpu ...` | The engine process: memory now, its peak and the limit, CPU time, threads and open files |
-| `passwords: N delivered, N failed, N waiting; initial passwords: N set, N refused; last failure: ...` | Password deliveries (see [Password synchronisation](password-sync.md)). Never a password |
+| `passwords: N delivered, N failed, N waiting, N dropped (report mode); initial passwords: N set, N refused; last failure: ...` | Password deliveries (see [Password synchronisation](password-sync.md)). `dropped` (new in 0.4.1, shown when not 0): changes not delivered because the publication is in report mode. Never a password |
+| `password keys: sealed with the passphrase`, or `password keys: stored in the clear (file mode only; set SYNCD_PASSWORD_KEY_PASSPHRASE_FILE to seal them)` | How the password key and the agents' CA key are stored (see [The password keys](#the-password-keys)). New in 0.4.1 |
 | `timers: N pending, next due in 4h` | Persisted timers: effective dates, leaver stages, change windows, canaries, group expiry |
 | `history: N entries, oldest 30d ago, pruned 12m ago, N pruned since start` | Entity history kept (see [Entity history](#entity-history)) |
 | `backups: to s3://... every 1d0h, last syncd-idm1-... 2h3m ago (4.0 MiB), next in 21h57m` | Scheduled backups, with `FAILED <ago>: <why>` when the last attempt failed |
@@ -159,6 +160,8 @@ Useful engine log messages:
 | `not writing: this engine no longer holds the pair's lease` | The fence stopped an export batch |
 | `store snapshot received from the active engine`, `pulling a store snapshot failed`, `taking a store snapshot failed` | Snapshots of a pair |
 | `password delivered`, `password change not delivered`, `the target refused the initial password; the entry was created without it` | Password deliveries, by account and DN, never the password |
+| `the password keys are stored in the clear, protected by file mode only: ...` | A warning at start: no passphrase seals the password keys (see [The password keys](#the-password-keys)). New in 0.4.1 |
+| `the password key was stored in the clear and is now sealed with the passphrase`, `the password agent CA key was stored in the clear ...` | The first start with a passphrase sealed the key files in place. New in 0.4.1 |
 | `an entry moved or renamed in the target was put back where the publication places it`, `... was found by its id` | Someone moved or renamed a managed entry in the target; the engine found it by the target's id and put it back |
 | `rename blocked by an entry this batch renames away; parked until it has moved` | Two entries swap names, or a chain of renames, in one batch |
 | `the entry's RDN is taken where it is moved aside; it was given one of its own` | A leaver moved aside into a container where its RDN was taken |
@@ -173,7 +176,7 @@ Useful console log messages:
 |---|---|
 | `console listening` (with `https`) | The console is up, over HTTPS when `https=true` |
 | `created a new master key for stored secrets; back it up` | The first start created `master.key` |
-| `the master key does not open the stored secrets: engines registered with mTLS must be registered again` | `CONSOLE_NEW_MASTER_KEY=true` started the console with a key that does not open the stored secrets |
+| `the master key does not open the stored secrets: engines registered with mTLS must be registered again, webhooks need their URL and secret again, and secret environment values must be entered again` | `CONSOLE_NEW_MASTER_KEY=true` started the console with a key that does not open the stored secrets (0.4.0 named the engines only) |
 | `audit log head` (with `id`, `at`, `hash`) | The newest audit event, logged at start and every hour when it moved. Keep these lines outside the database (the journal, a SIEM): they let **Verify chain** find events removed from the end of the trail |
 | `audit log upgraded to ...: the earlier entries keep their chain` | The first start on 0.4.0 continued the trail in the ENS format |
 | `audit delivery failed; retrying`, `audit delivery has been failing for N s`, `audit delivery recovered` | An audit output (Splunk, syslog, the file) is down, and is back |
@@ -217,7 +220,7 @@ Running the engine:
 | `syncd reconcile [--publication P]` | Reconciles a publication (or all) with its target now | Yes |
 | `syncd full-sync` | Recomputes every entity from its sources (after a rule change), then exports | Yes |
 | `syncd check-drift [--publication P]` | Reads a publication's entries (or every checked publication's) back from the target now, and acts on drift by its `drift` policy | Yes |
-| `syncd held PUBLICATION [--kind K] [--reason R] [--limit N]` | Lists a publication's [held changes](#held-changes), one per line: entity id, reason, kinds of change, `since=`, DN and a summary without values. `--kind`: `add`, `modify`, `move`, `delete`, `disable`, `strip_groups`. `--reason`: `window`, `overdue`, `modifications`, `additions`, `deletions`, `canary`, `canary_failed`, `report`, `expired`. 100 by default. New in 0.4.0 | Yes |
+| `syncd held PUBLICATION [--kind K] [--reason R] [--limit N]` | Lists a publication's [held changes](#held-changes), one per line: entity id, reason, kinds of change, `since=`, DN and a summary without values. `--kind`: `add`, `modify`, `move`, `delete`, `disable`, `strip_groups`, `password`. `--reason`: `window`, `overdue`, `modifications`, `additions`, `deletions`, `canary`, `canary_failed`, `report`, `expired`. 100 by default. New in 0.4.0 | Yes |
 | `syncd approve "<scope>"` | Releases what waits for an approval, with the scope exactly as `syncd status` shows it. `syncd approve "publication people_out"` plans every held change of the publication again from the entity's current state and applies it once: changes held by a threshold, an overdue window or a failed canary, and deletes over the deletion threshold. Before 0.4.0 it let deletes through only. See [Approving](change-safety.md#approving) | Yes |
 | `syncd report [--publication P] [--format text\|csv\|json] [--out FILE]` | The reconciliation report: per publication, a summary (entities, exported, the last drift check, held changes by reason, dead letters, leavers, would-dos, groups), then one row per entry with a difference. Reads nothing from the targets. New in 0.4.0. See [syncd report](reports-and-data-quality.md#syncd-report) | Yes |
 | `syncd lineage VIEW ENTITY [--format text\|json] [--reveal] [--out FILE]` | Everything the engine knows about one entity: each attribute with the source record and rule that produced it, its source records and joins, what each publication exported for it over time, its password events (times and outcomes) and its history. The entity id is 32 hex characters, as `syncd report` and the console's explorer show it. Sensitive values only with `--reveal`. New in 0.4.0. See [Lineage export](reports-and-data-quality.md#lineage-export) | Yes |
@@ -226,9 +229,9 @@ Running the engine:
 | `syncd group review PUBLICATION GROUP` | Reviews a computed group: its expiry and review clocks start again now, and an expired group comes back. New in 0.4.0. See [Group lifecycle](change-safety.md#group-lifecycle) | Yes |
 | `syncd correlation suggest --view V [--source S] [--above X] [--limit N] [--json]` | Scored suggestions for a view's records that joined no entity. New in 0.4.0. See [Correlation assistance](reports-and-data-quality.md#correlation-assistance) | Yes |
 | `syncd correlation accept --view V [--source S] [--above X \| --from FILE] [--limit N] [--yes]` | Joins the records whose best suggestion scores at least `--above` (the view's `correlation.accept_at` by default), or the decisions in a file `suggest --json` wrote. A dry run unless `--yes` | Yes |
-| `syncd backup --to DIR\|s3://... [--keep N] [...]` | An [off-host backup](#off-host-backups) of the running engine, without stopping it. New in 0.4.0 | Yes |
+| `syncd backup --to DIR\|s3://... [--keep N] [...]` | An [off-host backup](#off-host-backups) of the running engine, without stopping it, with the password keys as they are on disk (sealed or not). New in 0.4.0 | Yes |
 | `syncd restore --from DIR\|s3://... [--name NAME] [--replace]` | Restores a backup into the data directory, with the engine stopped (see [Restore](#restoring-an-off-host-backup)). New in 0.4.0 | No: refused while it runs |
-| `syncd support-bundle [--out FILE]` | Writes the engine's [support bundle](#support-bundle). New in 0.4.0 | Yes (collects less without it) |
+| `syncd support-bundle [--out FILE\|-]` | Writes the engine's [support bundle](#support-bundle); `--out -` streams it to standard output (from 0.4.1). New in 0.4.0 | Yes (collects less without it) |
 | `syncd password set`, `password change`, `password agent add\|list\|revoke\|enroll` | Submit a password change, change a person's own password, and manage the capture agents. See [Password synchronisation](password-sync.md) | Yes (`agent enroll` runs on the agent's host) |
 | `syncd store-format [--supported]` | Prints the store's format (`none` without a store); `--supported`, the newest format this `syncd` reads. Works while the engine runs | No |
 | `syncd run [--once]` | Runs the engine. This is what the service runs; `--once` does one full pass (read every source, export, reconcile) and exits | Not with the service running: it holds the store |
@@ -238,10 +241,10 @@ Configuring and testing (mostly for designers):
 | Command | What it does | Needs the running engine |
 |---|---|---|
 | `syncd validate` | Checks the configuration, compiles every expression, and runs the rule packages' tests, against a throwaway store | No |
-| `syncd test [--golden DIR] [--update] [--junit FILE]` | Runs the computed attributes' test cases, the rule packages' tests and the golden-file tests of whole publications (`tests/golden` next to the configuration by default). The one command for CI. See [Configuration as code](config-as-code.md) | No |
+| `syncd test [--golden DIR] [--update] [--junit FILE]` | Runs the computed attributes' test cases, the rule packages' tests and the golden-file tests of whole publications (`*.yaml` in `tests/golden` next to the configuration by default, and from 0.4.1 in its subdirectories one level down). The one command for CI. See [Configuration as code](config-as-code.md) | No |
 | `syncd config diff A [B] [--running] [--format text\|json\|markdown]` | What changed between two configurations, by meaning, secrets redacted. Exits 0 when they are the same, 1 when they differ, 2 on an error. `--running` compares the running engine's configuration (before) with the file. New in 0.4.0. See [Configuration as code](config-as-code.md) | Only with `--running` |
 | `syncd config render FILE --env ENV.yaml` | Prints a configuration rendered for an environment. New in 0.4.0 | No |
-| `syncd config promote ENGINE/vN --to ENV --console URL --token-file FILE [--ticket T] [--note N] [--ca FILE]` | Publishes a version to every engine of another environment, through the console's API with an API token that has `configs:publish`. New in 0.4.0. See [Configuration as code](config-as-code.md) | No (needs the console) |
+| `syncd config promote ENGINE/vN --to ENV --console URL --token-file FILE [--ticket T] [--note N] [--ca FILE]` | Publishes a version to every engine of another environment, through the console's API with an API token that has `configs:publish`, and from 0.4.1 prints each engine's diff summary (`changes: ...`). The golden tests in Git gate it, as any publish. New in 0.4.0. See [Configuration as code](config-as-code.md) | No (needs the console) |
 | `syncd apply-config FILE [--version LABEL]` | Sends a new configuration to the engine, which validates it, saves it over its file and reloads, then runs a full sync. The label is shown by `syncd status` (default: the time) | Yes |
 | `syncd simulate FILE [--samples N] [--reveal]` | What applying a configuration would send each target, without applying it: the engine dry-runs it on a copy of its state. Lists `N` operations per publication (default 20) | Yes |
 | `syncd preview FILE [--view V] [--samples N] [--random] [--live] [--reveal]` | Runs a configuration over a sample of source records (default 10, at most 100, of each view's first source) in a scratch store, and shows the entities and what each publication would write. `--live` reads the sources now instead of the engine's copies | Yes |
@@ -269,7 +272,9 @@ operation (a full sync, a reconciliation, a reload), then is refused: `the engin
 
 `SYNCD_HA_NAME`, `SYNCD_HA_LEASE_URL`, `SYNCD_HA_LEASE_PATH`, `SYNCD_HA_LEASE_TTL_SECS`,
 `SYNCD_HA_SNAPSHOT_EVERY_SECS`, `SYNCD_HA_MEMBER` and `SYNCD_HA_ADVERTISE` set up a pair from the
-environment (see [High availability](#high-availability)).
+environment (see [High availability](#high-availability)); from 0.4.1 the last two override the
+file's `member` and `advertise` when set. `SYNCD_PASSWORD_KEY_PASSPHRASE_FILE` (or
+`SYNCD_PASSWORD_KEY_PASSPHRASE`) seals the password keys (see [The password keys](#the-password-keys)).
 
 ### Control API options
 
@@ -313,9 +318,9 @@ keeps its `engine.yaml`, without the commented line: add it. The container image
 | `upgrade RELEASE` | `--yes`, `--no-rollback`, `--skip-db-backup`, `--reinstall` | Upgrades a bundle install to a `.tar.gz` or unpacked release ([Upgrade](install.md#upgrade)) |
 | `rollback` | `--keep-data`, `--yes` | Back to the previous release, restoring the backup taken before the upgrade ([Rollback](install.md#rollback)) |
 | `backup` | `--skip-db-backup`, `--leave-stopped` | A [host-local backup](#host-local-backups): stops syncd briefly to take a consistent copy; prints its directory. `--leave-stopped` leaves the services stopped afterwards |
-| `backup --to DIR\|s3://bucket/prefix` | `--keep N`, `--skip-db-backup` | An [off-host backup](#off-host-backups) of the running engine, with the console's database and `/etc/syncd` beside it. Nothing is stopped. New in 0.4.0 |
+| `backup --to DIR\|s3://bucket/prefix` | `--keep N`, `--skip-db-backup`; from 0.4.1 `--sse`, `--endpoint`, `--region`, `--s3-ca` | An [off-host backup](#off-host-backups) of the running engine, with the console's database, `/etc/syncd` and (from 0.4.1) the console's master key beside it. Nothing is stopped. New in 0.4.0 |
 | `restore DIR` | `--yes` | Restores a host-local backup: engine store, console files and database, `/etc/syncd` |
-| `restore --from DIR\|s3://...` | `--name syncd-<host>-<time>`, `--yes` | Restores an off-host backup, the newest or the named one ([Restoring an off-host backup](#restoring-an-off-host-backup)). New in 0.4.0 |
+| `restore --from DIR\|s3://...` | `--name syncd-<host>-<time>`, `--yes`; from 0.4.1 `--sse`, `--endpoint`, `--region`, `--s3-ca` | Restores an off-host backup, the newest or the named one ([Restoring an off-host backup](#restoring-an-off-host-backup)). New in 0.4.0 |
 | `support-bundle [FILE]` | | Writes a [support bundle](#support-bundle). New in 0.4.0 |
 | `status` | | Releases, services, health, store format, when the control API's certificates expire, public URL, host-local backups |
 | `renew-certs` | `--new-ca`, `--yes` | Renews the control API's certificates, restarts the engine with them and gives the console its new credentials (see [Certificates](#certificates)) |
@@ -365,10 +370,10 @@ The engine keeps a history entry per change of each entity, which lineage and th
 explorer show. It prunes it an hour after it starts and every hour after that:
 
 - entries older than `engine.history.keep_days` (30) go, except the newest
-  `engine.history.min_per_entity` (10, new in 0.4.0) of each entity, and every entry of an entity
-  with an open held change or a dead letter, which stay until it clears;
-- then each entity keeps at most `engine.history.keep_per_entity` (100), exempt entities
-  included.
+  `engine.history.min_per_entity` (10, new in 0.4.0) of each entity;
+- then each entity keeps at most `engine.history.keep_per_entity` (100);
+- an entity with an open held change or a dead letter keeps every entry, past both, until it
+  clears. Before 0.4.1, `keep_per_entity` applied to those entities too.
 
 `syncd history prune --now` prunes at once. What is kept shows in `syncd status` (`history:`), the
 console's engine page, and the `syncd_history_*` metrics. The arithmetic for disk is in
@@ -384,42 +389,52 @@ Two kinds, from 0.4.0:
 | Command | `syncdctl backup --to <dir \| s3://...>`, `syncd backup --to ...`, or on a schedule (`engine.backup`) | `syncdctl backup`; every upgrade takes one |
 | The engine | Keeps running: a consistent checkpoint of its store | Stopped while its store is copied |
 | Where | A directory (a mounted share) or S3 | `/var/lib/syncd/backups` on the host |
-| Holds | The store, the configuration file, the password key and agent CA; with `syncdctl`, the console's database and `/etc/syncd` | The store, the console's files with the master key, the console's database, `/etc/syncd` |
+| Holds | The store, the configuration file, the password key and agent CA (sealed or not, as on disk); with `syncdctl`, the console's database, `/etc/syncd` and, from 0.4.1, the console's master key | The store, the console's files with the master key, the console's database, `/etc/syncd` |
 | Restore | `syncdctl restore --from ...`, or `syncd restore --from ...` | `syncdctl restore <dir>`, `syncdctl rollback` |
 
 ### Off-host backups
 
 ```bash
-sudo syncdctl backup --to s3://backups/syncd/prod --keep 14     # or --to /mnt/backups
-sudo syncdctl backup --to /mnt/backups                           # a mounted share
+sudo syncdctl backup --to s3://backups/syncd/prod --keep 14 --sse AES256   # or --to /mnt/backups
+sudo syncdctl backup --to /mnt/backups/syncd                                # a mounted share
 ```
 
 Nothing is stopped. The engine takes a consistent checkpoint of its store while it runs, and
 streams it with its configuration file, its password key and the password agents' CA as one
 `syncd-<host>-<time>.tar.zst`, with a manifest beside it (`syncd-<host>-<time>.manifest.json`:
 sizes and SHA-256 per file, the syncd version and the store format). `syncdctl` runs `syncd
-backup` as the engine's user, and adds beside it:
+backup` as the engine's user, and adds beside it, named after it:
 
-- `<name>.console.dump`: the console's database (`pg_dump --format=custom`);
+- `<name>.console.dump`: the console's database (`pg_dump --format=custom`), dumped as the
+  console's user;
 - `<name>.etc.tar.gz`: `/etc/syncd`, with the service settings, the PKI and `engine.env` and its
-  secrets.
+  secrets;
+- `<name>.console-master.key`: the console's master key (`/var/lib/syncd/console/master.key`),
+  without which the restored database's sealed secrets do not open. New in 0.4.1. When
+  `CONSOLE_MASTER_KEY` is set in `console.env` instead, the key is in `/etc/syncd`'s archive, and
+  `syncdctl` says so.
 
-`--keep N` removes the oldest backups there beyond `N`. `--skip-db-backup` leaves the database
-out.
+It ends by listing what the backup holds. `--keep N` removes the oldest backups there beyond `N`.
+`--skip-db-backup` leaves the database out. `--sse`, `--endpoint`, `--region` and `--s3-ca`, as for
+`syncd backup` below, are passed on to every command that writes a part of the backup (new in
+0.4.1; 0.4.0 refused them). Other options are refused.
 
-!!! warning "The console's master key is not in an off-host backup"
-    `syncdctl backup --to` copies `/etc/syncd`, not `/var/lib/syncd/console`, so the console's
-    `master.key` is not in it (only `CONSOLE_MASTER_KEY`, if you set the key in `console.env`).
-    Without the key, the restored database's sealed secrets do not open. Keep a copy of
-    `master.key` elsewhere, apart from the backups (see [The master key](#the-master-key)).
+- **A directory destination** must be writable by the `syncd` user, which writes the archive:
+  `sudo install -d -o syncd -g syncd -m 0700 /mnt/backups/syncd`. `syncdctl` writes the other
+  files there as root, mode 0600.
+- **Fixed in 0.4.1.** With 0.4.0, the upload of `/etc/syncd` to S3 failed on file permissions, and
+  so did the console database's dump with `--local-database`; 0.4.0's backups also lack the master
+  key. Take a new off-host backup after upgrading.
 
 !!! warning "A backup is as sensitive as the store"
-    The archive holds the entity data, and the password key and the agents' CA key as files.
-    `syncdctl`'s copy of `/etc/syncd` holds the engine's secrets and the CA key. Protect the
-    destination, and ask S3 for server-side encryption. The release notes and the source
-    repository's INSTALL.md say the password key is "encrypted as it is on disk" and that a
-    restore needs "the same master key or passphrase"; in 0.4.0's code the key files are stored
-    unencrypted (mode 0600), so the backup is what protects them.
+    The archive holds the entity data, and the password key and the agents' CA key as they are on
+    disk: sealed when the engine has a passphrase, otherwise in the clear (see
+    [The password keys](#the-password-keys)). `syncdctl`'s copy of `/etc/syncd` holds the engine's
+    secrets and the control API's CA key, and the master key beside it opens every secret the
+    console stores. In a directory these files are root's, mode 0600; in S3 only the bucket's
+    access policy and encryption protect them. Protect the destination, and ask S3 for
+    server-side encryption (`--sse`). The 0.4.0 documentation said the password key was already
+    encrypted on disk; it was not.
 
 **`syncd backup`**, the command underneath, for an engine without `syncdctl` (a container, a
 pair):
@@ -435,10 +450,10 @@ pair):
 | `--s3-ca FILE` | PEM CA certificates for an endpoint with a private certificate |
 
 `syncd backup` needs what revealing values needs: the control socket, mutual TLS, or
-`api.local_reveal: true`, since the whole store leaves the engine. `syncdctl backup --to` takes
-only `--keep` and `--skip-db-backup`: for an endpoint, a region or a private CA, set
-`AWS_ENDPOINT_URL_S3` and `AWS_REGION` in `/etc/syncd/engine.env`. For server-side encryption,
-set the bucket's default encryption, or use `syncd backup --sse` or `engine.backup.sse`.
+`api.local_reveal: true`, since the whole store leaves the engine. Without the options,
+`AWS_ENDPOINT_URL_S3` (else `AWS_ENDPOINT_URL`) and `AWS_REGION` (else `AWS_DEFAULT_REGION`) in
+`/etc/syncd/engine.env` give the endpoint and the region. `syncdctl backup --to` passes the four
+S3 options on (it makes a relative `--s3-ca` absolute; the file must be readable by `syncd`).
 
 **S3 credentials** come from the engine's environment, `/etc/syncd/engine.env` on a host, in this
 order:
@@ -495,7 +510,16 @@ sudo syncdctl restore --from s3://backups/syncd/prod --name syncd-idm1-20261108T
 3. restores `/etc/syncd` from its archive, keeping the current `/etc/syncd/pki`, which the
    console's stored credentials match (the previous `/etc/syncd` is kept as
    `/etc/syncd.previous`);
-4. starts the services and checks them.
+4. restores the console's master key from `<name>.console-master.key` (owner `syncd-console`,
+   mode 0600); a different key it replaces is kept as `master.key.previous`. A backup taken before
+   0.4.1 has none: the console keeps the key it has, which opens the restored database's secrets
+   only if it is the same key. New in 0.4.1;
+5. starts the services and checks them.
+
+Give it the S3 options the backup was taken with (`--endpoint`, `--region`, `--s3-ca`; `--sse` is
+not needed to read). A part it cannot fetch is named (`<name>.<part> was not fetched: ...`), and
+the restore goes on without it. In 0.4.0 every fetch of the dump and of `/etc/syncd`'s archive
+failed on file permissions, silently.
 
 For the engine alone, run `syncd restore` as the engine's user with the engine stopped:
 
@@ -515,6 +539,10 @@ sudo -u syncd syncd restore --from s3://backups/syncd/prod --replace
 - **Checked.** It refuses while the engine's control API answers, refuses a backup whose store
   format the installed release cannot read (install that release first), and checks every file
   against the manifest before it puts anything in place.
+- **Sealed keys.** The password keys come back as they were backed up. When they are sealed, the
+  engine needs the passphrase of the engine they came from; `syncd restore` says so when the
+  passphrase it has is missing or does not open them (`the restored password key is sealed:
+  ...`). See [The password keys](#the-password-keys).
 - **The configuration** in the backup goes beside the live one, as
   `/var/lib/syncd/engine/engine.restored.yaml`, never over it: the host's `api` and `data_dir`
   may differ. `syncd config diff engine.restored.yaml /etc/syncd/engine/engine.yaml` says what
@@ -530,7 +558,7 @@ On Kubernetes, see [Backups on Kubernetes](availability-and-sizing.md#backups-on
 
 ```bash
 sudo syncdctl backup                  # stops syncd briefly; prints the backup's directory
-sudo syncdctl restore /var/lib/syncd/backups/20261108T101500Z-manual-0.4.0
+sudo syncdctl restore /var/lib/syncd/backups/20261108T101500Z-manual-0.4.1
 ```
 
 A backup is a directory under `/var/lib/syncd/backups`, readable by root only, named
@@ -570,13 +598,17 @@ New in 0.4.0. What support asks for first, in one file, with no entity data and 
 sudo syncdctl support-bundle                 # syncd-support-<host>-<time>.tar.gz here, mode 0600
 sudo syncdctl support-bundle /tmp/case-1234.tar.gz
 sudo syncd support-bundle --out bundle.tar   # the engine's part alone; .tar is left uncompressed
+sudo syncd support-bundle --out - > bundle.tar.zst   # to standard output (new in 0.4.1)
 ```
+
+With `--out -` the engine streams the `.tar.zst` to standard output and lists what it holds on
+standard error, for `kubectl exec` (see [The command line](#the-command-line) on Kubernetes).
 
 | Part | Holds |
 |---|---|
 | The engine's (`syncd support-bundle`, `syncd-support-<host>-<time>.tar.zst` by default) | Versions, the full `syncd status`, the running configuration with every secret and every path to one replaced by `<redacted>`, held changes and dead letters as counts and error texts (no DN, no entity id), a metrics scrape, the store's own statistics, the data directory's file sizes, the host's and the engine process's limits, the `SYNCD_*`, `AWS_*` and `RUST_LOG` variables with their values redacted, and the newest 10 000 lines of the engine's journal |
 | What `syncdctl` adds | The console's version, the installed and previous releases, the console's schema and migration state, `console.env` with every value that may hold a secret redacted, the console's journal, `systemctl status` of both services, and the certificates' expiry |
-| The console's (`GET /api/v1/admin/support-bundle`) | For a console you reach but whose host you don't: its version and settings (secrets redacted), migrations, and each registered engine's address, environment, certificate expiry and whether it answers. Administrators with a session only (API tokens are refused), recorded as `support.bundle-exported` |
+| The console's (`GET /api/v1/admin/support-bundle`; from 0.4.1 the **Download support bundle** link on the **Users** page) | For a console you reach but whose host you don't: its version and settings (secrets redacted), migrations, and each registered engine's address, environment, certificate expiry and whether it answers. Administrators with a session only (API tokens are refused), recorded as `support.bundle-exported` |
 
 No attribute values, DNs, anchors, certificates or keys are collected. The one part that may name
 an entry is the journal, when the log did (a failed export names its DN): `journalctl -u syncd -n
@@ -611,8 +643,10 @@ renewed.
 
 The passive engine serves its control API and its metrics, runs no source and writes nothing.
 Only the active engine runs the password agents' ingest listener and answers self-service
-password changes, and the console's `CONSOLE_SELF_SERVICE_ENGINE` does not follow the lease: see
-[Password synchronisation](password-sync.md#high-availability).
+password changes. From 0.4.1, when `CONSOLE_SELF_SERVICE_ENGINE` names one engine of a pair, the
+console sends each self-service change to the member that holds the lease; agents that reach the
+passive engine are refused and must retry. Both engines need the same password-key passphrase
+when the keys are sealed. See [Password synchronisation](password-sync.md#high-availability).
 `syncd status` works on it, and so do `syncd dlq` and `syncd quarantine`, which read its store;
 commands are refused with `this engine is the passive one of the pair idm; idm1 (...) is active:
 send the command there`. A configuration published to it is saved and loaded like on the active
@@ -714,6 +748,8 @@ stops the engine from starting. The passive engine of a pair serves its metrics 
 | `syncd_history_entries`, `syncd_history_pruned_total`, `syncd_history_oldest_timestamp_seconds`, `syncd_history_last_prune_timestamp_seconds` | Entity history kept, pruned, its oldest entry and the last prune. New in 0.4.0 |
 | `syncd_backup_interval_seconds`, `syncd_backup_last_success_timestamp_seconds`, `syncd_backup_last_bytes`, `syncd_backup_last_failure_timestamp_seconds`, `syncd_backup_pruned_total` | Scheduled backups. New in 0.4.0 |
 | `syncd_ha_active{pair,name}`, `syncd_ha_snapshot_age_seconds`, `syncd_ha_snapshot_interval_seconds`, `syncd_ha_lease_expires_timestamp_seconds` | An HA pair. New in 0.4.0 |
+| `syncd_password_deliveries_total{publication,outcome}` | Captured password changes since the engine started, per publication: `delivered`, `failed` (refused by the target, or expired), `dropped` (the publication is in report mode). A failure no publication can be named for (a change that does not open) has an empty `publication`. New in 0.4.1 |
+| `syncd_password_waiting{publication}` | Password changes waiting for the publication's account to be exported or its target to answer, as of the last delivery pass. New in 0.4.1 |
 | `syncd_entra_skipped_synced_users{target}` | Exports to an Entra ID target refused because the user is synchronised from on-premises AD. New in 0.4.0 |
 | `syncd_engine_busy`, `syncd_engine_busy_seconds` | A long operation runs (full sync, reconciliation, reload), and for how long; commands are refused meanwhile |
 | `syncd_view_quarantined{view}` | Entities whose exports a failing rule holds back, per view (0 for a view with none) |
@@ -768,10 +804,12 @@ other rules select on the engine's own metrics.
 | `SyncdBackupStale` | warning | No scheduled backup (`engine.backup`) has succeeded for two intervals, or none yet, for 30 minutes (new in 0.4.0) |
 | `SyncdHaNoActive` | critical | Neither engine of an HA pair has held the lease for 2 minutes: nothing is exported (new in 0.4.0) |
 | `SyncdHaSnapshotStale` | warning | An HA engine's newest store snapshot (taken when active, received when passive) is older than three intervals, for 15 minutes (new in 0.4.0) |
+| `SyncdPasswordDeliveryFailures` | warning | Captured password changes failed for a publication in the last 15 minutes: a target refused them, they expired before their account existed, or they could not be opened (new in 0.4.1) |
+| `SyncdPasswordChangesDropped` | warning | Captured password changes were thrown away in the last hour because the publication that delivers them is in report mode (new in 0.4.1) |
 | `SyncdMemoryNearLimit` | warning | Resident memory has been above 90% of the cgroup's limit for 10 minutes |
 
-The release notes count seven new rules; the shipped file at 0.4.0 has the eight marked above
-(`SyncdQualityErrors` came with the data-quality checks).
+0.4.0 added the eight rules marked 0.4.0 (its release notes said seven; 0.4.1's correct it), and
+0.4.1 the two password rules. The file and the chart's PrometheusRule hold the same rules.
 
 The thresholds are starting points: tune `for:` and the ages to how often your sources change and
 how long your full syncs take. A quiet source commits rarely (syncrepl only sends a new position
@@ -863,9 +901,13 @@ not among them: the console keeps only their hashes. The master key is `CONSOLE_
 first start, which logs `created a new master key for stored secrets; back it up`.
 
 - **Back it up** apart from the database: a database dump without the key cannot be decrypted.
-  `syncdctl backup` includes it, so treat host-local backups as secrets. Off-host backups
-  (`syncdctl backup --to`) do not include it: keep a copy of it apart.
-- **The console checks it at every start** against a secret its database holds. It refuses to
+  `syncdctl backup` includes it, and from 0.4.1 so does `syncdctl backup --to`
+  (`<name>.console-master.key`), so treat both kinds of backup as secrets, and keep a copy of the
+  key apart from them too. Scheduled backups (`engine.backup`) and `syncd backup` hold the
+  engine's part only.
+- **The console checks it at every start** against a secret its database holds: an engine's
+  client key, else a webhook's URL, else a secret environment value. Before 0.4.1 it checked
+  engine client keys only, so a console with a wrong key and only webhooks started. It refuses to
   start, and says to restore the key, when:
     - `master.key` is missing while the database holds sealed secrets (a restore that missed it,
       a new data directory);
@@ -882,6 +924,67 @@ first start, which logs `created a new master key for stored secrets; back it up
 - **On Kubernetes** the key is in the `syncd-console` Secret (see
   [The master key Secret](#the-master-key-secret)).
 
+## The password keys
+
+With [password synchronisation](password-sync.md) on, the engine keeps two private keys in its
+data directory: the password key (`password.key`, or `passwords.key_file`), which opens every
+captured password in transit, and the capture agents' CA key (`password-agent-ca.key`, beside it,
+with `password-agent-ca.crt`), when `passwords.ingest` is set. Both are mode 0600, owned by the
+engine's user. Backups and HA snapshots carry them as they are on disk.
+
+**Seal them with a passphrase** (new in 0.4.1; recommended). Without one they are plain files,
+protected by their mode only, and anyone who can read a backup can read them. With
+`SYNCD_PASSWORD_KEY_PASSPHRASE_FILE`, both files are sealed: PBKDF2-HMAC-SHA256 (600,000
+iterations) derives an AES-256-GCM key from the passphrase (FIPS-approved algorithms, through
+aws-lc). The 0.4.0 documentation said these files were already encrypted; they were not.
+
+1. Write a long random passphrase to a file the `syncd` user can read, outside `/etc/syncd` and
+   outside the data directory (both go into backups: see below), and keep a copy where you keep
+   other recovery secrets, apart from the backups:
+
+    ```bash
+    sudo install -d -m 0750 -o root -g syncd /etc/syncd-keys
+    sudo install -m 0640 -o root -g syncd /dev/null /etc/syncd-keys/password-key.passphrase
+    head -c 32 /dev/urandom | base64 | sudo tee /etc/syncd-keys/password-key.passphrase >/dev/null
+    ```
+
+2. Name it in `/etc/syncd/engine.env`, on a line of its own:
+   `SYNCD_PASSWORD_KEY_PASSPHRASE_FILE=/etc/syncd-keys/password-key.passphrase`. On Kubernetes,
+   `engine.passwordKeyPassphrase.existingSecret` does this (see
+   [Password synchronisation](install.md#password-synchronisation)).
+   `SYNCD_PASSWORD_KEY_PASSPHRASE`, the passphrase itself, is read when the file variable is not
+   set, for tests and containers that cannot mount a file.
+3. `sudo systemctl restart syncd`. The engine seals both files in place, with the same keys, so
+   nothing queued is lost and agents keep their certificates. The log says `the password key was
+   stored in the clear and is now sealed with the passphrase`, and `syncd status` says
+   `password keys: sealed with the passphrase`.
+
+| Where | Shows |
+|---|---|
+| `syncd status` | `password keys: sealed with the passphrase`, or `password keys: stored in the clear (...)` |
+| The engine's log at start | `the password keys are stored in the clear, protected by file mode only: ...` while they are not sealed |
+| The console's engine page | The **Passwords** card: `keys sealed`, or `password keys stored in the clear`, with the deliveries per publication |
+| The status API | `PasswordStatus.keys_sealed` |
+
+- **The passphrase travels with the keys.** A sealed key file without the passphrase, or with
+  another one, stops the engine at start, naming the variable: `the key is sealed with a
+  passphrase, and none is set: set SYNCD_PASSWORD_KEY_PASSPHRASE_FILE ...`, or `the passphrase
+  (SYNCD_PASSWORD_KEY_PASSPHRASE_FILE) does not open the sealed key ...`. The files are left as
+  they are. Both engines of an HA pair, and a restore, need the passphrase of the engine the keys
+  came from.
+- **Where to keep it.** Not under `/etc/syncd`, nor under the data directory: `/etc/syncd` is in
+  every host-local backup and in `syncdctl backup --to`'s `<name>.etc.tar.gz`, beside the sealed
+  keys, so a passphrase there would undo the sealing for anyone who can read the backups. (The
+  source repository's RUNBOOK.md suggests `/etc/syncd/engine/`; don't.) Back the passphrase up
+  separately: a restore, on this host or a new one, needs it.
+- **Backups taken before** sealing still hold the keys in the clear: protect or remove them.
+- **No passphrase change.** There is no command to change the passphrase, or to unseal the
+  files.
+- **A lost passphrase** cannot be recovered: move both key files aside and start the engine, which
+  creates new keys. Queued changes are reported failed, and the agents enroll again.
+- **Rolling back to 0.4.0**, which cannot open sealed keys, needs the plain files from before they
+  were sealed: see [Rolling back 0.4.1 to 0.4.0](install.md#rolling-back-041-to-040).
+
 ## Running on Kubernetes
 
 With the [Helm chart](install.md#install-with-helm), the engine runs in the pod `syncd-engine-0`
@@ -892,9 +995,9 @@ pods, and Helm installs, upgrades and removes them.
 | | Engine | Console |
 |---|---|---|
 | Kind | StatefulSet, one replica (two with `engine.ha.enabled`) | Deployment (`console.replicas`, 1) |
-| Ports | 7443 control API (mutual TLS), 9464 metrics (plain HTTP); Service `syncd-engine`, and the headless `syncd-engine-peers` for a pair | 8080, HTTP or HTTPS with `console.tls`; Service `syncd-console` |
+| Ports | 7443 control API (mutual TLS), 9464 metrics (plain HTTP); Service `syncd-engine`, and the headless `syncd-engine-peers` for a pair. With `engine.passwordIngest.enabled` (0.4.1), the ingest port (7445) on the Service `syncd-engine-ingest` | 8080, HTTP or HTTPS with `console.tls`; Service `syncd-console` |
 | Probes | Startup: the control API accepts connections (every 5 s, up to 10 minutes, for opening a large store). Readiness: the same. Liveness: `GET /metrics` on 9464 | `GET /healthz`, readiness and liveness |
-| Volumes | `data` (the PersistentVolumeClaim) at `/var/lib/syncd`; the `syncd-pki` Secret at `/etc/syncd/pki`; `/run/syncd` (memory) for the control socket; `/tmp`; `engine.extraVolumes` | `/var/lib/syncd/console` and `/tmp`, both `emptyDir`; `console.extraVolumes` |
+| Volumes | `data` (the PersistentVolumeClaim) at `/var/lib/syncd`; the `syncd-pki` Secret at `/etc/syncd/pki`; `/run/syncd` (memory) for the control socket; `/tmp`; with `engine.passwordKeyPassphrase`, its Secret at `/run/secrets/syncd-password-key`; `engine.extraVolumes` | `/var/lib/syncd/console` and `/tmp`, both `emptyDir`; `console.extraVolumes` |
 | Stopping | 90 s to finish its batch (`engine.terminationGracePeriodSeconds`) | |
 
 ### The command line
@@ -917,12 +1020,19 @@ active pod (`syncd status` says which). The console's own commands run in
 its pod: `kubectl -n syncd exec deploy/syncd-console -- syncd-console admin reset-password --user
 admin`.
 
-The images have no `tar`, so `kubectl cp` cannot copy a file out of a pod. To get the engine's
-[support bundle](#support-bundle), write it (`syncd support-bundle --out <file>`) to a volume you
-can read from elsewhere (`engine.extraVolumes`), or copy it with an ephemeral debug container
-(`kubectl debug`) that has `tar`. The console's part comes from `GET
-/api/v1/admin/support-bundle`. A pod has no journal, so the bundle leaves the journal out (its
-`manifest.json` says why): add `kubectl logs` output.
+The images have no `tar`, so `kubectl cp` cannot copy a file out of a pod. From 0.4.1 the engine
+streams its [support bundle](#support-bundle) to standard output instead. A pod has no journal, so
+the bundle leaves the journal out (its `manifest.json` says why): add the pods' logs.
+
+```bash
+kubectl -n syncd exec syncd-engine-0 -- syncd support-bundle --out - > syncd-support.tar.zst
+kubectl -n syncd logs syncd-engine-0 --timestamps > engine.log     # and syncd-engine-1 for a pair
+kubectl -n syncd logs deploy/syncd-console --timestamps > console.log
+kubectl -n syncd logs job/syncd-register --all-containers --timestamps > register.log
+```
+
+The registration Job is deleted once it succeeds, so its log is there while it runs or after it
+failed. The console's part comes from `GET /api/v1/admin/support-bundle`, or the **Users** page.
 
 Logs go to the containers' standard output: `kubectl -n syncd logs syncd-engine-0`,
 `kubectl -n syncd logs deploy/syncd-console`. The console's audit events are JSON lines in its
@@ -1037,19 +1147,19 @@ is generated at install, kept by upgrades, and kept by `helm uninstall`
 | `/opt/syncd/releases/<version>/` | One directory per installed release. Never edited |
 | `/opt/syncd/current`, `previous` | Symlinks to the running release and the one before it |
 | `/etc/syncd/console.env` | The console's settings: database URL, listen address, proxy, single sign-on, audit outputs, webhooks, mail, Git sync. Readable by root and `syncd-console` only |
-| `/etc/syncd/engine.env` | Secrets that engine configurations refer to (`password: { env: NAME }`), S3 credentials for backups, `SYNCD_HA_*`, and `SYNCD_FIPS_MODE`. Readable by root and `syncd` only |
+| `/etc/syncd/engine.env` | Secrets that engine configurations refer to (`password: { env: NAME }`), S3 credentials for backups, `SYNCD_HA_*`, `SYNCD_PASSWORD_KEY_PASSPHRASE_FILE` and `SYNCD_FIPS_MODE`. Readable by root and `syncd` only |
 | `/etc/syncd/engine/engine.yaml` | The engine's configuration. Publishing a configuration in the console replaces it |
 | `/etc/syncd/pki/` | The control API's CA and certificates (see [Certificates](#certificates)) |
 | `/etc/syncd.previous/` | `/etc/syncd` as it was before `syncdctl restore --from` |
-| `/var/lib/syncd/engine/` | The engine's store, with `password.key`, `password-agent-ca.key` and `password-agent-ca.crt` when passwords are on |
+| `/var/lib/syncd/engine/` | The engine's store, with `password.key`, `password-agent-ca.key` and `password-agent-ca.crt` when passwords are on (the keys sealed with a passphrase, or in the clear: see [The password keys](#the-password-keys)) |
 | `/var/lib/syncd/engine/backups/` | A store checkpoint, only while a backup is taken |
 | `/var/lib/syncd/engine/restore/`, `replaced-<time>/`, `engine.restored.yaml` | Left by `syncd restore`: the download, the store it moved aside, and the backed-up configuration |
 | `/var/lib/syncd/engine/ha/` | `swap.json` and `old-store`, only while an engine of a pair swaps a snapshot in; the received snapshot |
-| `/var/lib/syncd/console/` | The console's master key (`master.key`), until first used `initial-admin-password`, and the Git sync clone (`git/`) |
+| `/var/lib/syncd/console/` | The console's master key (`master.key`; `master.key.previous` when `syncdctl restore --from` replaced a different one), until first used `initial-admin-password`, and the Git sync clone (`git/`) |
 | `/var/lib/syncd/backups/` | Host-local backups, taken before every upgrade and on request. Root only |
 | `/etc/syncd/pki/before-renewal-<time>/` | The certificates replaced by `syncdctl renew-certs`. Root only |
 | `/run/syncd/control.sock` | The engine's control socket, when `api.control_socket` is set. `/run/syncd` exists while the engine runs |
-| `/opt/syncd/current/share/config/console.env` | The release's template of `console.env`, with every setting commented. Upgrades don't change yours |
+| `/opt/syncd/current/share/config/console.env`, `engine.env` | The release's templates, with every setting commented (from 0.4.1, notes on lines of their own). Upgrades don't change yours |
 | `/opt/syncd/current/share/nginx/syncd.conf` | An nginx configuration for HTTPS in front of the console |
 | `/opt/syncd/current/share/monitoring/syncd-alerts.yaml` | Prometheus alerting rules |
 | `/opt/syncd/current/share/doc/INSTALL.md` | The installation notes shipped with the release |
@@ -1064,7 +1174,8 @@ configuration in the console by importing the running one, which copies them.
 
 - **Daily:** `sudo syncd status`, or the console's engine page: no source `RETRYING` or `FAILED`,
   no unreachable target, no deletes or changes held for approval, no failed canary, no entities
-  quarantined, dead letters not growing, `backups:` not `FAILED`, and for a pair one engine
+  quarantined, dead letters not growing, no password failures or drops, `backups:` not `FAILED`,
+  `password keys: sealed with the passphrase`, and for a pair one engine
   `ACTIVE` with a recent snapshot. Alerts quiet.
 - **After publishing a configuration:** `syncd status` shows the new `configuration version`, and
   the log has no `did not start`. `syncd_rule_errors_total` is not climbing. A publication in
@@ -1077,5 +1188,5 @@ configuration in the console by importing the running one, which copies them.
   the active role once (stop the active engine cleanly) so a failover is known to work.
 - **Before an upgrade:** read the release notes (store format changes, `SYNCD_HEALTH_TIMEOUT`),
   and take an off-host backup.
-- **Regularly:** keep the master key off the host, apart from the backups; practise a restore
-  (`syncdctl restore --from`) on a test host.
+- **Regularly:** keep the master key and the password-key passphrase off the host, apart from the
+  backups; practise a restore (`syncdctl restore --from`) on a test host.

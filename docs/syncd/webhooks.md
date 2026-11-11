@@ -12,8 +12,10 @@ console watches each registered engine and posts on its behalf.
 ## Adding a webhook
 
 An administrator enters a name, an `https://` URL, the events and a format, and is shown the
-endpoint's **signing secret** (`whsec_…`) once. **New secret** replaces it (the new one is shown
-once); **Send a test** posts a `webhook.test` event, whether the webhook subscribes to it or not.
+endpoint's **signing secret** (`whsec_…`) once; for PagerDuty the page asks for the routing key
+instead (see [PagerDuty](#pagerduty)). **New secret** replaces it: from 0.4.1 with a generated one
+(shown once) or one the receiver already has (16 to 200 characters without spaces). **Send a
+test** posts a `webhook.test` event, whether the webhook subscribes to it or not.
 The page shows each webhook's pending and recently failed deliveries, its last error and its
 delivery log.
 
@@ -22,7 +24,7 @@ delivery log.
 | `engine.down`, `engine.up` | The console cannot reach an engine's control API; it answers again |
 | `source.down`, `source.up` | A source failed to read (and is retrying) or stopped; it reads again |
 | `target.down`, `target.up` | A target refused connections, as of its last operation; it takes operations again |
-| `run.completed`, `run.failed` | A full sync, a reconciliation or a reload ended; `failed` when a source failed to read meanwhile (see [`run.failed` is a heuristic](#runfailed-is-a-heuristic)) |
+| `run.completed`, `run.failed` | A run ended: a full sync, a reconciliation (scheduled or asked for), a reload, a drift check (scheduled or asked for), an approval or a dead-letter retry; `failed` when a source failed to read meanwhile (see [`run.failed` is a heuristic](#runfailed-is-a-heuristic)) |
 | `dead_letters.rising` | A publication's dead letters crossed 1, 10, 100, 1 000, ... |
 | `quarantine.rising` | A view's quarantined entities crossed 1, 10, 100, ... |
 | `hold.created` | Changes were held by a change window, a modification, add or deletion threshold, a canary or report mode (see [Change safety and lifecycle](change-safety.md)) |
@@ -90,7 +92,7 @@ sentence. `data` depends on the event:
 | `engine.up` | `configVersion` |
 | `source.down`, `source.up` | `source`, and `error` when it is down |
 | `target.down`, `target.up` | `target` |
-| `run.completed`, `run.failed` | `activity` (what ended), `elapsedMs`, `sourceFailures` (how many source failures were counted while it ran) |
+| `run.completed`, `run.failed` | `activity` (what ended), `elapsedMs`, `sourceFailures` (how many source failures were counted while it ran), and from 0.4.1 `runs` (how many runs ended since the watcher's last look; the event is about the last of them) |
 | `dead_letters.rising` | `publication`, `count`, `previous` |
 | `quarantine.rising` | `view`, `count`, `previous` |
 | `hold.created` | `publication`, `total`, `adds`, `modifies`, `deletes`, `moves`, `reasons` (each reason with its count), `needsApproval`, `detail` |
@@ -133,10 +135,11 @@ fact set of the engine, the event and the time.
 
 ### PagerDuty
 
-- **The endpoint's secret is the integration's routing key.** A new webhook gets a `whsec_`
-  secret like any other. Replace it with the routing key through the API:
-  `POST /api/v1/admin/webhooks/{id}/rotate-secret` with `{"secret": "<routing key>"}`. The
-  Integrations page's **New secret** button only generates a random one.
+- **The endpoint's secret is the integration's routing key.** From 0.4.1 the Integrations page
+  asks for it as soon as a PagerDuty webhook is added, and its **Routing key** button changes it;
+  it is sealed with the master key and never shown again. Through the API it is
+  `POST /api/v1/admin/webhooks/{id}/rotate-secret` with `{"secret": "<routing key>"}`. (In 0.4.0
+  the page could only generate a random `whsec_` secret, which PagerDuty cannot use.)
 - The down, failed, rising, hold, password, expiry, ageing, report, backup and failover events
   **trigger** an incident: `error` for `engine.down`, `source.down`, `target.down` and
   `run.failed`; `warning` for the others.
@@ -274,9 +277,11 @@ secret, bound to the webhook's id), and never returned after the secret is shown
 [Security](security.md#console-secrets-and-the-master-key).
 
 - There is no key of the webhooks' own: protecting and backing up the master key covers them.
-- A console started with another master key lists the webhooks with the URL marked as one that
-  cannot be decrypted, and their deliveries fail with that reason. Save the URL again and press
-  **New secret** on each, and give the receivers the new secret.
+- From 0.4.1 a console started with another master key refuses to start when the database holds
+  webhooks, as it does for engines' client keys (0.4.0 started, when no engine was registered with
+  mTLS). With `CONSOLE_NEW_MASTER_KEY=true` it starts, lists the webhooks with the URL marked as
+  one that cannot be decrypted, and their deliveries fail with that reason. Save the URL again and
+  set a new secret on each, and give the receivers the new secret.
 
 ## Settings
 
@@ -323,22 +328,25 @@ only. A delivery given up is logged as a warning in the console's log.
 
 ### `run.failed` is a heuristic
 
-The engine does not report a run's outcome as such. The watcher reports a run as failed when the
-engine's source-failure counter rose between the poll that saw the run start and the poll that
-saw it end. So a source that failed during a reconciliation for a reason unrelated to it makes the
-run `failed`, and a run that failed in another way is `completed`.
+The engine does not report a run's outcome as such. A run is reported as failed when the engine's
+source-failure counter rose while it ran. So a source that failed during a reconciliation for a
+reason unrelated to it makes the run `failed`, and a run that failed in another way is
+`completed`.
 
-Also, from the code: the watcher sees a run only when one of its ten-second polls finds the engine
-busy with it, so a full sync, reconciliation or reload that starts and ends between two polls
-sends neither `run.completed` nor `run.failed`. For alerting, prefer `source.down`,
-`target.down` and `dead_letters.rising`, or the engine's
+From 0.4.1 the engine counts the runs that end (`runs` in its status), and the watcher tells one
+event each time it sees the count rise: also for a run that started and ended between two of its
+ten-second polls, which 0.4.0 missed. When several runs ended between two polls, one event tells
+of the last of them, with how many ended (`runs`, and "(N runs ended since the last look)" in the
+summary). Because scheduled reconciliations and drift checks are runs too, expect a
+`run.completed` at least every reconciliation interval. An engine from before 0.4.1 has no count:
+the watcher then sees a run only when a poll finds the engine busy with it, as in 0.4.0. For
+alerting, prefer `source.down`, `target.down` and `dead_letters.rising`, or the engine's
 [Prometheus alerts](api-reference.md#prometheus-metrics).
 
 ### Other limitations
 
 - There is no `quality.errors` event for data-quality checks: use the `SyncdQualityErrors` alert
   (see [Reports, lineage and data quality](reports-and-data-quality.md)).
-- The PagerDuty routing key can be set only through the API.
 - Webhooks cannot go through an HTTP proxy.
 - Webhooks are a console feature: an engine run without a console sends none.
 

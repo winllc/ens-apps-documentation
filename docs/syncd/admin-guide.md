@@ -55,12 +55,13 @@ The console has five roles. Each account has exactly one.
 | **designer** | Reads everything a viewer reads; edits, checks, previews, simulates, approves, publishes and promotes configuration; runs connector checks; syncs from Git |
 | **operator** | Reads everything a viewer reads; runs and controls engines: reconciliations, full syncs, drift checks, threshold approvals, held changes, group reviews, dead letters, manual joins, unjoins and accepted correlation suggestions; schedules reports |
 | **viewer** | Reads engines, their status, configuration versions, the object explorer and data quality, and exports reports and lineage |
-| **auditor** | Reads everything a viewer reads, plus the audit trail, the API token and webhook lists, the environments and the scheduled reports |
+| **auditor** | Reads everything a viewer reads, plus the audit trail, the API token and webhook lists, the environments' values and the scheduled reports |
 
 The roles do not stack: a designer cannot run a full sync and an operator cannot publish a
 configuration. Give someone who needs both the `admin` role, or two accounts. The console checks
 every request on the server; the UI only hides what would be refused. 0.4.0 added no role; it gave
-auditors read access to tokens, webhooks and reports.
+auditors read access to tokens, webhooks and reports. 0.4.1 made the environments' values readable
+by admins and auditors only, as the **Integrations** page already showed them.
 
 ### Permissions matrix
 
@@ -88,21 +89,26 @@ What each role may do, from the role checks in the console's API handlers:
 | Create, change, send now and delete scheduled reports | Anyone's | | Their own | | |
 | Read the audit trail, verify its chain, export it, see its outputs' delivery | ✓ | | | | ✓ |
 | See the API tokens and webhooks (with each webhook's delivery log) | ✓ | | | | ✓ |
-| See the environments on the **Integrations** page | ✓ | | | | ✓ |
+| Read the environments' names (**Rendered for** on the **Compare** tab) | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Read the environments' values (the **Integrations** page and the API) | ✓ | | | | ✓ |
 | Create and revoke API tokens; add, change, test and delete webhooks; set environments | ✓ | | | | |
 | Create, change, disable and reset accounts | ✓ | | | | |
 | Local sign-in policy, configuration approval, banners | ✓ | | | | |
 | Register and remove engines; move an engine to another environment (API) | ✓ | | | | |
-| Download the console's support bundle (API) | ✓ | | | | |
+| Download the console's support bundle (**Users** page, API) | ✓ | | | | |
 | Reveal sensitive attributes | Roles listed in `CONSOLE_REVEAL_ROLES` (default: `admin` only); see below | | | | |
 
 Anyone signed in may read their own account, sign out and change their own password. The sign-in
 page, the version, the banners and the publish settings (`GET /api/v1/system`) need no sign-in, nor
 does the [self-service password page](#the-self-service-password-page).
 
-The environments' values (secret values excepted) are also readable through the API by any role
-(`GET /api/v1/environments`, the `configs:read` scope): only the **Integrations** page limits them
-to admins and auditors.
+The environments' values, and the names of their secret ones (`GET /api/v1/environments` and
+`/api/v1/environments/{name}`), need the admin or auditor role, or a token with the
+`environments:read` scope (or `admin`). Every role reads the environments' names
+(`GET /api/v1/environment-names`, the `configs:read` scope). In 0.4.0 any role could read the values
+through the API; scripts that read them with a `configs:read` token need the new scope. A
+configuration rendered for display (the editor's check, **Compare**) still shows the plain values it
+uses, never the secret ones.
 
 A refused request answers `403` with a message such as "the operator role cannot do this". Refusals
 of this kind are not written to the audit trail when they come from a signed-in session; refused
@@ -119,9 +125,9 @@ not build DNs from sensitive attributes.
 Roles listed in the console setting `CONSOLE_REVEAL_ROLES` may ask to see the values. It is a
 comma-separated list of role names, or `none`; the default is `admin`. A value that is not a role
 stops the console from starting. Accounts whose role may reveal get a **Reveal sensitive
-attributes** button on an entity and an **Include sensitive attributes (audited)** checkbox on
-searches, correlation review and simulations. A lineage export made while an entity's values are
-revealed includes them.
+attributes** button on an entity, an **Include sensitive attributes (audited)** checkbox on
+searches and correlation review, and **Show sensitive values (audited)** on simulations. A lineage
+export made while an entity's values are revealed includes them.
 
 - Every reveal is recorded (`explore.reveal`, `config.simulate`) with the names of the attributes
   it showed, and the record is written before the values are returned: if the audit trail cannot
@@ -137,8 +143,10 @@ revealed includes them.
 
 ## The Users page (`/users`)
 
-Administrators only. At the top are three cards, **Local sign-in**, **Configuration approval** and
-**Banners**, described in the sections below. Under them is the table of accounts:
+Administrators only. At the top are four cards: **Local sign-in**, **Configuration approval** and
+**Banners**, described in the sections below, and **Support bundle** (see
+[Settings that are not in the console](#settings-that-are-not-in-the-console)). Under them is the
+table of accounts:
 
 | Column | Shows |
 |---|---|
@@ -147,7 +155,7 @@ Administrators only. At the top are three cards, **Local sign-in**, **Configurat
 | **State** | **active** or **disabled**, plus **locked** (too many failed sign-ins), **one-time password** (must change it at the next sign-in) and **SSO** (signs in through single sign-on) |
 | **Break-glass** | A checkbox, for accounts with a local password (see [Local sign-in and break-glass accounts](#local-sign-in-and-break-glass-accounts)) |
 | **Created** | When the account was made |
-| Actions | A key button, **Reset password** (local accounts only), and **Disable** / **Enable** (not on your own row) |
+| Actions | A key button that resets the password (local accounts only), and **Disable** / **Enable** (not on your own row) |
 
 ### Creating an account
 
@@ -362,7 +370,7 @@ The local engine is registered for you:
 | Install | Registered as |
 |---|---|
 | Package or bundle (`syncdctl install`) | `local` at `127.0.0.1:7443`, with the certificates `syncdctl` issued |
-| Helm chart | The release's name (or `engine.name`) at the engine's service, port 7443, with the chart's certificates. A Job does it after each install and upgrade, with `--update`. With `engine.ha.enabled`, it registers both pods, as `<name>-0` and `<name>-1` |
+| Helm chart | The release's name (or `engine.name`) at the engine's service, port 7443, with the chart's certificates, in the environment `engine.environment` names (when set). A Job does it after each install and upgrade, with `--update`. With `engine.ha.enabled`, it registers both pods, as `<name>-0` and `<name>-1`; an engine registered as `<name>` before HA was turned on is first renamed `<name>-0` ([`rename-engine`](#syncd-console-admin-rename-engine)), keeping its versions |
 
 To add another, choose **Register engine** on the **Engines** page:
 
@@ -423,14 +431,10 @@ the console then cannot reach the engine.
   engine again with [`register-engine --update`](#syncd-console-admin-register-engine). The page
   cannot replace a registration.
 
-Replacing a registration keeps the engine's configuration versions, and is recorded as
-`engine.update`.
-
-!!! warning "Re-registering resets the environment"
-    `register-engine --update` also sets the engine's environment: to the one given with
-    `--environment`, or back to `default`. `syncdctl renew-certs` and the Helm registration Job pass
-    none, so an engine in another environment is back in `default` after a certificate renewal or a
-    Helm upgrade. Move it back with `PATCH /api/v1/engines/{id}` before the next publish.
+Replacing a registration keeps the engine's configuration versions and its environment (unless
+`--environment` names another), and is recorded as `engine.update`. In 0.4.0 a re-registration
+without `--environment` moved the engine back to `default`, so a certificate renewal or a Helm
+upgrade did; since 0.4.1 it no longer does.
 
 ### Removing an engine
 
@@ -465,17 +469,18 @@ To create one, choose **New token**:
 | **Expires** | Optional: a date (the token stops at the end of that day, UTC). Left empty, it gets the longest lifetime allowed (`CONSOLE_API_MAX_TOKEN_LIFETIME`, 365 days by default), which is also the most that may be asked for |
 
 **Create** shows the token **once**, with a **Copy** button. The console keeps only its SHA-256; it
-is never written to a log or the audit trail. **Revoke** on a row stops the token at once (there is
-no confirmation).
+is never written to a log or the audit trail. **Revoke** on a row asks for confirmation, then
+stops the token at once.
 
 | Scope | Needs the creator to be | Allows |
 |---|---|---|
 | `engines:read` | any role | The engines, their status, dead letters, quarantine, held changes, data quality, the reconciliation report |
-| `configs:read` | any role | Configuration versions, the running configuration, diffs, exports, packages, environments, Git sync status |
+| `configs:read` | any role | Configuration versions, the running configuration, diffs, exports, packages, the environments' names, Git sync status |
 | `configs:write` | designer or admin | Validate, save and import a version; Git **Sync now** (not publish) |
 | `configs:publish` | designer or admin | Publish a version; promote one (approval, when required, stays with people) |
 | `runs:run` | operator or admin | Start runs and drift checks; approve held deletions and changes; review groups; accept correlation suggestions; retry and discard dead letters |
 | `audit:read` | auditor or admin | The audit trail, its verification, the pull API, the export and the outputs' status |
+| `environments:read` | auditor or admin | The environments: their plain values, the names of their secret ones, and their engines (new in 0.4.1) |
 | `admin` | admin | Everything above |
 
 A token never does more than its creator **now**:
@@ -502,9 +507,9 @@ One base configuration can run in several installations. Where a value differs, 
 `{{ env.hr_host }}`, and each engine's **environment** fills it in when a version is published to
 that engine. How designers use this is in [Configuration as code](config-as-code.md#environments).
 
-The **Environments** card lists each environment with its values (secret ones shown only as
-**(secret)**), the engines that run in it and when it was last saved. Administrators choose
-**New environment** or **Edit**:
+The **Environments** card, shown to administrators and auditors, lists each environment with its
+values (secret ones shown only as **(secret)**), the engines that run in it and when it was last
+saved. Administrators choose **New environment** or **Edit**:
 
 | Field | Rules |
 |---|---|
@@ -513,13 +518,15 @@ The **Environments** card lists each environment with its values (secret ones sh
 | **Secret** | Sealed with the console's master key when saved and never shown again, not even to administrators. On **Edit**, a secret left blank keeps its stored value; typing replaces it |
 
 **Save** records `environment.changed`, with the keys added, removed and changed, never a value.
-An environment no engine runs in can be removed with the bin button (`environment.removed`).
+An environment no engine runs in can be removed with the bin button, after a confirmation
+(`environment.removed`).
 Engines that are given no environment run in `default`, which needs no entry here.
 
 - A publish to an engine whose environment lacks a value the version needs is refused, naming the
   value.
 - Secret values are rendered into the configuration sent to the engine; the console shows them as
-  `<secret name>` everywhere else (the **Compare** tab, the check panel).
+  `<secret name>` everywhere else (the **Compare** tab, the check panel). Plain values show as they
+  are there, to every role that reads configuration.
 - With [Git sync](#git-sync), environment files in the repository can set plain values, but a
   file that carries a secret is refused.
 
@@ -533,8 +540,11 @@ configuration lifecycle. Nothing is sent until an administrator adds a webhook.
 
 Administrators choose **New webhook**, give a **Name**, a **Format** (`json`, `slack`, `teams` or
 `pagerduty`), an `https://` **URL** and the **Events**, and are shown the **signing secret**
-(`whsec_…`) once. Each row has **Deliveries** (the delivery log; auditors too), **Send a test**,
-**Edit**, **New secret** and **Delete** (with a confirmation; the delivery log goes too).
+(`whsec_…`) once. A `pagerduty` webhook asks for the integration's **Routing key** instead, which
+is its secret. Each row has **Deliveries** (the delivery log; auditors too), **Send a test**,
+**Edit**, **New secret** (**Routing key** for PagerDuty) and **Delete** (with a confirmation; the
+delivery log goes too). **New secret** offers **Generate** (a random one, shown once) or a secret
+the receiver already has (16 to 200 characters without spaces, **Use this secret**).
 
 - The URL is checked when saved and at every send: never loopback, link-local or a cloud metadata
   address; private addresses only as `CONSOLE_WEBHOOKS_BLOCK_PRIVATE_NETWORKS` and
@@ -544,6 +554,9 @@ Administrators choose **New webhook**, give a **Name**, a **Format** (`json`, `s
 - Changes are audited: `webhook.created`, `webhook.changed`, `webhook.deleted`,
   `webhook.secret-rotated`, `webhook.test-sent`.
 - `CONSOLE_WEBHOOKS_ENABLED=false` queues and posts nothing; the card then says so.
+- `run.completed` and `run.failed` are sent for every run the engine reports ended, also one that
+  started and ended between two of the console's looks at its status (since 0.4.1; an engine
+  before 0.4.1 does not count its runs, and only runs a look saw are told).
 
 The events, the formats, how to verify the signature, retries and every setting are in
 [Webhooks](webhooks.md).
@@ -570,6 +583,9 @@ settings are:
 
 - With a ticket pattern set and `publish`, the ticket must appear in the commit message; a commit
   without one stays a draft (`config.git-failed`).
+- While Git sync is on, every publish runs the repository's golden tests (`tests/golden`, at the
+  branch head) as the editor's check does, and is refused when one fails: the **Publish** button,
+  the API, auto-publish and promotion. In 0.4.0 only the editor's check ran them.
 - The **Configuration** page of each engine then has a **Git** card: the repository, what a new
   commit becomes, the last commit seen, the last sync, the last error, and **Sync now**
   (designers and admins). Nothing is taken in while an engine named in
@@ -639,6 +655,15 @@ configuration has `passwords.self_service`. Without it, the page says "Password 
 available here." Give people the address `https://<console>/password`; the console has no link to
 it.
 
+- The page states the engine's policy for a new password (`min_length` and `min_classes` of
+  `passwords.self_service`, read from the engine's status and reused for a minute), and falls back
+  to the defaults (12 characters, three kinds) when the engine cannot be asked. In 0.4.0 it always
+  said 12.
+- When the setting names one engine of an HA pair, a change goes to the member that holds the
+  pair's lease (only the active engine takes self-service changes); to the named engine when that
+  cannot be told.
+- [`rename-engine`](#syncd-console-admin-rename-engine) does not change this setting: after an
+  engine is renamed, change it by hand.
 - Attempts are throttled per client address, as sign-ins are, and the engine holds a user name off
   for 15 minutes after 5 failures.
 - A wrong user name and a wrong password get the same answer.
@@ -711,7 +736,7 @@ The Splunk and syslog TLS connections trust the public roots. A SIEM can also pu
 | `user.bootstrap`, `bootstrap.password_file_removed` | The first `admin` account, and the initial password file being deleted |
 | `user.create`, `user.update`, `user.password_reset`, `user.password_change`, `user.password_change_skipped` | Account changes (role, disabled and break-glass before and after). A reset from the command line has the actor `system`, and says whether the account signs in through single sign-on |
 | `settings.local_sign_in`, `settings.config_approval`, `settings.banners` | Console settings, before and after |
-| `engine.register`, `engine.update`, `engine.re-registered`, `engine.remove` | Engines added, registered again with new credentials or moved to another environment, registered again over a client key the master key no longer opens, and removed (`system` when the installer, `syncdctl renew-certs` or the Helm Job does it) |
+| `engine.register`, `engine.update`, `engine.re-registered`, `engine.renamed`, `engine.remove` | Engines added, registered again with new credentials or moved to another environment, registered again over a client key the master key no longer opens, renamed, and removed (`system` when the installer, `syncdctl renew-certs`, `syncd-console admin` or the Helm Job does it) |
 | `engine.run`, `engine.approve_deletions`, `engine.check_drift`, `engine.dead_letters.retry`, `engine.dead_letters.discard`, `group.reviewed` | Operator commands, with the request and the engine's answer or error. **Approve and apply** on held changes is an `engine.approve_deletions` with the publication's scope |
 | `correlation.join`, `correlation.unjoin`, `correlation.accepted` | Records joined or unjoined by hand, and suggestions accepted |
 | `config.save`, `config.import`, `config.import_file`, `config.export` | Versions saved, imported or exported |
@@ -779,7 +804,7 @@ neither). The result is one of:
 
 ## Command-line administration (`syncd-console admin`)
 
-`syncd-console` has two administration commands besides `serve` (the default). They connect to the
+`syncd-console` has three administration commands besides `serve` (the default). They connect to the
 console database directly, so they need the console's settings: run them on the console host as
 the `syncd-console` user, with the console's environment file.
 
@@ -822,20 +847,40 @@ syncd-console admin register-engine --name NAME --address HOST:PORT|unix:/PATH \
 Registers an engine as the **Register engine** page does, checking that it answers first. The three
 PEM files are needed together, and are required unless the address is a loopback one or a `unix:`
 control socket (which takes none). `--environment` names the engine's
-[environment](#environments) (`default` unless given).
+[environment](#environments): `default` for a new engine unless given; with `--update`, the engine
+keeps the one it has unless given.
 
 When an engine with the name is registered already:
 
 | Case | Without `--update` | With `--update` |
 |---|---|---|
-| Its stored client key opens with the master key | Says so ("an engine named … exists") and changes nothing | Replaces the address, credentials and environment, keeping the engine's id and configuration versions. Recorded as `engine.update` |
-| Its stored client key no longer opens (the master key was replaced) | **Refused**, saying why, instead of "registered already" | Seals the new key over the old one, keeping the id and versions. Recorded as `engine.re-registered`, with the reason |
+| Its stored client key opens with the master key | Says so ("engine … is registered already"; the API answers `409`, "an engine named … exists") and changes nothing | Replaces the address and credentials, keeping the engine's id, configuration versions and environment (unless `--environment` names another). Recorded as `engine.update` |
+| Its stored client key no longer opens (the master key was replaced) | **Refused**, saying why, instead of "registered already" | Seals the new key over the old one, keeping the id, versions and environment (unless `--environment` names another). Recorded as `engine.re-registered`, with the reason |
 
 `POST /api/v1/engines` does the same, with `replace: true` for `--update`. `syncdctl install` uses
 the command to register the local engine; `syncdctl renew-certs` and the Helm chart's registration
-Job use it with `--update` (see the warning in
-[Certificate expiry and renewal](#certificate-expiry-and-renewal) about the environment). New
-registrations are recorded as `engine.register` by `system`.
+Job use it with `--update`, which keeps the engine's environment (the chart passes
+`--environment` when `engine.environment` is set). In 0.4.0, `--update` without `--environment`
+moved the engine back to `default`. New registrations are recorded as `engine.register` by
+`system`.
+
+### `syncd-console admin rename-engine`
+
+```sh
+syncd-console admin rename-engine --from NAME --to NEW-NAME
+```
+
+Renames a registered engine, keeping its id and with it its configuration versions, reports and
+history. Its stored client key is sealed again for the new name (one the master key cannot open is
+left as it is: `register-engine --update` replaces it). It does nothing, and says so, when no engine
+is named `--from` or one is named `--to` already, so it can run on every deployment. Recorded as
+`engine.renamed` by `system`.
+
+The Helm chart's registration Job runs it when `engine.ha.enabled` is on, before registering the
+pair: an engine registered as `<name>` before HA was turned on becomes `<name>-0`. (The 0.4.1
+release notes say this step was checked with `helm template` and `helm lint`, not on a cluster.)
+The command does not change engine names in the console's settings: change
+`CONSOLE_SELF_SERVICE_ENGINE` and `CONSOLE_CONFIG_GIT_ENGINES` by hand.
 
 There is no command to create accounts, change roles or change the console settings; those are done
 in the console or through the [API](api-reference.md).
@@ -845,7 +890,14 @@ in the console or through the [API](api-reference.md).
 These are set in the console's environment (`/etc/syncd/console.env`) by whoever runs the host, and
 take effect when the console restarts. An upgrade leaves `/etc/syncd/console.env` as it is; the
 release's template, `/opt/syncd/current/share/config/console.env`, has commented lines for the
-settings new in 0.4.0, and none of them is needed. See [Configuration](configuration.md).
+settings new in 0.4.0, and none of them is needed (0.4.1 adds no console setting). See
+[Configuration](configuration.md).
+
+In this file everything after `=` is the value, a `#` included: a comment after a value becomes part
+of it. The 0.4.1 templates put every explanation on a line of its own; an older file may still have
+comments after values, so move them to their own lines before uncommenting a setting. When a
+setting that holds ` #` stops the console (or a `syncd-console admin` command), the error is followed
+by a line naming the setting: "a comment at the end of the line becomes part of the value".
 
 | Setting | What it controls |
 |---|---|
@@ -869,9 +921,11 @@ The console checks the new settings when it starts and refuses to start with one
 hook URL that is not `https://`, a Git URL over plain `http://`, a share directory that does not
 exist), saying which.
 
-The console's part of a support bundle (its version, settings with secret values redacted, schema
-migrations and engines) is `GET /api/v1/admin/support-bundle` (admins, signed in; there is no
-button), recorded as `support.bundle-exported`. On a host, `syncdctl support-bundle` collects the
+The console's part of a support bundle (its version, settings with secret values redacted, the
+database migrations applied, and the registered engines with whether each answers; no credentials
+and no entity data) is **Download support bundle** on the **Users** page's **Support bundle** card
+(new in 0.4.1), or `GET /api/v1/admin/support-bundle` (admins, signed in). It is a `.tar.zst`
+archive, recorded as `support.bundle-exported`. On a host, `syncdctl support-bundle` collects the
 same from the host beside the engine's own bundle; see the [Operator guide](operator-guide.md).
 
 ### The master key
@@ -882,10 +936,11 @@ the file `$CONSOLE_DATA_DIR/master.key` (`/var/lib/syncd/console/master.key` on 
 `syncd-console` Secret under Helm). The console creates the file on its first start. Back it up
 with the database: the sealed values cannot be recovered without it.
 
-At each start the console checks the key against an engine's sealed client key in its database. It
-refuses to start when:
+At each start the console checks the key against a secret sealed in its database: an engine's
+client key, or, with no engine registered with mutual TLS, a webhook's URL, or else a secret
+environment value. It refuses to start when:
 
-- `master.key` is missing while the database holds sealed keys (a restore that missed it, a new
+- `master.key` is missing while the database holds sealed secrets (a restore that missed it, a new
   data directory). It does not create a new key over them;
 - the key does not open them: it is not the key they were sealed with.
 
@@ -899,11 +954,11 @@ with a new key if it has none, and everything sealed with the old key is lost:
   `console.newMasterKey=true` does this with the registration Job (see the
   [Install guide](install.md));
 - webhooks are listed with their URL marked as unreadable and their deliveries fail: save each
-  URL again and choose **New secret**;
+  URL again and choose **New secret** (**Routing key** for PagerDuty);
 - secret environment values must be typed again on the **Integrations** page.
 
-Keep the setting until the engines are registered again: until then the old sealed keys are still
-in the database, and the console, and the `syncd-console admin` commands run with its environment,
-refuse to start without it. Remove it afterwards, so that a lost key is caught again. The start-up
-check looks only at engines' client keys: a console with webhooks or secret environment values but
-no mTLS engine is not stopped by a wrong key.
+Keep the setting until those secrets are set again: until then the old sealed ones are still in
+the database, and the console, and the `syncd-console admin` commands run with its environment,
+can refuse to start without it. Remove it afterwards, so that a lost key is caught again. In 0.4.0 the
+check looked only at engines' client keys, so a console with webhooks or secret environment values
+but no mTLS engine was not stopped by a wrong key; since 0.4.1 it is.

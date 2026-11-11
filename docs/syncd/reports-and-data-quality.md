@@ -74,8 +74,9 @@ There is no Excel (`.xlsx`) export: spreadsheets open the CSV.
 
 The **Reports** page (`/reports`) e-mails the report, or writes it to a share, daily, weekly
 (Monday) or monthly (the 1st), at an hour in UTC (`/api/v1/reports`). Administrators and
-operators create, change, send now and delete their own (administrators everyone's). Auditors can
-look. Sessions only: no API token manages reports.
+operators create, change, send now and delete their own (administrators everyone's); since 0.4.1
+the page asks before it deletes one. Auditors can look. Sessions only: no API token manages
+reports.
 
 - A report names an engine, optionally one publication, the format (CSV or PDF), the schedule, up
   to 20 recipients, and/or a directory inside the share.
@@ -195,14 +196,17 @@ engine:
 The engine prunes an hour after it starts and every hour after that. `syncd history prune --now`
 prunes at once.
 
-1. Entries older than `keep_days` go, except:
-    - the newest `min_per_entity` of each entity, so an entity's story is never empty;
-    - every entry of an entity with an open held change or a dead letter in any publication, until
-      it clears, so the entry that explains why a change was planned stays with it.
-2. Then all but the newest `keep_per_entity` of each entity go, exemptions included.
+1. Entries older than `keep_days` go, except the newest `min_per_entity` of each entity, so an
+   entity's story is never empty.
+2. Then all but the newest `keep_per_entity` of each entity go.
+3. Neither step touches an entity with an open held change (a report-mode would-do counts too)
+   or a dead letter in any publication: it keeps every entry until that clears, so the entry that
+   explains why a change was planned stays with it. Since 0.4.1 this holds past `keep_per_entity`
+   as well as `keep_days`; in 0.4.0 the per-entity cap still applied to such an entity.
 
-So the history holds at most `entities × keep_per_entity` entries, and in a quiet directory about
-`entities × min_per_entity`. For a million people at about 300 bytes an entry, that is between
+So, held and dead-lettered entities aside, the history holds at most `entities × keep_per_entity`
+entries, and in a quiet directory about `entities × min_per_entity`. For a million people at about
+300 bytes an entry, that is between
 3 GB and 30 GB. [Availability and sizing](availability-and-sizing.md) has the rest of the
 arithmetic.
 
@@ -213,7 +217,8 @@ arithmetic.
 | Prometheus | `syncd_history_entries`, `syncd_history_pruned_total`, `syncd_history_oldest_timestamp_seconds`, `syncd_history_last_prune_timestamp_seconds` |
 
 `min_per_entity` and the exemptions are new in 0.4.0, so an upgraded engine keeps more history
-than 0.3.0 did with the same `keep_days`.
+than 0.3.0 did with the same `keep_days`. A publication in report mode for a long time, or a
+growing dead-letter queue, keeps its entities' whole history: watch `syncd_history_entries`.
 
 ## Data-quality checks
 

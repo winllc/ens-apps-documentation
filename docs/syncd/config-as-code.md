@@ -11,6 +11,10 @@ production. syncd 0.4.0 adds the pieces a team needs to work that way:
 | [Promotion](#promotion) | Publishes a version proven in one environment to every engine of another | `syncd config promote`, `POST /api/v1/configs/promote` |
 | [Golden-file tests](#golden-file-tests) | Check what whole publications contain after a run over fixture data | `syncd test --golden` |
 
+In syncd 0.4.1 the golden tests from Git gate every publish (the API, Git auto-publish and
+promotion, not only the editor), `syncd config promote` prints each engine's diff summary, and
+`syncd test` finds golden files one directory level down, as the console does.
+
 Rule packages, functions and lookup tables shared between configurations, fit the same way of
 working; see [Rule packages](#rule-packages) below and [Computed attributes and rules](rules.md).
 
@@ -36,9 +40,10 @@ expression.
 - **Packages.** A package's version change shows as `gov-naming 1.1.0 -> 1.2.0`, with the
   functions that changed.
 - **Secrets are redacted.** A path segment that is or contains `password` or `secret`, is `token`
-  or `key`, or ends in `_file` or `_key`, and a URL carrying `password=`, shows as
-  `<redacted> (changed)`. Not even where a secret lives is printed. Two Active Directory flags,
-  `password_never_expires` and `must_change_password`, are rules, not secrets, and are shown.
+  or `key`, or ends in `_file` or `_key`, the HA lease's `url`, and a URL carrying `password=` or
+  `pwd=`, shows as `<redacted> (changed)`. Not even where a secret lives is printed. Two Active
+  Directory flags, `password_never_expires` and `must_change_password`, are rules, not secrets,
+  and are shown.
 
 | Exit code | Meaning |
 |---|---|
@@ -117,8 +122,8 @@ publications:
   `port: "{{ env.hr_port }}"` renders as `port: 5433`. A placeholder among other text renders as
   text.
 - A placeholder with no value and no default is an error that names the key and where it is
-  (`connectors[0].connection.host: the environment has no value for hr_host`). Anything else in
-  `{{ ... }}` is an error too.
+  (``connectors[0].connection.host: the environment has no value for `hr_host` ``, with a hint to
+  set it or give a default). Anything else in `{{ ... }}` is an error too.
 - Comments are not kept in a rendered configuration.
 
 Keep secrets as secret references (`{ env: NAME }`, `{ file: PATH }`), as above. An environment's
@@ -158,9 +163,13 @@ already, so an engine registered with the console doesn't need `--env`.
 
 - **Each engine runs in an environment**, `default` unless one is given when it is registered
   (`syncd-console admin register-engine --environment prod`, or the registration form) or set
-  later by an admin (`PATCH /api/v1/engines/{id}` with `{"environment": "prod"}`).
-- **Environments are kept under Integrations > Environments** (admins), or with
-  `PUT /api/v1/environments/{name}`:
+  later by an admin (`PATCH /api/v1/engines/{id}` with `{"environment": "prod"}`). Since 0.4.1,
+  re-registering an engine (`register-engine --update`, which `syncdctl renew-certs` and the Helm
+  chart's registration Job run) keeps its environment unless `--environment` is given; in 0.4.0
+  it moved the engine back to `default`. On Kubernetes, the chart's `engine.environment` passes
+  one at each registration.
+- **Environments are kept under Integrations > Environments** (admins change them; auditors see
+  them), or with `PUT /api/v1/environments/{name}`:
 
     ```json
     {"values": {"hr_host": {"value": "hr.prod.example.gov"},
@@ -170,14 +179,22 @@ already, so an engine registered with the console doesn't need `--env`.
     A value marked secret is sealed with the master key and never returned: `GET` shows
     `{"secret": true}`, and a `PUT` that leaves its value out keeps the stored one. Changes are
     audited as `environment.changed` (the keys added, removed and changed, never a value). An
-    environment that an engine runs in can't be removed. Reading environments needs a role that may
-    view configuration (`configs:read` for a token); changing them is for admins, signed in.
+    environment that an engine runs in can't be removed, and the console asks before it removes
+    one.
+- **Who reads what.** Since 0.4.1 the values (`GET /api/v1/environments` and
+  `GET /api/v1/environments/{name}`) are for admins and auditors, or a token with the
+  `environments:read` scope (or `admin`). In 0.4.0 any role, or a `configs:read` token, could
+  read them: scripts that read values with a `configs:read` token need the new scope. Every role
+  reads the names, with `GET /api/v1/environment-names` (`configs:read` for a token); the
+  **Compare** tab uses it. Changing environments is for admins, signed in.
 - **A version is the base.** Publishing a version to an engine renders it for the engine's
   environment, with secret values in clear, and sends that. A value the environment lacks refuses
   the publish and names it.
 - **What is shown is rendered with secrets masked:** the editor's check, saving a version, and
   the **Compare** tab, which renders both sides for the engine's environment. Its **Rendered for**
-  selector picks another environment, or none to compare the texts as saved.
+  selector picks another environment, or **as written** to compare the texts as saved. A
+  rendering shown this way still shows the plain values it uses, to any role that may view
+  configuration.
 - **The versions list** shows each version's **Source** (`console`, `git` or `promotion`, with the
   commit or the version it came from) and where it **Runs in**: the environments whose engines run
   that text.
@@ -202,7 +219,7 @@ CONSOLE_CONFIG_GIT_ENGINES=dev-1,dev-2
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `CONSOLE_CONFIG_GIT_URL` | none (off) | The repository: `ssh://` or `https://`. Plain `http://` is refused |
+| `CONSOLE_CONFIG_GIT_URL` | none (off) | The repository: `ssh://` (or `git@host:path`) or `https://`. Plain `http://` is refused |
 | `CONSOLE_CONFIG_GIT_BRANCH` | `main` | The branch to follow |
 | `CONSOLE_CONFIG_GIT_PATH` | `syncd.yaml` | The configuration file in the repository. A relative path, without `..` |
 | `CONSOLE_CONFIG_GIT_ENV_PATH` | none | A directory of `<name>.env.yaml` [environment files](#environment-files-from-git) |
@@ -212,7 +229,7 @@ CONSOLE_CONFIG_GIT_ENGINES=dev-1,dev-2
 | `CONSOLE_CONFIG_GIT_POLL` | `60s` | How often the branch is fetched |
 | `CONSOLE_CONFIG_GIT_AUTO_PUBLISH` | `off` | `off`, `validate` or `publish` (below) |
 | `CONSOLE_CONFIG_GIT_PUSH_BACK` | `false` | Commit versions saved in the console to the branch |
-| `CONSOLE_CONFIG_GIT_ENGINES` | every engine | The engines the repository is for, comma-separated |
+| `CONSOLE_CONFIG_GIT_ENGINES` | every engine | The engines the repository is for, comma-separated. Renaming an engine (`syncd-console admin rename-engine`) doesn't change this list: change it by hand |
 
 The console checks these at start-up and refuses both credentials at once, absolute or `..`
 paths, and files that are not there.
@@ -236,8 +253,8 @@ For each commit:
 | Mode | What happens to the new version |
 |---|---|
 | `off` | It stays a draft. Someone publishes it from the console |
-| `validate` | It is checked: compiled, with the rules' test cases, the packages' tests and the [golden tests](#golden-tests-in-the-console) from the repository. Failures are recorded as `config.git-failed`. It stays a draft either way, and one that fails can't be published |
-| `publish` | It is checked as for `validate`, then published the way the **Publish** button does it: four-eyes approval (the version waits for approval), the pre-publish hook, and, when `CONSOLE_PUBLISH_TICKET_PATTERN` is set, a change-ticket reference found in the commit message (`HR port moved (CHG-12345)`). A commit without one is recorded as `config.git-failed` and its version stays a draft |
+| `validate` | It is checked: compiled, with the rules' test cases, the packages' tests and the [golden tests](#golden-tests-in-the-console) from the repository. Failures are recorded as `config.git-failed`. It stays a draft either way, and one that fails can't be published, by any route |
+| `publish` | It is checked as for `validate`, then published through the same gate as the **Publish** button: four-eyes approval (the version waits for approval), the pre-publish hook, and, when `CONSOLE_PUBLISH_TICKET_PATTERN` is set, a change-ticket reference found in the commit message (`HR port moved (CHG-12345)`). A commit without one is recorded as `config.git-failed` and its version stays a draft |
 
 The commit counts as seen whatever happened to it, so a bad commit is reported once, not every
 minute.
@@ -258,10 +275,10 @@ the console instead.
 
 With `CONSOLE_CONFIG_GIT_PUSH_BACK=true`, a version saved or published in the console for an
 engine the repository is for is committed to the branch at `CONSOLE_CONFIG_GIT_PATH`, as the
-console user, with the subject `<engine> v<n>: saved (<comment>)`, and pushed. Nothing is
-committed when the branch already has that text. A push the server rejects (the branch moved, a
-protected branch) is recorded as `config.git-failed` with the reason. It is never forced. The next
-pass sees the pushed commit and makes no second version of it.
+console user, with the subject `<engine> v<n>: saved (<comment>)` (or `published (<comment>)`), and
+pushed. Nothing is committed when the branch already has that text. A push the server rejects
+(the branch moved, a protected branch) is recorded as `config.git-failed` with the reason. It is
+never forced. The next pass sees the pushed commit and makes no second version of it.
 
 With push-back on, the repository needs a deploy key or token that may write to the branch.
 
@@ -317,8 +334,8 @@ The command calls `POST /api/v1/configs/promote` with
 `{"engine", "version", "to", "ticket", "note"}`. Every engine of the target environment except
 the source gets the text as a version of its own (source `promotion`, `dev-1/v7`), rendered for
 its environment, and the usual gates apply **on each engine**: four-eyes approval, the rules' test
-cases, the ticket pattern and the pre-publish hook. Golden tests are not among them (see
-[Golden tests in the console](#golden-tests-in-the-console)): run them in CI before you promote.
+cases, the [golden tests](#golden-tests-in-the-console) from Git (since 0.4.1), the ticket pattern
+and the pre-publish hook.
 
 | Outcome per engine | Meaning |
 |---|---|
@@ -327,11 +344,19 @@ cases, the ticket pattern and the pre-publish hook. Golden tests are not among t
 | `running` | The engine already runs this text; nothing changed |
 | `failed` | Refused by a gate, or the engine couldn't take it; the detail says why |
 
-The command prints one line per engine (`prod-eu v3: published`), with the detail. The API's
-answer also carries, per engine, a one-line summary of the semantic diff against what the engine
-ran before (`diff_summary`). The command exits `0` when no engine failed, `1` when any did, and
-`2` when the console refused the request: a version never published, an unknown
-engine, an environment with no engines, a token without the scope, a missing ticket.
+The command prints one line per engine, with the detail, and under it, since 0.4.1, the one-line
+summary of the semantic diff against what the engine ran before (`diff_summary` in the API's
+answer):
+
+```text
+prod-eu v3: published (<the publish's summary>)
+  changes: views: 1 changed; publications: 1 changed
+prod-us v5: running (the engine runs this configuration as v5 already)
+```
+
+The command exits `0` when no engine failed, `1` when any did, and `2` when the console refused
+the request: a version never published, an unknown engine, an environment with no engines, a token
+without the scope, a missing ticket.
 
 Each target engine's outcome is recorded as `config.promoted` in the audit trail (from, to, the
 status and the diff summary), and `config.promoted` is raised once as a webhook event.
@@ -406,9 +431,11 @@ A publication that differs prints as a unified diff of the expected file against
 contains. The command exits `1` when any test case, package test or golden test fails, else `0`.
 Add `--env FILE` when the configuration has placeholders.
 
-`syncd test` reads the `*.yaml` files directly in the directory, not in its subdirectories. The
-console also reads one level of subdirectories. Keep golden files directly in `tests/golden`, with
-their fixtures and expected files in subdirectories, and both find the same tests:
+A golden file is a `*.yaml` or `*.yml` file directly in the directory or one level of
+subdirectories down. `syncd test` and the console find the same files. (Before 0.4.1, `syncd test`
+read only the files directly in the directory, while the console read one level down as well.)
+Either layout works: golden files directly in `tests/golden`, with fixtures and expected files in
+subdirectories, or one subdirectory per test:
 
 ```text
 syncd.yaml
@@ -417,7 +444,13 @@ tests/golden/fixtures/hr.csv
 tests/golden/fixtures/corp.ldif
 tests/golden/fixtures/openldap-existing.ldif
 tests/golden/expected/people_to_openldap.ldif
+tests/golden/leavers/leavers.yaml
+tests/golden/leavers/fixtures/hr.csv
+tests/golden/leavers/expected/people_to_openldap.ldif
 ```
+
+Any other YAML file one level down is taken for a golden file too, so keep fixtures as CSV or
+LDIF there. Files two levels down are only read as fixtures and expected files.
 
 ### What golden tests leave out
 
@@ -441,11 +474,15 @@ the rules' test cases:
   cases' failures. While any fails, the editor's **Publish** button is disabled.
 - **Git sync's `validate` and `publish` modes** check every version they make the same way. A
   failing golden test is a `config.git-failed`, and the version is not published.
+- **Every publish** runs them, since 0.4.1: the server's publish gate
+  (`POST /api/v1/engines/{id}/configs/{version}/publish`, which the **Publish** button, API tokens,
+  Git auto-publish and [promotion](#promotion) all use) runs the golden tests with the rules' test
+  cases, on the version rendered for the engine's environment with secrets masked, and refuses
+  the publish when any fails (`not published: N of M test cases fail`, with each golden failure).
+  In 0.4.0 the gate ran only the rules' test cases, so a publish through the API or a promotion
+  went ahead with a failing golden test.
 
-The server's publish gate itself (`POST /api/v1/engines/{id}/configs/{version}/publish`, which
-API tokens and [promotion](#promotion) use) runs the rules' test cases but not the golden tests.
-A publish through the API, or a promotion, goes ahead with a failing golden test, so run
-`syncd test` in CI before either. Without Git sync, the console has no golden tests.
+Without Git sync, the console has no golden tests: run `syncd test` in CI.
 
 The console reads the golden files at the **branch head**, not at the commit of the version being
 checked. A version from an older commit, or a draft that has moved ahead of the branch, is checked
@@ -557,11 +594,9 @@ inline. In a configuration-as-code repository, packages are files in the same re
 - **Promotion** is command line and API only. There is no Promote button in the web console.
 - **The console's golden tests** (and the package files it reads from Git) come from the branch
   head, not from the commit of the version being checked.
-- **The publish endpoint and promotion** don't run golden tests; only the editor and Git sync's
-  `validate` and `publish` modes do.
 - **The console's version compare** shows a file package's name, version, file and pin, not the
   functions that changed. `syncd config diff` does show them.
-- **`syncd test`** reads golden files only directly in its directory; the console reads one level
-  of subdirectories too.
+- **Renaming an engine** (`syncd-console admin rename-engine`, run by the Helm chart when it turns
+  HA on) doesn't update `CONSOLE_CONFIG_GIT_ENGINES`: change it by hand.
 - **Git sync** runs the `git` program: `file://` repositories don't work in the container image,
   which has no shell.

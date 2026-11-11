@@ -700,7 +700,10 @@ computed:
 too, and reports failures as `view <v>: computed <c>: test <n>: expected ..., got ...`.
 Publishing requires every test to pass: the console will save a version whose tests fail
 but not publish it, and the engine refuses to apply it. `syncd test --golden DIR` also
-runs golden-file tests of whole publications; see
+runs golden-file tests of whole publications (the `*.yaml` files in `DIR` and, since
+0.4.1, one directory level down). With Git sync the console runs the golden tests beside
+the configuration for every publish, through the editor, the API, Git auto-publish or
+promotion, and refuses one that fails (0.4.0 ran them for the editor's check only); see
 [Golden-file tests](config-as-code.md#golden-file-tests).
 
 ## Rule packages
@@ -822,8 +825,9 @@ configuration too, at a version the range allows.
 A package's `tests` are expressions evaluated inside the package over `input` as `e`,
 with every package's lookup tables and the test's own `lookups`. `now()` is 0 and
 `unique()` treats every candidate as free, as in other test cases. They run with the
-computed attributes' tests: in `syncd validate`, `syncd test`, the console's check and the
-publish gate. A failure is reported as `package gov-naming 1.2.0: test 3: expected ...,
+computed attributes' tests: in `syncd test`, the console's check and the publish gate,
+and when the engine applies a configuration (`syncd validate` compiles but runs no
+tests). A failure is reported as `package gov-naming 1.2.0: test 3: expected ...,
 got ...`, and blocks publishing like any failing test.
 
 ### Where packages show
