@@ -195,6 +195,7 @@ compares parsed DNs (RFC 4514), so string tricks cannot escape the namespace.
 | | **Title attribute** | Entry title, and the default sort |
 | | **Containers for new entries** | Parent DNs where users can create entries (must be within the base DN) |
 | Find the signed-in user | **Self match** | How **My profile** finds the user's own entries: *none*, *entry DN equals the user's DN*, or *entry attribute equals the user's attribute* (for example `member` = user `dn`, `acmeAssignedTo` = user `dn`, `uid` = user `uid`) |
+| Group access (v0.0.7) | **Let users find these groups and request access**, and its settings | For definitions of groups on a read/write directory. See [Group access](#group-access) |
 
 Deleting a definition also removes all its permission grants. The audit log records how many grants
 were removed.
@@ -289,6 +290,65 @@ Two license features decide whether these grants can be used at all:
 `white-pages` only widens access inside the directory editor, so it needs `directory-editor` as
 well: a license with `white-pages` but without `directory-editor` gives nobody a directory to
 browse.
+
+[Group access](#group-access) has no feature of its own: either `directory-editor` or
+`self-service-profile` turns it on, and neither grants nor `white-pages` decide who may look groups
+up. See [Group access → License](#group-access-license).
+
+## Group access
+
+*Admin → Directory definitions → Group access* (v0.0.7)
+
+Group access lets the people in a directory find its groups, ask to join one, and have the group's
+owners decide, without anyone holding edit access to the whole definition. It is off until you turn
+it on for a definition whose entries are groups. The definition must be **Read / write**.
+
+| Setting | Default | Description |
+|---|---|---|
+| **Let users find these groups and request access** | off | Turns group access on for this definition |
+| **Member field** | *Automatic (member, uniqueMember or memberUid)* | The form's member field: the first of `member`, `uniqueMember` or `memberUid` the form has, or another multi-valued DN field you choose. The form must have one. Approving adds the requester's DN to it, or their login name for `memberUid` |
+| **Owner attribute** | `owner` | The DN-valued attribute naming who approves: people, or groups whose members all approve |
+| **Groups that take requests** | every group | An LDAP filter, for example `(!(cn=domain admins))`. Other groups can be looked up but not requested |
+| **Require a reason** | off | A request must say why |
+| **Members may leave on their own** | off | Members can remove themselves; otherwise they ask the owners |
+
+How it works:
+
+- **Who sees what.** Signed-in users see the group directories of the LDAP directory they signed in
+  to, under **Group access** in the menu (shown once a definition has it on). Looking groups up needs
+  no grant on the definition: users see names, descriptions and owners; only owners and editors see
+  members.
+- **Who decides.** A group's owners, and anyone who may edit the definition (administrators
+  included). Nobody decides their own request. *To review* lists what each person can decide, and
+  the menu shows how many are waiting. Rejecting leaves the group as it is; the requester sees the
+  decision and the owner's note either way.
+- **Owners manage members** on the group's page: find people by name, login or e-mail to add them,
+  and remove members. This is the only write group access allows; owners can't edit the group's
+  other attributes unless they hold **Can view and edit** on the definition.
+- **Audit and webhooks.** Requests and decisions are audited (see [Audit log](#audit-log)). A
+  membership change is the usual `entry.update` event, and its `details.via` says why someone
+  without write access could make it: `group-access-request`, `group-owner` or `group-leave`. It also
+  sends the `group.membership_changed` [webhook](webhooks.md).
+- **Storage.** Requests are kept in `group-access-requests.json` in the data directory, or in the
+  shared database when one is configured. Closed requests are kept for a year (at most 5,000); the
+  audit trail keeps them for good.
+
+### License { #group-access-license }
+
+| License | Group access |
+|---|---|
+| `directory-editor` and `self-service-profile` | Available |
+| `directory-editor` only | Available |
+| `self-service-profile` only | Available: users look groups up, ask to join and leave, and owners decide and manage members, although the **Directories** menu is hidden. Administrators and editors still approve |
+| Neither | Off: `/api/groups/**` answers 403 `feature_not_licensed`, and **Group access** is not in the menu |
+| Several directories without `multi-directory` | Only the first directory's group directories take part; users of other directories see none |
+
+So a license sold for self service alone (*My profile*) also covers group requests and owner
+approval. Grants and `white-pages` don't change who may look groups up or ask to join.
+
+!!! example "Demo"
+    The demo turns group access on for **Groups**. Carol Chen co-owns *engineering*, and
+    *directory-admins* doesn't take requests.
 
 ## Metrics dashboards
 
@@ -404,6 +464,7 @@ application. The format, the outputs to Splunk and syslog, and integrity checkin
 | Password changes | `auth.password-changed`, `auth.password-reset` | A password attribute changed by the user themselves (`changed`), or by someone else through a directory (`reset`). The value is never recorded |
 | Refused requests | `access.denied` | Method, path and reason (role, license, feature, CSRF header, the portal's own permission checks). Identical denials within 60 seconds are folded into one event with a count |
 | Configuration changes | `grant.save`, `grant.revoke`, `definition.*`, `form.*`, `schema.import`, `schema.attribute_type.save/delete`, `schema.object_class.save/delete`, `dashboard.*`, `analysis.*` | The settings that changed, before and after |
+| Group access requests (v0.0.7) | `group.access-requested`, `group.access-cancelled`, `group.access-approved`, `group.access-rejected` | The group; for a decision also the request, the requester and the owner's note. The membership change itself is an `entry.update` with `details.via` |
 | The license | `license.installed`, `license.rejected`, `license.mode-changed` | The reason for a rejection; the old and new mode |
 | Exports | `analysis.export`, `data.exported`, `audit.exported` | Which analysis, run or filter |
 | The audit trail itself and the system | `audit.*`, `system.started`, `system.stopped`, `job.*` | See [Audit logging](../audit-logging.md#what-is-recorded) |

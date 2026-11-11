@@ -151,6 +151,24 @@ shows a message instead of your entries when that match is not safe: when it fin
 entry for you, or when users can edit one of the matched attributes in self service. Ask an
 administrator to fix the directory's set-up.
 
+## Group access
+
+**Group access** (`/groups`, from v0.0.7) appears in the menu when an administrator has turned it
+on for a directory of groups. It shows the groups of the directory you signed in to.
+
+- **Find groups** by name or description. Each group shows whether you are a member, own it, or
+  have asked to join.
+- **Request access**, with a reason (some directories require one). **My requests** lists your
+  requests and their answers; you can withdraw one that is still open.
+- **My groups** lists the groups you are in. You can **leave** a group when its directory allows it;
+  otherwise ask its owners.
+- **To review** (for a group's owners): approve or reject requests, with a note the requester sees.
+  The menu shows how many requests are waiting. You can't decide your own request.
+- **Owners** open a group to add people (search by name, login or e-mail) and remove members.
+
+Some groups can be looked up but don't take requests; ask their owners or an administrator. Group
+access comes with your organisation's license for the directory editor or for **My profile**.
+
 ## Metrics
 
 **Metrics** (`/metrics`) offers statistics and charts computed live from the directories you can

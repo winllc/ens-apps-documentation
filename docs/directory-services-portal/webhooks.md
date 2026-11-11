@@ -17,6 +17,10 @@ until one exists.
 
 A webhook can be limited to some directories. **Send test event** queues a `ping`.
 
+From v0.0.7 membership changes made through [group access](admin-guide.md#group-access) (an
+approved request, an owner adding or removing members, a member leaving) send
+`group.membership_changed` and `entry.changed` like any other.
+
 From the next release every event's `data` also has `directory`, the id of the LDAP directory the
 entry is in (`default` with one directory; see
 [Configuration → Several directories](configuration.md#several-directories)), next to
