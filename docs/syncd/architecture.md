@@ -228,9 +228,12 @@ sequenceDiagram
 ```
 
 - **The engine's password key** is a P-256 key pair, created on first start in the data
-  directory (`password.key`, `passwords.key_file`), in the clear and protected by its file mode
-  (0600) only. Capture points fetch the public half (`GetPasswordKey`); they can seal, never
-  open.
+  directory (`password.key`, `passwords.key_file`), mode 0600. From 0.4.1, with
+  `SYNCD_PASSWORD_KEY_PASSPHRASE_FILE`, it and the agent CA's key are sealed at rest
+  (PBKDF2-HMAC-SHA256, 600,000 iterations, AES-256-GCM, on aws-lc-rs); without it they are in the
+  clear, protected by the file mode only, and the engine warns at start. Capture points fetch the
+  public half (`GetPasswordKey`); they can seal, never open. See
+  [Security](security.md#cryptography).
 - **The envelope** is HPKE (RFC 9180, base mode): DHKEM(P-256, HKDF-SHA256), HKDF-SHA256,
   AES-256-GCM, on aws-lc-rs, with the key's id as additional data. A self-service request is
   sealed with a different HPKE `info`, so it can never be taken for a captured change.
@@ -240,7 +243,8 @@ sequenceDiagram
       `.crt` beside the password key, created on first start, ten years). They submit with
       `Submit`. See [API reference](api-reference.md#password-ingest-api-grpc).
     - **The console's self-service page** seals the person's request to the password key and
-      sends it with `ChangeOwnPassword`. The engine checks its policy, binds as the person to
+      sends it with `ChangeOwnPassword` (from 0.4.1, to the member of an HA pair that holds the
+      lease). The engine checks its policy, binds as the person to
       prove the current password, changes it in the source directory as the person, then queues
       it for the other targets.
     - **`syncd password set`** stands in for a capture point in scripts and tests.
@@ -252,14 +256,15 @@ sequenceDiagram
   than the last delivered (`password_sequences`) is dropped. syncd's own write coming back from
   a directory is recognised for 10 minutes by a keyed hash and dropped.
 - **A refusal** by a target (its password policy, access rights) is reported and not retried.
-  `syncd status` and the status API count deliveries, failures and waiting changes, never with
-  password material.
+  `syncd status` and the status API count deliveries, failures, dropped (report mode) and
+  waiting changes, never with password material; from 0.4.1 also per publication, and as the
+  metrics `syncd_password_deliveries_total` and `syncd_password_waiting`.
 - **Agents** are kept in `password_agents`: the token's SHA-256, the certificate's fingerprint,
   revocation, when last seen and how many changes each submitted. Revocation checks the
   fingerprint, not a CRL.
 
 There are no capture plugins yet (the Windows password filter, the 389 and OpenLDAP plugins),
-and the password key and agent CA cannot be rotated. See
+and the password key and agent CA cannot be rotated (nor, from 0.4.1, their passphrase changed). See
 [Password synchronisation](password-sync.md) and [Security](security.md#password-synchronisation).
 
 ## Renames and moves
@@ -339,19 +344,20 @@ names first seen in it. A crash cannot leave a record that refers to an unknown 
 or a checkpoint ahead of the data it covers.
 
 The layout has a version, the **store format**. A newer release that changes it migrates the
-store when it first starts; an older release refuses a store written by a newer one. 0.4.0 does
-not change the format: it adds the column families above that 0.3.0 did not have, on first
+store when it first starts; an older release refuses a store written by a newer one. Neither
+0.4.0 nor 0.4.1 changes the format (1). 0.4.0 it adds the column families above that 0.3.0 did not have, on first
 start. 0.3.0 opens a store that has them, but ignores what they hold (timers, held changes,
 quality results, group lifecycles). See [Installation](install.md) for upgrades and rollbacks.
 
 History keeps at most `engine.history.keep_per_entity` entries per entity (100 by default) for
 `keep_days` (30 by default). Since 0.4.0 the newest `min_per_entity` entries of each entity (10 by
-default) stay past `keep_days`, and so does every entry of an entity with an open held change or
-a dead letter, until it clears. The prune runs every hour, or at once
+default) stay past `keep_days`. Every entry of an entity with an open held change or a dead letter
+stays until it clears: past `keep_days`, and from 0.4.1 past `keep_per_entity` too (0.4.0 still
+cut such an entity's entries to `keep_per_entity`). The prune runs every hour, or at once
 with `syncd history prune --now`.
 
 The data directory also holds the password key and the agent CA (`password.key`,
-`password-agent-ca.key`, `password-agent-ca.crt`), and, while they are in use, `backups/` (a
+`password-agent-ca.key`, `password-agent-ca.crt`; the two keys sealed when a passphrase is set), and, while they are in use, `backups/` (a
 store checkpoint while a backup is taken), `restore/` and `replaced-<time>/` (left by
 `syncd restore`), and `ha/` (a snapshot received from the active engine, and the swap's
 progress).

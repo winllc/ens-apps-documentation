@@ -51,7 +51,7 @@ one change, to the second department. An entity that no longer needs a change lo
 | Where | What |
 |---|---|
 | `syncd status` | A `held:` line under the publication: the count by kind and reason and the oldest, when the window opens next, the canary under way, and the approval to give. A report-mode publication prints `report mode: N adds, M modifies, K moves, L deletes would be sent` instead |
-| `syncd held <publication> [--kind K] [--reason R] [--limit N]` | The held changes, one per line, in entity id order |
+| `syncd held <publication> [--kind K] [--reason R] [--limit N]` | The held changes, one per line, in entity id order. `--kind` is one of `add`, `modify`, `move`, `delete`, `disable`, `strip_groups`, `password`; `--reason` one of the reasons above (`window`, `overdue`, `modifications`, `additions`, `deletions`, `canary`, `canary_failed`, `expired`, `report`). `--limit` is 100 by default. (The 0.4.0 help left out `password` and `expired`, which it already accepted) |
 | The console's engine page | A **Held** column per publication, and a **Held changes** card with the list and an **Approve and apply** button when an approval is needed |
 | Prometheus | `syncd_held_changes{publication,reason}` (every reason, so a hold that clears reads 0), `syncd_window_opens_timestamp_seconds{publication}`, `syncd_canary_failed{publication}`, `syncd_shadow_planned{publication,kind}` (report mode) |
 | Alerts | `SyncdChangesNeedApproval` (warning: changes held as `modifications`, `additions`, `deletions`, `overdue` or `canary_failed`) and `SyncdCanaryFailed` (critical). See [Alert rules](operator-guide.md#alert-rules) |
@@ -235,6 +235,9 @@ rehire) does nothing, and the next one is armed from what the rules say then.
     staged leaver steps, effective dates, change windows, canaries and group expiry stop. It also
     refuses settings it does not know, so publish a configuration without the 0.4.0 settings
     before rolling back with the store kept. See [Installation](install.md).
+
+syncd 0.4.1 keeps the 0.4.0 store format, so timers and held changes survive an upgrade to 0.4.1
+and a rollback from it to 0.4.0.
 
 ## Effective dates
 

@@ -62,7 +62,7 @@ files, with `SHA256SUMS` and its signature.
 
 !!! warning "Nothing is published yet"
     The source repository has no release tags yet, so no GitHub release, container image or
-    chart has been published, for 0.4.0 or any earlier version. Until one is, build from source:
+    chart has been published, for 0.4.1 or any earlier version. Until one is, build from source:
     `scripts/package.sh` (and `scripts/package-el8.sh`) for the bundle and packages, `docker
     build` for the images (below), and `helm install` from `deploy/helm/syncd` for the chart.
     The names and addresses on this page are where each release will be published once it is
@@ -109,7 +109,7 @@ sha256sum -c SHA256SUMS --ignore-missing
 - **A release without `SHA256SUMS.asc`** was published without the signing key (the release
   workflow's summary says so). Its checksums still show that a file is complete, not who built
   it.
-- **The bundle alone:** `sha256sum -c syncd-0.4.0-linux-x86_64.tar.gz.sha256`. Inside the bundle,
+- **The bundle alone:** `sha256sum -c syncd-0.4.1-linux-x86_64.tar.gz.sha256`. Inside the bundle,
   every file is listed in `MANIFEST.sha256`, and the installer checks the release against it
   before it copies anything, so a damaged archive is refused even without these steps.
 - **SBOMs.** The two CycloneDX files list the crates and the web console's packages each
@@ -128,8 +128,8 @@ container registry and signs them. None has been pushed yet (see above):
 | The console's image | `ghcr.io/winllc/syncd-console:<version>` (with the web UI, `git` and `ssh`), and `<version>-fips` |
 | The Helm chart | `oci://ghcr.io/winllc/charts/syncd`, version `<version>` |
 
-- **Tags.** Each release is tagged with its version, for example `0.4.0`, and its FIPS variant
-  `0.4.0-fips`. There is no `latest`. The chart's version and `appVersion` are the release's.
+- **Tags.** Each release is tagged with its version, for example `0.4.1`, and its FIPS variant
+  `0.4.1-fips`. There is no `latest`. The chart's version and `appVersion` are the release's.
 - **Platforms.** A tag holds `linux/amd64`, and `linux/arm64` when the release was built with
   `ARM64_RUNNERS` set. `docker buildx imagetools inspect ghcr.io/winllc/syncd:<version>` lists a
   tag's platforms. The `-fips` tags are amd64 only.
@@ -152,7 +152,7 @@ container registry and signs them. None has been pushed yet (see above):
 
 ```bash
 # A tag's digest (the image index: every platform)
-docker buildx imagetools inspect ghcr.io/winllc/syncd:0.4.0
+docker buildx imagetools inspect ghcr.io/winllc/syncd:0.4.1
 
 # The image's signature, and its SBOM attestations
 cosign verify ghcr.io/winllc/syncd@<digest> \
@@ -176,10 +176,10 @@ the images (see [Air-gapped clusters](#air-gapped-clusters)).
 **Images you build yourself**, from the source repository:
 
 ```bash
-docker build -f deploy/container/Dockerfile --target engine -t registry.example.com/syncd:0.4.0 .
-docker build -f deploy/container/Dockerfile --target console -t registry.example.com/syncd-console:0.4.0 .
+docker build -f deploy/container/Dockerfile --target engine -t registry.example.com/syncd:0.4.1 .
+docker build -f deploy/container/Dockerfile --target console -t registry.example.com/syncd-console:0.4.1 .
 # The FIPS variant
-docker build -f deploy/container/Dockerfile --target engine -t registry.example.com/syncd:0.4.0-fips \
+docker build -f deploy/container/Dockerfile --target engine -t registry.example.com/syncd:0.4.1-fips \
   --build-arg FEATURES=syncd/fips,syncd-console/fips .
 ```
 
@@ -204,13 +204,13 @@ See [FIPS 140-3 and DISA STIG](fips-and-stig.md).
 ## Install from the bundle
 
 ```bash
-sha256sum -c syncd-0.4.0-linux-x86_64.tar.gz.sha256
-tar -xzf syncd-0.4.0-linux-x86_64.tar.gz
-sudo ./syncd-0.4.0-linux-x86_64/install.sh --local-database
+sha256sum -c syncd-0.4.1-linux-x86_64.tar.gz.sha256
+tar -xzf syncd-0.4.1-linux-x86_64.tar.gz
+sudo ./syncd-0.4.1-linux-x86_64/install.sh --local-database
 ```
 
-On aarch64, use `syncd-0.4.0-linux-aarch64.tar.gz`. For FIPS mode, use
-`syncd-0.4.0-linux-x86_64-fips.tar.gz` and add `--fips`.
+On aarch64, use `syncd-0.4.1-linux-aarch64.tar.gz`. For FIPS mode, use
+`syncd-0.4.1-linux-x86_64-fips.tar.gz` and add `--fips`.
 
 `install.sh` runs `bin/syncdctl install` with the options you give it. On a host where syncd is
 already installed (`/etc/syncd/console.env` exists), it runs `syncdctl upgrade` instead (see
@@ -271,9 +271,9 @@ At the end it prints the console's address and the `admin` account's one-time pa
 ## Install from a package
 
 ```bash
-sudo apt install ./syncd_0.4.0_amd64.deb            # Debian, Ubuntu (arm64: syncd_0.4.0_arm64.deb)
-sudo dnf install ./syncd-0.4.0-1.x86_64.rpm         # RHEL, Rocky, Alma 9+, Fedora (aarch64: syncd-0.4.0-1.aarch64.rpm)
-sudo dnf install ./syncd-0.4.0-1.el8.x86_64.rpm     # RHEL, Rocky, Alma 8
+sudo apt install ./syncd_0.4.1_amd64.deb            # Debian, Ubuntu (arm64: syncd_0.4.1_arm64.deb)
+sudo dnf install ./syncd-0.4.1-1.x86_64.rpm         # RHEL, Rocky, Alma 9+, Fedora (aarch64: syncd-0.4.1-1.aarch64.rpm)
+sudo dnf install ./syncd-0.4.1-1.el8.x86_64.rpm     # RHEL, Rocky, Alma 8
 sudo syncdctl install --local-database              # or --database-url ...
 ```
 
@@ -316,11 +316,15 @@ CONSOLE_PUBLIC_URL=https://syncd.example.com:8443
 
 !!! warning "Comments in `console.env` go on lines of their own"
     systemd reads `console.env` as an `EnvironmentFile`, which takes everything after the `=` as
-    the value, a `# ...` at the end of the line included. Some commented lines of the release's
-    template (`/opt/syncd/current/share/config/console.env`) end with such a note, for example
+    the value, a `# ...` at the end of the line included. From 0.4.1 the release's templates
+    (`/opt/syncd/current/share/config/console.env` and `engine.env`) keep every note on a line
+    of its own. Your `/etc/syncd/console.env` is written at install only, so a host installed
+    with 0.4.0 or earlier may still have commented lines that end with a note, for example
     `#CONSOLE_PUBLISH_HOOK_ON_ERROR=refuse   # or allow`. Uncommenting one as it is sets a wrong
-    value, and the console refuses it or fails to start. Delete the trailing note when you
-    uncomment a line. The same holds for `engine.env`.
+    value, and the console refuses it or fails to start; from 0.4.1 its error then adds
+    `<setting> holds ` #` (a comment at the end of the line becomes part of the value)`. Move
+    the note to a line of its own when you uncomment a line. The same holds for `engine.env`,
+    though the engine gives no such hint.
 
 ```bash
 sudo chown root:syncd-console /etc/syncd/console-tls/*
@@ -488,9 +492,22 @@ registered already:
   replaced), and says why: `engine N is registered, but this console's master key cannot open its
   stored client key`. `POST /api/v1/engines` answers the same, with `400`.
 - **With `--update`** (`replace: true` through the API) it replaces that engine's address and
-  credentials, keeping its id and configuration versions, and records `engine.update`. When the
-  stored key could not be opened, it seals the new one over it and records
-  `engine.re-registered`. `syncdctl renew-certs` and the Helm chart's registration Job use it.
+  credentials, keeping its id, configuration versions and environment, and records
+  `engine.update`. When the stored key could not be opened, it seals the new one over it and
+  records `engine.re-registered`. `syncdctl renew-certs` and the Helm chart's registration Job
+  use it.
+- **`--environment ENV`** sets the environment the engine runs in (see
+  [Configuration as code](config-as-code.md)): `default` for a new engine unless given. With
+  `--update`, the engine keeps the environment it has unless `--environment` is given. In 0.4.0,
+  `--update` without it moved the engine back to `default`, so a `renew-certs` or a
+  `helm upgrade` did.
+
+`syncd-console admin rename-engine --from A --to B` renames a registered engine, keeping its id,
+configuration versions, reports and history; it does nothing when no engine is called `A`, or
+one is called `B` already, and records `engine.renamed`. New in 0.4.1; the Helm chart runs it when
+HA is turned on (see [An active/passive pair](#an-active-passive-pair)). It does not change engine
+names in the console's settings (`CONSOLE_SELF_SERVICE_ENGINE`, `CONSOLE_CONFIG_GIT_ENGINES`):
+change those by hand.
 
 A `unix:` address only works for a console on the engine's host, running as a user that may open
 the socket. The socket is mode 0600, owned by the engine's user, so the packaged
@@ -560,14 +577,18 @@ when the lease expires. How it works, its failover window and its limits are in
    [Registering engines](#registering-engines)). The console shows them as one pair.
 
 The snapshots carry the engine's password key and the password agents' CA, so the engine that
-takes over opens the password changes queued in the store. `engine.ha` can only be changed on the
+takes over opens the password changes queued in the store. When the keys are sealed (see
+[The password keys](operator-guide.md#the-password-keys)), both engines need the same
+`SYNCD_PASSWORD_KEY_PASSPHRASE_FILE` passphrase: an engine with another one, or none, refuses
+to start on a snapshot's keys. `engine.ha` can only be changed on the
 host: the engine refuses a configuration published from the console that changes it, as it does
 `engine.data_dir` and `api`.
 
 The pair can also come from the environment alone, with a configuration file that says nothing
 of it: `SYNCD_HA_NAME` (the pair), `SYNCD_HA_LEASE_URL` or `SYNCD_HA_LEASE_PATH`, and optionally
 `SYNCD_HA_LEASE_TTL_SECS` and `SYNCD_HA_SNAPSHOT_EVERY_SECS`. `SYNCD_HA_MEMBER` and
-`SYNCD_HA_ADVERTISE` override `member` and `advertise` either way. A file with an `engine.ha` of
+`SYNCD_HA_ADVERTISE`, when set and not empty, override `member` and `advertise` either way (from
+0.4.1; 0.4.0 used the file's values first). A file with an `engine.ha` of
 its own keeps it. On Kubernetes, `engine.ha.enabled` does all of this (see
 [An active/passive pair](#an-active-passive-pair)).
 
@@ -639,7 +660,7 @@ console:
 Then install:
 
 ```bash
-helm install syncd oci://ghcr.io/winllc/charts/syncd --version 0.4.0 \
+helm install syncd oci://ghcr.io/winllc/charts/syncd --version 0.4.1 \
   --namespace syncd -f syncd-values.yaml --wait
 ```
 
@@ -660,7 +681,8 @@ release's name contains `syncd`. For a release named `syncd`, as here, they are 
 `syncd-engine` (pod `syncd-engine-0`), the Deployment and Service `syncd-console`, the Service
 `syncd-engine`, the Secrets `syncd-console` and `syncd-pki`, and the Job `syncd-register`. The
 examples on these pages use those names. [Production values](#production-values) covers single
-sign-on, the console's own HTTPS, extra volumes, NetworkPolicies, the alert rules and an HA pair.
+sign-on, the console's own HTTPS, extra volumes, NetworkPolicies, the alert rules, password
+synchronisation and an HA pair.
 
 ### 2. First sign-in
 
@@ -699,14 +721,17 @@ kubectl -n syncd exec deploy/syncd-console -- syncd-console admin reset-password
 | `imagePullSecrets` | `[]` | For a private registry or mirror |
 | `podSecurityContext`, `securityContext` | uid and gid 65532, `fsGroup` 65532, `runAsNonRoot`, seccomp `RuntimeDefault`; no privilege escalation, read-only root file system, every capability dropped | Both components and the Job |
 | `engine.name` | The release's name | The name the console knows the engine by |
+| `engine.environment` | | The console environment the engine runs in, passed to each registration (`--environment`). Empty: a new engine runs in `default`, and a registered one keeps the one it has. New in 0.4.1 |
 | `engine.envFromSecret` | | A Secret whose keys become the engine's environment variables: the secrets its configuration refers to, and S3 keys for backups |
 | `engine.env` | `[]` | More environment variables, for example `RUST_LOG` or `SYNCD_FIPS_MODE` |
 | `engine.extraVolumes`, `.extraVolumeMounts` | `[]` | More volumes on the engine's pod: a CA bundle, a CSV inbox (see [Extra volumes](#extra-volumes)) |
+| `engine.passwordKeyPassphrase.existingSecret`, `.key` | , `passphrase` | A Secret of yours holding the passphrase that seals the password keys (see [Password synchronisation](#password-synchronisation)). New in 0.4.1 |
 | `engine.persistence.size`, `.storageClass`, `.accessModes` | `10Gi`, the default class, `[ReadWriteOnce]` | The engine's volume, one per engine (see [Sizing](availability-and-sizing.md#sizing)) |
 | `engine.resources` | Requests 250m CPU and 512Mi; memory limit 4Gi | The engine's pod. The memory limit is the engine's `syncd_memory_limit_bytes` |
 | `engine.terminationGracePeriodSeconds` | `90` | Time the engine has to finish its batch and stop, as `TimeoutStopSec` on a host |
 | `engine.nodeSelector`, `.tolerations`, `.affinity`, `.podAnnotations` | | Scheduling, annotations. `affinity` replaces the HA pair's anti-affinity |
 | `engine.service.type` | `ClusterIP` | The Service with the control API (`api`, 7443) and metrics (`metrics`, 9464) |
+| `engine.passwordIngest.enabled`, `.port`, `.service.type`, `.service.annotations` | `false`, `7445`, `ClusterIP`, `{}` | The password agents' ingest listener on a Service of its own, `<release>-syncd-engine-ingest` (see [Password synchronisation](#password-synchronisation)). New in 0.4.1 |
 | `engine.ha.enabled` | `false` | Two engine pods as an [active/passive pair](#an-active-passive-pair) |
 | `engine.ha.leaseTtlSeconds`, `.snapshotEverySeconds` | `15`, `300` | The lease's TTL and the snapshot interval |
 | `engine.ha.antiAffinity` | `soft` | `soft` prefers two nodes for the pair; `hard` requires them |
@@ -729,7 +754,7 @@ kubectl -n syncd exec deploy/syncd-console -- syncd-console admin reset-password
 | `console.nodeSelector`, `.tolerations`, `.affinity`, `.podAnnotations` | | Scheduling, annotations |
 | `console.service.type`, `.port` | `ClusterIP`, `8080` | The console's Service: HTTP, or HTTPS with `console.tls` |
 | `console.ingress.enabled`, `.className`, `.annotations`, `.host`, `.tls` | `false`, , `{}`, `syncd.example.com`, `[]` | An Ingress for one host, path `/` |
-| `networkPolicy.*` | Off | [NetworkPolicies](#networkpolicies) |
+| `networkPolicy.*` | Off | [NetworkPolicies](#networkpolicies). `networkPolicy.passwordIngestFrom` (new in 0.4.1): who may reach the ingest port |
 | `pki.days` | `3650` | How long the CA and the certificates the chart issues are valid |
 
 `values.yaml` in the chart lists them all, and the source repository's
@@ -914,7 +939,9 @@ kind's does not, so the chart's CI test checks the objects, not the isolation.
 - **The engine** accepts its control API (7443) from the console's and the registration Job's
   pods only (and, in a pair, from the other engine), and its metrics (9464) from
   `networkPolicy.monitoringNamespaceSelector` and `monitoringPodSelector` (both in one `from`
-  entry; from anywhere while both are empty).
+  entry; from anywhere while both are empty). With `engine.passwordIngest.enabled`, it also
+  accepts the ingest port from `networkPolicy.passwordIngestFrom` (`from` entries, such as an
+  `ipBlock` for the domain controllers; from anywhere while it is empty). New in 0.4.1.
 - **The console** accepts its port (8080) from `networkPolicy.ingressNamespaceSelector` and
   `ingressControllerSelector`, plus `networkPolicy.console.extraIngressFrom` (more `from`
   entries, an `ipBlock` for instance); from anywhere while all are empty.
@@ -984,6 +1011,56 @@ label to `engine.metrics.job` (`syncd`), and the rules are rendered with that jo
 PrometheusRule on one of them: its rules match every engine. See
 [Monitoring on Kubernetes](operator-guide.md#monitoring-on-kubernetes).
 
+#### Password synchronisation
+
+New in 0.4.1. Two values serve [password synchronisation](password-sync.md): a passphrase that
+seals the password keys, and a Service for the capture agents' ingest listener.
+
+**Seal the password keys.** Without a passphrase, the engine's password key and the agents' CA
+key are plain files on the data volume, and backups and HA snapshots carry them as they are (see
+[The password keys](operator-guide.md#the-password-keys)). Create a Secret with a passphrase and
+name it:
+
+```bash
+kubectl -n syncd create secret generic syncd-password-key \
+  --from-literal=passphrase="$(head -c 32 /dev/urandom | base64)"
+```
+
+```yaml
+engine:
+  passwordKeyPassphrase:
+    existingSecret: syncd-password-key
+    key: passphrase          # the default
+```
+
+The chart mounts the key read-only at `/run/secrets/syncd-password-key/passphrase` and sets
+`SYNCD_PASSWORD_KEY_PASSPHRASE_FILE` to it. At its next start the engine seals both files in place,
+with the same keys, and `syncd status` says `password keys: sealed with the passphrase`. Both
+engines of a pair use the same Secret. The chart neither creates nor keeps this Secret: keep a copy
+of the passphrase with your other recovery secrets, since a restore needs it.
+
+**The ingest listener.** Capture agents enroll and send changes on the listener the configuration
+sets in `passwords.ingest`. `engine.passwordIngest.enabled` gives the engine's pods an `ingest` port
+and a Service of its own, `syncd-engine-ingest`, so a load balancer for the agents exposes neither
+the control API nor the metrics:
+
+```yaml
+engine:
+  passwordIngest:
+    enabled: true
+    port: 7445               # the port of passwords.ingest.listen
+    service:
+      type: LoadBalancer     # for agents outside the cluster; ClusterIP by default
+networkPolicy:
+  passwordIngestFrom:        # with networkPolicy.enabled; from anywhere when empty
+    - ipBlock: { cidr: 10.20.0.0/24 }
+```
+
+The configuration the console publishes must listen on that port, with `names` the address the
+agents use (`passwords: { ingest: { listen: 0.0.0.0:7445, names: [...] } }`). With
+`engine.ha.enabled` the Service routes to both pods but only the active engine listens: an agent
+that reaches the passive one is refused and must try again.
+
 #### An active/passive pair { #an-active-passive-pair }
 
 ```bash
@@ -1002,9 +1079,17 @@ data volume, as an active/passive pair:
   (`syncd-engine-0.syncd-engine-peers.<namespace>.svc`). The lease records the active one's; the
   passive one pulls snapshots from it with the chart's engine certificate, which names both pods.
 - **Registration.** The Job registers both pods in the console, as `<engine name>-0` and `-1`. The
-  console shows them as one pair, with the active one's status. An engine registered before under
-  `<engine name>` alone stays registered, with its configuration versions, until you remove it
-  under **Engines**.
+  console shows them as one pair, with the active one's status. From 0.4.1, an engine registered
+  before under `<engine name>` alone is renamed `<engine name>-0` first, keeping its configuration
+  versions, reports and history: an init container of the Job runs
+  `syncd-console admin rename-engine` (it does nothing when there is no such engine, or `-0`
+  exists already). With chart 0.4.0 it stayed registered beside the pair until removed under
+  **Engines**. Engine names in `CONSOLE_SELF_SERVICE_ENGINE` or `CONSOLE_CONFIG_GIT_ENGINES` are
+  not renamed: change them in `console.env`. The rename was checked with `helm template` and
+  `helm lint`, not on a cluster.
+- **Password synchronisation.** Only the active engine listens on the ingest port (see
+  [Password synchronisation](#password-synchronisation)). With sealed keys, both pods use the same
+  passphrase Secret.
 - **Scheduling.** A PodAntiAffinity on the host name keeps the two pods apart:
   `engine.ha.antiAffinity: soft` (the default) prefers two nodes, `hard` requires them (a
   one-node cluster then runs one). `engine.affinity`, when set, replaces it. A
@@ -1021,7 +1106,8 @@ kubectl -n syncd delete secret syncd-pki    # certificates from an older chart d
 ```
 
 Then upgrade. The chart issues new certificates, and the registration Job gives the console the
-new ones. The same applies when turning HA off again.
+new ones. The same applies when turning HA off again; nothing is renamed back then: the Job
+registers `<engine name>` anew, and `-0` and `-1` stay registered until you remove them.
 
 !!! warning "Not tested on Kubernetes"
     The chart's kind test installs a single engine: a pair on Kubernetes isn't installed or
@@ -1032,8 +1118,8 @@ new ones. The same applies when turning HA off again.
 
 ```yaml
 image:
-  engine: { tag: 0.4.0-fips }
-  console: { tag: 0.4.0-fips }
+  engine: { tag: 0.4.1-fips }
+  console: { tag: 0.4.1-fips }
 engine:
   env:
     - { name: SYNCD_FIPS_MODE, value: "true" }
@@ -1059,13 +1145,15 @@ first (see [Backups on Kubernetes](availability-and-sizing.md#backups-on-kuberne
 - the engine: `kubectl -n syncd exec syncd-engine-0 -- syncd backup --to s3://...`, or a volume
   snapshot of its volume;
 - the console's database, with `pg_dump`;
-- the `syncd-console` Secret (and the `syncd-pki` Secret).
+- the `syncd-console` Secret (and the `syncd-pki` Secret, and the password-key passphrase Secret
+  if you use one).
 
 On upgrade, the engine migrates its store if the new release changed its format (see
 [Store format](#store-format)), the console migrates its database, and the registration Job runs
 again. The engine pod has 10 minutes to open its store and listen (its startup probe) before
 Kubernetes restarts it. `helm rollback` and its limits are in [Rollback](#rollback). What changes
-from chart 0.3.0 to 0.4.0 is in [Upgrading from 0.3.0 to 0.4.0](#upgrading-from-030-to-040).
+from chart 0.4.0 to 0.4.1 is in [Upgrading from 0.4.0 to 0.4.1](#upgrading-from-040-to-041), and
+from 0.3.0 to 0.4.0 in [Upgrading from 0.3.0 to 0.4.0](#upgrading-from-030-to-040).
 
 A host install does not move to Kubernetes by itself: see
 [Moving from a host to Kubernetes](availability-and-sizing.md#moving-from-a-host-to-kubernetes).
@@ -1094,15 +1182,15 @@ the console Secret alone loses the master key (see
 ### Air-gapped clusters
 
 1. On a connected host, get the chart: `helm pull oci://ghcr.io/winllc/charts/syncd --version
-   0.4.0` gives `syncd-0.4.0.tgz`. Verify it and the images with cosign there (see
+   0.4.1` gives `syncd-0.4.1.tgz`. Verify it and the images with cosign there (see
    [Verifying the images and the chart](#verifying-the-images-and-the-chart)).
-2. Copy `ghcr.io/winllc/syncd:0.4.0` and `ghcr.io/winllc/syncd-console:0.4.0` (or the `-fips`
+2. Copy `ghcr.io/winllc/syncd:0.4.1` and `ghcr.io/winllc/syncd-console:0.4.1` (or the `-fips`
    tags) into your registry, for example with `skopeo copy --all` (every platform) or `docker
    pull`, `docker tag` and `docker push`. The chart uses no other image.
 3. Install from the file, with your registry:
 
 ```bash
-helm install syncd ./syncd-0.4.0.tgz --namespace syncd -f syncd-values.yaml \
+helm install syncd ./syncd-0.4.1.tgz --namespace syncd -f syncd-values.yaml \
   --set image.engine.repository=registry.example.gov/winllc/syncd \
   --set image.console.repository=registry.example.gov/winllc/syncd-console
 ```
@@ -1115,6 +1203,8 @@ Add `imagePullSecrets` if your registry needs them.
 - **A FIPS image for arm64.** The FIPS images are amd64 only.
 - **A tested HA pair.** The pair's templates are linted and rendered, not installed or failed
   over (above). Its lease is in PostgreSQL only: there is no Kubernetes Lease or etcd backend.
+- **Password ingest that follows the lease.** The ingest Service routes to both engines of a
+  pair, and only the active one listens: agents retry until they reach it.
 
 ## The JDBC bridge
 
@@ -1170,6 +1260,63 @@ Run it with a restart policy (systemd `Restart=always`, or a container with
 On Kubernetes, upgrade with `helm upgrade` (see [Upgrade with Helm](#helm-upgrade)). On a host,
 upgrade as in [Bundle installs](#bundle-installs) or [Package installs](#package-installs). Read
 what changes first.
+
+### Upgrading from 0.4.0 to 0.4.1
+
+Upgrade as usual, with `syncdctl upgrade`, `apt` or `dnf`, or `helm upgrade` with chart 0.4.1. The
+upgrade takes its local backup first, as before. 0.4.1 fixes what documenting 0.4.0 found. What to
+know:
+
+- **Nothing changes format.** The store stays format 1, and the console's schema stays 17, so a
+  rollback to 0.4.0 keeps the console's database.
+- **Seal the password keys (recommended).** Without a passphrase they stay plain files, as in
+  0.4.0, and the engine now says so: a warning at start and `password keys: stored in the clear`
+  in `syncd status`. Set `SYNCD_PASSWORD_KEY_PASSPHRASE_FILE` in `/etc/syncd/engine.env` (or
+  `engine.passwordKeyPassphrase.existingSecret` in the chart) and restart: both key files are
+  sealed in place, with the same keys. See [The password keys](operator-guide.md#the-password-keys).
+  Backups taken before still hold them in the clear. **A rollback to 0.4.0 cannot open sealed
+  keys** (see [Rolling back 0.4.1 to 0.4.0](#rolling-back-041-to-040)).
+- **Off-host backups hold the console's master key.** `syncdctl backup --to` writes it as
+  `<name>.console-master.key`, and `syncdctl restore --from` puts it back. `--sse`, `--endpoint`,
+  `--region` and `--s3-ca` are now accepted by both. In 0.4.0 the upload of `/etc/syncd` to S3 and
+  every fetch of `restore --from` failed on file permissions (silently for the fetches), and the
+  database dump failed with `--local-database`: take a new off-host backup after the upgrade. See
+  [Off-host backups](operator-guide.md#off-host-backups).
+- **Behaviour changes:**
+    - `SYNCD_HA_MEMBER` and `SYNCD_HA_ADVERTISE` now override `engine.ha.member` and `advertise`
+      when set (0.4.0 used the configuration first).
+    - `syncd test` finds golden files one directory level down too (`tests/golden/<name>/*.yaml`),
+      as the console does.
+    - An entity with an open hold or a dead letter keeps all its history until that clears,
+      beyond `keep_per_entity` as well as `keep_days` (see
+      [Entity history](availability-and-sizing.md#entity-history)).
+    - **Environment values** (`GET /api/v1/environments[/{name}]`) need the admin or auditor
+      role, or an API token with the new `environments:read` scope (or `admin`); every role still
+      reads the names (`GET /api/v1/environment-names`). Scripts that read values with a
+      `configs:read` token need the new scope.
+    - **Golden tests gate every publish:** a publish through the API, Git auto-publish and
+      promotion run the golden tests from Git, like the editor's check, and refuse when they fail.
+    - **`register-engine --update` keeps the engine's environment** unless `--environment` is
+      given, so `syncdctl renew-certs` and `helm upgrade` no longer move an engine back to
+      `default`. The chart's new `engine.environment` passes one.
+    - **The console's master key check at start** covers every sealed secret (engine client
+      keys, webhook URLs, secret environment values), not only engine keys: a console with a
+      wrong key and only webhooks now refuses to start.
+- **Helm.** New values: `engine.environment`, `engine.passwordKeyPassphrase`,
+  `engine.passwordIngest` and `networkPolicy.passwordIngestFrom` (see [Key values](#3-key-values)).
+  Turning on `engine.ha.enabled` now renames the existing `<name>` registration to `<name>-0`
+  (see [An active/passive pair](#an-active-passive-pair)). Chart and images move to 0.4.1
+  together.
+- **New alert rules.** `SyncdPasswordDeliveryFailures` and `SyncdPasswordChangesDropped`, on the
+  new metrics `syncd_password_deliveries_total` and `syncd_password_waiting` (see
+  [Alert rules](operator-guide.md#alert-rules)). Load the new rule file into Prometheus; the
+  chart's PrometheusRule has them.
+- **Files kept.** `/etc/syncd/console.env` and `engine.env` are written at install only. The new
+  templates (`/opt/syncd/current/share/config/*.env`) have every explanation on its own line; in
+  your own files, a comment after a value is still part of the value (see
+  [Comments in `console.env`](#the-consoles-own-https)).
+- **No new ports by default.** With `engine.passwordIngest.enabled`, the chart adds the ingest
+  Service.
 
 ### Upgrading from 0.3.0 to 0.4.0
 
@@ -1278,8 +1425,8 @@ Upgrade as below, with `syncdctl upgrade`, `apt` or `dnf`. What to know first:
 Either command upgrades:
 
 ```bash
-sudo syncdctl upgrade syncd-0.4.0-linux-x86_64.tar.gz
-sudo ./syncd-0.4.0-linux-x86_64/install.sh        # on a host that runs syncd
+sudo syncdctl upgrade syncd-0.4.1-linux-x86_64.tar.gz
+sudo ./syncd-0.4.1-linux-x86_64/install.sh        # on a host that runs syncd
 ```
 
 The new release's own `syncdctl` runs the upgrade:
@@ -1320,8 +1467,8 @@ release.
 Upgrade with the package manager:
 
 ```bash
-sudo apt install ./syncd_0.4.0_amd64.deb
-sudo dnf upgrade ./syncd-0.4.0-1.x86_64.rpm          # RHEL 8: ./syncd-0.4.0-1.el8.x86_64.rpm
+sudo apt install ./syncd_0.4.1_amd64.deb
+sudo dnf upgrade ./syncd-0.4.1-1.x86_64.rpm          # RHEL 8: ./syncd-0.4.1-1.el8.x86_64.rpm
 ```
 
 Before the new files are unpacked, the installed release stops syncd and takes the same backup.
@@ -1354,6 +1501,21 @@ After a rollback there is no previous release to go back to again. On a package 
 is refused: install the older package, then `syncdctl restore` the backup named
 `<time>-upgrade-<old>-to-<new>`. More on recovery is in
 [Sizing, availability and recovery](availability-and-sizing.md#rolling-back-an-upgrade).
+
+### Rolling back 0.4.1 to 0.4.0
+
+- **The console's database is kept**: 0.4.1 did not change its schema.
+- **0.4.0 cannot open sealed password keys.** A full `syncdctl rollback` restores the engine
+  store, with the plain key files, from the backup taken before the upgrade. With the store kept
+  (`syncdctl rollback --keep-data`, `helm rollback`, or a package downgrade), put the plain files
+  back first: copy `password.key` and `password-agent-ca.key` from the upgrade's backup
+  (`/var/lib/syncd/backups/<time>-upgrade-0.4.0-to-0.4.1/engine/`) into `/var/lib/syncd/engine/`,
+  owner `syncd`, mode 0600; on Kubernetes, from a backup taken before
+  the keys were sealed. The keys are the same, so nothing queued is lost. Otherwise the 0.4.0
+  engine does not start while password synchronisation is configured.
+- **What 0.4.1 fixed comes back**, as described in [Upgrading from 0.4.0 to
+  0.4.1](#upgrading-from-040-to-041): among others, `--update` moves an engine back to `default`,
+  and `syncdctl backup --to` leaves out the master key and refuses the S3 options.
 
 ### Rolling back 0.4.0 to 0.3.0
 
@@ -1390,6 +1552,10 @@ newer release changed neither the store's format nor the console's schema. Other
 backups taken before the upgrade first: the older engine refuses a store format it cannot read.
 See [Backups on Kubernetes](availability-and-sizing.md#backups-on-kubernetes).
 
+From chart 0.4.1 to 0.4.0, neither changed, but put the plain password key files back on the
+engine's volume first if the keys were sealed (see
+[Rolling back 0.4.1 to 0.4.0](#rolling-back-041-to-040)).
+
 From chart 0.4.0 to 0.3.0, the console's schema changed: restore the console's database dump
 into an empty database (drop and create it first). `pg_restore --clean` alone leaves the tables
 0.4.0 added. Publish a configuration without 0.4.0's settings first, as above, since the
@@ -1413,7 +1579,7 @@ and `syncd store-format` prints it (`--supported`: the newest format this `syncd
   For such an upgrade, set `SYNCD_HEALTH_TIMEOUT` as the release notes suggest.
 
 Stores written by 0.2.1 and older record no format: they are format 1, which is still the current
-format in 0.4.0. 0.3.0 started recording it. New column families, such as those 0.4.0 adds, are
+format in 0.4.1. 0.3.0 started recording it. New column families, such as those 0.4.0 adds, are
 not a format change.
 
 ## Uninstall
@@ -1450,6 +1616,9 @@ That stops and disables the services; `/etc/syncd` and `/var/lib/syncd` stay.
 - [ ] Monitoring is set up: `api.metrics_listen` and the shipped alert rules (see
       [Operator guide](operator-guide.md#monitoring)).
 - [ ] The audit trail reaches your SIEM, through the journal or the `ENS_AUDIT_*` outputs.
+- [ ] With password synchronisation, the keys are sealed: `sudo syncd status` says `password
+      keys: sealed with the passphrase`, and the passphrase is kept apart (see
+      [The password keys](operator-guide.md#the-password-keys)).
 - [ ] Backups leave the host: `engine.backup` on a schedule, or `sudo syncdctl backup --to
       <dir or s3://...>`, and you have taken a first one.
 
@@ -1457,5 +1626,6 @@ On Kubernetes: the images and the chart are verified with cosign; the engine pod
 is ready and `kubectl -n syncd exec syncd-engine-0 -- syncd status` answers; the registration Job
 finished (`syncd-register` is deleted once it succeeds; a failed one stays, for `kubectl logs`);
 you signed in through the Ingress and changed the password; the `syncd-console` Secret is backed
-up; the engine Secret holds the configuration's secrets; the ServiceMonitor (or a scrape job of
+up; the engine Secret holds the configuration's secrets; with password synchronisation, the
+passphrase Secret is set (`engine.passwordKeyPassphrase`) and kept apart; the ServiceMonitor (or a scrape job of
 your own) reads port 9464 and the PrometheusRule is loaded; `engine.backup` writes to S3.
