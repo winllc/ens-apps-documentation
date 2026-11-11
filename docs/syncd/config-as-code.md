@@ -42,7 +42,8 @@ expression.
 - **Secrets are redacted.** A path segment that is or contains `password` or `secret`, is `token`
   or `key`, or ends in `_file` or `_key`, the HA lease's `url`, and a URL carrying `password=` or
   `pwd=`, shows as `<redacted> (changed)`. Not even where a secret lives is printed. Two Active
-  Directory flags, `password_never_expires` and `must_change_password`, are rules, not secrets, and are shown.
+  Directory flags, `password_never_expires` and `must_change_password`, are rules, not secrets,
+  and are shown.
 
 | Exit code | Meaning |
 |---|---|
@@ -275,9 +276,9 @@ the console instead.
 With `CONSOLE_CONFIG_GIT_PUSH_BACK=true`, a version saved or published in the console for an
 engine the repository is for is committed to the branch at `CONSOLE_CONFIG_GIT_PATH`, as the
 console user, with the subject `<engine> v<n>: saved (<comment>)` (or `published (<comment>)`), and
-pushed. Nothing is committed when the branch already has that text. A push the server rejects (the branch moved, a
-protected branch) is recorded as `config.git-failed` with the reason. It is never forced. The next
-pass sees the pushed commit and makes no second version of it.
+pushed. Nothing is committed when the branch already has that text. A push the server rejects
+(the branch moved, a protected branch) is recorded as `config.git-failed` with the reason. It is
+never forced. The next pass sees the pushed commit and makes no second version of it.
 
 With push-back on, the repository needs a deploy key or token that may write to the branch.
 
@@ -353,8 +354,9 @@ prod-eu v3: published (<the publish's summary>)
 prod-us v5: running (the engine runs this configuration as v5 already)
 ```
 
-The command exits `0` when no engine failed, `1` when any did, and `2` when the console refused the request: a version never published, an unknown
-engine, an environment with no engines, a token without the scope, a missing ticket.
+The command exits `0` when no engine failed, `1` when any did, and `2` when the console refused
+the request: a version never published, an unknown engine, an environment with no engines, a token
+without the scope, a missing ticket.
 
 Each target engine's outcome is recorded as `config.promoted` in the audit trail (from, to, the
 status and the diff summary), and `config.promoted` is raised once as a webhook event.

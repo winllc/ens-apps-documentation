@@ -290,7 +290,7 @@ hint always gave the defaults.
 ## Capture agents
 
 A capture agent is a program on another host that submits password changes: in time, the Windows
-filter's service and the directory plugins; in 0.4.0, a script using `syncd password set
+filter's service and the directory plugins; in 0.4.1, a script using `syncd password set
 --agent-dir`. Agents have identities of their own and a listener of their own, so they never need
 control access to the engine.
 
@@ -425,10 +425,10 @@ engine:
     enabled: true
     port: 7445                # the port of passwords.ingest.listen
     service:
-      type: LoadBalancer      # ClusterIP by default; LoadBalancer or NodePort for agents outside the cluster
+      type: LoadBalancer      # for agents outside the cluster (or NodePort); ClusterIP by default
       annotations: {}
 networkPolicy:
-  passwordIngestFrom:         # with networkPolicy.enabled: who may reach the port; anywhere when empty
+  passwordIngestFrom:         # with networkPolicy.enabled: who may reach it; anywhere when empty
     - ipBlock: { cidr: 10.20.0.0/24 }
 ```
 
