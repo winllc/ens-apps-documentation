@@ -11,7 +11,7 @@ readers, and there is no self-audit or accessibility conformance report.
 |---|---|
 | Automated accessibility scan (axe-core or similar) | **None.** The console's CI runs no accessibility scan |
 | Accessibility lint rules | **None** |
-| Browser tests | The Playwright smoke test (`console/web/e2e/smoke.spec.ts`, run in CI) finds controls by their role and accessible name (`getByRole`, `getByLabel`), so a control that loses its name or label fails it. It also moves through a metrics chart with the keyboard, finds the engine CPU and memory charts and the dashboard's sparklines by their names, opens the public password page (`/password`, turned off) and joins a record on the Correlation page by its labelled field. These are functional tests, not accessibility audits. The pages added in 0.4.0 (**Integrations**, **Reports**, **Data quality**, the engine page's **Held changes** and **Groups** cards, the Studio's **Quality check** block) are not visited by any browser test |
+| Browser tests | The Playwright smoke test (`console/web/e2e/smoke.spec.ts`, run in CI) finds controls by their role and accessible name (`getByRole`, `getByLabel`), so a control that loses its name or label fails it. It also moves through a metrics chart with the keyboard, finds the engine CPU and memory charts and the dashboard's sparklines by their names, opens the public password page (`/password`, turned off) and joins a record on the Correlation page by its labelled field. These are functional tests, not accessibility audits. The pages added in 0.4.0 (**Integrations**, **Reports**, **Data quality**, the engine page's **Held changes** and **Groups** cards, the Studio's **Quality check** block) are not visited by any browser test, nor are the 0.4.1 additions (the **Support bundle** card, the webhook secret dialog, the per-publication table of the **Passwords** card); 0.4.1 changed no browser test |
 | Screen-reader testing | Not done |
 | Banner colours | The server refuses any banner whose text-to-background contrast is below 4.5:1; a unit test covers the calculation |
 
@@ -33,12 +33,16 @@ readers, and there is no self-audit or accessibility conformance report.
       **Remove row 1**, and so on; the correlation checkboxes **Select &lt;entity&gt; for
       &lt;record&gt;**; the Data quality page's filter **Severity**;
     - the public password page (`/password`) labels its fields and marks them for password
-      managers (user name, current password, new password); a refusal is announced as an alert.
+      managers (user name, current password, new password), and gives the password policy as the
+      new password's description; a refusal is announced as an alert;
+    - the webhook secret dialog (0.4.1) labels its field **Secret**, or **Routing key** for
+      PagerDuty.
 - **Messages**: errors are announced as alerts (`role="alert"`), and other notices (success,
   information, warnings) as status messages.
 - **Keyboard**: everything is reached with standard links, buttons and form controls, and the
   keyboard focus has a visible outline. Dialogs are native modal dialogs: focus stays inside while
-  one is open, and **Escape** closes it.
+  one is open, and **Escape** closes it. The confirmations added in 0.4.1 (revoking a token,
+  deleting a scheduled report, removing an environment) are the browser's own confirmation box.
 - **State**: toggles such as the metrics time window and the visual editor's **Forms** / **Data
   flow** switch say whether they are pressed; the editor's tabs say which is selected; the selected
   item in the configuration editor's list is marked as current; a count of errors on an item is
@@ -48,8 +52,9 @@ readers, and there is no self-audit or accessibility conformance report.
   additions: held-change reasons (**window**, **canary_failed**, …), HA roles (**active**,
   **passive**), audit severities (**warning**, **alert**), output states (**failing**, **catching
   up**), correlation scores and how each attribute matched (**exact**, **normalized**,
-  **similar**), and the dashboard's data-quality counts, which are sentences ("2 checks failing with
-  errors · 0 with warnings") as well as red and amber. The golden-test diffs keep their `+` and `-`
+  **similar**), whether an engine's password keys are sealed (**keys sealed**, **password keys
+  stored in the clear**), and the dashboard's data-quality counts, which are sentences ("2 checks
+  failing with errors · 0 with warnings") as well as red and amber. The golden-test diffs keep their `+` and `-`
   signs beside the green and red.
 - **Charts** (live metrics): each chart is an image with a name, can be focused, and is read with
   the arrow keys, **Home** and **End** (**Escape** clears); the values at the chosen point are
@@ -98,6 +103,9 @@ readers, and there is no self-audit or accessibility conformance report.
   does not say whether the list is open.
 - **Action columns**: the last column of the token, webhook, environment, report and group tables
   holds the row's buttons and has an empty header.
+- **PagerDuty routing key button**: on a PagerDuty webhook's row the button reads **Routing key**,
+  but its accessible name is **New secret for &lt;webhook&gt;**, so a speech-input user saying what
+  is shown may not reach it.
 - **High CPU and memory**: CPU at 90% or more, and memory at 90% of its limit, are marked only by
   turning the value amber, on the dashboard and the live metrics page.
 - **Motion**: loading spinners animate whatever the operating system's reduced-motion setting is.

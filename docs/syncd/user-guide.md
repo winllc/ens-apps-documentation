@@ -78,10 +78,10 @@ console account, and no role.
    **Current password**, and the **New password** twice.
 2. Choose **Change password**.
 
-The new password must have at least 12 characters, mix lower case, upper case, digits or symbols,
-and not contain your user name (your organisation may have set other rules; the directory's own
-rules apply too). A refusal says why. A wrong user name or password always gets the same answer,
-and after repeated failures the page refuses your user name for 15 minutes. Once it says **Your
+The hint under **New password** gives your organisation's rules: by default at least 12
+characters, mixing three of lower case, upper case, digits and symbols, and not containing your user
+name (the directory's own rules apply too). A refusal says why. A wrong user name or password always
+gets the same answer, and after repeated failures the page refuses your user name for 15 minutes. Once it says **Your
 password was changed**, it may take a minute to work everywhere you sign in.
 
 If the page says "Password changes are not available here", it is not turned on: ask your
@@ -166,7 +166,7 @@ Notices at the top:
 | **Reconcile** (on a publication's row) | Reconciles that publication only |
 
 Each returns when the engine is done and shows its summary. Every run is recorded in the audit
-trail.
+trail, and its end raises the `run.completed` or `run.failed` [webhook](webhooks.md) event.
 
 ### Deletes held back by a deletion threshold
 
@@ -188,8 +188,13 @@ once, now. The threshold stays in force for later changes.
   pruned.
 - **Backups** (when the engine backs itself up on a schedule): where to, how often, the last one,
   and the last failure in red.
-- **Passwords** (with password synchronisation): changes **Delivered**, **Failed** and
-  **Waiting**, and **Initial passwords set** and **refused** on new entries, with the last failure.
+- **Passwords** (with password synchronisation): changes **Delivered**, **Failed**, **Dropped
+  (report mode)** and **Waiting**, and **Initial passwords set** and **refused** on new entries, with
+  the last failure; then a table of each publication's deliveries (**Delivered**, **Failed**,
+  **Dropped**, **Waiting**). A badge beside the title says whether the engine's password keys are
+  sealed (**keys sealed**) or not (**password keys stored in the clear**: whoever runs the engine
+  host can seal them with `SYNCD_PASSWORD_KEY_PASSPHRASE_FILE`; see
+  [Password synchronisation](password-sync.md)).
 - **Sources**: each source object with its mode (scrape, delta or stream), its state (**starting**,
   **reading**, **streaming**, **idle**, **retrying** with the time to the next try, **failed** with
   the error), restarts, events read, the last event and its checkpoint. A warning (in amber) says,
@@ -518,8 +523,9 @@ publish goes ahead, and may refuse it with a reason. The ticket, note and answer
 version. See [Admin guide → The pre-publish hook and change tickets](admin-guide.md#the-pre-publish-hook-and-change-tickets).
 
 **Publish** is disabled while the version is the one running, while any test case or golden test
-fails, or while it awaits approval; hover over it for the reason. To roll back, open an earlier
-version and publish it.
+fails, or while it awaits approval; hover over it for the reason. The server checks the test cases
+and golden tests again on every publish, also one through the API, Git sync or promotion. To roll
+back, open an earlier version and publish it.
 
 If the engine accepted a version but did not come back in time, the version shows **publishing**
 until the engine reports it running; the versions list settles it.
@@ -694,8 +700,8 @@ Operators and administrators choose **New scheduled report**:
 | **Enabled** | Untick to pause it (**paused**) |
 
 On your own reports (administrators: on anyone's) the row has **Send now**, **Edit** and **Delete**
-(no confirmation). Each run checks again that the owner is still an administrator or operator and
-that every recipient is allowed; a run that fails a check sends nothing. A scheduled report's file
+(after a confirmation). Each run checks again that the owner is still an administrator or operator
+and that every recipient is allowed; a run that fails a check sends nothing. A scheduled report's file
 holds at most 50,000 rows by default; the mail says when it was cut.
 
 ## Errors you may see
