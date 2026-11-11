@@ -12,11 +12,11 @@ ways to install it:
 
 !!! note "syncd"
     syncd ships differently. Its releases go to GitHub on a version tag, not to the licensing portal
-    (no syncd release has been tagged yet, so none is published): offline bundles (`.tar.gz`, x86_64,
-    aarch64 and an x86_64 FIPS build), `.deb` and `.rpm` packages for a Linux host with systemd,
+    (no syncd release has been tagged yet, so none is published): offline bundles (`.tar.gz`, x86_64, an
+    x86_64 FIPS build, and aarch64 when the release workflow's arm64 runners are enabled), `.deb` and `.rpm` packages for a Linux host with systemd,
     CycloneDX SBOMs, and `SHA256SUMS` with a GPG signature (`SHA256SUMS.asc`) when the release key is
-    set. The container images `ghcr.io/winllc/syncd` and `ghcr.io/winllc/syncd-console` (amd64 and
-    arm64, `-fips` tags for amd64) and the Helm chart `oci://ghcr.io/winllc/charts/syncd` are signed
+    set. The container images `ghcr.io/winllc/syncd` and `ghcr.io/winllc/syncd-console` (amd64, arm64
+    with the same runners, `-fips` tags for amd64) and the Helm chart `oci://ghcr.io/winllc/charts/syncd` are signed
     with cosign as below, from the repository `winllc/ldap-sync-merge-view`. See
     [syncd's install guide](syncd/install.md#getting-the-release).
 
