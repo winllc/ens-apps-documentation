@@ -490,16 +490,20 @@ with PBKDF2-HMAC-SHA256 (600,000 iterations, a random salt each time the file is
 FIPS-approved, through aws-lc-rs. The certificate (`password-agent-ca.crt`) is not secret and is
 not sealed.
 
-1. Write a long random passphrase to a file only the engine's user can read, kept apart from the
-   backups, and keep a copy with your other recovery secrets: a restore needs it.
+1. Write a long random passphrase to a file only the engine's user can read, outside `/etc/syncd`
+   and the engine's data directory, and keep a copy with your other recovery secrets: a restore
+   needs it. `syncdctl backup --to` archives all of `/etc/syncd`, so a passphrase kept there
+   (as the source repository's RUNBOOK.md suggests) would travel in the same backup as the sealed
+   keys it opens.
 
     ```sh
-    head -c 32 /dev/urandom | base64 > /etc/syncd/engine/password-key.passphrase
-    chown syncd /etc/syncd/engine/password-key.passphrase
-    chmod 0600 /etc/syncd/engine/password-key.passphrase
+    sudo install -d -m 0750 -o root -g syncd /etc/syncd-keys
+    head -c 32 /dev/urandom | base64 | sudo tee /etc/syncd-keys/password-key.passphrase >/dev/null
+    sudo chown root:syncd /etc/syncd-keys/password-key.passphrase
+    sudo chmod 0640 /etc/syncd-keys/password-key.passphrase
     ```
 
-2. Set `SYNCD_PASSWORD_KEY_PASSPHRASE_FILE=/etc/syncd/engine/password-key.passphrase` in
+2. Set `SYNCD_PASSWORD_KEY_PASSPHRASE_FILE=/etc/syncd-keys/password-key.passphrase` in
    `/etc/syncd/engine.env` (on Kubernetes, `engine.passwordKeyPassphrase`; see
    [On Kubernetes](#on-kubernetes)). `SYNCD_PASSWORD_KEY_PASSPHRASE`, the passphrase itself, is
    read only when the file variable is not set, for tests and containers that can't mount a file.

@@ -322,7 +322,7 @@ CONSOLE_PUBLIC_URL=https://syncd.example.com:8443
     with 0.4.0 or earlier may still have commented lines that end with a note, for example
     `#CONSOLE_PUBLISH_HOOK_ON_ERROR=refuse   # or allow`. Uncommenting one as it is sets a wrong
     value, and the console refuses it or fails to start; from 0.4.1 its error then adds
-    `<setting> holds ` #` (a comment at the end of the line becomes part of the value)`. Move
+    `` <setting> holds ` #` (a comment at the end of the line becomes part of the value) ``. Move
     the note to a line of its own when you uncomment a line. The same holds for `engine.env`,
     though the engine gives no such hint.
 
@@ -1299,9 +1299,10 @@ know:
     - **`register-engine --update` keeps the engine's environment** unless `--environment` is
       given, so `syncdctl renew-certs` and `helm upgrade` no longer move an engine back to
       `default`. The chart's new `engine.environment` passes one.
-    - **The console's master key check at start** covers every sealed secret (engine client
-      keys, webhook URLs, secret environment values), not only engine keys: a console with a
-      wrong key and only webhooks now refuses to start.
+    - **The console's master key check at start** now tests the key against any kind of sealed
+      secret: an engine's client key, else a webhook's URL, else a secret environment value (0.4.0
+      tried engine client keys only). A console with a wrong key and only webhooks or secret
+      environment values now refuses to start.
 - **Helm.** New values: `engine.environment`, `engine.passwordKeyPassphrase`,
   `engine.passwordIngest` and `networkPolicy.passwordIngestFrom` (see [Key values](#3-key-values)).
   Turning on `engine.ha.enabled` now renames the existing `<name>` registration to `<name>-0`

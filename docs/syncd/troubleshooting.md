@@ -161,13 +161,15 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
 
 ??? failure "The console fails to start, or refuses a setting, after uncommenting a line of `console.env`"
     systemd reads `/etc/syncd/console.env` (and `engine.env`) as an `EnvironmentFile`: everything
-    after the `=` is the value, including a `# ...` note at the end of the line. Several commented
-    lines of the release's template end with one, for example
+    after the `=` is the value, including a `# ...` note at the end of the line. The templates of
+    0.4.0 and earlier had such notes, for example
     `#CONSOLE_PUBLISH_HOOK_ON_ERROR=refuse   # or allow` or
-    `#CONSOLE_CONFIG_GIT_AUTO_PUBLISH=off   # off | validate | publish`. Uncommented as they are,
-    the value is `refuse   # or allow`, which the console refuses, or takes as a wrong value. Remove
-    the trailing note, keep comments on lines of their own, and restart:
-    `systemctl show syncd-console -p Environment` shows the values systemd passes.
+    `#CONSOLE_CONFIG_GIT_AUTO_PUBLISH=off   # off | validate | publish`, and your file, written at
+    install, keeps them; 0.4.1's templates keep notes on lines of their own. Uncommented as it is,
+    the value is `refuse   # or allow`, which the console refuses, or takes as a wrong value. From
+    0.4.1 the console's error adds `` <setting> holds ` #` (a comment at the end of the line becomes
+    part of the value) ``; the engine gives no such hint. Move the note to a line of its own, and
+    restart: `systemctl show syncd-console -p Environment` shows the values systemd passes.
 
 ??? failure "The console will not start: `refusing to start: the supplied admin password is empty or admin`"
     `CONSOLE_ADMIN_PASSWORD` or `CONSOLE_ADMIN_PASSWORD_FILE` supplies a first password that is
@@ -196,12 +198,17 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
     database holds secrets only that key opens: the client keys of engines registered with mTLS,
     webhook addresses and secrets, secret environment values. Restore
     `/var/lib/syncd/console/master.key` from a backup (owner `syncd-console`, mode 0600), or set
-    `CONSOLE_MASTER_KEY` to the old key, and restart. Off-host backups (`syncdctl backup --to`) do
-    not hold the key: keep it apart. If the key is lost for good, see
+    `CONSOLE_MASTER_KEY` to the old key, and restart. Off-host backups taken with 0.4.1's
+    `syncdctl backup --to` hold it (`<name>.console-master.key`), and `syncdctl restore --from`
+    puts it back; those taken with 0.4.0 do not. If the key is lost for good, see
     [The master key](operator-guide.md#the-master-key): `CONSOLE_NEW_MASTER_KEY=true` starts the
     console with a new key, and the engines must be registered again.
 
 ??? failure "The console will not start: `the master key does not open the secrets the database holds (engine <name>'s client key)`"
+    Or `(webhook <name>'s URL)`, or `(environment <env>'s secret value <key>)`: from 0.4.1 the
+    check at start opens one sealed secret of any kind (an engine's client key, else a webhook's
+    URL, else a secret environment value), not only engine client keys, so a console with a wrong
+    key and only webhooks or secret environment values now refuses to start too.
     The key, from the file or `CONSOLE_MASTER_KEY`, is not the one the secrets were sealed with:
     often the key of another installation, or a database restored without its own key. Put back
     the key that belongs with this database. Only if it is lost for good, set
@@ -229,6 +236,23 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
 ??? failure "The engine refuses its configuration: `engine.ha.lease: ttl_secs must be at least 3`, `engine.ha: snapshot_every_secs must be at least 10`"
     The pair's settings are checked with the rest of the configuration. Raise the values (the
     defaults are 15 and 300). See [High availability](availability-and-sizing.md#high-availability).
+
+??? failure "The engine will not start: `the key is sealed with a passphrase, and none is set`, or `the passphrase (SYNCD_PASSWORD_KEY_PASSPHRASE_FILE) does not open the sealed key`"
+    New in 0.4.1. The password key or the agents' CA key is sealed (see
+    [The password keys](operator-guide.md#the-password-keys)), and the engine has no passphrase,
+    or another one: the variable is missing from `/etc/syncd/engine.env` (or the pod's
+    environment), names another file, or the keys came from another engine (a restored backup,
+    the other engine of an HA pair) sealed with its passphrase. The key files are left as they
+    are. Set `SYNCD_PASSWORD_KEY_PASSPHRASE_FILE` to a file holding the passphrase the keys were
+    sealed with, and start again. `cannot read the passphrase file ...` or `the passphrase file
+    ... is empty`: the file is missing, not readable by `syncd`, or empty. A lost passphrase
+    cannot be recovered: move both key files aside and start with new keys (queued changes are
+    reported failed; agents enroll again).
+
+??? failure "After a rollback to 0.4.0, the engine will not start: `loading the password key ...`"
+    0.4.0 cannot open password keys sealed by 0.4.1. Put the plain files back from a backup taken
+    before they were sealed, such as the upgrade's (see
+    [Rolling back 0.4.1 to 0.4.0](install.md#rolling-back-041-to-040)).
 
 ## Signing in
 
@@ -377,18 +401,25 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
 
 ??? failure "`the <role> role cannot do this`"
     The account's role does not allow the action: registering engines and managing accounts need
-    `admin`; editing and simulating configuration need `designer`. See [Admin guide](admin-guide.md).
+    `admin`; editing and simulating configuration need `designer`. From 0.4.1 an environment's
+    values (`GET /api/v1/environments[/{name}]`) need `admin` or `auditor`, or an API token with
+    the `environments:read` scope (or `admin`); a script that read them with a `configs:read`
+    token needs the new scope. Every role still reads the names (`GET /api/v1/environment-names`).
+    See [Admin guide](admin-guide.md).
 
 ??? failure "A published configuration is refused: `engine.data_dir cannot be changed through the control API`, `the api section can only be changed on the engine host` or `engine.ha can only be changed on the engine host`"
     The version changes settings that stay with the engine host. Start from the running
     configuration (import it in the console), keep its `engine.data_dir`, `api` and `engine.ha`
     as they are, and change those only in `/etc/syncd/engine/engine.yaml` on the host.
 
-??? failure "A published configuration is refused: `N of M test cases fail`"
+??? failure "A published configuration is refused: `not published: N of M test cases fail`"
     A computed attribute's test cases, a rule package's tests, or (with Git sync) a golden-file
     test fail, and the version cannot be published. The console lets such a version be saved,
-    but not published. Fix the rule or the test case. See [Rules](rules.md) and
-    [Configuration as code](config-as-code.md).
+    but not published. From 0.4.1 the golden tests in Git gate every publish: the editor's,
+    one through the API, Git auto-publish, and `syncd config promote`. Fix the rule or the test
+    case. `golden tests: not run, the configuration rendered for display does not compile: ...`
+    means the golden tests could not run on the version as the console renders it for display. See
+    [Rules](rules.md) and [Configuration as code](config-as-code.md).
 
 ??? failure "Publishing is refused: `a publish needs a change ticket reference matching ...` or `the ticket reference ... does not match ...` (400)"
     New in 0.4.0. `CONSOLE_PUBLISH_TICKET_PATTERN` is set, so every publish must carry a matching
@@ -499,21 +530,38 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
 
 ## Passwords
 
-??? failure "`passwords: ... N failed; last failure: ...` in `syncd status`, or the webhook `password.delivery-failed`"
+??? failure "`passwords: ... N failed; last failure: ...` in `syncd status`, `SyncdPasswordDeliveryFailures`, or the webhook `password.delivery-failed`"
     A password change was not delivered. The log names the account and DN (`password change not
-    delivered`), never the password. Usual reasons:
+    delivered`), never the password. `syncd_password_deliveries_total{outcome="failed"}` counts
+    failures per publication (new in 0.4.1), and the console's engine page lists them. Usual
+    reasons:
 
-    - **The target refused it**: its password policy (length, history, complexity), or the sync
-      account's access rights. A refused change is reported and not retried; the person's next
-      change is delivered.
-    - **It waited too long**: the account was not provisioned or exported yet, or the target
-      was unreachable, for longer than `passwords.ttl_secs` (a day by default). It is dropped and
-      counted as failed.
+    - **The target refused it** (`... refused the password of ...`): its password policy (length,
+      history, complexity), or the sync account's access rights. A refused change is reported
+      and not retried; the person's next change is delivered.
+    - **It waited too long** (`... expired before it could be delivered`): the account was not
+      provisioned or exported yet, or the target was unreachable, for longer than
+      `passwords.ttl_secs` (a day by default). It is dropped and counted as failed.
+      `syncd_password_waiting` climbing before shows which publication was stuck.
+    - **It could not be opened** (an empty `publication` label): the change was sealed to another
+      password key, such as one from before a restore with new keys. The capture point fetches
+      the current key again by itself.
     - **Active Directory over plain LDAP**: AD takes `unicodePwd` only over LDAPS or StartTLS;
       from 0.4.0 such a configuration is refused at validation.
 
-    There are no password metrics or alert rules: watch the status line, the console, or the
-    webhook. See [Password synchronisation](password-sync.md).
+    See [Password synchronisation](password-sync.md).
+
+??? warning "Password changes are dropped (`SyncdPasswordChangesDropped`, `N dropped (report mode)`)"
+    New in 0.4.1. The publication that delivers them is in report mode, which writes nothing,
+    passwords included, and they are not kept for later. Put the publication in apply mode, or
+    stop delivering passwords through it (`passwords` on the publication).
+
+??? warning "`password keys: stored in the clear` in `syncd status`, or `the password keys are stored in the clear` in the log"
+    New in 0.4.1. No passphrase seals the password key and the agents' CA key, so they are plain
+    files protected by their mode only, and backups and HA snapshots carry them as they are. Seal
+    them: set `SYNCD_PASSWORD_KEY_PASSPHRASE_FILE` and restart (see
+    [The password keys](operator-guide.md#the-password-keys)). Backups taken before still hold
+    them in the clear.
 
 ??? warning "`the target refused the initial password; the entry was created without it`"
     A `passwords.initial` password (generated or read from the entity) was refused by the target,
@@ -523,11 +571,13 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
     re-added without one. `the initial password rule failed; the entry is created without one`
     means the `from` expression failed.
 
-??? warning "Password agents or self-service stop working after an HA failover"
-    Only the active engine of a pair runs the agents' ingest listener and answers self-service
-    changes, and the console's `CONSOLE_SELF_SERVICE_ENGINE` names one engine. Point agents and
-    the console at the engine that is now active, or at an address that follows it. See
-    [Password synchronisation](password-sync.md#high-availability).
+??? warning "Password agents stop delivering after an HA failover"
+    Only the active engine of a pair runs the agents' ingest listener: an agent that reaches the
+    passive one is refused and must retry. Point agents at the engine that is now active, or at an
+    address that reaches both (on Kubernetes, the `syncd-engine-ingest` Service routes to both
+    pods). Self-service changes follow the lease from 0.4.1: the console sends them to the member
+    that holds it. With sealed keys, an engine with another passphrase does not start on the
+    snapshot's keys (above). See [Password synchronisation](password-sync.md#high-availability).
 
 ## Backups and restore
 
@@ -544,11 +594,26 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
     The backup was asked over a plain-text loopback listener that may not reveal values. Use the
     installed mutual TLS (the default), the control socket, or `sudo syncdctl backup --to`.
 
-??? failure "`syncdctl backup --to ...`: `unknown option --sse` (or `--endpoint`, `--region`, `--s3-ca`)"
-    `syncdctl backup --to` takes only `--keep` and `--skip-db-backup`. Set `AWS_ENDPOINT_URL_S3`
-    and `AWS_REGION` in `/etc/syncd/engine.env`, give the bucket a default encryption, or run
-    `syncd backup` with those options. `--to takes a directory or s3://bucket/prefix` means the
+??? failure "`syncdctl backup`: `unknown option --sse`, or `--sse, --endpoint, --region and --s3-ca are for an off-host backup (--to)`"
+    From 0.4.1, `syncdctl backup --to` and `syncdctl restore --from` take `--sse`, `--endpoint`,
+    `--region` and `--s3-ca` and pass them on; 0.4.0's refused them (`unknown option`), and still
+    does after a rollback. A host-local `syncdctl backup` (without `--to`) takes none of them.
+    Other options are refused. `--to takes a directory or s3://bucket/prefix` means the
     destination is neither.
+
+??? failure "`syncdctl backup --to <dir>`: `the engine's backup failed` (permission denied)"
+    The engine's part is written by the `syncd` user, so a directory destination must be writable
+    by it: `sudo install -d -o syncd -g syncd -m 0700 /mnt/backups/syncd`. `syncdctl` writes the
+    other files there as root. With 0.4.0, the upload of `/etc/syncd` to S3 and the console
+    database's dump with `--local-database` failed too; 0.4.1 fixes both.
+
+??? warning "`syncdctl restore --from`: `<name>.<part> was not fetched: ...`, or `the backup has no console master key`"
+    A part of the backup (the console's dump, `/etc/syncd`'s archive, the master key) could not be
+    fetched; the restore goes on without it, and keeps what the host has. Check the S3 options
+    (`--endpoint`, `--region`, `--s3-ca`: the ones the backup was taken with) and the destination.
+    A backup taken with 0.4.0 has no master key file: the console keeps its own key, which opens
+    the restored database's secrets only if it is the same one; copy back the key that belongs
+    with the backup if it is not.
 
 ??? failure "`syncd restore`: `the engine is running (its control API answers): stop it before restoring`"
     A restore replaces the store, so the engine must be stopped: `sudo systemctl stop syncd`
@@ -563,6 +628,12 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
     destination or prefix is wrong, or the credentials see another bucket; `--name` picks one by
     name (`syncd-<host>-<time>`). A file that does not match the manifest is a damaged or
     incomplete backup: nothing was put in place; use another one.
+
+??? warning "`syncd restore`: `the restored password key is sealed: ...`"
+    New in 0.4.1. The backup's password key is sealed, and the passphrase this command has is
+    missing or does not open it. The engine will not start until `SYNCD_PASSWORD_KEY_PASSPHRASE_FILE`
+    names the passphrase of the engine the backup came from. See
+    [The password keys](operator-guide.md#the-password-keys).
 
 ??? warning "After a restore, the engine runs its old configuration"
     `syncd restore` never writes over the live configuration: the backed-up one is beside it, as
@@ -793,9 +864,10 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
     `engine.cache_mb`. Raise `MemoryMax` (`systemctl edit syncd`) or the host's memory. Don't
     remove the limit. See [Sizing](availability-and-sizing.md#the-memory-limit).
 
-??? warning "The store grew after the upgrade to 0.4.0"
+??? warning "The store grew after the upgrade to 0.4.0 or 0.4.1"
     Entity history now keeps the newest `min_per_entity` entries (10) of every entity past
-    `keep_days`, and every entry of an entity with a held change or a dead letter. `syncd status`
+    `keep_days`, and every entry of an entity with a held change or a dead letter (from 0.4.1,
+    beyond `keep_per_entity` too). `syncd status`
     shows `history: N entries`. Lower `engine.history.min_per_entity` if the disk is tight, then
     `sudo syncd history prune --now`. See [Entity history](availability-and-sizing.md#entity-history).
 
@@ -928,8 +1000,9 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
 ??? failure "The registration Job fails"
     `syncd-register` runs after each install and upgrade, and retries (12 times, for up to 15
     minutes) while the engine or the console's database is not up yet. A failed Job stays, for its
-    logs, until the next install or upgrade: `kubectl -n syncd logs job/syncd-register` (with a
-    pair, `-c register-0` and `-c register-1`). Usual causes: the console's database URL is
+    logs, until the next install or upgrade: `kubectl -n syncd logs job/syncd-register
+    --all-containers` (with a pair, the containers are `register-0` and `register-1`, after the
+    init container `rename`, new in 0.4.1). Usual causes: the console's database URL is
     wrong or unreachable, the engine pod is not ready (`kubectl -n syncd describe pod
     syncd-engine-0`), a NetworkPolicy with egress closed that does not let the Job reach the
     database, or the master key does not open the stored secrets (above). The Job gets
@@ -941,6 +1014,19 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
     take longer; so can a memory limit the engine keeps hitting (`OOMKilled` in
     `kubectl describe pod`): raise `engine.resources.limits.memory` (see
     [Sizing on Kubernetes](availability-and-sizing.md#sizing-on-kubernetes)).
+
+??? failure "`kubectl cp` fails to copy the support bundle out of the pod"
+    The images have no `tar`. From 0.4.1 the engine streams its bundle to standard output:
+    `kubectl -n syncd exec syncd-engine-0 -- syncd support-bundle --out - > syncd-support.tar.zst`.
+    A pod's bundle has no journal: add `kubectl logs` output. See
+    [The command line](operator-guide.md#the-command-line).
+
+??? warning "After turning on `engine.ha.enabled`, the console shows `<name>-0` with the old engine's history"
+    New in 0.4.1, and expected: the registration Job renames the existing `<name>` registration to
+    `<name>-0` (`syncd-console admin rename-engine`), keeping its configuration versions, reports
+    and history, and registers `<name>-1` beside it. Engine names in `CONSOLE_SELF_SERVICE_ENGINE`
+    and `CONSOLE_CONFIG_GIT_ENGINES` are not renamed: change them in `console.env`. See
+    [An active/passive pair](install.md#an-active-passive-pair).
 
 ??? failure "`kubectl exec ... -- syncd status` fails"
     The image has no shell, so run `syncd` itself, as `kubectl -n syncd exec syncd-engine-0 --

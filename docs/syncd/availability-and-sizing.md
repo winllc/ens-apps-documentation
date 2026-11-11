@@ -71,9 +71,10 @@ Entity history is usually the largest part of the store. The engine prunes it an
 starts and every hour after that (`syncd history prune --now` does it at once):
 
 1. entries older than `keep_days` go, except the newest `min_per_entity` of each entity, so an
-   entity's story is never empty, and every entry of an entity with an open held change or a dead
-   letter, which stay until it clears;
-2. then each entity keeps at most its newest `keep_per_entity`, exempt entities included.
+   entity's story is never empty;
+2. then each entity keeps at most its newest `keep_per_entity`;
+3. an entity with an open held change or a dead letter keeps every entry, past both, until it
+   clears. Before 0.4.1, `keep_per_entity` applied to those entities too.
 
 ```yaml
 engine:
@@ -83,7 +84,8 @@ engine:
     min_per_entity: 10     # new in 0.4.0: the newest ones an entity keeps past the age cut
 ```
 
-So the history holds at most `entities × keep_per_entity` entries, and in a quiet directory about
+So the history holds at most `entities × keep_per_entity` entries, plus the whole history of
+entities with a held change or a dead letter, and in a quiet directory about
 `entities × min_per_entity`. Each entry is a few hundred bytes (the attributes that changed,
 before and after; an export's operations). For a million people at 300 bytes an entry, that is
 between 3 GB (the floor) and 30 GB (the cap, reached only with a hundred changes per person inside
@@ -223,9 +225,13 @@ to the active engine is enough. When they differ, it runs its own: publish to bo
   snapshot.
 - **Password changes the old engine had queued after its last snapshot are not delivered again**
   after a failover. The person's next change is.
-- **Only the active engine runs the password agents' ingest listener and self-service**, and the
-  console's `CONSOLE_SELF_SERVICE_ENGINE` names one engine: it does not follow the lease. See
-  [Password synchronisation](password-sync.md#high-availability).
+- **Only the active engine runs the password agents' ingest listener and self-service.** From
+  0.4.1 the console sends a self-service change to the member that holds the lease, when
+  `CONSOLE_SELF_SERVICE_ENGINE` names one engine of the pair. Agents are not redirected: one that
+  reaches the passive engine is refused and must retry (on Kubernetes, the ingest Service routes
+  to both pods). See [Password synchronisation](password-sync.md#high-availability).
+- **Sealed password keys need the same passphrase on both engines**, since the snapshots carry
+  the key files as they are (see [The password keys](operator-guide.md#the-password-keys)).
 - **`syncdctl` does not set up a pair** on hosts: follow the steps in
   [Installation](install.md#an-activepassive-pair-on-hosts).
 - **Not tested on Kubernetes.** The chart's kind test installs a single engine; CI only lints and
@@ -280,22 +286,24 @@ still be running, or both engines export.
 |---|---|---|
 | The engine store, `/var/lib/syncd/engine` | Entities, their source records, checkpoints of each source, what was exported, dead letters, held changes, timers, history; the password key and the agents' CA when passwords are on | `syncd backup --to` or `engine.backup` (the running engine, a consistent checkpoint), or `syncdctl backup` (stops the engine while it copies). A copy of the files taken while the engine runs is not consistent |
 | The console's database | Accounts, roles, settings, registered engines, configuration versions, the audit trail, API tokens, webhooks, environments, scheduled reports, the HA lease | `syncdctl backup --to` (`pg_dump` beside the engine's archive), `syncdctl backup`, or your database's own backups |
-| The master key, `/var/lib/syncd/console/master.key` (or `CONSOLE_MASTER_KEY`) | Decrypts the stored engine client keys, webhook addresses and secrets, and secret environment values | `syncdctl backup` (host-local), and a copy kept apart from the database dumps. Off-host backups do not include it |
+| The master key, `/var/lib/syncd/console/master.key` (or `CONSOLE_MASTER_KEY`) | Decrypts the stored engine client keys, webhook addresses and secrets, and secret environment values | `syncdctl backup` (host-local), `syncdctl backup --to` from 0.4.1 (`<name>.console-master.key`), and a copy kept apart from the backups. `engine.backup` and `syncd backup` do not include it |
+| The password-key passphrase (the file `SYNCD_PASSWORD_KEY_PASSPHRASE_FILE` names), when the password keys are sealed | Opens the sealed password key and agents' CA key, in the store and in every backup and snapshot | A copy kept apart from the backups: a restore needs it. Keep the file outside `/etc/syncd`, whose backups would carry it beside the sealed keys |
 | `/etc/syncd` | `console.env`, `engine.env` (secrets, S3 keys), `engine/engine.yaml`, and the control API's CA and certificates | `syncdctl backup --to` (`<name>.etc.tar.gz`), `syncdctl backup`, or your configuration management. It holds secrets |
 | nginx's configuration and certificate, or the console's own (`CONSOLE_TLS_CERT`) | HTTPS for the console | Your configuration management |
 | The release | The bundle or package you installed | Keep the download, with `SHA256SUMS` and its signature |
 | People, accounts, groups | The source systems and the target directories | Their own backups. The engine reads the sources again |
 | The audit trail | Also in your SIEM, when the console sends it there (the journal, `ENS_AUDIT_*`) | The SIEM's own retention |
 
-!!! warning "Backups hold the password key in the clear"
-    The engine's password key (`password.key`) and the agents' CA key are plain files in the data
-    directory, protected only by their mode (0600). Every backup (host-local, off-host and
-    scheduled) and every HA snapshot copies them as they are. Anyone who can read a backup can
-    open password changes sealed to that key. Restrict the backup directory or bucket, and turn on
-    S3 server-side encryption (`--sse`, `engine.backup.sse`, or the bucket's default); that is
-    encryption at rest by the store, not by syncd. The release notes and the source repository's
-    INSTALL.md say the key is encrypted on disk and that a restore needs the same master key or
-    passphrase; the 0.4.0 code does not encrypt it.
+!!! warning "Backups hold the password keys as they are on disk"
+    The engine's password key (`password.key`) and the agents' CA key are files in the data
+    directory. Every backup (host-local, off-host and scheduled) and every HA snapshot copies them
+    as they are. Without a passphrase they are in the clear, protected on disk only by their mode
+    (0600): anyone who can read a backup can open password changes sealed to that key. From 0.4.1,
+    `SYNCD_PASSWORD_KEY_PASSPHRASE_FILE` seals them, so backups and snapshots carry ciphertext (see
+    [The password keys](operator-guide.md#the-password-keys)); backups taken before still hold
+    them in the clear. Restrict the backup directory or bucket in any case, and turn on S3
+    server-side encryption (`--sse`, `engine.backup.sse`, or the bucket's default). The 0.4.0
+    documentation said the key was already encrypted on disk; it was not.
 
 **Keep backups off the host.** From 0.4.0 the engine writes them there itself: a directory on a
 mounted share, or S3 (with MinIO and other S3-compatible stores), by hand or on a schedule:
@@ -336,14 +344,18 @@ backup are not sent again.
     sudo syncdctl restore --from s3://backups/syncd/prod            # the newest; --name for another
     ```
 
-    This restores the engine store, the console's database from the dump, and `/etc/syncd` from
+    This restores the engine store, the console's database from the dump, `/etc/syncd` from
     its archive, keeping the new host's own PKI (which the new console's database does not
     match: run `sudo syncdctl renew-certs` afterwards, which gives the console the new host's
-    credentials). The backed-up configuration is put beside the live one as
-    `/var/lib/syncd/engine/engine.restored.yaml`: compare it with `syncd config diff` and publish
-    the one you want. Copy `master.key` back from where you keep it, to
-    `/var/lib/syncd/console/master.key` (owner `syncd-console`, mode 0600), before the console
-    starts.
+    credentials), and, from 0.4.1, the console's master key. Give it the S3 options the backup
+    was taken with (`--endpoint`, `--region`, `--s3-ca`). The backed-up configuration is put
+    beside the live one as `/var/lib/syncd/engine/engine.restored.yaml`: compare it with
+    `syncd config diff` and publish the one you want. A backup taken with 0.4.0 has no master
+    key: copy `master.key` back from where you keep it, to `/var/lib/syncd/console/master.key`
+    (owner `syncd-console`, mode 0600), before the console starts. When the password keys were
+    sealed, put the passphrase file, from where you keep it apart, at the path
+    `SYNCD_PASSWORD_KEY_PASSPHRASE_FILE` names in the restored `engine.env` (readable by `syncd`)
+    before the engine starts.
 
     **From a host-local backup directory** copied off the old host: copy it to
     `/var/lib/syncd/backups/` on the new host (root only, mode 0700), then:
@@ -357,6 +369,7 @@ backup are not sent again.
     back before it loads the database dump, and loads the dump into the database it names. This
     puts back the engine store, the console's files with the master key, `/etc/syncd`
     (configuration, secrets, certificates), and the console's database, then starts the services.
+    Sealed password keys need their passphrase, as above.
 
 3. The backup keeps the old host's numeric owners. If the `syncd` and `syncd-console` accounts
    have other ids on the new host, the services cannot read their files: give them back the owners
@@ -389,18 +402,20 @@ its sealed secrets. Restore the key; if it is lost for good, start it with
 
 **A pair.** The surviving engine is the recovery: it takes over by itself. To rebuild the other
 host, install it as in [An active/passive pair on hosts](install.md#an-activepassive-pair-on-hosts)
-and start it: it starts passive and pulls a snapshot, with nothing to restore. To restore a pair
+and start it, with the pair's password-key passphrase if the keys are sealed: it starts passive
+and pulls a snapshot, with nothing to restore. To restore a pair
 from a backup, stop both engines, restore on one, start that one first, then the other.
 
 ### Backups on Kubernetes
 
-The chart takes no backups, and `syncdctl` does not run there. Back up three things:
+The chart takes no backups, and `syncdctl` does not run there. Back up these:
 
 | Item | How |
 |---|---|
 | The engine's store | `engine.backup` on a schedule, or `kubectl -n syncd exec syncd-engine-0 -- syncd backup --to s3://backups/syncd/prod --keep 14`, without stopping it. Or a VolumeSnapshot of `data-syncd-engine-0`, with the engine stopped so that the copy is consistent: `kubectl -n syncd scale statefulset syncd-engine --replicas=0`, take the snapshot, then scale it back (the next `helm upgrade` sets it back too) |
 | The console's database | `pg_dump --format=custom`, or your database's own backups |
 | The `syncd-console` Secret | `kubectl -n syncd get secret syncd-console -o yaml`, kept as a secret. It holds the master key |
+| The password-key passphrase Secret (`engine.passwordKeyPassphrase`), when you use one | Your own copy of the passphrase, kept apart from the backups: the chart neither creates nor keeps it |
 
 The `syncd-pki` Secret is worth keeping with them, but need not be: without it the chart issues new
 certificates and its registration Job gives the console the new credentials. From chart 0.4.0 it
@@ -422,7 +437,8 @@ is kept by `helm uninstall`.
 **Restoring**, into the same release name and namespace:
 
 1. Put the `syncd-console` Secret back (`kubectl apply -f`) before installing, so the chart reuses
-   its master key instead of generating one.
+   its master key instead of generating one, and the passphrase Secret when the password keys are
+   sealed.
 2. Restore the console's database into an empty database (drop and create it first, then
    `pg_restore --no-owner`), the one `console.database` names.
 3. The engine's store, either way:
@@ -430,7 +446,7 @@ is kept by `helm uninstall`.
       s3://backups/syncd/prod --replace` in a pod with the engine's image and the
       `data-syncd-engine-0` claim mounted at `/var/lib/syncd` (a Job, or `kubectl debug`), with
       the same S3 credentials and `SYNCD_CONFIG=/var/lib/syncd/engine.yaml`. Then scale the
-      engine back to 1.
+      engine back to 1 (2 for a pair).
     - **From a volume snapshot:** create the PersistentVolumeClaim `data-syncd-engine-0` from the
       snapshot (its `dataSource`) before installing, so the StatefulSet uses it. With the release
       installed, scale the engine to 0 and delete the claim first.
@@ -491,6 +507,11 @@ sudo syncdctl rollback
   and so are the control API's certificates, which the console's stored credentials match.
 - `--keep-data` switches the programs back and restores nothing. It is refused when the newer
   release migrated the store to a format the previous one cannot read.
+
+**From 0.4.1 to 0.4.0**, neither the store's format nor the console's schema changed, so the
+console's database is kept. 0.4.0 cannot open sealed password keys: a full rollback restores the
+plain files with the store; with `--keep-data`, a package downgrade or `helm rollback`, put the
+plain files back first. See [Rolling back 0.4.1 to 0.4.0](install.md#rolling-back-041-to-040).
 
 **From 0.4.0 to 0.3.0**, the console's schema changed (8 to 17), so the rollback restores the
 console's database, dropping the tables 0.4.0 added, and loses everything recorded in the console
