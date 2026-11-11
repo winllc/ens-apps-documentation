@@ -248,7 +248,11 @@ Session only.
 | POST | `/api/v1/engines/{id}/dead-letters/retry` | operator | `runs:run` | Export dead letters again now (all, a publication's, or one entity's) |
 | POST | `/api/v1/engines/{id}/dead-letters/discard` | operator | `runs:run` | Remove one dead letter without retrying it |
 
-Registrations are audited as `engine.register`, replacements as `engine.update`. Operator calls are
+Registrations are audited as `engine.register`, replacements and environment moves as
+`engine.update`, and a replacement over a client key the master key no longer opens as
+`engine.re-registered`. From 0.4.1, `syncd-console admin rename-engine` (which the Helm chart runs
+when HA is turned on) renames a registration, keeping its id, and is audited as `engine.renamed`
+(see [Admin guide](admin-guide.md#syncd-console-admin-rename-engine)). Operator calls are
 audited with their request and outcome (`engine.run`, `engine.approve_deletions`,
 `engine.check_drift`, `engine.dead_letters.retry`, `engine.dead_letters.discard`, and the group
 review).

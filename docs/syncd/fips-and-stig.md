@@ -29,7 +29,9 @@ Its cryptography goes through **aws-lc-rs**, AWS's Rust binding of AWS-LC, in bo
 - **Password synchronisation** in the engine uses aws-lc-rs too: P-256 key generation and
   ECDH, HKDF-SHA256 (built from aws-lc-rs's HMAC-SHA256) and AES-256-GCM for the HPKE envelopes;
   the agent CA's and agents' certificates are made with `rcgen` on aws-lc-rs; enrollment tokens
-  are hashed with SHA-256. See [HPKE in FIPS mode](#hpke-in-fips-mode).
+  are hashed with SHA-256. From 0.4.1 the password key and the agent CA's key can be sealed at
+  rest with PBKDF2-HMAC-SHA256 and AES-256-GCM, from aws-lc-rs too. See
+  [HPKE in FIPS mode](#hpke-in-fips-mode).
 - **S3 backups** are signed with SigV4 (SHA-256 and HMAC-SHA256 from aws-lc-rs) by syncd's own
   client, over rustls on the process provider.
 - **ID token signatures** (single sign-on) are checked by `jsonwebtoken` on its aws-lc-rs
@@ -57,7 +59,8 @@ repository records the decision.
 | Local account passwords | Argon2id normally; PBKDF2-HMAC-SHA512 (210 000 iterations) in FIPS mode |
 | SHA-256 | Session and API tokens and enrollment tokens (only their hash is stored), the audit chain, PKCE, search digests, the export file and backup checksums |
 | HMAC-SHA256 | Webhook and pre-publish hook signatures (`X-Syncd-Signature`), SigV4 for S3 |
-| AES-256-GCM | Stored secrets (engine client keys, webhook URLs and secrets, secret environment values), under the master key; the HPKE envelopes of password changes |
+| AES-256-GCM | Stored secrets (engine client keys, webhook URLs and secrets, secret environment values), under the master key; the HPKE envelopes of password changes; the sealed password keys (from 0.4.1) |
+| PBKDF2-HMAC-SHA256 | From 0.4.1, the key that seals the password key and the agent CA's key at rest, derived from `SYNCD_PASSWORD_KEY_PASSPHRASE_FILE`'s passphrase (600,000 iterations, a random 16-byte salt) |
 | ECDH P-256, HKDF-SHA256 | The HPKE key encapsulation and key schedule of password changes |
 
 Non-security hashing is unaffected by FIPS mode: the engine detects record changes with xxh3.
@@ -76,7 +79,7 @@ flag.
     scripts/package.sh --fips                      # bundle, .deb and .rpm, with -fips in the name
     deploy/packaging/build.sh --fips --packages    # the same, called directly
     docker build -f deploy/container/Dockerfile --target engine \
-      --build-arg FEATURES=syncd/fips,syncd-console/fips -t syncd:0.4.0-fips .   # the FIPS image
+      --build-arg FEATURES=syncd/fips,syncd-console/fips -t syncd:0.4.1-fips .   # the FIPS image
     ```
 
     The bundle carries a `FIPS` marker file. There is no FIPS `.deb` or `.rpm` on a release (they
@@ -176,9 +179,14 @@ module. The construction around them is syncd's own code, checked against the RF
 vector; it is not part of the module's validation, and it has not been tested in FIPS mode. The
 same holds for the self-service requests the console seals.
 
-The engine's password key and the agent CA's key are stored in the clear, protected by their
-file mode (0600) only, and backups carry them as they are; key storage is outside what a FIPS
-module covers. See [Security](security.md#password-synchronisation). There are no capture plugins
+From 0.4.1 the engine's password key and the agent CA's key can be sealed at rest with a
+passphrase (`SYNCD_PASSWORD_KEY_PASSPHRASE_FILE`): PBKDF2-HMAC-SHA256 with 600,000 iterations
+derives an AES-256-GCM key, both FIPS-approved algorithms and both from aws-lc-rs, so from the
+FIPS module in a FIPS build. The sealed-file format around them is syncd's own code, and like the
+rest it has not been tested in FIPS mode. Without a passphrase the keys are stored in the clear,
+protected by their file mode (0600) only, and backups carry them as they are; choose a long
+random passphrase, since its strength bounds the keys'. See
+[Security](security.md#password-synchronisation). There are no capture plugins
 yet (the Windows password filter, the 389 and OpenLDAP plugins), and the keys cannot be rotated.
 
 ### Options that are not FIPS-appropriate
@@ -235,7 +243,7 @@ to decide for a STIG deployment. The console settings are environment variables 
 | Client addresses in the audit log | `CONSOLE_TRUSTED_PROXIES` | none | Your proxy's address |
 | FIPS 140-3 | `SYNCD_FIPS_MODE` with a FIPS build | off | See [Turning FIPS mode on](#turning-fips-mode-on) |
 
-Remaining gaps, as of 0.4.0: no notice-and-consent banner before sign-in, no limit on concurrent
+Remaining gaps, as of 0.4.1: no notice-and-consent banner before sign-in, no limit on concurrent
 sessions, a fixed lockout policy and local password policy, no certificate (CAC/PIV) sign-in of
 the console's own, and no signed apt or dnf repositories.
 
@@ -264,12 +272,13 @@ For a STIG host, also:
 - run PostgreSQL configured to your database STIG, with TLS if it is on another host;
 - keep the `syncd` group (which can read the command line's client key, and so control the
   engine) to administrators;
-- protect and store apart the console's master key and the `syncdctl` backups, which hold it
-  and the secrets in `/etc/syncd`; an engine backup or off-host backup also holds the entity data
-  and the password key in the clear, so encrypt its destination (S3 server-side encryption, an
-  encrypted share);
-- with password synchronisation, keep the engine's data directory to the engine's user, and open
-  the ingest listener only to the capture agents' hosts;
+- protect the `syncdctl` backups, which hold the console's master key (off-host too, from 0.4.1)
+  and the secrets in `/etc/syncd`, and keep a copy of the master key apart from them; an engine
+  backup or off-host backup also holds the entity data and the password keys (in the clear unless
+  they are sealed), so encrypt its destination (S3 server-side encryption, an encrypted share);
+- with password synchronisation, seal the keys with a passphrase kept outside `/etc/syncd` (an
+  off-host backup archives all of it), keep the engine's data directory to the engine's user, and
+  open the ingest listener only to the capture agents' hosts;
 - renew the control API's certificates before they expire (`syncdctl status` shows when;
   `syncdctl renew-certs`), and choose `--new-ca` when your policy limits the CA's lifetime.
 
@@ -297,10 +306,12 @@ Decide, for a STIG cluster:
   the hop from the controller too, and `console.trustedProxies` to the controller's addresses.
 - **Network:** `networkPolicy.enabled` makes NetworkPolicies that let only the console (and the
   registration Job, and the other engine of an HA pair) reach the engine's port 7443, and only the
-  monitoring namespace you select its port 9464. Turn on `networkPolicy.egress.enabled` to close
+  monitoring namespace you select its port 9464 (and, from chart 0.4.1, the sources in
+  `networkPolicy.passwordIngestFrom` the password ingest port, with `engine.passwordIngest`). Turn on `networkPolicy.egress.enabled` to close
   egress too, and list what the pods may reach in `networkPolicy.egress.extra`.
 - **Secrets:** the `syncd-pki` Secret (for a release named `syncd`) holds the control API's
-  CA key, and the `syncd-console` Secret the master key. Restrict who can read Secrets in the namespace, use
+  CA key, the `syncd-console` Secret the master key, and with password synchronisation your
+  `engine.passwordKeyPassphrase.existingSecret` the passphrase that seals the password keys. Restrict who can read Secrets in the namespace, use
   encryption at rest for Secrets, and back up the console Secret.
 - **Logs:** collect the pods' logs: the engine's control requests and reveals, and the console's
   audit trail, which it writes to its log as one JSON line per event (filter on

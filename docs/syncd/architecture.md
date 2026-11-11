@@ -345,8 +345,8 @@ or a checkpoint ahead of the data it covers.
 
 The layout has a version, the **store format**. A newer release that changes it migrates the
 store when it first starts; an older release refuses a store written by a newer one. Neither
-0.4.0 nor 0.4.1 changes the format (1). 0.4.0 it adds the column families above that 0.3.0 did not have, on first
-start. 0.3.0 opens a store that has them, but ignores what they hold (timers, held changes,
+0.4.0 nor 0.4.1 changes the format (1). 0.4.0 adds the column families above that 0.3.0 did
+not have, on first start. 0.3.0 opens a store that has them, but ignores what they hold (timers, held changes,
 quality results, group lifecycles). See [Installation](install.md) for upgrades and rollbacks.
 
 History keeps at most `engine.history.keep_per_entity` entries per entity (100 by default) for
@@ -408,6 +408,10 @@ While one runs, source changes wait (they are not lost), and a command waits up 
 seconds and is then refused as busy, naming what the engine is doing. Status always
 answers. A stop request is checked between pages, so the engine stops within a page of
 work. A full sync that is interrupted records how far it got and resumes at the next start.
+
+From 0.4.1 the status also counts the runs that end (`runs`: full syncs, reconciliations,
+reloads, drift checks, approvals and dead-letter retries), with the last one's activity, start,
+end and the source reads that failed meanwhile; the console's `run.*` webhooks come from it.
 
 The metrics `syncd_engine_busy` and `syncd_engine_busy_seconds` show a long operation. See
 [Operator guide](operator-guide.md) and [Troubleshooting](troubleshooting.md).
@@ -475,7 +479,8 @@ None of these writes to a target or to the engine's state.
 ## High availability
 
 From 0.4.0, two engines with the same configuration can run as an **active/passive pair**
-(`engine.ha`, or the `SYNCD_HA_*` variables). Without it, an engine runs on its own as before:
+(`engine.ha`, or the `SYNCD_HA_*` variables; from 0.4.1 `SYNCD_HA_MEMBER` and `SYNCD_HA_ADVERTISE`
+override `engine.ha.member` and `advertise` when set, where 0.4.0 used the configuration first). Without it, an engine runs on its own as before:
 one engine per store.
 
 ```mermaid
@@ -509,7 +514,8 @@ flowchart LR
   writes nothing, and refuses commands with the active engine's name. It keeps a warm copy: it
   pulls the active engine's newest **snapshot** (`PullSnapshot`, which needs what a reveal needs)
   every half interval. A snapshot is a backup archive of the store checkpoint, the key material
-  and the configuration file, checked against its manifest when received.
+  and the configuration file, checked against its manifest when received. Sealed password keys
+  travel sealed, so both engines need the same passphrase.
 - **Fencing.** Every export batch of every target kind and every password delivery asks first
   whether this engine holds the lease with more than a second to go. The lease's time is counted
   from when the renewal was sent, so a slow answer cannot stretch it. An engine that cannot renew
@@ -528,7 +534,8 @@ flowchart LR
 
 There is no etcd or Kubernetes Lease backend, each snapshot is a full archive rather than a
 delta, and password changes the old engine queued after its last snapshot are not delivered
-again after a failover. See [Availability and sizing](availability-and-sizing.md) and
+again after a failover. Only the active engine listens for password capture agents
+(`passwords.ingest`): an agent that reaches the passive one must retry. See [Availability and sizing](availability-and-sizing.md) and
 [Installation](install.md).
 
 ## Backups
@@ -536,15 +543,17 @@ again after a failover. See [Availability and sizing](availability-and-sizing.md
 `syncd backup --to <directory | s3://bucket/prefix>` asks the running engine for a backup
 (`Backup`, which needs what a reveal needs): a RocksDB checkpoint of the store (hard-linked, so
 consistent at one instant while the engine goes on writing), the configuration file, the
-password key and the agent CA, streamed as one `tar.zst` with a manifest of every file's size and
+password key and the agent CA (as they are on disk: sealed when a passphrase is set), streamed as
+one `tar.zst` with a manifest of every file's size and
 SHA-256. Nothing is staged on the engine's disk but the checkpoint. `engine.backup` takes one on a
 schedule (`every_secs`, `keep`). S3 is reached with syncd's own SigV4 client on the process's
 crypto provider, with optional server-side encryption (`AES256`, `aws:kms`).
 
 `syncd restore` (with the engine stopped) verifies every file against the manifest, refuses a
 store format newer than it reads, and puts the backed-up configuration beside the live one as
-`engine.restored.yaml`, never over it. `syncdctl backup --to ...` adds the console's database and
-`/etc/syncd`. See [Installation](install.md) and [Security](security.md#backups).
+`engine.restored.yaml`, never over it. A restored engine with sealed keys needs the passphrase
+they were sealed with. `syncdctl backup --to ...` adds the console's database, `/etc/syncd` and,
+from 0.4.1, the console's master key, which `syncdctl restore --from` puts back. See [Installation](install.md) and [Security](security.md#backups).
 
 ## The console
 
@@ -560,7 +569,7 @@ sequenceDiagram
     B->>N: POST /api/v1/engines/1/configs/7/publish<br/>{ticket, note}, cookie or bearer token
     N->>C: proxy (X-Forwarded-For)
     C->>P: session or token, role (and scope)
-    C->>C: ticket pattern? approved by someone else, if required?<br/>test cases pass?
+    C->>C: ticket pattern? approved by someone else, if required?<br/>test cases and golden tests pass?
     C->>C: render the version for the engine's environment
     C->>H: config.publish-requested, signed (when a hook is set)
     H-->>C: allow, or deny with a reason
@@ -601,7 +610,7 @@ resumes where it was, and several consoles on one database share the work withou
 
 | Task | Does | See |
 |---|---|---|
-| Status watcher | Reads every engine's status every 10 seconds; raises webhook events on each change; keeps the data-quality daily rollup (`quality_daily`) | [Webhooks](webhooks.md) |
+| Status watcher | Reads every engine's status every 10 seconds; raises webhook events on each change (from 0.4.1 it tells runs by the engine's count of runs ended, so none is missed between two reads); keeps the data-quality daily rollup (`quality_daily`) | [Webhooks](webhooks.md) |
 | Webhook sender | Posts queued deliveries, signed, with retries for a day | [Webhooks](webhooks.md) |
 | Audit outputs | One sender per output (stdout, file, Splunk HEC, syslog), each from its own cursor; the daily retention prune | [Audit trail](#the-audit-trail) |
 | Git sync | Polls the repository, turns new commits into configuration versions, pushes console versions back | [Configuration as code](#configuration-as-code) |
@@ -611,7 +620,8 @@ resumes where it was, and several consoles on one database share the work withou
 ### The console database
 
 PostgreSQL 13 or newer. The console applies its migrations (`console/server/migrations`) every
-time it starts. 0.4.0 takes the schema from 8 to 17.
+time it starts. 0.4.0 takes the schema from 8 to 17; 0.4.1 keeps it at 17, so a rollback to
+0.4.0 keeps the database.
 
 | Table | Holds | Migration |
 |---|---|---|
@@ -636,8 +646,9 @@ chain (the newest entry's id, time and hash) to its own log, as `audit log head`
 lives outside the database, so a verification against it finds entries removed from the end
 of the log. See [Security](security.md#audit-trail).
 
-Also at startup, the console checks its master key against a secret the database holds (an
-engine's sealed client key). A missing key file is not replaced by a new key while such
+Also at startup, the console checks its master key against a secret the database holds: an
+engine's sealed client key, or else a webhook's URL, or else a secret environment value (0.4.0
+looked at engines' client keys only). A missing key file is not replaced by a new key while such
 secrets exist, and a key that does not open them is refused: the console does not start
 unless `CONSOLE_NEW_MASTER_KEY=true`. See
 [Security](security.md#console-secrets-and-the-master-key).
@@ -763,7 +774,8 @@ or `<release>-…` when the release name contains `syncd`.
 | Console | A Deployment (`console.replicas`, 1 by default) on port 8080, plain HTTP, or HTTPS with `console.tls.existingSecret`, with an optional Ingress. Its data directory is an `emptyDir`: the master key comes from a Secret |
 | Certificates | The `syncd-pki` Secret: a CA of the chart's own, the engine's server certificate (named for its Service, and for each pod of an HA pair) and the console's client certificate, ECDSA P-256, issued by Helm at install (`pki.days`, ten years by default), kept across upgrades and when the release is uninstalled |
 | Console secrets | The `syncd-console` Secret: the master key (32 random bytes) and the initial admin password, generated at install, kept across upgrades, and kept when the release is uninstalled |
-| Registration | A Job after each install and upgrade runs `syncd-console admin register-engine --update` with the chart's certificates, and with `console.env` |
+| Registration | A Job after each install and upgrade runs `syncd-console admin register-engine --update` with the chart's certificates, and with `console.env`. From chart 0.4.1 a registered engine keeps its environment unless `engine.environment` names one, and with `engine.ha.enabled` an init container first renames an earlier `<name>` registration to `<name>-0` (`syncd-console admin rename-engine`), keeping its configuration versions, reports and history |
+| Password ingest | From chart 0.4.1, `engine.passwordIngest.enabled`: the ingest port (7445 by default) on a Service of its own (`syncd-engine-ingest`), let in from `networkPolicy.passwordIngestFrom`. `engine.passwordKeyPassphrase.existingSecret` seals the password keys with a passphrase from a Secret of your own |
 | Single sign-on | `console.oidc.*` and `console.publicUrl`; see [Single sign-on](single-sign-on.md#on-kubernetes) |
 | Monitoring | An optional `ServiceMonitor` (its targets' job label is `engine.metrics.job`, `syncd`) and an optional PrometheusRule with the shipped alert rules (`engine.metrics.prometheusRule.enabled`) |
 | NetworkPolicies | Optional (`networkPolicy.enabled`): 7443 from the console and the registration Job only, 9464 from your monitoring namespace, 8080 from your ingress controller; egress open unless `networkPolicy.egress.enabled` |

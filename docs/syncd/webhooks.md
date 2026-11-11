@@ -14,7 +14,8 @@ console watches each registered engine and posts on its behalf.
 An administrator enters a name, an `https://` URL, the events and a format, and is shown the
 endpoint's **signing secret** (`whsec_…`) once; for PagerDuty the page asks for the routing key
 instead (see [PagerDuty](#pagerduty)). **New secret** replaces it: from 0.4.1 with a generated one
-(shown once) or one the receiver already has (16 to 200 characters without spaces). **Send a test** posts a `webhook.test` event, whether the webhook subscribes to it or not.
+(shown once) or one the receiver already has (16 to 200 characters without spaces). **Send a
+test** posts a `webhook.test` event, whether the webhook subscribes to it or not.
 The page shows each webhook's pending and recently failed deliveries, its last error and its
 delivery log.
 
