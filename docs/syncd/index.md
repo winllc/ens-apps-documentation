@@ -31,7 +31,7 @@ It has two parts:
     Vault, AWS or Azure, a REST/OData source with Workday, SuccessFactors and UKG Pro presets,
     custom functions in WebAssembly, reports of target entries nobody manages, and a WCAG 2.1
     self-audit with a draft VPAT. **Upgrading from 0.4.1 changes behaviour**: read the
-    [upgrade notes](install.md) first.
+    [upgrade notes](install.md#upgrading-from-041-to-050) first.
 
     Much of 0.5.0 was tested against stand-ins only: the HR services, Vault, AWS and Azure, the
     Entra ID certificate and workload-identity sign-in, and the Kubernetes Lease were run against

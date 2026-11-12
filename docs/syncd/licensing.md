@@ -64,7 +64,8 @@ id: install the newest one.
   `sudo syncdctl license install FILE` checks the file with this release's keys, installs it as
   `/etc/syncd/license.lic`, sets `CONSOLE_LICENSE_FILE` in `console.env` and restarts the
   console; on Kubernetes, put it in a Secret and name it in
-  `console.license.existingSecret`. The console reads the file every status round; the License
+  `console.license.existingSecret` (see [the license on Kubernetes](install.md#the-license-on-kubernetes)).
+  The install guide's [The license](install.md#the-license) is the step by step. The console reads the file every status round; the License
   page then shows it and takes no uploads.
 
 The console gives every engine it manages the license and its assessment, after an upload,

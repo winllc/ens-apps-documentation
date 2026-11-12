@@ -5,7 +5,7 @@
 | Method | Use it for | You run |
 |---|---|---|
 | [Offline bundle](#install-from-the-bundle) | Any Linux distribution with systemd (glibc 2.34 or newer), x86_64 or aarch64, including hosts with no internet access | `install.sh`, then `syncdctl` |
-| [Package](#install-from-a-package) | Debian and Ubuntu (`.deb`); RHEL, Rocky, Alma 9 and newer and Fedora (`.rpm`); RHEL, Rocky, Alma 8 (`.el8.rpm`) | `apt` or `dnf`, then `syncdctl install` |
+| [Package](#install-from-a-package) | Debian and Ubuntu (`.deb`); RHEL, Rocky, Alma 9 and newer and Fedora (`.rpm`); RHEL, Rocky, Alma 8 (`.el8.rpm`). Downloaded, or from the signed apt and dnf repositories (new in 0.5.0) | `apt` or `dnf`, then `syncdctl install` |
 | [Helm chart](#install-with-helm) | Kubernetes, from the container images (amd64 and arm64; FIPS images for amd64) | `helm install` |
 
 syncd has two parts:
@@ -22,13 +22,21 @@ On Kubernetes, the engine is a StatefulSet with one replica, or two as an
 [active/passive pair](#an-active-passive-pair), and the console a Deployment. The chart issues
 the certificates and registers the engine.
 
-From 0.4.0 two engines can also run as an active/passive pair on two hosts (see
-[An active/passive pair on hosts](#an-activepassive-pair-on-hosts)). How the pair works is in
-[High availability](availability-and-sizing.md#high-availability).
+From 0.4.0 two engines can also run as an active/passive pair on two hosts, which from 0.5.0
+`syncdctl ha` sets up (see [An active/passive pair on hosts](#an-activepassive-pair-on-hosts)).
+How the pair works is in [High availability](availability-and-sizing.md#high-availability).
 
-!!! note "No license to add"
-    There is no ENS license check yet (licensing is on the roadmap), so there is no license to
-    add. See [Licensing](../licensing.md).
+The password capture agent, for the hosts of the directory servers people change passwords in,
+is a package of its own from 0.5.0, `syncd-capture` (see
+[The capture agent's package](#the-capture-agents-package)). It is not needed on the engine's
+host.
+
+!!! note "A license, within 60 days"
+    From 0.5.0 syncd checks a license from the ENS licensing portal. A new or upgraded
+    installation runs a 30-day evaluation with everything enabled, then a 30-day grace period;
+    after that, publishing configuration changes is refused until a license is installed. Sync
+    itself never stops. Install it as in [The license](#the-license); the states, packs and
+    managed identities are in [syncd licensing](licensing.md).
 
 For the settings referred to here, see [Configuration](configuration.md). Day-to-day running is in
 the [Operator guide](operator-guide.md).
@@ -39,7 +47,7 @@ The requirements for the [Helm chart](#install-with-helm) are listed with it.
 
 | Requirement | Notes |
 |---|---|
-| **Linux with systemd** | x86_64 or aarch64. Releases are built for both; the aarch64 files are only there when the release was built with the arm64 runners (see [Getting the release](#getting-the-release)). The FIPS bundle is x86_64 only |
+| **Linux with systemd** | x86_64 or aarch64. Releases are built for both, and from 0.5.0 the FIPS bundle too; the aarch64 files are missing only when the release was built with the arm64 jobs switched off (see [Getting the release](#getting-the-release)) |
 | **glibc 2.34 or newer** | Releases are built on Rocky Linux 9, so they run on RHEL 9, Ubuntu 22.04, Debian 12 and anything newer. A release built elsewhere needs at least the build host's glibc. |
 | **RHEL, Rocky or Alma 8** | Use the `.el8.rpm` (x86_64 only). It is built on Rocky Linux 8, and its build checks that the binaries need nothing newer than RHEL 8 has. RHEL 8's default PostgreSQL is 10, too old for the console: `sudo dnf module enable postgresql:16` first. |
 | **PostgreSQL 13 or newer** | For the console. On the same host, or elsewhere. |
@@ -61,33 +69,39 @@ lifecycle on each, checks the tag against the version in the source, and only th
 files, with `SHA256SUMS` and its signature.
 
 !!! warning "Nothing is published yet"
-    The source repository has no release tags yet, so no GitHub release, container image or
-    chart has been published, for 0.4.1 or any earlier version. Until one is, build from source:
-    `scripts/package.sh` (and `scripts/package-el8.sh`) for the bundle and packages, `docker
-    build` for the images (below), and `helm install` from `deploy/helm/syncd` for the chart.
-    The names and addresses on this page are where each release will be published once it is
-    tagged.
+    The source repository has no release tags yet, so no GitHub release, package repository,
+    container image or chart has been published, for 0.5.0 or any earlier version. Until one
+    is, build from source: `scripts/package.sh` (and `scripts/package-el8.sh`) for the bundle
+    and packages, `docker build` for the images (below), and `helm install` from
+    `deploy/helm/syncd` for the chart. The names and addresses on this page are where each
+    release will be published once it is tagged. The release jobs new in 0.5.0 (arm64 and the
+    aarch64 FIPS bundle, the `.rpm` signing, the package repositories and their publishing)
+    had not run in GitHub Actions before the pull request that brought 0.5.0, and no release
+    build has been made.
 
 | File | For |
 |---|---|
 | `syncd-<version>-linux-x86_64.tar.gz`, `syncd-<version>-linux-aarch64.tar.gz` | The offline bundle, for x86_64 and aarch64 (arm64): any distribution with systemd and glibc 2.34+, including hosts without internet access. Each with its `.sha256` |
-| `syncd-<version>-linux-x86_64-fips.tar.gz` | The FIPS bundle: the same release built with the FIPS 140-3 validated module, for `syncdctl install --fips`. x86_64 only, with its `.sha256` |
+| `syncd-<version>-linux-x86_64-fips.tar.gz`, `syncd-<version>-linux-aarch64-fips.tar.gz` | The FIPS bundle: the same release built with the FIPS 140-3 validated module, for `syncdctl install --fips`. Each with its `.sha256`; the aarch64 one is new in 0.5.0 |
 | `syncd_<version>_amd64.deb`, `syncd_<version>_arm64.deb` | Debian and Ubuntu, through apt |
 | `syncd-<version>-1.x86_64.rpm`, `syncd-<version>-1.aarch64.rpm` | RHEL, Rocky and Alma 9 and newer, and Fedora, through dnf |
 | `syncd-<version>-1.el8.x86_64.rpm` | RHEL, Rocky and Alma 8, through dnf (x86_64 only) |
-| `syncd-<version>.cdx.json`, `syncd-console-<version>.cdx.json` | The software bill of materials of the engine and of the console (CycloneDX JSON) |
+| `syncd-capture_<version>_amd64.deb`, `syncd-capture_<version>_arm64.deb`, `syncd-capture-<version>-1.x86_64.rpm`, `syncd-capture-<version>-1.aarch64.rpm`, `syncd-capture-<version>-1.el8.x86_64.rpm` | The password capture agent alone, for the directory servers' hosts (see [The capture agent's package](#the-capture-agents-package)). New in 0.5.0 |
+| `syncd-<version>.cdx.json`, `syncd-console-<version>.cdx.json`, `syncd-capture-<version>.cdx.json` | The software bill of materials of the engine, of the console and of the capture agent (CycloneDX JSON) |
 | `SHA256SUMS` | The checksums of every file above |
 | `SHA256SUMS.asc` | The release signing key's GPG signature over `SHA256SUMS` |
+| `sbom-syncd-<version>[-fips]-<arch>.spdx.json`, `sbom-syncd-console-<version>[-fips]-<arch>.spdx.json` | The SPDX bill of materials of each container image and platform. Not in `SHA256SUMS`: each is also a signed attestation on its image. New in 0.5.0 |
 
-- **aarch64.** The aarch64 bundle and packages, and the arm64 images, are built only when the
-  source repository's variable `ARM64_RUNNERS` is `true`. Without it the release is x86_64 only,
-  and the release workflow's summary says so.
-- **FIPS.** The FIPS bundle and the FIPS images are x86_64 (amd64) only. There are no FIPS
-  `.deb` or `.rpm` packages. See [FIPS 140-3 and DISA STIG](fips-and-stig.md).
-- **No package repositories.** There are no signed apt or dnf repositories: install the
-  downloaded files.
+- **aarch64.** From 0.5.0 the aarch64 bundles and packages, and the arm64 images, are built by
+  default. A release built with the source repository's variable `ARM64_RUNNERS` set to `false`
+  is x86_64 only, and the release workflow's summary says so.
+- **FIPS.** From 0.5.0 the FIPS bundle and the FIPS images are built for both architectures.
+  There are no FIPS `.deb` or `.rpm` packages. See [FIPS 140-3 and DISA STIG](fips-and-stig.md).
+- **Package repositories.** From 0.5.0 the `.deb` and `.rpm` files are also published in signed
+  apt and dnf repositories (see [From the package repositories](#from-the-package-repositories)).
 - A GitHub release's notes are the release notes from the source repository
-  (`docs/releases/<version>.md`).
+  (`docs/releases/<version>.md`). Which versions get fixes (the latest minor version only) and
+  what a version number promises are in the source repository's `docs/SUPPORT.md`.
 
 ### Verifying a release
 
@@ -103,18 +117,25 @@ sha256sum -c SHA256SUMS --ignore-missing
 ```
 
 - **Both must succeed.** `gpg` reports a good signature from the syncd release key. Check the
-  key's fingerprint against the one you were given separately, never against anything in the
-  download itself. The public key (`syncd-release.asc`) is given to customers by the publisher;
-  it is not one of the release's files.
+  key's fingerprint against the one published in the source repository's
+  `docs/RELEASE-KEY.md` (or one you were given separately), never against anything in the
+  download itself. From 0.5.0 the public key (`syncd-release.asc`) is served with the package
+  repositories, at `https://winllc.github.io/ldap-sync-merge-view/syncd-release.asc`; it is not
+  one of the release's files. As no release has been signed yet, `RELEASE-KEY.md` publishes no
+  fingerprint so far.
+- **`.rpm` signatures.** From 0.5.0 the `.rpm` files of a signed release carry the same key's
+  signature, which `dnf` checks when it installs from the repository. To check a downloaded
+  file: `sudo rpm --import syncd-release.asc && rpm -K syncd-*.rpm` (`digests signatures OK`).
 - **A release without `SHA256SUMS.asc`** was published without the signing key (the release
   workflow's summary says so). Its checksums still show that a file is complete, not who built
   it.
-- **The bundle alone:** `sha256sum -c syncd-0.4.1-linux-x86_64.tar.gz.sha256`. Inside the bundle,
+- **The bundle alone:** `sha256sum -c syncd-0.5.0-linux-x86_64.tar.gz.sha256`. Inside the bundle,
   every file is listed in `MANIFEST.sha256`, and the installer checks the release against it
   before it copies anything, so a damaged archive is refused even without these steps.
 - **SBOMs.** The two CycloneDX files list the crates and the web console's packages each
   binary was built from, for your vulnerability scanner. They are covered by `SHA256SUMS`. The
-  images carry SPDX SBOMs of their own as signed attestations (below), not as release files.
+  images carry SPDX SBOMs of their own as signed attestations (below); from 0.5.0 the same
+  SBOMs are also release files, for tools that read a file (the attestation is the signed copy).
 
 ### Container images and the Helm chart
 
@@ -128,11 +149,12 @@ container registry and signs them. None has been pushed yet (see above):
 | The console's image | `ghcr.io/winllc/syncd-console:<version>` (with the web UI, `git` and `ssh`), and `<version>-fips` |
 | The Helm chart | `oci://ghcr.io/winllc/charts/syncd`, version `<version>` |
 
-- **Tags.** Each release is tagged with its version, for example `0.4.1`, and its FIPS variant
-  `0.4.1-fips`. There is no `latest`. The chart's version and `appVersion` are the release's.
-- **Platforms.** A tag holds `linux/amd64`, and `linux/arm64` when the release was built with
-  `ARM64_RUNNERS` set. `docker buildx imagetools inspect ghcr.io/winllc/syncd:<version>` lists a
-  tag's platforms. The `-fips` tags are amd64 only.
+- **Tags.** Each release is tagged with its version, for example `0.5.0`, and its FIPS variant
+  `0.5.0-fips`. There is no `latest`. The chart's version and `appVersion` are the release's.
+- **Platforms.** A tag holds `linux/amd64` and `linux/arm64`, unless the release was built with
+  `ARM64_RUNNERS` set to `false`. `docker buildx imagetools inspect
+  ghcr.io/winllc/syncd:<version>` lists a tag's platforms. From 0.5.0 the `-fips` tags are built
+  for the same platforms (0.4.1's were amd64 only).
 - **FIPS images** are the same release built with the FIPS 140-3 module. Set
   `SYNCD_FIPS_MODE=true` in both containers to turn the mode on (see
   [FIPS images](#fips-images)). The standard images refuse `SYNCD_FIPS_MODE` at startup (`not a
@@ -152,7 +174,7 @@ container registry and signs them. None has been pushed yet (see above):
 
 ```bash
 # A tag's digest (the image index: every platform)
-docker buildx imagetools inspect ghcr.io/winllc/syncd:0.4.1
+docker buildx imagetools inspect ghcr.io/winllc/syncd:0.5.0
 
 # The image's signature, and its SBOM attestations
 cosign verify ghcr.io/winllc/syncd@<digest> \
@@ -176,10 +198,10 @@ the images (see [Air-gapped clusters](#air-gapped-clusters)).
 **Images you build yourself**, from the source repository:
 
 ```bash
-docker build -f deploy/container/Dockerfile --target engine -t registry.example.com/syncd:0.4.1 .
-docker build -f deploy/container/Dockerfile --target console -t registry.example.com/syncd-console:0.4.1 .
+docker build -f deploy/container/Dockerfile --target engine -t registry.example.com/syncd:0.5.0 .
+docker build -f deploy/container/Dockerfile --target console -t registry.example.com/syncd-console:0.5.0 .
 # The FIPS variant
-docker build -f deploy/container/Dockerfile --target engine -t registry.example.com/syncd:0.4.1-fips \
+docker build -f deploy/container/Dockerfile --target engine -t registry.example.com/syncd:0.5.0-fips \
   --build-arg FEATURES=syncd/fips,syncd-console/fips .
 ```
 
@@ -192,25 +214,31 @@ place of the `oci://` address below.
     Unlike the other ENS applications, syncd releases are not delivered through the
     **Downloads** page of the ENS licensing portal, and `SHA256SUMS` is signed with syncd's own
     release key, not the ENS release key. [Releases and downloads](../releases.md) describes the
-    portal and the signatures for the other products.
+    portal and the signatures for the other products. syncd's **license** does come from the
+    portal, from 0.5.0 (see [The license](#the-license)).
 
 **Builds you make yourself.** `scripts/package.sh` in the source repository builds the bundle, the
 `.deb` and the `.rpm` into `dist/`, for the host's architecture (on an aarch64 host,
 `syncd-<version>-linux-aarch64.tar.gz`, `syncd_<version>_arm64.deb` and
-`syncd-<version>-1.aarch64.rpm`), and `scripts/package-el8.sh` the RHEL 8 `.rpm`. A FIPS build
+`syncd-<version>-1.aarch64.rpm`), and `scripts/package-el8.sh` the RHEL 8 `.rpm`. From 0.5.0
+each also builds the `syncd-capture` package from the same build. A FIPS build
 (`deploy/packaging/build.sh --fips --packages`) has `-fips` in its name and a `FIPS` marker file.
-See [FIPS 140-3 and DISA STIG](fips-and-stig.md).
+See [FIPS 140-3 and DISA STIG](fips-and-stig.md). A build from source without the release's
+license key accepts only development licenses and says `DEVELOPMENT LICENSE KEY` (see
+[syncd licensing](licensing.md#release-builds-and-the-development-key)): don't run one in
+production.
 
 ## Install from the bundle
 
 ```bash
-sha256sum -c syncd-0.4.1-linux-x86_64.tar.gz.sha256
-tar -xzf syncd-0.4.1-linux-x86_64.tar.gz
-sudo ./syncd-0.4.1-linux-x86_64/install.sh --local-database
+sha256sum -c syncd-0.5.0-linux-x86_64.tar.gz.sha256
+tar -xzf syncd-0.5.0-linux-x86_64.tar.gz
+sudo ./syncd-0.5.0-linux-x86_64/install.sh --local-database
 ```
 
-On aarch64, use `syncd-0.4.1-linux-aarch64.tar.gz`. For FIPS mode, use
-`syncd-0.4.1-linux-x86_64-fips.tar.gz` and add `--fips`.
+On aarch64, use `syncd-0.5.0-linux-aarch64.tar.gz`. For FIPS mode, use
+`syncd-0.5.0-linux-x86_64-fips.tar.gz` (or, from 0.5.0, `syncd-0.5.0-linux-aarch64-fips.tar.gz`)
+and add `--fips`.
 
 `install.sh` runs `bin/syncdctl install` with the options you give it. On a host where syncd is
 already installed (`/etc/syncd/console.env` exists), it runs `syncdctl upgrade` instead (see
@@ -258,7 +286,9 @@ already has syncd; use `syncdctl upgrade` there.
    Links `syncd`, `syncd-console` and `syncdctl` into `/usr/local/bin`.
 4. With `--local-database`, creates the role and database.
 5. Writes the configuration to `/etc/syncd`: `console.env`, `engine.env` and
-   `engine/engine.yaml`. Files that already exist are kept.
+   `engine/engine.yaml`. Files that already exist are kept. From 0.5.0 the new `engine.yaml`
+   gives the control API strict access: the console's certificate applies configurations, the
+   command line's reads and operates (see [Control API access](#control-api-access)).
 6. Issues the control API's certificates from a CA of the host's own, in `/etc/syncd/pki`. The
    engine and the console talk to each other over mutual TLS, even on loopback.
 7. Installs the systemd units, enables and starts both services, and waits for both to be
@@ -271,9 +301,9 @@ At the end it prints the console's address and the `admin` account's one-time pa
 ## Install from a package
 
 ```bash
-sudo apt install ./syncd_0.4.1_amd64.deb            # Debian, Ubuntu (arm64: syncd_0.4.1_arm64.deb)
-sudo dnf install ./syncd-0.4.1-1.x86_64.rpm         # RHEL, Rocky, Alma 9+, Fedora (aarch64: syncd-0.4.1-1.aarch64.rpm)
-sudo dnf install ./syncd-0.4.1-1.el8.x86_64.rpm     # RHEL, Rocky, Alma 8
+sudo apt install ./syncd_0.5.0_amd64.deb            # Debian, Ubuntu (arm64: syncd_0.5.0_arm64.deb)
+sudo dnf install ./syncd-0.5.0-1.x86_64.rpm         # RHEL, Rocky, Alma 9+, Fedora (aarch64: syncd-0.5.0-1.aarch64.rpm)
+sudo dnf install ./syncd-0.5.0-1.el8.x86_64.rpm     # RHEL, Rocky, Alma 8
 sudo syncdctl install --local-database              # or --database-url ...
 ```
 
@@ -284,8 +314,75 @@ does the rest as with the bundle. From 0.4.0 the packages recommend `git`, which
 sync needs; apt installs recommended packages by default, dnf when its `install_weak_deps` is on.
 
 A host installed from a package is upgraded and removed with the package manager. `syncdctl
-upgrade`, `rollback` and `uninstall` refuse to run there and say so. There are no FIPS packages:
-use the FIPS bundle for FIPS mode.
+upgrade`, `rollback` and `uninstall` refuse to run there and say so; `backup`, `restore` and
+`status` work the same as on a bundle install. There are no FIPS packages: use the FIPS bundle for
+FIPS mode.
+
+### From the package repositories
+
+New in 0.5.0. The same packages are in apt and dnf repositories, so that an upgrade is `apt
+upgrade` or `dnf upgrade` rather than a download. They are served by GitHub Pages at
+`https://winllc.github.io/ldap-sync-merge-view`, hold the newest three releases (never
+pre-releases), and are signed with the release key: check its fingerprint against
+`docs/RELEASE-KEY.md` in the source repository before you trust it. They exist from the first
+release published with the signing key and with GitHub Pages set up; until then the address
+answers 404 (see [Getting the release](#getting-the-release)).
+
+=== "Debian, Ubuntu (amd64, arm64)"
+
+    ```bash
+    curl -fsSL https://winllc.github.io/ldap-sync-merge-view/syncd-release.gpg |
+      sudo tee /usr/share/keyrings/syncd-release.gpg >/dev/null
+    gpg --show-keys --fingerprint /usr/share/keyrings/syncd-release.gpg   # compare with RELEASE-KEY.md
+    sudo curl -fsSL -o /etc/apt/sources.list.d/syncd.sources \
+      https://winllc.github.io/ldap-sync-merge-view/syncd.sources
+    sudo apt update && sudo apt install syncd
+    sudo syncdctl install --local-database        # or --database-url ...
+    ```
+
+=== "RHEL, Rocky, Alma 9+, Fedora (x86_64, aarch64)"
+
+    ```bash
+    sudo curl -fsSL -o /etc/yum.repos.d/syncd.repo \
+      https://winllc.github.io/ldap-sync-merge-view/syncd.repo
+    sudo dnf install syncd        # dnf shows the key's fingerprint and asks: compare with RELEASE-KEY.md
+    sudo syncdctl install --local-database
+    ```
+
+    On RHEL, Rocky and Alma 8 (x86_64), use `syncd-el8.repo`. RHEL 8's `rpm` checks RSA
+    signatures only: if the release key is of another kind, the published `syncd-el8.repo` says
+    `gpgcheck=0`, and the packages are still covered by the signed repository metadata, which
+    holds their checksums.
+
+`syncd.repo` sets `gpgcheck=1` (each package's signature) and `repo_gpgcheck=1` (the repository's
+metadata). On a host without internet access, mirror the repository's directory tree (static
+files), or keep installing from the downloaded package or the bundle. The repositories were
+tested in CI with stand-in packages and a throwaway key only; the published ones have not been
+installed from yet.
+
+### The capture agent's package
+
+New in 0.5.0. `syncd-capture` is the password capture agent alone, for the hosts of the directory
+servers people change their passwords in (OpenLDAP, 389 Directory Server). It is not needed on the
+engine's host, and the bundle's `install.sh` is not for a directory server:
+
+```bash
+sudo apt install syncd-capture       # or: sudo apt install ./syncd-capture_0.5.0_amd64.deb
+sudo dnf install syncd-capture       # or: sudo dnf install ./syncd-capture-0.5.0-1.x86_64.rpm
+                                     # RHEL 8: ./syncd-capture-0.5.0-1.el8.x86_64.rpm
+```
+
+It installs the agent (`/usr/bin/syncd-capture`), a sample `/etc/syncd-capture/capture.conf`
+(kept across upgrades), its systemd unit, a `syncd-capture` account with its state directory
+`/var/lib/syncd-capture` (mode 0700: the enrollment and the spool of sealed changes), and, under
+`/usr/share/syncd-capture`, the README and the directory hooks' source. It starts nothing: enroll
+the agent with the engine first, then enable it. An upgrade of the package restarts a running
+agent; removing it keeps the enrollment and the settings (`apt purge` removes them). The hooks are not shipped compiled: build the
+OpenLDAP overlay against the installed slapd's source, or the 389 plugin against the server's
+headers, on that host, and again when the directory server is upgraded. Nothing for Active
+Directory is packaged: the Windows password filter is source only, and compile-checked only. The
+steps are in [Password synchronisation](password-sync.md#capture-agents). The packaged agent has
+not been started under systemd in the project's tests.
 
 ## HTTPS in front of the console
 
@@ -344,6 +441,13 @@ sudo systemctl restart syncd-console
   The console offers HTTP/1.1 only.
 - **`CONSOLE_TRUSTED_PROXIES`** is not needed: clients connect to the console directly, and the
   audit trail records their addresses.
+- **HSTS.** From 0.5.0 the console sends `Strict-Transport-Security` when it serves HTTPS
+  itself: `ENS_HSTS_MAX_AGE` seconds, a year by default (`0` sends none), and
+  `ENS_HSTS_INCLUDE_SUBDOMAINS`. Behind nginx, nginx sends it.
+- **Client certificates (CAC/PIV).** From 0.5.0 the console can sign people in with a client
+  certificate, directly on its own HTTPS, or behind nginx through a header (the shipped nginx
+  file has the lines to uncomment, with `ENS_X509_MODE=proxy`). See
+  [Single sign-on](single-sign-on.md).
 - **Older hosts.** A host installed before 0.3.0 keeps its `console.env`, so the commented
   `CONSOLE_TLS_CERT` and `CONSOLE_TLS_KEY` lines of a new install's file are not in it. Add the
   settings yourself.
@@ -399,7 +503,8 @@ sudo nginx -t && sudo systemctl enable --now nginx && sudo systemctl reload ngin
 The shipped configuration redirects port 80 to HTTPS, allows TLS 1.2 and 1.3, accepts request
 bodies up to 2 MB (configuration imports), sets `X-Forwarded-For` to the client's address
 (replacing whatever the client sent), and turns buffering off with a one-hour read timeout, for the
-live status stream (server-sent events).
+live status stream (server-sent events). From 0.5.0 it also sends HSTS (`max-age` a year), and
+has commented lines for certificate sign-in through the proxy.
 
 **4. Tell the console about the proxy** in `/etc/syncd/console.env`, then restart it:
 
@@ -447,7 +552,8 @@ copy it to `/usr/local/share/ca-certificates/` and run `update-ca-certificates`)
    `/var/lib/syncd/console/initial-admin-password` (mode 0600, readable by `syncd-console` only)
    until it has been used.
 3. Set a new password. Nothing else works until you do. A password needs at least 12 characters,
-   and may not be the username or `admin`. Once it is changed, the file is deleted.
+   and may not be the username or `admin` (from 0.5.0 the sign-in policy's `ENS_PASSWORD_*`
+   settings can ask for more). Once it is changed, the file is deleted.
 
 An installer can supply the first password instead, with `CONSOLE_ADMIN_PASSWORD` or
 `CONSOLE_ADMIN_PASSWORD_FILE` in `console.env` before the first start. `admin` and empty passwords
@@ -470,6 +576,25 @@ provider and its MFA. To give one anyway, while the provider is unavailable say,
 the same command in the console's pod (see [Install with Helm](#install-with-helm)). Next steps:
 add accounts and roles, and set up [single sign-on](single-sign-on.md) if you use it
 ([Admin guide](admin-guide.md)).
+
+## The license
+
+New in 0.5.0. syncd needs a license file from the ENS licensing portal; a new installation
+evaluates with everything enabled for 30 days from its first start, then has a 30-day grace
+period, after which publishing configuration changes is refused. Sync never stops. Request the
+license with the **installation id**, which the console's **License** page shows (or
+`sudo syncdctl license status` on the console's host), then install it one of these ways:
+
+| Where | How |
+|---|---|
+| The console, by hand | Upload it on the **License** page (administrators with a role on everything) |
+| The console's host, as a file | `sudo syncdctl license install L-0001.lic`: checks the file with this release's keys, installs it as `/etc/syncd/license.lic` (root, readable by `syncd-console`), sets `CONSOLE_LICENSE_FILE` in `/etc/syncd/console.env` and restarts the console. A renewal is the same command again. Suits air-gapped hosts |
+| Kubernetes | A Secret named in `console.license.existingSecret` (see [The license on Kubernetes](#the-license-on-kubernetes)) |
+| An engine without a console | `engine.license_file` in its `engine.yaml` (relative to that file, readable by `syncd`, read every minute). `syncd license show` gives the state and the installation id; `syncd license verify FILE` checks a file first |
+
+The console gives its engines the license. What the states, packs and managed identities mean,
+and what a block does and does not stop, are in [syncd licensing](licensing.md). `syncdctl
+license` was not run on a packaged host before 0.5.0 was released.
 
 ## Registering engines
 
@@ -507,7 +632,12 @@ configuration versions, reports and history; it does nothing when no engine is c
 one is called `B` already, and records `engine.renamed`. New in 0.4.1; the Helm chart runs it when
 HA is turned on (see [An active/passive pair](#an-active-passive-pair)). It does not change engine
 names in the console's settings (`CONSOLE_SELF_SERVICE_ENGINE`, `CONSOLE_CONFIG_GIT_ENGINES`):
-change those by hand.
+change those by hand. From 0.5.0 the console warns about such a setting that names no registered
+engine, at start, at `rename-engine` and on the **Engines** page, and a running console picks up
+a `register-engine --update` or `rename-engine` made by another process without a restart (0.4.1
+kept the old address and certificates until it was restarted). From 0.5.0 an engine's name is
+also what scoped roles name (`operator@engine:hr-1`), and a rename renames those assignments
+too.
 
 A `unix:` address only works for a console on the engine's host, running as a user that may open
 the socket. The socket is mode 0600, owned by the engine's user, so the packaged
@@ -523,33 +653,139 @@ less than 60 days left, and when it has expired. See
     host's own CA) names only `localhost`, `127.0.0.1` and `::1`. For a console on another host to
     manage it, the engine needs an `api.listen` that host can reach, and a certificate for the name
     the console uses. `api` can only be changed in the engine's file on its host (see
-    [Configuration](configuration.md)). syncdctl does not issue such certificates, and
-    `syncdctl renew-certs` renews them for `localhost` only. The engines of an
-    [active/passive pair](#an-activepassive-pair-on-hosts) need such certificates too.
+    [Configuration](configuration.md)). syncdctl issues such certificates only for the engines
+    of a pair (`syncdctl ha`, below), and otherwise `syncdctl renew-certs` renews them for
+    `localhost` only.
+
+## Control API access
+
+New in 0.5.0. Every call to the engine's control API belongs to a tier, each including the one
+before: `read` (status, lists, simulations, reports), `operate` (runs, approvals, dead-letter
+actions, joins, backups and HA snapshots, revealing values), and `configure` (applying a
+configuration). Setting passwords through the API (`syncd password set`, adding or binding a
+capture agent) needs `passwords` on top of `operate`, which no certificate has by default; on the
+engine's host, `sudo syncd password ...` goes through the control socket, which may.
+`api.access` in `engine.yaml` names which
+client certificate (by common name, or a `uri:` subject alternative name) has which tier; the
+settings are in [Configuration](configuration.md#control-api-api), and the reasons in
+[Security](security.md#the-engine-control-api).
+
+| Install | Access | What it means |
+|---|---|---|
+| New in 0.5.0 (the installer's `engine.yaml`, the container image's) | `mode: strict` | The console's certificate (`syncd console`) applies configurations; the command line's (`cli.crt`, `syncd command line`, readable by the `syncd` group) and the control socket read and operate. `sudo syncd apply-config` is refused (`ApplyConfig needs the configure tier`): configurations go through the console, its approvals and its gates |
+| Upgraded from 0.4.1 or earlier | No `access` section: compatible | Every certificate the client CA signed may do everything, as before, including `cli.crt`. The engine warns at every start, `syncd status` says `control API access: COMPATIBLE`, and the console warns on the engine's page |
+
+**Opting an upgraded host in:**
+
+```bash
+sudo syncdctl api-access strict --dry-run      # what it would change
+sudo syncdctl api-access strict
+```
+
+It adds the new-install `access` section to the `api` section of
+`/etc/syncd/engine/engine.yaml`, checks it with `syncd validate`, restarts the engine, and checks
+that `syncd status` says `control API access: strict`; otherwise it puts the previous file back
+(a copy stays in `/etc/syncd/engine/before-api-access-<time>/`). A second run changes nothing.
+Then, in the console, **import the running configuration** on the engine's **Configuration**
+page before the next publish: the engine refuses a published configuration that changes its
+`api` section. With an HA pair, do it on both hosts. The command does not edit an `api` section
+written on one line (it says so); there is no command back to compatible mode other than the
+saved copy. `sudo syncdctl api-access status` shows the engine's lines on access.
+
+**Signed configurations.** With `engine.require_signed_config`, the engine applies only a
+configuration the console signed for it (ECDSA P-256, bound to a value the engine issues anew at
+every start and reload), whoever sends it. On a host whose console is local:
+
+```bash
+sudo syncdctl api-access signing-key --from-console             # trust the console's key
+sudo syncdctl api-access signing-key --from-console --require   # and apply nothing unsigned
+```
+
+The first installs the key as `/etc/syncd/pki/console-signing.pub` and names it in
+`engine.config_signing_keys`; signed publishes then show as `signed by key <id>` in `syncd
+status`. Publish once from the console in between, then add `--require`, and import the running
+configuration in the console again. For a console on another host, write its key with
+`syncd-console admin config-signing-key --out FILE` there and give the file to `syncdctl
+api-access signing-key FILE`. On Kubernetes, see
+[Control API access on Kubernetes](#control-api-access-on-kubernetes).
+
+`engine.data_dir`, `engine.ha`, `engine.require_signed_config` with `engine.config_signing_keys`,
+`engine.license_file` and the `api` section can only be changed on the engine's host. Neither
+tiers nor signatures protect against root on the engine's host, who can edit the configuration
+file. The console reports a running configuration it did not publish (`config.unpublished-running`
+in the audit trail and as a webhook event).
 
 ## An active/passive pair on hosts
 
 New in 0.4.0. Two engines on two hosts, with the same configuration, share a lease in PostgreSQL
-(the console's database works) or in a file on a shared file system. The one holding it runs the
-sources and the exports; the other keeps a warm copy of the store from snapshots and takes over
-when the lease expires. How it works, its failover window and its limits are in
+(the console's database works) or in a file on a shared file system (or, on Kubernetes, from
+0.5.0, a Lease object). The one holding it runs the sources and the exports; the other keeps a
+warm copy of the store from snapshots, follows the queued password changes, and takes over when
+the lease expires. How it works, its failover window and its limits are in
 [High availability](availability-and-sizing.md#high-availability); running it is in the
 [Operator guide](operator-guide.md#high-availability).
 
-`syncdctl` does not set up a pair. On two hosts installed from the bundle or the packages:
+### Setting up a pair with syncdctl
 
-1. **Install both as usual.** `syncdctl` gives each host a CA of its own and an engine certificate
-   for `localhost`; a pair needs more:
-    - Make the second host trust the first's CA: copy `/etc/syncd/pki/ca.crt` and `ca.key` from
-      the first host over the second's, and run `sudo syncdctl renew-certs` there. It issues the
-      second host's console and command-line certificates from that CA.
-    - On each host, replace `/etc/syncd/pki/engine.crt` and `engine.key` with a certificate from
-      that CA that names the host: from your PKI, or with `openssl`, with
-      `subjectAltName=DNS:idm1.example.gov` and `extendedKeyUsage=serverAuth`.
-      `renew-certs` issues a `localhost` one again, so repeat this after each renewal.
-    - The command line's `cli.crt` is what a passive engine pulls snapshots with.
-2. **Configure both engines** in `/etc/syncd/engine/engine.yaml`: `api.listen: 0.0.0.0:7443`
-   with `api.tls`, and the same `engine.ha`:
+New in 0.5.0. On two hosts installed as usual (`syncdctl install` on each, from the bundle or the
+packages):
+
+```bash
+# On the first host: the lease is a PostgreSQL database both hosts reach (the console's works
+# when both reach it), or --lease-path FILE on a file system both share.
+sudo syncdctl ha init --name idm \
+  --lease-url 'postgres://syncd:secret@db.example.gov/syncd_console?sslmode=require' \
+  --advertise idm1.example.gov
+
+# Copy /root/syncd-ha-idm.join to the second host over a channel you trust, then there:
+sudo syncdctl ha join syncd-ha-idm.join --advertise idm2.example.gov
+
+# Delete the join file on both hosts. On the host whose console manages the pair, register
+# the other host's engine (the console shows the two as one pair):
+sudo syncdctl ha register idm2 idm2.example.gov:7443
+```
+
+- **What they do.** `ha init` keeps the first host's CA and writes it, with its key, into the join
+  file; `ha join` puts it in place of the second host's, issues the console's and the command
+  line's certificates from it, and gives the second host's console its new credentials. Each
+  issues an engine certificate for `localhost` and the `--advertise` name (which `renew-certs`
+  keeps from then on, reading `SYNCD_HA_ADVERTISE`), sets `api.listen: 0.0.0.0:7443`, writes the
+  pair's `SYNCD_HA_*` settings to `/etc/syncd/engine.env` (`engine.yaml` says nothing of the pair,
+  so one published configuration suits both), restarts the engine and waits for `syncd status`
+  to show the lease held. If the engine does not start, the previous certificates, `engine.yaml`
+  and `engine.env` are put back (kept in `/etc/syncd/pki/before-ha-<time>`).
+- **Options.** `--advertise` is the name the other engine reaches this host's API by (the host's
+  fully qualified name by default); `--member` this engine's name in the pair (the host name);
+  `--ttl` (15) and `--snapshot-every` go to `ha init` and are carried to the second host.
+  `--snapshot-every` defaults to 60 seconds in `syncdctl`; the source repository's INSTALL.md
+  still says 300, the default before 0.5.0. `--dry-run` shows what would change; both ask
+  before changing anything (`--yes` skips it) and can be run again. `sudo syncdctl ha status`
+  prints the engine's line on the pair.
+- **Sealed password keys.** When the first host seals its password keys, the join file carries
+  the passphrase and `ha join` installs it at the same path. A second host that seals its keys
+  with another passphrase, or seals them when the first does not, is refused.
+- **The join file** holds the CA's private key, the lease database's URL with its password and,
+  when the keys are sealed, their passphrase: copy it as a secret and delete it afterwards.
+- **Left to you:** open the control API's port (7443) between the two hosts (`syncdctl ha` opens
+  no firewall port), and import the running configuration in the console before the next
+  publish (the `api` section changed on the host). `ha init` and `ha join` refuse a host whose
+  `engine.yaml` has an `engine.ha` section of its own, and `syncdctl renew-certs --new-ca` on one
+  host breaks the pair until both commands are run again.
+
+### Setting up a pair by hand
+
+The same, step by step, for hosts whose certificates syncdctl did not issue:
+
+1. **One CA for both hosts.** Copy `/etc/syncd/pki/ca.crt` and `ca.key` from the first host over
+   the second's, and run `sudo syncdctl renew-certs` there. On each host, replace
+   `/etc/syncd/pki/engine.crt` and `engine.key` with a certificate from that CA that names the
+   host (your PKI, or `openssl` with `subjectAltName=DNS:idm1.example.gov` and
+   `extendedKeyUsage=serverAuth`). The command line's `cli.crt` is what a passive engine pulls
+   snapshots with.
+2. **Configure both engines**: `api.listen: 0.0.0.0:7443` with `api.tls` in
+   `/etc/syncd/engine/engine.yaml`, and the pair either in `engine.ha` or in `/etc/syncd/engine.env`
+   (`SYNCD_HA_NAME`, `SYNCD_HA_LEASE_URL` or `SYNCD_HA_LEASE_PATH`, `SYNCD_HA_LEASE_TTL_SECS`,
+   `SYNCD_HA_SNAPSHOT_EVERY_SECS`, and this host's `SYNCD_HA_MEMBER` and `SYNCD_HA_ADVERTISE`):
 
     ```yaml
     engine:
@@ -561,36 +797,45 @@ when the lease expires. How it works, its failover window and its limits are in
           url: { env: SYNCD_HA_LEASE_URL } # postgres://user:password@db.example.gov/syncd_console
           # tls_verify: true               # check the database's certificate (ca_file: ...)
           ttl_secs: 15                     # at least 3
-        snapshot_every_secs: 300           # at least 10
+        snapshot_every_secs: 60            # the default from 0.5.0 (300 before); at least 10
+        # password_replication_wait_ms: 2000  # how long a submitted password change waits for
+        #                                  # the passive engine to have it; 0: not at all
         # role: passive                    # a standby that never takes the lease
         # member: idm1                     # this engine's name in the pair; the host name by default
         # advertise: idm1.example.gov:7443 # where the other engine reaches this one's API
     ```
 
-    Put `SYNCD_HA_LEASE_URL` in `/etc/syncd/engine.env` on both hosts. Set
-    `SYNCD_HA_ADVERTISE=<this host's name>:7443` there too when the host name is not the name in
-    the engine's certificate.
 3. **Open 7443 between the two hosts**, so each engine reaches the other's control API.
 4. **Start the first engine, then the second.** The first takes the lease; the second starts
    passive and pulls a snapshot.
 5. **Register both engines in the console**, each at its host's address with mutual TLS (see
    [Registering engines](#registering-engines)). The console shows them as one pair.
 
-The snapshots carry the engine's password key and the password agents' CA, so the engine that
-takes over opens the password changes queued in the store. When the keys are sealed (see
-[The password keys](operator-guide.md#the-password-keys)), both engines need the same
-`SYNCD_PASSWORD_KEY_PASSPHRASE_FILE` passphrase: an engine with another one, or none, refuses
-to start on a snapshot's keys. `engine.ha` can only be changed on the
-host: the engine refuses a configuration published from the console that changes it, as it does
-`engine.data_dir` and `api`.
-
-The pair can also come from the environment alone, with a configuration file that says nothing
-of it: `SYNCD_HA_NAME` (the pair), `SYNCD_HA_LEASE_URL` or `SYNCD_HA_LEASE_PATH`, and optionally
-`SYNCD_HA_LEASE_TTL_SECS` and `SYNCD_HA_SNAPSHOT_EVERY_SECS`. `SYNCD_HA_MEMBER` and
-`SYNCD_HA_ADVERTISE`, when set and not empty, override `member` and `advertise` either way (from
-0.4.1; 0.4.0 used the file's values first). A file with an `engine.ha` of
-its own keeps it. On Kubernetes, `engine.ha.enabled` does all of this (see
+`SYNCD_HA_MEMBER` and `SYNCD_HA_ADVERTISE`, when set and not empty, override `member` and
+`advertise` (from 0.4.1). A file with an `engine.ha` of its own keeps it. `engine.ha` can only
+be changed on the host: the engine refuses a configuration published from the console that
+changes it. On Kubernetes, `engine.ha.enabled` does all of this (see
 [An active/passive pair](#an-active-passive-pair)).
+
+### Passwords and the pair
+
+- **Keys.** The snapshots carry the engine's password keys and the agents' CA, so the engine that
+  takes over opens the password changes queued in the store. When the keys are sealed (see
+  [The password keys](operator-guide.md#the-password-keys)), both engines need the same
+  `SYNCD_PASSWORD_KEY_PASSPHRASE_FILE` passphrase: an engine with another one, or none, refuses
+  to start on a snapshot's keys.
+- **Queued changes** (from 0.5.0) are followed by the passive engine write by write between
+  snapshots, so they survive a failover. A submitted change waits up to
+  `password_replication_wait_ms` (2000) for the passive engine to have it, and is accepted
+  either way.
+- **Capture agents reach either engine** (from 0.5.0): with `passwords.ingest`, the passive
+  engine listens on the ingest port too and hands every call to the active one. Give agents one
+  name that reaches both hosts (DNS with both addresses, a load balancer, a virtual address) and
+  list it in `passwords.ingest.names` on both. In strict mode, the active engine takes these
+  calls only from a certificate listed under `api.access.passwords`: list the one the passive
+  engine uses (by default `cli.crt`, `syncd command line`, which the `syncd` group can read; a
+  certificate of its own for the pair, `engine.ha.peer.cert_file` and `key_file`, keeps that
+  power from the group).
 
 ## Install with Helm
 
@@ -609,7 +854,7 @@ The chart (`deploy/helm/syncd` in the source repository, to be published as
 
 | Requirement | Notes |
 |---|---|
-| **Kubernetes on amd64 or arm64 nodes** | arm64 needs a release built with arm64 images (see [Container images](#container-images-and-the-helm-chart)); the FIPS images are amd64 only. The CI test runs on kind |
+| **Kubernetes on amd64 or arm64 nodes** | Both platforms, and from 0.5.0 the FIPS images too, unless the release was built without arm64 (see [Container images](#container-images-and-the-helm-chart)). The CI tests run on kind; EKS, AKS, GKE and OpenShift are not tested |
 | **Helm 3.8 or newer** | For OCI charts. CI uses Helm 3.16 |
 | **PostgreSQL 13 or newer** | For the console, outside the chart: the chart has no bundled database. An HA pair keeps its lease there too |
 | **A StorageClass** | The cluster's default, or one you name, for the engine's volume (`ReadWriteOnce`, 10 GiB by default) |
@@ -660,7 +905,7 @@ console:
 Then install:
 
 ```bash
-helm install syncd oci://ghcr.io/winllc/charts/syncd --version 0.4.1 \
+helm install syncd oci://ghcr.io/winllc/charts/syncd --version 0.5.0 \
   --namespace syncd -f syncd-values.yaml --wait
 ```
 
@@ -724,8 +969,11 @@ kubectl -n syncd exec deploy/syncd-console -- syncd-console admin reset-password
 | `engine.environment` | | The console environment the engine runs in, passed to each registration (`--environment`). Empty: a new engine runs in `default`, and a registered one keeps the one it has. New in 0.4.1 |
 | `engine.envFromSecret` | | A Secret whose keys become the engine's environment variables: the secrets its configuration refers to, and S3 keys for backups |
 | `engine.env` | `[]` | More environment variables, for example `RUST_LOG` or `SYNCD_FIPS_MODE` |
-| `engine.extraVolumes`, `.extraVolumeMounts` | `[]` | More volumes on the engine's pod: a CA bundle, a CSV inbox (see [Extra volumes](#extra-volumes)) |
-| `engine.passwordKeyPassphrase.existingSecret`, `.key` | , `passphrase` | A Secret of yours holding the passphrase that seals the password keys (see [Password synchronisation](#password-synchronisation)). New in 0.4.1 |
+| `engine.extraVolumes`, `.extraVolumeMounts` | `[]` | More volumes on the engine's pod: a Kerberos keytab, a CSV inbox, secrets from a vault (see [Extra volumes](#extra-volumes)) |
+| `engine.extraCaCertificates.configMap`, `.secret` | | A ConfigMap or a Secret (one of the two) of CA certificates, every key a file under `/etc/syncd/ca`, for connectors' `ca_file` (see [CA certificates](#ca-certificates)). New in 0.5.0 |
+| `engine.serviceAccount.create`, `.name`, `.annotations` | `false`, , `{}` | The engine pods' service account (see [Service accounts](#service-accounts)). New in 0.5.0 |
+| `engine.configSigning.publicKey`, `.existingConfigMap`, `.existingSecret`, `.key` | , , , `console-signing.pub` | The console's configuration signing key, mounted at `/etc/syncd/config-signing/<key>` (see [Control API access on Kubernetes](#control-api-access-on-kubernetes)). New in 0.5.0 |
+| `engine.passwordKeyPassphrase.existingSecret`, `.key`, `.previousKey` | , `passphrase`, | A Secret of yours holding the passphrase that seals the password keys; `previousKey` (new in 0.5.0) names the key holding the passphrase before a change (see [Password synchronisation](#password-synchronisation)). New in 0.4.1 |
 | `engine.persistence.size`, `.storageClass`, `.accessModes` | `10Gi`, the default class, `[ReadWriteOnce]` | The engine's volume, one per engine (see [Sizing](availability-and-sizing.md#sizing)) |
 | `engine.resources` | Requests 250m CPU and 512Mi; memory limit 4Gi | The engine's pod. The memory limit is the engine's `syncd_memory_limit_bytes` |
 | `engine.terminationGracePeriodSeconds` | `90` | Time the engine has to finish its batch and stop, as `TimeoutStopSec` on a host |
@@ -733,13 +981,16 @@ kubectl -n syncd exec deploy/syncd-console -- syncd-console admin reset-password
 | `engine.service.type` | `ClusterIP` | The Service with the control API (`api`, 7443) and metrics (`metrics`, 9464) |
 | `engine.passwordIngest.enabled`, `.port`, `.service.type`, `.service.annotations` | `false`, `7445`, `ClusterIP`, `{}` | The password agents' ingest listener on a Service of its own, `<release>-syncd-engine-ingest` (see [Password synchronisation](#password-synchronisation)). New in 0.4.1 |
 | `engine.ha.enabled` | `false` | Two engine pods as an [active/passive pair](#an-active-passive-pair) |
-| `engine.ha.leaseTtlSeconds`, `.snapshotEverySeconds` | `15`, `300` | The lease's TTL and the snapshot interval |
+| `engine.ha.lease.kind` | `postgres` | Where the pair's lease is: a row in the console's database, or (`kubernetes`, new in 0.5.0) a Lease object. Changing it on a running pair needs both engine pods stopped first (see [The lease on Kubernetes](#the-lease-on-kubernetes)) |
+| `engine.ha.leaseTtlSeconds`, `.snapshotEverySeconds` | `15`, `60` | The lease's TTL and the snapshot interval. The interval's default was 300 before 0.5.0; a release that sets it, or is upgraded with `--reuse-values`, keeps its own |
 | `engine.ha.antiAffinity` | `soft` | `soft` prefers two nodes for the pair; `hard` requires them |
 | `engine.ha.podDisruptionBudget.enabled` | `true` | A drain evicts one engine of the pair at a time |
 | `engine.metrics.job` | `syncd` | The `job` label the ServiceMonitor gives the engine's metrics, and the job the PrometheusRule selects |
 | `engine.metrics.serviceMonitor.enabled`, `.interval`, `.labels` | `false`, `30s`, `{}` | A Prometheus Operator ServiceMonitor scraping `/metrics` (see [Monitoring on Kubernetes](operator-guide.md#monitoring-on-kubernetes)) |
 | `engine.metrics.prometheusRule.enabled`, `.labels` | `false`, `{}` | The shipped alert rules as a PrometheusRule (see [Alert rules](#alert-rules-as-a-prometheusrule)) |
 | `console.replicas` | `1` | The console's pods |
+| `console.serviceAccount.create`, `.name`, `.annotations` | `false`, , `{}` | The service account of the console's pods and of the registration Job. New in 0.5.0 |
+| `console.license.existingSecret`, `.key` | , `license.lic` | A Secret holding the license file (see [The license on Kubernetes](#the-license-on-kubernetes)). New in 0.5.0 |
 | `console.database.url` | | The console's PostgreSQL URL, kept in the chart's `syncd-console` Secret |
 | `console.database.existingSecret`, `.existingSecretKey` | , `url` | Or a Secret of your own holding the URL, which keeps it out of Helm's values |
 | `console.adminPassword` | Generated (24 characters) | The initial `admin` password, which must be changed at the first sign-in |
@@ -759,7 +1010,17 @@ kubectl -n syncd exec deploy/syncd-console -- syncd-console admin reset-password
 
 `values.yaml` in the chart lists them all, and the source repository's
 `tests/helm/all-options.yaml` turns every production option on at once (CI renders it). There is
-no value for the engine's configuration: it comes from the console, as on a host.
+no value for the engine's configuration: it comes from the console, as on a host. Nor is there one
+for its host settings (`api.access`, `engine.require_signed_config`, `engine.config_signing_keys`),
+which live in the engine's own file on its volume (see
+[Control API access on Kubernetes](#control-api-access-on-kubernetes)), or for the KMS settings
+(`SYNCD_PASSWORD_KEY_PASSPHRASE_KMS` can go in `engine.env`; `CONSOLE_MASTER_KEY_KMS` cannot be
+set up through the chart).
+
+The 0.5.0 values (service accounts, the signing key, CA certificates, the Kubernetes Lease and its
+RBAC, the license Secret, `previousKey`) are rendered and installed by CI jobs that had not run in
+GitHub Actions before the pull request that brought 0.5.0; during development they were never
+rendered by `helm` or installed on a cluster. Try them on a test cluster first.
 
 **Other console settings**, such as session lengths, the audit outputs, webhooks or Git sync, go in
 `console.env` as the variables in [Configuration](configuration.md). Take secrets from a Secret of
@@ -772,6 +1033,12 @@ console:
     - { name: ENS_AUDIT_SPLUNK_URL, value: https://splunk.example.com:8088 }
     - { name: ENS_AUDIT_SPLUNK_TOKEN_FILE, value: /etc/syncd/secrets/splunk-hec-token }
 ```
+
+The sign-in settings new in 0.5.0 (SAML, `CONSOLE_SAML_*`; certificate sign-in, `ENS_X509_*`; the
+notice-and-consent banner and the sign-in policy, `ENS_CONSENT_BANNER_*`, `ENS_SESSION_*`,
+`ENS_LOCKOUT_*`, `ENS_PASSWORD_*`, `ENS_HSTS_*`) have no values of their own either: set them in
+`console.env`, with their files (the provider's metadata, the allowed issuers, the notice's text)
+mounted with `console.extraVolumes`. See [Single sign-on](single-sign-on.md).
 
 Before 0.4.0 single sign-on went in `console.env` too. It now has values of its own
 (`console.oidc.*`, `console.publicUrl`); don't set the same variables both ways.
@@ -892,23 +1159,77 @@ console:
   `haproxy.org/server-ssl: "true"`.
 - `kubectl port-forward` then needs `https://` too.
 
+#### CA certificates
+
+New in 0.5.0. For directories and other systems whose certificates come from a CA of your own,
+`engine.extraCaCertificates` mounts a ConfigMap or a Secret (one of the two) read-only at
+`/etc/syncd/ca`, every key a file, and a connector names its file:
+
+```bash
+kubectl -n syncd create configmap corp-ca --from-file=corp-ca.pem
+```
+
+```yaml
+engine:
+  extraCaCertificates:
+    configMap: corp-ca        # or secret: corp-ca
+```
+
+In the configuration published from the console, `connection: { url: ldaps://dc1.corp.example.com,
+ca_file: /etc/syncd/ca/corp-ca.pem, ... }` on an LDAP or Active Directory connector (new in 0.5.0;
+see [Connectors](connectors.md)). Those connectors read the file at each connection, and the
+kubelet updates a mounted ConfigMap within about a minute, so a renewed CA needs no restart. The
+same directory serves a `scim` connector's `connection.tls.ca_file` and `engine.backup`'s
+`ca_file`.
+
+#### Service accounts
+
+New in 0.5.0. By default the chart names no service account, and the engine, the console and the
+registration Job run as the namespace's `default` account, as before. Give them their own when a
+workload identity is bound to one (an IAM role through IRSA, a vault role, a Google service
+account):
+
+```yaml
+engine:
+  serviceAccount:
+    create: true             # <release>-syncd-engine (or `name`)
+    annotations:
+      eks.amazonaws.com/role-arn: arn:aws:iam::111122223333:role/syncd-engine
+console:
+  serviceAccount:
+    create: false            # an account that exists, by name
+    name: syncd-console
+```
+
+The registration Job runs as the console's account. The pods mount no API server token
+(`automountServiceAccountToken: false`), except the engine's with a Kubernetes lease. Azure
+workload identity's pod label (`azure.workload.identity/use`) has no chart value. No workload
+identity was exercised on a cloud.
+
 #### Extra volumes
 
 `engine.extraVolumes` and `engine.extraVolumeMounts`, and the `console.*` pair, add volumes and
-mounts to the pods: a CA bundle for a source's or target's TLS, a Kerberos keytab, an ODBC
-configuration, a Git deploy key, a Splunk HEC token. The root file systems are read-only, so
-anything the processes must find on disk comes in this way:
+mounts to the pods for what the chart has no value of its own for: a Kerberos keytab, an ODBC
+configuration, secrets from a vault, a Git deploy key, a Splunk HEC token. The root file systems
+are read-only, so anything the processes must find on disk comes in this way:
 
 ```yaml
 engine:
   extraVolumes:
-    - name: corp-ca
-      configMap: { name: corp-ca }
+    - name: krb5
+      secret: { secretName: syncd-krb5, defaultMode: 0440 }
   extraVolumeMounts:
-    - name: corp-ca
-      mountPath: /etc/syncd/ca
+    - name: krb5
+      mountPath: /etc/syncd/krb5
       readOnly: true
 ```
+
+From 0.5.0 the chart's own volume names on the engine are taken: `data`, `pki`, `run`, `tmp`,
+`password-key-passphrase`, `config-signing` and `extra-ca-certificates`. From 0.5.0 the engine can
+also read secrets from HashiCorp Vault, AWS Secrets Manager or Azure Key Vault itself, signing in
+as its pod (the settings in `engine.env`; see
+[Configuration](configuration.md#secret-references)); the External Secrets Operator or the
+Secrets Store CSI driver, which bring a secret to the pod as a file, work through these volumes.
 
 The inbox of a `csv` connector comes in the same way: a PersistentVolumeClaim (or an NFS share)
 the exporting system writes to, mounted where the connector's `path` points. The engine only reads
@@ -1011,6 +1332,68 @@ label to `engine.metrics.job` (`syncd`), and the rules are rendered with that jo
 PrometheusRule on one of them: its rules match every engine. See
 [Monitoring on Kubernetes](operator-guide.md#monitoring-on-kubernetes).
 
+#### Control API access on Kubernetes { #control-api-access-on-kubernetes }
+
+New in 0.5.0 (see [Control API access](#control-api-access) for the tiers). The chart issues two
+client certificates: `syncd console` (the console's) and `syncd engine` (the engine's own, which
+the passive engine of a pair pulls snapshots with).
+
+- **A new release is strict.** The image's initial configuration has `api.access` with `mode:
+  strict`: `syncd console` applies configurations, `syncd engine` and the control socket
+  (`kubectl exec ... -- syncd status`, `reconcile`, `approve`) read and operate, and `syncd engine`
+  may also set passwords (`passwords: [syncd engine]`, for a pair's ingest forwarding).
+  `kubectl exec ... -- syncd apply-config` is refused.
+- **A release first installed before 0.5.0 stays compatible.** The engine's configuration file
+  is on its data volume and an upgrade never rewrites it. To opt in, add to the `api` section of
+  `/var/lib/syncd/engine.yaml` on the volume:
+
+    ```yaml
+    api:
+      access:
+        mode: strict
+        configure: [syncd console]
+        operate: [syncd engine]
+        passwords: [syncd engine]      # with a pair and capture agents
+    ```
+
+    The image has no shell or editor: use an ephemeral debug container, or a pod that mounts the
+    volume while the engine is scaled down. Restart the engine's pod (both pods of a pair), then
+    import the running configuration in the console. This procedure has not been rehearsed on a
+    cluster, and the chart has no value for the access mode.
+- **Signed configurations.** `engine.configSigning` mounts the console's public key in the engine's
+  pods, at `/etc/syncd/config-signing/console-signing.pub`:
+
+    ```bash
+    kubectl -n syncd exec deploy/syncd-console -- syncd-console admin config-signing-key |
+      sed -n '/BEGIN PUBLIC KEY/,/END PUBLIC KEY/p' > console-signing.pub
+    helm upgrade syncd oci://ghcr.io/winllc/charts/syncd --version 0.5.0 -n syncd --reuse-values \
+      --set-file engine.configSigning.publicKey=console-signing.pub
+    ```
+
+    The chart keeps it in a ConfigMap (`syncd-config-signing`); `existingConfigMap` or
+    `existingSecret` (with `key`) name one of your own instead, one of the three. Mounting it
+    changes nothing by itself: add `config_signing_keys:
+    [/etc/syncd/config-signing/console-signing.pub]`, then `require_signed_config: true`, to the
+    `engine` section of the file on the volume, as for `api.access`. For a rotation, put both keys
+    in the value; the engine reads the file at each apply.
+
+#### The license on Kubernetes { #the-license-on-kubernetes }
+
+New in 0.5.0. Install the license on the console's **License** page, or keep it in a Secret, which
+suits GitOps:
+
+```bash
+kubectl -n syncd create secret generic syncd-license --from-file=license.lic=L-0001.lic
+helm upgrade syncd oci://ghcr.io/winllc/charts/syncd --version 0.5.0 -n syncd --reuse-values \
+  --set console.license.existingSecret=syncd-license
+```
+
+The chart mounts the Secret at `/etc/syncd/license` and sets `CONSOLE_LICENSE_FILE`. A renewal is
+a changed Secret, which the console reads within minutes without a restart; with the Secret, the
+License page shows the license and takes no uploads. The installation id the portal may ask for is
+on the License page, or `kubectl -n syncd exec deploy/syncd-console -- syncd-console admin
+license`. See [syncd licensing](licensing.md).
+
 #### Password synchronisation
 
 New in 0.4.1. Two values serve [password synchronisation](password-sync.md): a passphrase that
@@ -1039,6 +1422,15 @@ with the same keys, and `syncd status` says `password keys: sealed with the pass
 engines of a pair use the same Secret. The chart neither creates nor keeps this Secret: keep a copy
 of the passphrase with your other recovery secrets, since a restore needs it.
 
+**Changing the passphrase** (new in 0.5.0). The engine cannot write a mounted Secret, so the
+change is made in the Secret: keep the current passphrase under another key, put the new one
+under `passphrase`, and name the old key in `engine.passwordKeyPassphrase.previousKey` (mounted
+as `passphrase.previous`). At `helm upgrade` each engine pod opens the key files with the
+previous passphrase and seals them again with the new one. Once every pod has started since (and,
+for a pair, the passive one has received a snapshot taken after the change), remove `previousKey`
+and the old key. Rotating the keys themselves (`syncd password rotate-key`, `rotate-agent-ca`) is
+done with `kubectl exec`, as on a host. The procedure has not been rehearsed on a cluster.
+
 **The ingest listener.** Capture agents enroll and send changes on the listener the configuration
 sets in `passwords.ingest`. `engine.passwordIngest.enabled` gives the engine's pods an `ingest` port
 and a Service of its own, `syncd-engine-ingest`, so a load balancer for the agents exposes neither
@@ -1058,8 +1450,11 @@ networkPolicy:
 
 The configuration the console publishes must listen on that port, with `names` the address the
 agents use (`passwords: { ingest: { listen: 0.0.0.0:7445, names: [...] } }`). With
-`engine.ha.enabled` the Service routes to both pods but only the active engine listens: an agent
-that reaches the passive one is refused and must try again.
+`engine.ha.enabled` the Service routes to both pods, and from 0.5.0 both answer: the passive
+engine hands every call (enrollment, renewal, submissions) to the active one, once it has received
+its first snapshot (in 0.4.1 the passive pod refused the agent, which retried). While neither pod
+holds the lease, agents are told `unavailable` and keep their changes. This forwarding is tested
+with two engine processes on one host, not on a cluster.
 
 #### An active/passive pair { #an-active-passive-pair }
 
@@ -1071,8 +1466,10 @@ helm upgrade syncd oci://ghcr.io/winllc/charts/syncd -n syncd --reuse-values \
 `engine.ha.enabled` runs two engine pods, `syncd-engine-0` and `syncd-engine-1`, each with its own
 data volume, as an active/passive pair:
 
-- **The lease** is a row in the console's PostgreSQL database (table `syncd_lease`, created by
-  the console's migrations), reached with the console's database URL. The pair is set from the
+- **The lease** is, by default, a row in the console's PostgreSQL database (table
+  `syncd_lease`, created by the console's migrations), reached with the console's database URL.
+  From 0.5.0 it can be a Kubernetes Lease object instead (see
+  [The lease on Kubernetes](#the-lease-on-kubernetes)). Either way the pair is set from the
   environment (`SYNCD_HA_*`), so the configuration the console publishes is the same for both
   pods.
 - **Each pod by name.** A headless Service, `syncd-engine-peers`, gives each pod a name
@@ -1085,17 +1482,20 @@ data volume, as an active/passive pair:
   `syncd-console admin rename-engine` (it does nothing when there is no such engine, or `-0`
   exists already). With chart 0.4.0 it stayed registered beside the pair until removed under
   **Engines**. Engine names in `CONSOLE_SELF_SERVICE_ENGINE` or `CONSOLE_CONFIG_GIT_ENGINES` are
-  not renamed: change them in `console.env`. The rename was checked with `helm template` and
-  `helm lint`, not on a cluster.
-- **Password synchronisation.** Only the active engine listens on the ingest port (see
+  not renamed: change them in `console.env`; from 0.5.0 the Job's log, the console's log and a
+  notice on its Engines page name such a setting.
+- **Password synchronisation.** From 0.5.0 both engines answer on the ingest port, and the passive
+  one follows the queued password changes (see
   [Password synchronisation](#password-synchronisation)). With sealed keys, both pods use the same
   passphrase Secret.
 - **Scheduling.** A PodAntiAffinity on the host name keeps the two pods apart:
   `engine.ha.antiAffinity: soft` (the default) prefers two nodes, `hard` requires them (a
   one-node cluster then runs one). `engine.affinity`, when set, replaces it. A
   PodDisruptionBudget lets a drain evict one engine at a time.
-- **Timing.** `engine.ha.leaseTtlSeconds` (15) and `engine.ha.snapshotEverySeconds` (300). A pod
-  stopped by a rollout or a drain hands the lease over at once.
+- **Timing.** `engine.ha.leaseTtlSeconds` (15) and `engine.ha.snapshotEverySeconds` (60 from 0.5.0;
+  300 before, and kept by a release that sets it or is upgraded with `--reuse-values`). After the
+  first, a snapshot sends only the files the passive pod does not hold. A pod stopped by a rollout
+  or a drain hands the lease over at once.
 
 **On an existing release**, the StatefulSet's `serviceName` and `podManagementPolicy` change with
 `engine.ha.enabled`, and Kubernetes does not update them in place. Before the upgrade:
@@ -1109,17 +1509,45 @@ Then upgrade. The chart issues new certificates, and the registration Job gives 
 new ones. The same applies when turning HA off again; nothing is renamed back then: the Job
 registers `<engine name>` anew, and `-0` and `-1` stay registered until you remove them.
 
-!!! warning "Not tested on Kubernetes"
-    The chart's kind test installs a single engine: a pair on Kubernetes isn't installed or
-    failed over by any test. CI only lints and renders the HA templates. The pair itself is
-    tested end to end on hosts. Try a failover on a test cluster before you rely on it.
+##### The lease on Kubernetes { #the-lease-on-kubernetes }
+
+New in 0.5.0. `engine.ha.lease.kind: kubernetes` keeps the pair's lease in a
+`coordination.k8s.io/v1` Lease object named after the release, in its namespace, so the engines'
+availability no longer depends on the console's database:
+
+```bash
+helm upgrade syncd oci://ghcr.io/winllc/charts/syncd -n syncd --reuse-values \
+  --set engine.ha.enabled=true --set engine.ha.lease.kind=kubernetes
+kubectl -n syncd get lease syncd -o yaml     # holderIdentity, renewTime, leaseTransitions
+```
+
+- **What the chart makes:** the Lease object; a Role that may `get` and `update` that one Lease;
+  a RoleBinding to the engine's service account; and that account, when `engine.serviceAccount`
+  names none. The engine's pods then mount their account's token.
+- **How it decides.** An engine takes the lease once the Lease object has stood unchanged for its
+  whole duration as that engine saw it, so the nodes' clocks need not agree; every write names the
+  `resourceVersion` it read. A pod that has just started waits one lease duration before it takes
+  over a lease whose holder is gone.
+- **With `networkPolicy.egress.enabled`,** let the engine pods reach the cluster's API server.
+- **Changing the kind of a running pair** (either way): the two kinds don't know of each other,
+  so stop both engine pods first (`kubectl -n syncd scale statefulset syncd-engine
+  --replicas=0`), upgrade with the new kind, and let the chart scale the pair back up. A release
+  installed before 0.5.0 keeps `postgres`.
+
+!!! warning "Barely tested on Kubernetes"
+    New in 0.5.0, a `kind-ha` CI job installs a pair in kind, turns HA on for an existing
+    release, and fails it over by lease expiry and by deleting the active pod, with the
+    PostgreSQL lease. It had not run in GitHub Actions before the pull request that brought
+    0.5.0. Its variant with the Kubernetes lease has never run, and the Kubernetes Lease backend
+    has met only a fake API server (never a real one, never TLS to it). The pair itself is tested
+    end to end on hosts. Try a failover on a test cluster before you rely on it.
 
 #### FIPS images
 
 ```yaml
 image:
-  engine: { tag: 0.4.1-fips }
-  console: { tag: 0.4.1-fips }
+  engine: { tag: 0.5.0-fips }
+  console: { tag: 0.5.0-fips }
 engine:
   env:
     - { name: SYNCD_FIPS_MODE, value: "true" }
@@ -1128,9 +1556,11 @@ console:
     - { name: SYNCD_FIPS_MODE, value: "true" }
 ```
 
-`kubectl -n syncd exec syncd-engine-0 -- syncd status` then shows `fips on`. The FIPS images are
-amd64 only. The registration Job gets `console.env` too, so it runs in FIPS mode with the console.
-See [FIPS 140-3 and DISA STIG](fips-and-stig.md).
+`kubectl -n syncd exec syncd-engine-0 -- syncd status` then shows `fips on`. From 0.5.0 the FIPS
+images are built for amd64 and arm64. The registration Job gets `console.env` too, so it runs in
+FIPS mode with the console. Custom functions in WebAssembly are refused in FIPS mode unless
+`SYNCD_FIPS_ALLOW_WASM_FUNCTIONS=true` is in both containers' `env`. See
+[FIPS 140-3 and DISA STIG](fips-and-stig.md).
 
 ### 6. Upgrade { #helm-upgrade }
 
@@ -1145,15 +1575,16 @@ first (see [Backups on Kubernetes](availability-and-sizing.md#backups-on-kuberne
 - the engine: `kubectl -n syncd exec syncd-engine-0 -- syncd backup --to s3://...`, or a volume
   snapshot of its volume;
 - the console's database, with `pg_dump`;
-- the `syncd-console` Secret (and the `syncd-pki` Secret, and the password-key passphrase Secret
-  if you use one).
+- the `syncd-console` Secret (and the `syncd-pki` Secret, the password-key passphrase Secret and
+  the license Secret if you use them).
 
 On upgrade, the engine migrates its store if the new release changed its format (see
 [Store format](#store-format)), the console migrates its database, and the registration Job runs
 again. The engine pod has 10 minutes to open its store and listen (its startup probe) before
 Kubernetes restarts it. `helm rollback` and its limits are in [Rollback](#rollback). What changes
-from chart 0.4.0 to 0.4.1 is in [Upgrading from 0.4.0 to 0.4.1](#upgrading-from-040-to-041), and
-from 0.3.0 to 0.4.0 in [Upgrading from 0.3.0 to 0.4.0](#upgrading-from-030-to-040).
+from chart 0.4.1 to 0.5.0 is in [Upgrading from 0.4.1 to 0.5.0](#upgrading-from-041-to-050), from
+0.4.0 to 0.4.1 in [Upgrading from 0.4.0 to 0.4.1](#upgrading-from-040-to-041), and from 0.3.0 to
+0.4.0 in [Upgrading from 0.3.0 to 0.4.0](#upgrading-from-030-to-040).
 
 A host install does not move to Kubernetes by itself: see
 [Moving from a host to Kubernetes](availability-and-sizing.md#moving-from-a-host-to-kubernetes).
@@ -1182,15 +1613,15 @@ the console Secret alone loses the master key (see
 ### Air-gapped clusters
 
 1. On a connected host, get the chart: `helm pull oci://ghcr.io/winllc/charts/syncd --version
-   0.4.1` gives `syncd-0.4.1.tgz`. Verify it and the images with cosign there (see
+   0.5.0` gives `syncd-0.5.0.tgz`. Verify it and the images with cosign there (see
    [Verifying the images and the chart](#verifying-the-images-and-the-chart)).
-2. Copy `ghcr.io/winllc/syncd:0.4.1` and `ghcr.io/winllc/syncd-console:0.4.1` (or the `-fips`
+2. Copy `ghcr.io/winllc/syncd:0.5.0` and `ghcr.io/winllc/syncd-console:0.5.0` (or the `-fips`
    tags) into your registry, for example with `skopeo copy --all` (every platform) or `docker
    pull`, `docker tag` and `docker push`. The chart uses no other image.
 3. Install from the file, with your registry:
 
 ```bash
-helm install syncd ./syncd-0.4.1.tgz --namespace syncd -f syncd-values.yaml \
+helm install syncd ./syncd-0.5.0.tgz --namespace syncd -f syncd-values.yaml \
   --set image.engine.repository=registry.example.gov/winllc/syncd \
   --set image.console.repository=registry.example.gov/winllc/syncd-console
 ```
@@ -1200,11 +1631,16 @@ Add `imagePullSecrets` if your registry needs them.
 ### What the chart does not do yet
 
 - **A bundled PostgreSQL.**
-- **A FIPS image for arm64.** The FIPS images are amd64 only.
-- **A tested HA pair.** The pair's templates are linted and rendered, not installed or failed
-  over (above). Its lease is in PostgreSQL only: there is no Kubernetes Lease or etcd backend.
-- **Password ingest that follows the lease.** The ingest Service routes to both engines of a
-  pair, and only the active one listens: agents retry until they reach it.
+- **The engine's host settings.** `api.access` and the signing settings live in the engine's own
+  file on its volume: the chart mounts the signing key and cannot set them (see
+  [Control API access on Kubernetes](#control-api-access-on-kubernetes)).
+- **KMS-wrapped keys.** The chart has no values for `SYNCD_PASSWORD_KEY_PASSPHRASE_KMS` or
+  `CONSOLE_MASTER_KEY_KMS`; the console's needs the chart's `CONSOLE_MASTER_KEY` gone, which it
+  does not offer.
+- **Pod labels**, such as Azure workload identity's `azure.workload.identity/use`.
+- **An etcd lease backend**, and a `values.schema.json`.
+- **A pair tested on a real cluster** (above): the 0.5.0 kind job is the only test, and the
+  Kubernetes Lease has met a fake API server only.
 
 ## The JDBC bridge
 
@@ -1260,6 +1696,90 @@ Run it with a restart policy (systemd `Restart=always`, or a container with
 On Kubernetes, upgrade with `helm upgrade` (see [Upgrade with Helm](#helm-upgrade)). On a host,
 upgrade as in [Bundle installs](#bundle-installs) or [Package installs](#package-installs). Read
 what changes first.
+
+### Upgrading from 0.4.1 to 0.5.0
+
+Upgrade as usual, with `syncdctl upgrade`, `apt` or `dnf`, or `helm upgrade` with chart 0.5.0. The
+upgrade takes its local backup first, as before. A good part of 0.5.0 was tested against stand-ins
+only (the release notes' "Known limitations"), and the CI test that upgrades 0.4.1 to this release
+had not run in GitHub Actions before the pull request that brought 0.5.0: try the upgrade on a
+test installation first. What to know:
+
+- **Request a license as part of the upgrade.** Nothing changes at the upgrade itself. The 30-day
+  evaluation starts at the first start of 0.5.0, a warning shows from day 23, a 30-day grace period
+  follows, and then publishing a changed configuration is refused: **about 60 days after the
+  upgrade**. Runs, approvals, dead-letter actions, password changes and publishing again a version
+  published before (a rollback) go on. Find the installation id on the License page and install the
+  license as in [The license](#the-license); the clock is in
+  [syncd licensing](licensing.md#upgrading-from-041-the-clock-starts).
+- **The control API stays compatible until you opt in.** An upgrade never rewrites
+  `/etc/syncd/engine/engine.yaml`, so an upgraded engine has no `access` section and lets every
+  certificate of its CA do everything, with a warning at every start, in `syncd status` and on
+  the console's engine page. Opt in with `sudo syncdctl api-access strict` (on Kubernetes, an edit
+  on the volume), then import the running configuration in the console (see
+  [Control API access](#control-api-access)).
+- **Configurations that no longer validate.** Delivering passwords, initial passwords or
+  self-service changes to an LDAP directory on another host over `ldap://` without `starttls` is
+  refused: add TLS, or `passwords: { allow_cleartext: true }` (loopback and `ldapi://` are
+  exempt). The upgrade's configuration check (`syncd validate` with the new binary) tells you
+  first.
+- **Capture agents.** `syncd password agent add` needs `--source <connector>` for a new agent. An
+  agent enrolled before 0.5.0 is bound to no source: it keeps working, with a warning at every
+  start, in `syncd status` and in `syncd password agent list`. Bind each with `sudo syncd password
+  agent bind <name> --source <connector>`.
+- **Role maps add up.** In `CONSOLE_OIDC_ROLE_MAP` (and the new SAML and certificate role maps)
+  every entry that matches adds its role; in 0.4.1 the first match won. Review maps that relied on
+  their order. Sign-in audit records carry `roles` (a list) instead of `role`: update SIEM
+  parsers. With the consent banner on, scripts that sign in with a password must first
+  `POST /api/v1/auth/consent`.
+- **Other behaviour changes** (the release notes list them all):
+    - A `TRUNCATE` of a followed PostgreSQL table now deletes the table's entries in the targets,
+      subject to the deletion thresholds (0.4.1 ignored it).
+    - An initial password the directory refuses is retried three times, then put in the
+      dead-letter queue.
+    - Source changes that arrive during a reconciliation, a full sync or a reload are applied
+      during it (see [Sizing](availability-and-sizing.md#sizing)).
+    - A publication with `drift` also lists its target's unmanaged entries after each scheduled
+      drift check (a read-only paged search; `unmanaged: { scheduled: false }` turns it off).
+    - The HA snapshot interval's default is 60 s (was 300 s). A value that is set is kept, such
+      as the `snapshot_every_secs: 300` of a pair set up from the 0.4.1 instructions: remove it
+      to take the new default.
+    - The console's master key is checked at start against one sealed secret of each kind. A
+      database with secrets sealed under two keys, which 0.4.1 started, may now refuse to start,
+      naming what the key does not open.
+    - A passphrase file inside `/etc/syncd` is left out of `syncdctl backup --to` archives, with a
+      warning: move it to `/etc/syncd-keys/` and back it up apart.
+- **The console's database gains migrations 0018 to 0028** (schema 17 to 28): the configuration
+  signing key, the sign-in policy, SAML, role assignments (`users.role` is dropped: every account
+  keeps its former role, on everything), audit scope columns, API token limits, WebAssembly
+  modules, the license, audit filter indexes, the xlsx report format and each version's Git
+  commit. **A rollback to 0.4.1 therefore needs the console database backup taken before the
+  upgrade** (see [Rolling back 0.5.0 to 0.4.1](#rolling-back-050-to-041)).
+- **The store's format does not change** (format 1), but 0.5.0 keeps records 0.4.1 cannot use
+  (see [Rolling back 0.5.0 to 0.4.1](#rolling-back-050-to-041)).
+- **An HA pair** works mixed during the upgrade: snapshots fall back to whole archives, and the
+  password queue is not followed until both engines run 0.5.0. A mixed pair was not run in the
+  project's tests. A console and an engine of different minor versions are still not tested.
+- **Helm.** New values: `engine.serviceAccount`, `console.serviceAccount`, `engine.configSigning`,
+  `engine.extraCaCertificates`, `engine.passwordKeyPassphrase.previousKey`, `engine.ha.lease.kind`
+  (`postgres` by default; changing it needs both engine pods stopped first) and
+  `console.license` (see [Key values](#3-key-values)). `engine.ha.snapshotEverySeconds` defaults to
+  60; `--reuse-values` keeps the old 300. Chart and images move to 0.5.0 together.
+- **New alert rules** (21 to 30): `SyncdGroupReviewsDue`, the four `SyncdLicense*` rules,
+  `SyncdPasswordAgentCertExpiring`, `SyncdPasswordKeyOld`, `SyncdUnmanagedEntriesGrew` and
+  `SyncdUnmanagedPrivilegedMembersGrew` (see [Alert rules](operator-guide.md#alert-rules)). Load
+  the new rule file into Prometheus, or upgrade the chart with `prometheusRule.enabled`. New
+  webhook events (`config.unpublished-running`, `group.review-due`, `license.state-changed`,
+  `quality.errors`) reach an endpoint once they are added to its list.
+- **Files kept.** `/etc/syncd/engine/engine.yaml`, `console.env` and `engine.env` stay as you left
+  them. The release's templates (`/opt/syncd/current/share/config/`) list the new settings.
+- **New files.** On the active engine of a pair, `<data_dir>/ha/snapshots/` (the newest two
+  snapshots, hard links to the store's files); on the passive one, `ha/password-queue.replica`.
+  Previous password keys (`password.key.<id>`) and a previous agent CA during a rotation. With a
+  license installed by `syncdctl`, `/etc/syncd/license.lic`; with signed configurations,
+  `/etc/syncd/pki/console-signing.pub`.
+- **New package:** `syncd-capture`, for the directory servers' hosts (see
+  [The capture agent's package](#the-capture-agents-package)).
 
 ### Upgrading from 0.4.0 to 0.4.1
 
@@ -1426,8 +1946,8 @@ Upgrade as below, with `syncdctl upgrade`, `apt` or `dnf`. What to know first:
 Either command upgrades:
 
 ```bash
-sudo syncdctl upgrade syncd-0.4.1-linux-x86_64.tar.gz
-sudo ./syncd-0.4.1-linux-x86_64/install.sh        # on a host that runs syncd
+sudo syncdctl upgrade syncd-0.5.0-linux-x86_64.tar.gz
+sudo ./syncd-0.5.0-linux-x86_64/install.sh        # on a host that runs syncd
 ```
 
 The new release's own `syncdctl` runs the upgrade:
@@ -1461,23 +1981,33 @@ this), and so are the current and the previous release; older releases are remov
 
 **A pair on hosts.** Upgrade the passive engine's host first, then the active one's: stopping the
 active engine hands the lease to the upgraded one at once. Both engines should run the same
-release.
+release. Between 0.4.1 and 0.5.0 a mixed pair works while you upgrade: snapshots are sent whole,
+and the passive engine follows the password queue only once both run 0.5.0.
 
 ### Package installs
 
 Upgrade with the package manager:
 
 ```bash
-sudo apt install ./syncd_0.4.1_amd64.deb
-sudo dnf upgrade ./syncd-0.4.1-1.x86_64.rpm          # RHEL 8: ./syncd-0.4.1-1.el8.x86_64.rpm
+sudo apt install ./syncd_0.5.0_amd64.deb
+sudo dnf upgrade ./syncd-0.5.0-1.x86_64.rpm          # RHEL 8: ./syncd-0.5.0-1.el8.x86_64.rpm
+# From the package repositories (new in 0.5.0):
+sudo apt update && sudo apt install syncd
+sudo dnf upgrade syncd
 ```
 
 Before the new files are unpacked, the installed release stops syncd and takes the same backup.
 Afterwards the new release starts the services and checks they are healthy. Unlike a bundle
 upgrade, a package upgrade does not check the configuration or the disk space first, and does not
 roll back by itself: a failed health check fails the package's configuration step and names the
-backup. To go back, install the previous package version, then run
+backup. To go back, install the previous package version (`sudo apt install syncd=<version>`,
+`sudo dnf downgrade syncd-<version>`, or the downloaded file), then run
 `sudo syncdctl restore <backup>`.
+
+With the repositories configured, an upgrade comes whenever the package manager runs, and it stops
+both services for its backup. Choose when: hold the package between maintenance windows (`sudo
+apt-mark hold syncd`; `exclude=syncd` in `/etc/yum.repos.d/syncd.repo`, lifted with
+`--disableexcludes=syncd`), in particular on hosts with unattended upgrades.
 
 ## Rollback
 
@@ -1502,6 +2032,29 @@ After a rollback there is no previous release to go back to again. On a package 
 is refused: install the older package, then `syncdctl restore` the backup named
 `<time>-upgrade-<old>-to-<new>`. More on recovery is in
 [Sizing, availability and recovery](availability-and-sizing.md#rolling-back-an-upgrade).
+
+### Rolling back 0.5.0 to 0.4.1
+
+- **The console's database is restored**, since 0.5.0 changed its schema (17 to 28). `syncdctl
+  rollback` and the upgrade's own backup do this; everything done in the console since the upgrade
+  is lost (configuration versions, role assignments, licenses, audit entries). From 0.5.0 the
+  restore also drops the database functions a newer release added, so upgrading again after the
+  rollback works (before, it failed at migration 0024).
+- **A full rollback restores the engine store** taken before the upgrade, and is the safe way back.
+- **With the store kept** (`syncdctl rollback --keep-data`, `helm rollback`, a package downgrade),
+  the store's format allows it, but 0.4.1 cannot read 0.5.0's password agent and queued password
+  records: don't roll back so with agents enrolled or password changes queued since the upgrade.
+  0.4.1 also ignores previous password keys and a previous agent CA (rotate nothing until you are
+  sure of the upgrade), drops group-review timers as unknown, and ignores what else 0.5.0 keeps
+  (unmanaged-entry results, the license ledger, the password queue position, the quality trend).
+- **0.4.1 refuses settings it doesn't know.** Before a rollback that keeps the store, publish a
+  configuration without the settings new in 0.5.0 (`api.access`, `engine.require_signed_config`,
+  `engine.license_file`, `engine.wasm_functions`, the `kubernetes` lease, `connection.ca_file`,
+  `passwords.allow_cleartext`, `vault`, `aws_secret` and `azure_keyvault` references, the new Entra
+  `auth` methods, the `rest` and HR connectors, `unmanaged`, `reviewers`, `placeholder_member`,
+  ...). The host settings among them must be removed from the engine's file on its host.
+- **A pair.** A pair on the Kubernetes lease goes back to the PostgreSQL lease with chart 0.4.1:
+  stop both engine pods first, as for any change of lease kind.
 
 ### Rolling back 0.4.1 to 0.4.0
 
@@ -1553,6 +2106,11 @@ newer release changed neither the store's format nor the console's schema. Other
 backups taken before the upgrade first: the older engine refuses a store format it cannot read.
 See [Backups on Kubernetes](availability-and-sizing.md#backups-on-kubernetes).
 
+From chart 0.5.0 to 0.4.1, the console's schema changed: restore the console's database dump taken
+before the upgrade into an empty database (drop and create it first), and publish a configuration
+without 0.5.0's settings first, since the configuration file on the engine's volume is kept (see
+[Rolling back 0.5.0 to 0.4.1](#rolling-back-050-to-041)).
+
 From chart 0.4.1 to 0.4.0, neither changed, but put the plain password key files back on the
 engine's volume first if the keys were sealed (see
 [Rolling back 0.4.1 to 0.4.0](#rolling-back-041-to-040)).
@@ -1580,7 +2138,7 @@ and `syncd store-format` prints it (`--supported`: the newest format this `syncd
   For such an upgrade, set `SYNCD_HEALTH_TIMEOUT` as the release notes suggest.
 
 Stores written by 0.2.1 and older record no format: they are format 1, which is still the current
-format in 0.4.1. 0.3.0 started recording it. New column families, such as those 0.4.0 adds, are
+format in 0.5.0. 0.3.0 started recording it. New column families, such as those 0.4.0 adds, are
 not a format change.
 
 ## Uninstall
@@ -1610,6 +2168,10 @@ That stops and disables the services; `/etc/syncd` and `/var/lib/syncd` stay.
       `CONSOLE_TRUSTED_PROXIES`), and `console.env` sets `CONSOLE_PUBLIC_URL`.
 - [ ] `sudo syncdctl status` shows when the control API's certificates expire.
 - [ ] You signed in as `admin` and changed the one-time password.
+- [ ] A license is installed, or requested with the installation id from the **License** page
+      before the evaluation and grace period run out (see [The license](#the-license)).
+- [ ] `sudo syncd status` says `control API access: strict` (an upgraded host: `sudo syncdctl
+      api-access strict`, then import the running configuration in the console).
 - [ ] `/var/lib/syncd/console/master.key` is backed up somewhere safe (see
       [Operator guide](operator-guide.md#the-master-key)).
 - [ ] The secrets your configuration refers to are in `/etc/syncd/engine.env`, and
@@ -1626,7 +2188,7 @@ That stops and disables the services; `/etc/syncd` and `/var/lib/syncd` stay.
 On Kubernetes: the images and the chart are verified with cosign; the engine pod `syncd-engine-0`
 is ready and `kubectl -n syncd exec syncd-engine-0 -- syncd status` answers; the registration Job
 finished (`syncd-register` is deleted once it succeeds; a failed one stays, for `kubectl logs`);
-you signed in through the Ingress and changed the password; the `syncd-console` Secret is backed
-up; the engine Secret holds the configuration's secrets; with password synchronisation, the
+you signed in through the Ingress and changed the password; a license is installed (the License
+page, or `console.license.existingSecret`); the `syncd-console` Secret is backed up; the engine Secret holds the configuration's secrets; with password synchronisation, the
 passphrase Secret is set (`engine.passwordKeyPassphrase`) and kept apart; the ServiceMonitor (or a scrape job of
 your own) reads port 9464 and the PrometheusRule is loaded; `engine.backup` writes to S3.
