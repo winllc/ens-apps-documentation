@@ -150,7 +150,7 @@ At startup each program installs its provider:
 | PBKDF2 hashes | Accepted | Accepted |
 | Single sign-on accounts | | Unaffected: they have no local password |
 | Password synchronisation, webhooks, API tokens, backups, SAML and certificate sign-in, signed configurations, the license check | aws-lc-rs | The same algorithms, from the FIPS module |
-| Custom functions in WebAssembly (from 0.5.0) | Allowed | **Refused** (a configuration whose packages carry a module does not validate, and the console refuses the upload), unless `SYNCD_FIPS_ALLOW_WASM_FUNCTIONS=true` (or `--fips-allow-wasm-functions`) on both the engine and the console. A module's own code runs outside the validated module and could carry cryptography of its own; allow them only for modules that do no security-relevant cryptography. Modules get no host functions either way |
+| Custom functions in WebAssembly (from 0.5.0) | Allowed | **Refused** (a configuration whose packages carry a module does not validate, and the console refuses the upload), unless `SYNCD_FIPS_ALLOW_WASM_FUNCTIONS=true` (or `--fips-allow-wasm-functions`) on both the engine and the console. See [Custom functions in WebAssembly](rules.md#custom-functions-in-webassembly). A module's own code runs outside the validated module and could carry cryptography of its own; allow them only for modules that do no security-relevant cryptography. Modules get no host functions either way |
 
 **Switching an existing installation to FIPS mode** therefore needs local passwords reset. Before
 switching, make sure an admin will be able to get in:

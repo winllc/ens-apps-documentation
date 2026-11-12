@@ -4,7 +4,12 @@ This page summarises syncd's security controls and the settings that affect them
 console's sign-in, sessions, roles and API tokens, its HTTPS, the engine's control API,
 secrets, password synchronisation, webhooks and other outbound connections, the audit trail,
 backups, high availability, the systemd hardening, the container images and Helm chart, and the
-supply chain.
+supply chain. It describes syncd 0.5.0 (commit `a9d17c6`).
+
+The source repository's `SECURITY.md` says how to report a vulnerability (GitHub's private
+vulnerability reporting) and that fixes go to the latest minor version only; its
+`docs/SUPPORT.md` says what each kind of version number promises. 0.5.0 also adds a threat model
+of password synchronisation, `docs/security/password-sync-threat-model.md`, which is a draft.
 
 ## Trust model
 
@@ -478,6 +483,8 @@ api:
 - **The passive engine of an HA pair** refuses commands, naming the active one.
 - TLS goes through rustls on the process crypto provider, with its safe default protocol
   versions (TLS 1.2 and 1.3), and TLS handshakes time out after 10 seconds.
+
+Switching an installation to strict mode is in the [Install guide](install.md#control-api-access) and the [Operator guide](operator-guide.md#control-api-access).
 
 ### Signed configurations
 

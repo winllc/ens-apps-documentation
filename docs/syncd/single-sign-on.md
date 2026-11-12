@@ -233,7 +233,7 @@ addresses. Neither has been tried on a cluster.
 The console's roles are `admin`, `designer`, `operator`, `viewer` and `auditor`, and from 0.5.0
 each can be given on everything, on one environment or on named engines (see
 [Security](security.md#authorization)). The same role map syntax serves OpenID Connect
-(`CONSOLE_OIDC_ROLE_MAP`), SAML (`CONSOLE_SAML_ROLE_MAP`) and certificates (`ENS_X509_ROLE_MAP`).
+(`CONSOLE_OIDC_ROLE_MAP`), SAML (`CONSOLE_SAML_ROLE_MAP`) and certificates (`ENS_X509_ROLE_MAP`). How scopes work in the console is in the [Admin guide](admin-guide.md#scopes).
 
 - A role map is a list of `value=role` entries, separated by commas, or by semicolons when a
   value contains commas (group DNs):
@@ -362,7 +362,7 @@ through Keycloak by SAML. Keycloak is the only provider the console is tested ag
 From 0.5.0 the console is a SAML 2.0 service provider (the Web Browser SSO profile), beside
 OpenID Connect or instead of it, for identity providers that offer nothing else (AD FS, many
 government ones). It sends an `AuthnRequest` by redirect and takes the provider's signed
-`Response` at its assertion consumer service.
+`Response` at its assertion consumer service. Every setting is in the [Configuration guide](configuration.md#saml-sign-in).
 
 1. Register the console at the provider. Its metadata is at
    `<CONSOLE_PUBLIC_URL>/api/v1/auth/saml/metadata` once the settings below are in; or by hand:
@@ -494,6 +494,8 @@ Either way the console checks the certificate itself, at the sign-in endpoint:
   set `ENS_X509_CRL_URL`, or every sign-in fails closed.
 - A refusal tells the person why (expired, revoked, not from an allowed issuer). The per-address
   sign-in limit applies; the lockout and password settings do not.
+
+The settings are also listed in the [Configuration guide](configuration.md#certificate-sign-in-cacpiv), and the sign-in policy (consent banner, lockout, passwords) in the [Admin guide](admin-guide.md#sign-in-policy).
 
 ## API tokens and single sign-on
 

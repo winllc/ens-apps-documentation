@@ -25,9 +25,11 @@ It has two parts:
     code and say so.
 
 !!! note "New in 0.5.0, and what is still unproven"
-    0.5.0 adds a license check ([Licensing](licensing.md)), SAML 2.0 and X.509 (CAC/PIV) sign-in,
-    roles scoped to an environment or an engine, access tiers on the engine's control API and
-    signed configurations, password capture on OpenLDAP and 389 Directory Server, secrets from
+    0.5.0 adds a license check ([Licensing](licensing.md)), [SAML 2.0](single-sign-on.md#saml-20) and
+    [X.509 (CAC/PIV)](single-sign-on.md#certificate-sign-in-cacpiv) sign-in, roles scoped to an
+    environment or an engine, [access tiers](security.md#access-tiers) on the engine's control API
+    and signed configurations, [password capture](password-sync.md#capturing-changes-in-the-directories)
+    on OpenLDAP and 389 Directory Server, secrets from
     Vault, AWS or Azure, a REST/OData source with Workday, SuccessFactors and UKG Pro presets,
     custom functions in WebAssembly, reports of target entries nobody manages, and a WCAG 2.1
     self-audit with a draft VPAT. **Upgrading from 0.4.1 changes behaviour**: read the

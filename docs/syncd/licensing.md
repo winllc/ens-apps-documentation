@@ -161,6 +161,7 @@ to it needs the pack, or the locked parts removed.
 | Metrics | `syncd_license_state` (0 licensed or evaluating, 1 warning, 2 grace, 3 blocked), `syncd_license_managed_identities`, `syncd_license_managed_identities_limit`, `syncd_license_expiry_seconds`, `syncd_license_development_key` |
 | Alerts | `SyncdLicenseWarning`, `SyncdLicenseGracePeriod`, `SyncdLicensePublishingBlocked` (critical), `SyncdLicenseDevelopmentKey` |
 | Webhook | `license.state-changed` (see [Webhooks](webhooks.md)) |
+| API | `GET /api/v1/license`, the upload and the usage export (see [API reference](api-reference.md#license)) |
 | Audit | `license.upload`, `license.replace`, `license.remove`, `license.state`, `license.usage-export` |
 
 ## Release builds and the development key
