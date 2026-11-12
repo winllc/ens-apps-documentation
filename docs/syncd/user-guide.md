@@ -2,24 +2,35 @@
 
 This guide walks through every screen of the syncd web console, for **designers** (who build and
 publish configurations) and **operators** (who watch engines and act on what they report). What you
-can do depends on your role; each section says which role an action needs. Accounts, roles, sign-in
+can do depends on your roles; each section says which role an action needs. Accounts, roles, sign-in
 policy, banners, engine registration, API tokens, webhooks, environments and the audit trail are in
-the [Admin guide](admin-guide.md). People who only want to change their own directory password use
-the [self-service page](#changing-your-directory-password-password), which needs no console account.
+the [Admin guide](admin-guide.md); the license and the **License** page are in
+[Licensing](licensing.md). People who only want to change their own directory password use the
+[self-service page](#changing-your-directory-password-password), which needs no console account.
+
+It describes syncd 0.5.0 (`main` at commit `a9d17c6`). New screens since 0.4.1 are
+[Unmanaged entries](#unmanaged-entries-enginesidunmanaged), [Custom functions](#custom-functions-enginesidfunctions),
+the **Promote** dialog and the **License** page.
 
 ## Roles at a glance
 
 | You can | Role needed |
 |---|---|
-| Look at everything below: engines, status, held changes, metrics, dead letters, data quality, configuration versions, the Studio, the object explorer, correlation suggestions; download reports and lineage | Any role |
-| Edit, check, save, preview, simulate, import, approve and publish configuration; run connector checks; sync from Git | **designer** or **admin** |
-| Run reconciliations, full syncs and drift checks; approve held-back deletes and held changes; review groups; retry and discard dead letters; join, unjoin and accept suggestions; schedule reports | **operator** or **admin** |
+| Look at everything below: engines, status, held changes, metrics, dead letters, data quality, unmanaged entries, custom function modules, configuration versions, the Studio, the object explorer, correlation suggestions; download reports and lineage | Any role |
+| Edit, check, save, preview, simulate, import, approve, publish and promote configuration; run connector checks; upload and approve modules of custom functions; sync from Git | **designer** or **admin** |
+| Run reconciliations, full syncs, drift checks and unmanaged-entry checks; adopt an entry; approve held-back deletes and held changes; review groups; retry and discard dead letters; join, unjoin and accept suggestions; schedule reports | **operator** or **admin** |
 | See the scheduled reports | **operator**, **auditor** or **admin** |
 | Reveal sensitive attribute values | A role listed in `CONSOLE_REVEAL_ROLES` (by default **admin** only) |
 
-A designer cannot run engines, and an operator cannot change configuration. Buttons your role cannot
-use are not shown, and the server refuses the request if it is sent anyway. The full matrix is in
-[Admin guide → Permissions matrix](admin-guide.md#permissions-matrix).
+Since 0.5.0 an account can hold several roles, and each can be limited to one environment or one
+engine (`operator on prod`, `designer on engine hr-1`): you see only the engines your roles reach,
+and on each engine's pages only the actions your roles allow there. An engine outside your roles
+does not appear anywhere: its page says "No engine with id N", as for an id never used. Git sync's card and **Sync
+now** need a role on everything.
+
+A designer cannot run engines, and an operator cannot change configuration, unless they hold both
+roles. Buttons your roles cannot use are not shown, and the server refuses the request if it is sent
+anyway. The full matrix is in [Admin guide → Permissions matrix](admin-guide.md#permissions-matrix).
 
 ## Signing in
 
@@ -27,25 +38,37 @@ Open the console's address (normally `https://` and the host name your administr
 If your organisation set banners, they appear across the top and bottom of every page, the sign-in
 page included.
 
+When your administrator has turned on the **notice and consent** banner, the sign-in page first
+shows the notice (**Notice and consent**) and nothing else: read it and choose **I acknowledge and
+consent**. The console refuses any sign-in, by password, single sign-on or certificate, without
+that acknowledgement; it stands for about a quarter of an hour and serves one sign-in, and is
+recorded in the audit trail with the session it led to.
+
 === "Console account"
 
     Enter the **Username** and **Password** your administrator gave you, and choose **Sign in**.
 
     - A new account, or one whose password was reset, has a **one-time password**: the console
-      then asks you to choose your own (**Choose a new password**) before anything else. It needs
-      at least 12 characters and must not be your username.
+      then asks you to choose your own (**Choose a new password**) before anything else. The hint
+      under the new password gives your organisation's rules: by default at least 12 characters
+      and not your username. The same page comes up when your password is older than your
+      organisation allows.
     - A failed sign-in always says "sign-in failed; after repeated failures an account locks for
-      15 minutes". After 5 failures the account locks for 15 minutes; an administrator can unlock
-      it sooner with a password reset. More than 20 attempts from one address in 5 minutes are
+      15 minutes", whatever the lockout settings. By default, 5 failures lock the account for 15
+      minutes; your administrator may have set other limits, or a lock that lasts until an
+      administrator unlocks the account. More than 20 attempts from one address in 5 minutes are
       refused with "too many attempts; try again later".
 
-=== "Single sign-on"
+=== "Single sign-on or certificate"
 
-    If single sign-on is set up, the page shows **Sign in with &lt;provider&gt;**. You sign in at
-    your organisation's identity provider and come back to the page you asked for. Your role comes
-    from the provider's groups at each sign-in. If the provider refuses you, or you are in no group
-    the console maps to a role, you come back to the sign-in page under **Single sign-on failed**,
-    with the reason.
+    If single sign-on is set up, the page shows **Sign in with &lt;provider&gt;** (one button per
+    provider, OpenID Connect or SAML). You sign in at your organisation's identity provider and
+    come back to the page you asked for. With certificate sign-in, **Sign in with a certificate
+    (CAC/PIV)** (or the label your administrator chose) signs you in with the certificate your
+    browser presented, such as your smart card's. Your roles come from the provider's groups, or
+    from the certificate, at each sign-in. If the provider refuses you, or nothing maps to a role,
+    you come back to the sign-in page under **Single sign-on failed** (or **Certificate sign-in
+    failed**), with the reason.
 
     When your administrator has limited local sign-in to break-glass accounts, the password form
     is folded away behind **Break-glass sign-in**. It is for when the identity provider is down;
@@ -59,14 +82,18 @@ Other messages on the sign-in page:
   production.
 
 A session ends after **30 minutes** without activity or **12 hours** in all (your administrator may
-have changed these). The console then sends you to sign in, and back to the page you were on.
-**Sign out** is at the top right.
+have changed these, and may have set a shorter idle limit for administrators, or a number of
+sessions per account beyond which a new sign-in ends your oldest). The console then sends you to
+sign in, and back to the page you were on. **Sign out** is at the top right; it ends the console
+session, not the identity provider's.
 
 ### Changing your console password
 
 Go to `/change-password` (type it after the console's address): the current password, the new one
-twice, **Set password**. Your other sessions are signed out. Accounts that sign in through single
-sign-on have no console password; change it at the identity provider.
+twice, **Set password**. The hint under the new password gives the rules (length, the kinds of
+character asked for, the username); your organisation may also refuse one of your recent passwords.
+Your other sessions are signed out. Accounts that sign in through single sign-on or a certificate
+have no console password; change it at the identity provider.
 
 ### Changing your directory password (`/password`)
 
@@ -89,11 +116,20 @@ administrator. How it works is in [Password synchronisation](password-sync.md#pe
 
 ## The page layout
 
-- **Header**: the syncd logo (back to **Engines**), the navigation (**Engines**; **Users** for
-  administrators; **Audit log** for administrators and auditors; **Reports** for administrators,
-  operators and auditors; **Integrations** for administrators and auditors), a **FIPS** badge when
-  the console runs in FIPS mode, your name and role, and **Sign out**.
+- **Header**: the syncd logo (back to **Engines**), the navigation (**Engines**; **Users** and
+  **License** for administrators of everything; **Audit log** for administrators and auditors;
+  **Reports** for administrators, operators and auditors; **Integrations** for administrators and
+  auditors), a **FIPS** badge when the console runs in FIPS mode, your name and your role (or
+  how many roles you hold, listed on hover), and **Sign out**. On a narrow window the header wraps
+  onto several lines.
+- **License banner**: while the license needs attention, a banner under the header says so on every
+  page (red once it blocks publishing configuration changes: sync keeps running). See
+  [Licensing](licensing.md).
 - **Footer**: the console version.
+- Each browser tab is titled after the page's heading, as "&lt;Page&gt; · syncd console". From the
+  keyboard, the first Tab reaches **Skip to main content**, which jumps past the banners and the
+  navigation. In a code editor (the YAML, the comparison, the Studio's expressions), Tab indents:
+  press **Escape, then Tab**, to leave the editor, as the hint under each editor says.
 - A page you are not allowed to open says so (for example "Only administrators manage accounts").
   An address that does not exist shows **Page not found** with a link back to the engines.
 
@@ -123,15 +159,21 @@ exported.
 The cards follow each engine's live status stream, so these update about once a second. CPU is
 averaged over the last five seconds or so.
 
+Above the cards, a line gives the **managed identities** counted against the license's tier (or
+"no license: evaluation"), with the license's state when it needs attention. Administrators of
+everything also see a notice for each console setting that names an engine no longer registered
+(after a rename, say).
+
 Choose a card to open the engine. Administrators also have **Register engine** here.
 
 ## An engine's page (`/engines/{id}`)
 
 The header shows the engine's address, its version, uptime, the configuration it runs and
 **FIPS** if it runs in FIPS mode, with buttons to **Metrics**, **Explore**, **Correlation**,
-**Data quality**, **Configuration** and **Dead letters**, the report downloads **Report CSV** and
-**PDF** (see [Downloading the reconciliation report](#downloading-the-reconciliation-report)), and
-**Remove engine** for administrators.
+**Data quality**, **Unmanaged entries**, **Configuration**, **Dead letters** and **Custom
+functions**, the report downloads **Report CSV**, **Excel** and **PDF** (see
+[Downloading the reconciliation report](#downloading-the-reconciliation-report)), and **Remove
+engine** for administrators of everything.
 
 The page follows the engine's **live status stream**: it updates by itself, about once a second.
 If the stream drops, a red notice says it is reconnecting and the last status stays on screen.
@@ -155,6 +197,17 @@ Notices at the top:
   means nothing is read or exported.
 - **Busy: …**: the engine is in the middle of a long task (a full sync, for example). Runs and
   other commands are refused until it ends.
+- **The engine's control API is in compatible mode** (an engine upgraded from 0.4.x): any client
+  certificate of its CA may apply a configuration and approve held changes without the console.
+  Whoever runs the engine host opts in to strict access; see
+  [Admin guide → Engines](admin-guide.md#engines).
+- **The engine runs a configuration this console did not publish**: it was applied around the
+  console (through the control API, or by editing the file on the engine's host). Compare the
+  version the console last published with what runs, and publish the version that should run.
+- A line saying who applied the running configuration, whether it was **signed**, and the control
+  API's access mode.
+- **License**: what the running configuration uses that the license leaves out, or the license's
+  problems.
 
 ### Run (operators)
 
@@ -190,7 +243,8 @@ once, now. The threshold stays in force for later changes.
   and the last failure in red.
 - **Passwords** (with password synchronisation): changes **Delivered**, **Failed**, **Dropped
   (report mode)** and **Waiting**, and **Initial passwords set** and **refused** on new entries, with
-  the last failure; then a table of each publication's deliveries (**Delivered**, **Failed**,
+  the last failure (since 0.5.0 an initial password the directory refuses is tried again up to
+  three times and then goes to the dead-letter queue); then a table of each publication's deliveries (**Delivered**, **Failed**,
   **Dropped**, **Waiting**). A badge beside the title says whether the engine's password keys are
   sealed (**keys sealed**) or not (**password keys stored in the clear**: whoever runs the engine
   host can seal them with `SYNCD_PASSWORD_KEY_PASSPHRASE_FILE`; see
@@ -260,8 +314,9 @@ When a publication manages groups with a lifecycle, the **Groups** card lists th
 | **Review** | When the review is due, **due since …**, or when it was last reviewed |
 
 Operators have **Review** on each row: it records a review, which starts the expiry and review
-clocks again and brings an expired group back. A due review shows here, in the engine's status and
-in a metric only: syncd sends no reminder. See
+clocks again and brings an expired group back. Since 0.5.0 a review that falls due also reaches
+someone: the group's `reviewers` get a mail from the console, and the `group.review-due` webhook
+event and the `SyncdGroupReviewsDue` alert fire. See
 [Change safety and lifecycle → Group lifecycle](change-safety.md#group-lifecycle).
 
 ## Dead letters (`/engines/{id}/dead-letters`)
@@ -306,6 +361,7 @@ configuration (any role):
 | **Severity** | **error**, **warning** or **info** |
 | **Failing** | How many entities fail it now |
 | **Since** | When it started failing |
+| **Last 24 hours** | A small line of how many failed each hour, from the engine's own hourly trend, with the peak |
 | **Last 7 days** | A small line of how many failed each day |
 
 **Severity** at the top shows only the checks of one severity. A check's failing entities are
@@ -318,6 +374,76 @@ A check that only reports changes nothing. A check set to quarantine holds the e
 back, and one set to skip publications keeps the entity out of them, so that publication's leaver
 policy applies to it. How checks are written and what they do is in
 [Reports, lineage and data quality](reports-and-data-quality.md#data-quality-checks).
+
+## Unmanaged entries (`/engines/{id}/unmanaged`)
+
+New in 0.5.0. **Unmanaged entries** on an engine's page lists, per publication, what the engine's
+last unmanaged-entries pass found in the target that syncd does not manage: entries no publication
+exported, and members of privileged groups that no rule accounts for. These are entries of the
+*target*; the engine card's "orphans" are source records that joined no entity. The targets are read,
+never written, except by **Adopt**. The pass runs after each scheduled drift check of a publication
+with `drift` (unless its `unmanaged: { scheduled: false }`), or with **Check now**.
+
+Each publication's card says how many of the entries read are unmanaged and how many an
+`unmanaged.ignore` pattern hides (and the same for privileged groups' members), when it was checked
+and under which bases, then:
+
+| Column | Shows |
+|---|---|
+| **Entry** | The DN |
+| **Class** | Its object class |
+| **Created** | When the directory created it, or **unknown** |
+| **Last sign-in** | Where the directory keeps one, with the attribute it came from |
+| **State** | **enabled**, **disabled** or **locked**, or **unknown** |
+
+and, for privileged groups, the **Privileged group**, the **Member no rule accounts for**, and
+whether **The member is** a managed or an unmanaged entry (**through a nested group** when it is; in
+Active Directory nested groups are resolved). Long lists show the first entries and how many more
+there are; `syncd unmanaged` on the engine host lists them. A pass that stopped says why, and its
+counts are partial. **Not checked yet** means no pass has run.
+
+Operators have:
+
+- **Check now**: reads the targets again (recorded as `engine.check_unmanaged`);
+- **Adopt** on an entry: asks for the **Entity id** (32 hex digits, as the object explorer shows it)
+  of an entity that has no entry in that publication yet. The entry becomes that entity's entry: it
+  is moved to where the publication places the entity, given the attributes the publication
+  exports, and managed from then on. Recorded as `engine.adopt_entry`; `syncd adopt` does the same
+  on the host.
+
+An entry whose person is in a source but joined nothing is a matter for
+[correlation review](#correlation-review-enginesidcorrelation); to stop listing a service account,
+add it to the publication's `unmanaged.ignore`. Unmanaged entries are listed for LDAP and Active
+Directory targets, and for SCIM and Entra ID users (no privileged groups there). The release notes
+say 389 Directory Server and Ping were unit-tested only, and no real Entra tenant or SCIM provider
+was used.
+
+## Custom functions (`/engines/{id}/functions`)
+
+New in 0.5.0. **Custom functions** on an engine's page lists the WebAssembly modules uploaded for that
+engine, which a rule package can name by their SHA-256 (see
+[Computed attributes and rules → Custom functions in WebAssembly](rules.md#custom-functions-in-webassembly)):
+each module's name, the start of its **sha256**, its size, how many **Functions** it declares, who
+uploaded it and when, and its **Approval** (**approved by …** or **waiting for review**).
+
+1. A designer of the engine chooses **Upload a module**, gives a **Name** (lower-case letters,
+   digits, `-` and `_`; uploads of one name are reviewed against the one before), the **Module
+   (.wasm)** file (at most 1 MiB) and an optional **Comment**, and **Upload**. The console checks the
+   module as the engine would (no imports, the expected exports, a manifest declaring its functions,
+   the FIPS policy) and keeps it by its SHA-256 (`wasm_module.upload`).
+2. Someone else who edits the engine's configuration opens the module: its sha256, size, uploader,
+   its **Functions** with their signatures, the **Changes** from the previous upload of the same
+   name, and **Download** for the module itself. **Approve** records the approval
+   (`wasm_module.approve`). The uploader cannot approve their own module (the database refuses it
+   too), and neither an approval nor a module can be changed afterwards.
+3. A package of the configuration names the module by its hash, without `from`:
+   `wasm: { sha256: "…" }` (the review shows the line to copy). The console fills the approved module
+   in when it checks, previews and publishes the configuration. A module not uploaded or not yet
+   approved makes the configuration fail its check.
+
+With Git sync, a module can instead sit in the repository beside its package file (`from`), and is
+reviewed with the change that adds it. When the license does not include the Extensibility pack,
+custom functions are locked (see [Licensing](licensing.md)).
 
 ## Configuration versions (`/engines/{id}/configs`)
 
@@ -346,6 +472,9 @@ Badges also show **running** (what the engine runs now) and **approved**.
 
 Designers have:
 
+- **Promote**: publishes a version that runs on one engine to every engine of another environment
+  (see [Promoting a version](#promoting-a-version)). It shows once some version of the engine has
+  been published;
 - **Import running**: saves what the engine runs now as a new version, to start managing an engine
   that was configured by hand;
 - **Import file**: imports an export file from another console (see
@@ -355,8 +484,10 @@ Designers have:
 
 When the console takes configuration from Git, a **Git** card above the list shows the repository,
 branch and file, what a new commit becomes (a draft version, a validated one or a published one),
-the last commit seen, the last sync and the last error. Designers have **Sync now**, which fetches
-at once and says how many commits were taken in. See [Configuration as code](config-as-code.md#git-sync).
+the last commit seen, the last sync and the last error. The repository holds every engine's
+configuration, so the card shows only to accounts with a role on everything; designers on everything
+have **Sync now**, which fetches at once and says how many commits were taken in. See
+[Configuration as code](config-as-code.md#git-sync).
 
 Choose a version to open it in the editor.
 
@@ -380,12 +511,15 @@ auditors every field is read-only.
 | Item | The form covers |
 |---|---|
 | **Engine and attributes** | Multi-valued and sensitive attributes, seconds between full reads and between reconciliations, the longest retry wait, entity history (days and entries per entity), worker shards, store cache, data directory. The control API (`api`) is set on each engine host and is not edited here |
-| **Connector** | **Connection** settings for its type (PostgreSQL, MySQL / MariaDB, SQL Server, MongoDB, LDAP directory, Active Directory, Debezium Server, JDBC bridge, CSV / flat file, SCIM 2.0, Entra ID), its **Objects** (what is read and how: scrape, delta or stream; for directory objects read by delta or stream, **Renamed container check (s)**, default 60, 0 off; for a CSV file, its columns, delimiter, encoding, done file and what a bad row does) and **Deletion safety** |
+| **Connector** | **Connection** settings for its type (PostgreSQL, MySQL / MariaDB, SQL Server, MongoDB, LDAP directory, Active Directory, Debezium Server, JDBC bridge, CSV / flat file, SCIM 2.0, Entra ID, and, new in 0.5.0, the REST / OData API, Workday, SAP SuccessFactors and UKG Pro sources, whose fields, paging and delta settings are edited in the YAML), its **Objects** (what is read and how: scrape, delta or stream; for directory objects read by delta or stream, **Renamed container check (s)**, default 60, 0 off; for a CSV file, its columns, delimiter, encoding, done file and what a bad row does) and **Deletion safety** |
 | **View** | **Sources** (each with its join rules and attribute flows), **Computed attributes** (steps, value mode, error policy and test cases; for **assign once**, **Keep for good, by key**), **References**, **Lookup tables**, **Precedence**, and a **Dependency graph** |
 | **Publication** | Target directory, view, which entities (a CEL filter), DN and container, object classes and attributes, DN attributes, references, **Create missing containers** (and, with it, **Remove containers left empty**), **Leaving scope** (delete, disable, move, disown, or deprovision in stages, and the deletion thresholds), **Groups** and their **Group policy** (manual members, owner, expiry, review), **Active Directory** (account control, home folder, UPN, sAMAccountName, Exchange addresses), **Existing entries**, **Drift** and **Change safety** (change window, modification and add thresholds, canary, report mode). For SCIM and Entra ID targets: the resource type, how resources are matched, and licences |
 
 New connectors, views and publications start from a template for their type, with placeholders to
-fill in. Renaming an item carries the new name over to everything that refers to it. Each change in
+fill in. A connector type the license does not include is marked **(locked: &lt;pack&gt; pack)** in
+the list and cannot be added; a connector of such a type already in the configuration shows
+**Locked by the license**: a configuration that uses it cannot be saved or published (see
+[Licensing](licensing.md#packs)). Renaming an item carries the new name over to everything that refers to it. Each change in
 a form changes one place in the YAML, so comments, key order and settings the forms do not show
 (per-attribute precedence, watched tables mapped with SQL, `passwords`, `quality` checks, rule
 `packages`) are kept; the form says when something must be edited in YAML.
@@ -420,8 +554,15 @@ In a view:
 **Data flow**, above the forms, shows the configuration as a graph: source objects → views →
 publications → target directories. Choose a node or an edge to open its form. Designers can drag
 from an object to a view to add it as a source of the view, drag from a view to a directory to add
-a publication, and select a source edge and press **Delete** to take it out of the view. Every
-change goes into the YAML as the forms' do. **Forms** goes back to the forms.
+a publication, and select a source edge and press **Delete** to take it out of the view. Since 0.5.0
+**Delete** on a selected node no longer takes it off the canvas (it never took it out of the
+configuration). Every change
+goes into the YAML as the forms' do. **Forms** goes back to the forms.
+
+Under the graph, **Connections** lists the same edges as text, each with **Open** and, for designers,
+**Remove**, and two forms that make the edits the canvas takes by dragging: **Add a source** (an
+object and a view, **Add source**) and **Publish** (a view and a directory, **Publish view**). They
+are for the keyboard, for a screen reader, and for a window too narrow for the canvas.
 
 ### YAML
 
@@ -437,10 +578,15 @@ environment, and the **Check** panel shows:
 - **Compiles: N connectors, N views, N publications**, or **Does not compile** with the errors;
 - **All N test cases pass**, or which fail. The rule packages' own tests count too. A version whose
   test cases fail can be saved but not published (the engine refuses it too);
-- **Golden tests: N of M publications as expected**, when the console takes configuration from Git
-  and the repository has golden files (`tests/golden`). Each publication that differs opens with
-  its diff. A failing golden test blocks publishing like a failing test case. The golden files are
-  read at the branch head, not at the commit of the version being checked;
+- **Golden tests: N of M publications as expected (at commit …)**, when the console takes
+  configuration from Git and the repository has golden files (`tests/golden`). Each publication
+  that differs opens with its diff. A failing golden test blocks publishing like a failing test
+  case. A saved, unedited version is checked against the golden files of **its own Git commit**
+  (the commit Git sync took it from, or the branch head when it was saved); an edited text, like any
+  draft, against the branch head. A version saved before 0.5.0 has no commit: it is checked at the
+  branch head, and a note says so;
+- what the configuration uses that the license does not include, naming the connector or setting
+  and the pack: such a configuration does not compile here, cannot be saved and cannot be published;
 - rules whose tests cannot run because they read other entities (shown, not counted as failures);
 - **warnings**: likely mistakes that do not stop the configuration, such as an attribute nothing
   sets.
@@ -449,12 +595,15 @@ environment, and the **Check** panel shows:
 
 On a saved version that uses rule packages, the **Packages** panel (any role) lists each package
 with its version, **pinned** when it carries a `pin`, where it comes from (`inline`, or `from` a
-file), how many functions and tests it has, and its description. **not read** and an error mean the
+file), how many functions and tests it has, and its description. A package that carries custom
+functions has a **WebAssembly** badge and a line naming its module (`from` a file, or from the
+engine's module store), the start of its SHA-256 and its size. **not read** and an error mean the
 file could not be read.
 
-A package read `from` a file is read from the console's Git repository (at the version's commit for
-a version from Git, at the branch head otherwise). The console keeps no package files of its own:
-without Git sync, write packages inline. **Check for update** compares the file at the branch head
+A package read `from` a file is read from the console's Git repository at the version's commit
+(kept with each version since 0.5.0; an older version is read at the branch head). The console keeps
+no package files of its own: without Git sync, write packages inline (its module store holds
+WebAssembly modules only; see [Custom functions](#custom-functions-enginesidfunctions)). **Check for update** compares the file at the branch head
 with the version's and says **Up to date with the branch**, or which version the file has now. How
 packages are written is in [Computed attributes and rules](rules.md).
 
@@ -476,8 +625,13 @@ connectors, views, publications, rules and packages added, removed or changed, w
 field's old value struck through and the new one beside it. Secret values show only as
 `<redacted> (changed)`. **The same by meaning** says only comments or layout differ. **Rendered
 for** picks the environment both sides are rendered for: the engine's own by default, another, or
-**as written**. For a package read from a file, it shows the package's name, version, file and
-pin, not the functions that changed; `syncd config diff` on a host shows those.
+**as written**. Each side's packages are read at that side's own Git commit (and modules from the
+engine's module store), as `syncd config diff` reads them from files: a package whose version changed
+reads `gov-naming 1.0.0 -> 1.1.0`, with the functions that changed, and a WebAssembly module shows
+its pin, size and the signatures added or removed, never its bytes. A package that cannot be read on
+a side (a version older than 0.5.0 whose file has moved on, a module not approved) is compared by
+name, version, file and pin, and **How packages were compared** above the changes says which and
+why.
 
 ### Saving a version (designers)
 
@@ -527,11 +681,41 @@ fails, or while it awaits approval; hover over it for the reason. The server che
 and golden tests again on every publish, also one through the API, Git sync or promotion. To roll
 back, open an earlier version and publish it.
 
+The license is checked at publish too: a version that uses a connector or feature outside the
+license's packs is refused, and so is any version never published to the engine once the license's
+grace period is over ("not published: publishing configuration changes is blocked by the license").
+Publishing again a version that was published to that engine before, a rollback, is always allowed,
+and recorded as such. Sync keeps running either way. See [Licensing](licensing.md).
+
+The console signs every configuration it publishes. An engine that requires signed configurations
+applies nothing else, so on such an engine the console is the only way to change the configuration.
+
 If the engine accepted a version but did not come back in time, the version shows **publishing**
 until the engine reports it running; the versions list settles it.
 
-The console has no **Promote** button: a version is promoted to another environment's engines with
-`syncd config promote` or the API (see [Configuration as code](config-as-code.md#promotion)).
+### Promoting a version
+
+**Promote** on an engine's **Configuration** page (new in 0.5.0) publishes a version that runs on one
+engine to every engine of another environment, rendered for that environment, through the same API
+and the same gate as `syncd config promote` (see [Configuration as code](config-as-code.md#promotion)).
+In the **Promote a version** dialog:
+
+1. pick **From engine** (this one, preselected), its **Version** (only a published version can be
+   promoted) and **To environment** (every engine running in it gets the version);
+2. give a **Change ticket** (required, and checked against the pattern, when your administrator set
+   one) and an optional **Note**;
+3. choose **Preview**: a dry run that checks your roles on every engine of the target environment
+   and shows, per engine, what would happen (`would_publish`, or `running` when the engine runs that
+   text already) and a one-line summary of what changes there, as the command prints it. Nothing is
+   saved, published or recorded;
+4. choose **Promote** (it stays disabled until a preview succeeded; changing a field asks for a new
+   one). The dialog then shows each engine's outcome (`published`, `pending_approval`, `running` or
+   `failed`, with the reason) and how many engines published.
+
+Each target engine gets the text as a version of its own, and the usual checks apply there: your
+roles on every engine of the environment (a role that misses one promotes nothing), the license,
+approval by someone else, the test cases, the golden tests and the change hook. The preview does
+not run the tests or the hook.
 
 ### Export and import
 
@@ -574,7 +758,14 @@ and designers can edit.
   case**. **Dependencies** shows what the attribute **Reads** and what it is **Read by**, and the
   **Functions** catalog inserts a function at the cursor of the expression last edited. The
   version's rule packages are in the catalog too, under **package &lt;name&gt; &lt;version&gt;**,
-  with their descriptions; they are offered as completions, and the preview calls them.
+  with their descriptions; they are offered as completions, and the preview calls them. A package's
+  custom functions in WebAssembly are listed with their signatures
+  (`checksum.luhn_digit(digits: string) -> string`), marked **(WebAssembly)**, and run in the preview
+  and the tests as the engine runs them (with the default limits, whatever the engine's
+  `engine.wasm_functions` says). When the license does not include them, the catalog says they are
+  **Locked**.
+- An attribute whose name is not a CEL identifier, such as `mail-alias`, is completed as
+  `e["mail-alias"]`, and one the view does not have is flagged.
 - **Quality check**: write a data-quality check for the view: a **Name**, a **Severity**, the
   **Kind** (**a condition every entity meets**, or **a value no two entities share**), the
   condition or value in the CEL editor, and a **Message**. As you type, the engine tries it on 50
@@ -642,6 +833,11 @@ it, each **suggested** entity it may belong to:
 Records unjoined by hand say so (**Unjoined by hand from …**), and those entities are not suggested
 again.
 
+When the view lists `correlation.other_views`, a second table under a record shows entities of those
+views it **looks like**, with the **View**, the **Score**, a few attributes, the **Entity** and the
+**Breakdown**. The record's source is no source of those views, so it cannot join them: the table is
+a place to look, not a suggestion to accept.
+
 Operators can:
 
 - **Join** a record to one of its suggestions, or type an entity id (from the explorer) and
@@ -656,32 +852,43 @@ Nothing joins without an operator. A record joined by hand stays joined whatever
 say; a record joined to another entity moves. Each join is recorded in the audit trail and can be
 undone with **Unjoin** on the entity's page. **More** loads further records.
 
-Suggestions are made within one view only, compare text only, and do not find a typo in a value's
-first three characters. How scoring and hints work is in
+Suggestions are joins within one view only (other views are only pointed to) and compare text only.
+Since 0.5.0 they also find a typo in a value's first characters, and values one typo apart (a
+character replaced, dropped or added, or two neighbours swapped) from five characters on, so
+**Accept all** may take records it left before: check the count its confirmation gives, and the
+suggestions shown, before you accept. How scoring and hints work is in
 [Reports, lineage and data quality](reports-and-data-quality.md#correlation-assistance).
 
 ## Reports
 
 ### Downloading the reconciliation report
 
-**Report CSV** and **PDF** on an engine's page (any role) download the engine's reconciliation
-report: per publication, a summary (entities, entries exported, the last drift check, dead letters,
-held changes, leavers, what report mode would do, groups, the last reconciliation), then one row per
-entry with a difference. Nothing is read from the targets for it: it is what the engine found at its
-last checks. Sensitive attributes are named, never shown.
+**Report CSV**, **Excel** and **PDF** on an engine's page (any role) download the engine's
+reconciliation report: per publication, a summary (entities, entries exported and, since 0.5.0,
+**adopted**, the last drift check, dead letters, held changes, leavers, what report mode would do,
+groups, the last reconciliation, the last unmanaged-entries pass), then one row per entry with a
+difference, the unmanaged entries among them. Nothing is read from the targets for it: it is what
+the engine found at its last checks. Sensitive attributes are named, never shown.
 
 - A download holds at most 200,000 rows by default; a cut one says so.
 - The CSV opens in a spreadsheet as UTF-8. Cells that would start a formula get a leading `'`.
-  There is no Excel (`.xlsx`) export.
+  Since 0.5.0 it has seven more columns at the end: six for the unmanaged-entries pass, and
+  `adopted` last.
+- The Excel file (`.xlsx`, new in 0.5.0) is a workbook of three sheets: **Report** (what the PDF's
+  cover says), **Summary** (one row per publication) and **Entries** (one row per entry with a
+  difference), each with a bold, frozen header row and a filter. Counts are numbers and times are
+  dates (UTC); text is always text, never a formula.
 - The PDF has a cover page and your organisation's top banner in every page's header and footer.
-  It uses the PDF standard fonts: characters outside Latin-1 print as `?`. Use the CSV for names in
-  other scripts.
+  Since 0.5.0 its text is set in an embedded DejaVu Sans Mono, which covers Latin, Greek and
+  Cyrillic; other characters (Chinese, Japanese, Korean, Arabic, Hebrew, emoji) print as the
+  replacement character `�`. The PDF is tagged (language, title, headings, tables), with no claim
+  of PDF/UA conformance. Use the CSV or Excel file for names in other scripts.
 - Every download is recorded in the audit trail.
 
 ### Scheduled reports (`/reports`)
 
 **Reports** in the navigation (administrators, operators and auditors) lists the reports sent on a
-schedule: the engine and publication, the schedule and hour (UTC), the format, where it goes (e-mail
+schedule for the engines your roles reach: the engine and publication, the schedule and hour (UTC), the format, where it goes (e-mail
 addresses, a share), its owner, the **Next run** and the **Last run** (**sent**, with the time and
 row count, or **not sent** with the reason). Notices at the top say when e-mail or the share is not
 set up.
@@ -692,11 +899,11 @@ Operators and administrators choose **New scheduled report**:
 |---|---|
 | **Engine** | The engine reported on |
 | **Publication** | One publication, or empty for all of them |
-| **Format** | CSV or PDF |
+| **Format** | CSV, Excel (.xlsx) or PDF |
 | **Schedule** | **Daily**, **Weekly (Monday)** or **Monthly (the 1st)** |
 | **Hour (UTC)** | 0 to 23 |
 | **E-mail recipients** | Up to 20 addresses, separated by commas, in the domains your administrator allows (the hint names them) |
-| **Write the file to the share** | And the **Directory inside the share**. The file is named `<engine>-<publication>-<date>.<csv\|pdf>` |
+| **Write the file to the share** | And the **Directory inside the share**. The file is named `<engine>-<publication>-<date>.<csv\|xlsx\|pdf>` |
 | **Enabled** | Untick to pause it (**paused**) |
 
 On your own reports (administrators: on anyone's) the row has **Send now**, **Edit** and **Delete**
@@ -708,11 +915,17 @@ holds at most 50,000 rows by default; the mail says when it was cut.
 
 | Message | Meaning |
 |---|---|
-| "the &lt;role&gt; role cannot do this" | Your role does not allow the action |
+| "the &lt;role&gt; role cannot do this", "none of your roles (…) can do this" | Your roles do not allow the action |
+| "none of your roles (…) allows this on …" | Your roles allow it on other engines or environments, not on this one |
+| "this needs a role that covers everything; yours (…) are limited to an environment or to engines" | The action is for roles on everything (accounts, settings, webhooks, Git sync, the trail as a whole) |
+| "acknowledge the notice on the sign-in page before signing in" | The consent notice must be acknowledged again (an acknowledgement lasts about a quarter of an hour and serves one sign-in) |
 | "your role may not reveal sensitive attributes" | Your role is not in `CONSOLE_REVEAL_ROLES` |
 | "the configuration does not compile" | Fix the errors in the **Check** panel first |
 | "not published: N of M test cases fail" | Every test case, package test and golden test must pass before publishing |
 | "not published: version N needs approval by someone other than its author" | Four eyes is on; ask another designer or an admin |
+| "… needs the &lt;pack&gt; pack, which the license does not include" | The configuration uses a connector or feature the license leaves out; it cannot be saved or published until the license includes the pack (see [Licensing](licensing.md)) |
+| "not published: publishing configuration changes is blocked by the license (…)" | The license's grace period is over. Sync keeps running, and a version published to the engine before can still be published again; ask an administrator to install a license |
+| "promoting to environment X publishes to every engine in it, and your roles (…) do not allow publishing to …" | **Promote** needs the right to publish on every engine of the target environment |
 | "a publish needs a change ticket reference matching …", "the ticket reference … does not match …" | Your administrator requires a change ticket in that form |
 | "not published: the change hook refused version N: …" | The change-management system said no; the reason follows |
 | The change hook's error, with status `503` | The change-management system did not answer, and the console refuses to publish without it; try again, or ask your administrator |

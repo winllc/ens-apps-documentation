@@ -1,17 +1,24 @@
 # Reports, lineage and data quality
 
 This page covers the evidence syncd gives operators and auditors, and the tools that keep bad
-data out of the targets. All of it is new in syncd 0.4.0.
+data out of the targets. All of it is new in syncd 0.4.0; this page describes syncd 0.5.0
+(`main` at commit `a9d17c6`), which adds unmanaged entries, Excel exports, PDFs with an embedded
+font and tagging, an hourly quality trend and a wider correlation search.
 
-- **Reconciliation reports**: what each publication holds, what the last drift check found, and
-  what is held or dead-lettered, as text, CSV, JSON or PDF, on demand or on a schedule.
+- **Reconciliation reports**: what each publication holds, what the last drift check found, what
+  is held or dead-lettered, and (from 0.5.0) the target's unmanaged entries, as text, CSV, JSON,
+  Excel or PDF, on demand or on a schedule.
 - **Lineage export**: one person's whole story, as JSON or PDF.
 - **History retention**: how much entity history the engine keeps, and what it never prunes.
 - **Data-quality checks**: what good source data is, checked on every entity.
 - **Correlation assistance**: scored suggestions for source records that joined no entity.
 
-The audit trail itself is in the [Admin guide](admin-guide.md). Held changes, leaver stages and
-group lifecycle, which the report counts, are in [Change safety and lifecycle](change-safety.md).
+The audit trail itself is in the [Admin guide](admin-guide.md). From 0.5.0 its **Audit log** page
+filters by time, category, action, actor and outcome (server-side), and exports what it lists as
+CSV (`GET /api/v1/audit/csv`, at most 100,000 rows, recorded as `data.exported` with the
+filters); the NDJSON export remains the one to check the chain with. Held changes, leaver stages
+and group lifecycle, which the report counts, are in
+[Change safety and lifecycle](change-safety.md).
 
 ## Reconciliation reports
 
@@ -23,11 +30,34 @@ the targets**: it gives the last drift check's result and when it was made. Run
   check (when, entries read, drifted, missing, reverted, accepted, flagged, or why it stopped),
   dead letters, held changes by reason, leavers by the stage ahead of them, what a report-mode
   publication would do, the computed groups (with manual members, expired, reviews due) and when
-  the publication was last reconciled in full.
+  the publication was last reconciled in full. From 0.5.0 also the last unmanaged-entries pass
+  (when, unmanaged and ignored entries, unaccounted and ignored privileged members, why it
+  stopped) and the **adopted** count: entries the engine found in the target and took over rather
+  than created.
 - **One detail row per entry with a difference**, of one of these kinds: `drifted` and
   `missing` (from the last drift check: the DN and the attributes that differ, with their values
   except for sensitive attributes, which are named only), `held` or `would_do` (a held change),
-  and `dead_letter`. Each has its `since`.
+  `dead_letter`, and from 0.5.0 `unmanaged` (an entry no publication exported, with its creation
+  time, last sign-in and state) and `unmanaged_privileged` (a member of a privileged group that
+  no rule accounts for, with the group). Each has its `since`.
+
+### Unmanaged entries and unaccounted privileged members
+
+New in 0.5.0. An auditor's question, "which accounts have no owner?", has its answer in the
+report: per publication, the entries of the kind it manages that its target holds and no
+publication exported (made by hand, older than syncd, service accounts), and the members of
+privileged groups (`unmanaged.privileged_groups`, and computed groups with `manual_members:
+report`) that no rule put there. Each entry comes with its creation time, its last sign-in where
+the directory keeps one (the attribute is named: `lastLogonTimestamp` is a sign-in,
+`pwdChangedTime` only a password change) and whether it is enabled. The list holds at most 200
+entries and 200 members per publication; the counts are whole.
+
+The report gives the last pass, which runs after each scheduled drift check (or `syncd unmanaged`,
+or **Check now** on the console's **Unmanaged entries** page). How to set it up, adopt an entry
+and act on the alerts is in [Unmanaged entries](operator-guide.md#unmanaged-entries). LDAP and
+Active Directory targets have both lists; SCIM and Entra ID have entries only. 389 Directory
+Server and PingDirectory were unit-tested only, and no real Entra tenant or SCIM provider was
+used. There is no search from an unmanaged entry to the entities it may belong to.
 
 ### `syncd report`
 
@@ -40,35 +70,51 @@ syncd report --format json | jq 'select(.row == "summary")'   # one JSON object 
 | Format | Use |
 |---|---|
 | `text` (default) | Reading in a terminal |
-| `csv` | Spreadsheets and scripts. RFC 4180, the same 33 columns as the console's CSV |
+| `csv` | Spreadsheets and scripts. RFC 4180, the same 40 columns as the console's CSV |
 | `json` | Scripts. JSON lines: one object per row |
 
 The CSV has one header row. The `row` column says whether a line is a publication's `summary` or
-a `detail`, and the columns the other kind does not use are empty.
+a `detail`, and the columns the other kind does not use are empty. 0.5.0 appends seven columns
+after 0.4.1's 33 (the 34th to the 40th): `unmanaged_checked_at`, `unmanaged`, `unmanaged_ignored`,
+`unmanaged_privileged`, `unmanaged_privileged_ignored`, `unmanaged_error` and `adopted`. Parsers
+that read by position are unaffected; the release notes number them 33 to 40.
 
-### Report CSV and PDF in the console
+### Report CSV, Excel and PDF in the console
 
-The **Report CSV** and **PDF** buttons on an engine's page download the same report:
-`POST /api/v1/engines/{id}/reports/reconciliation/export?format=csv|pdf[&publication=]`.
+The **Report CSV**, **Excel** (new in 0.5.0) and **PDF** buttons on an engine's page download the
+same report: `POST /api/v1/engines/{id}/reports/reconciliation/export?format=csv|xlsx|pdf[&publication=]`.
 
 - **A `POST`, because it is audited.** Each export is recorded as `data.exported`, with the
   format, the publication and the row count, before a byte is sent. An export the trail cannot
   record is refused. Anyone who may view the engine may export (sessions, and API tokens with
   `engines:read`): it changes nothing but the trail.
-- **Always a file**: `text/csv` or `application/pdf`, `Content-Disposition: attachment` and
+- **Always a file**: CSV, an Excel workbook or a PDF, with `Content-Disposition: attachment` and
   `X-Content-Type-Options: nosniff`. The file is named `<engine>-<publication>-<date>.<ext>`.
 - **Capped** at `CONSOLE_EXPORTS_MAX_ROWS` (200,000) rows. A capped download carries
   `X-Syncd-Truncated: true`.
-- **Formula-injection guard.** A text cell that starts with a tab or a carriage return, or whose
-  first character after any white space is `=`, `+`, `-` or `@`, is written with a leading
-  apostrophe.
+- **Formula-injection guard.** In the CSV, a text cell that starts with a tab or a carriage
+  return, or whose first character after any white space is `=`, `+`, `-` or `@`, is written with
+  a leading apostrophe.
 - **CSV** is UTF-8 with a byte-order mark (so Excel reads it as UTF-8), CRLF line ends, RFC 4180
   quoting and times in ISO 8601 UTC.
+- **Excel** (`.xlsx`, new in 0.5.0) is a workbook of three sheets: **Report** (the engine, its
+  environment, the publication, when and by whom, the banner's text when one is set, and a note),
+  **Summary** (one row per publication) and **Entries** (one row per entry with a difference),
+  each under a bold, frozen header row with a filter. Numbers are numbers and times are dates in
+  UTC. Text is always written as text, never as a formula, so a value that starts with `=` shows
+  as typed and is never run (the CSV's apostrophe is not needed). The console writes the file
+  itself, without a spreadsheet library. The files were read back with a zip reader in testing,
+  not opened in Excel or LibreOffice.
 - **PDF** is landscape A4: a cover page (the engine, its environment, the publication, when and by
   whom), the summary table and the detail table, with the header repeated on each page. With a top
   [banner](admin-guide.md#banners) set, its text is printed in every page's header and footer.
-
-There is no Excel (`.xlsx`) export: spreadsheets open the CSV.
+  From 0.5.0 the text is Unicode in an embedded subset of DejaVu Sans Mono (Latin, Greek and
+  Cyrillic with punctuation and symbols), so it can be searched and copied; a character outside
+  it (Chinese, Japanese, Korean, among others) shows as U+FFFD, and there is no right-to-left text
+  or shaping. The PDF is tagged (PDF 1.7, a structure tree in reading order with headings, tables
+  and header cells, the language and the title; page furniture marked as artifacts), but claims
+  no PDF/UA conformance: it was checked with qpdf and poppler, not with veraPDF, PAC, Acrobat or a
+  screen reader. The lineage PDF is made the same way.
 
 ### Scheduled reports
 
@@ -78,8 +124,8 @@ operators create, change, send now and delete their own (administrators everyone
 the page asks before it deletes one. Auditors can look. Sessions only: no API token manages
 reports.
 
-- A report names an engine, optionally one publication, the format (CSV or PDF), the schedule, up
-  to 20 recipients, and/or a directory inside the share.
+- A report names an engine, optionally one publication, the format (CSV, PDF, or from 0.5.0
+  Excel), the schedule, up to 20 recipients, and/or a directory inside the share.
 - Every five minutes (`CONSOLE_REPORTS_POLL_SECONDS`) one console looks for reports that are due,
   under a database lock, so a report goes out once however many consoles run.
 - **Every run checks again** that the report's owner is still an active administrator or operator
@@ -89,7 +135,7 @@ reports.
   was cut.
 - **Writing to a share:** the directory is relative to `CONSOLE_REPORTS_SHARE_DIR`, with no `..`,
   and links are resolved so it cannot point out of the share. The file is written atomically as
-  `<engine>-<publication>-<date>.<csv|pdf>`. On Kubernetes, mount the share with
+  `<engine>-<publication>-<date>.<csv|pdf|xlsx>`. On Kubernetes, mount the share with
   `console.extraVolumes` and `console.extraVolumeMounts`.
 - Audited: `report.created`, `report.changed`, `report.deleted`, and `report.sent` with the
   recipients and the row count (a refused run is a failed `report.sent` with the reason).
@@ -102,17 +148,23 @@ reports.
 
 ### E-mail
 
-The console speaks SMTP itself, with no mail library: EHLO, STARTTLS, AUTH PLAIN, MAIL, RCPT,
-DATA. TLS uses the console's own crypto provider, so FIPS mode applies to it.
+The console speaks SMTP itself, with no mail library: EHLO, STARTTLS or TLS from the first byte,
+AUTH PLAIN or AUTH LOGIN, MAIL, RCPT, DATA. TLS uses the console's own crypto provider, so FIPS
+mode applies to it. Scheduled reports use it, and from 0.5.0 so do the mails to a group's
+`reviewers` when its review falls due (see [Group lifecycle](change-safety.md#review)), within
+the same `CONSOLE_REPORTS_RECIPIENT_DOMAINS`.
 
-- **STARTTLS only.** The connection is upgraded with STARTTLS (port 587 by default) and the
-  server's certificate is checked against the public roots or `CONSOLE_SMTP_CA_FILE`. There is
-  no SMTPS (implicit TLS, port 465).
-- **AUTH PLAIN only**, and only after STARTTLS. There is no AUTH LOGIN. The console refuses to
-  start with a username and `CONSOLE_SMTP_STARTTLS=false`, so a password is never sent in plain
-  text.
-- `CONSOLE_SMTP_STARTTLS=false` sends in plain text, for a relay on the same host or a private
-  network only.
+- **STARTTLS** by default: the connection is upgraded with STARTTLS (port 587 by default) and the
+  server's certificate is checked against the public roots or `CONSOLE_SMTP_CA_FILE`.
+- **SMTPS** (implicit TLS, new in 0.5.0): `CONSOLE_SMTP_IMPLICIT_TLS=true` speaks TLS from the first
+  byte, with the same certificate check; set `CONSOLE_SMTP_PORT=465` too, since the port's
+  default stays 587. `CONSOLE_SMTP_STARTTLS` is not used then.
+- **AUTH PLAIN or AUTH LOGIN** (AUTH LOGIN new in 0.5.0), only over TLS: `CONSOLE_SMTP_AUTH` is
+  `auto` (AUTH PLAIN when the server offers it or says nothing, else AUTH LOGIN), `plain` or
+  `login`. The console refuses to start with a username and neither STARTTLS nor implicit TLS, so
+  a password is never sent in plain text.
+- `CONSOLE_SMTP_STARTTLS=false` (without implicit TLS) sends in plain text, for a relay on the same
+  host or a private network only.
 - Mail goes through an **outbox** in the console's database: written when the run decides to send,
   delivered by a sender, retried while the mail server is down (after a minute, doubling to an
   hour), and given up after a day. Giving up raises the [webhook](webhooks.md) event
@@ -136,8 +188,10 @@ Set these in `/etc/syncd/console.env`, or in `console.env` of the Helm chart's v
 | `CONSOLE_SMTP_HOST` | unset | The mail server (a relay). Turns e-mail on |
 | `CONSOLE_SMTP_PORT` | `587` | |
 | `CONSOLE_SMTP_STARTTLS` | `true` | Upgrade the connection with STARTTLS. `false` sends in plain text |
+| `CONSOLE_SMTP_IMPLICIT_TLS` | `false` | TLS from the first byte (SMTPS, usually port 465). New in 0.5.0 |
+| `CONSOLE_SMTP_AUTH` | `auto` | `auto`, `plain` or `login`. New in 0.5.0 |
 | `CONSOLE_SMTP_CA_FILE` | none | PEM CA certificates the mail server's certificate may chain to |
-| `CONSOLE_SMTP_USERNAME`, `CONSOLE_SMTP_PASSWORD_FILE` | none | The account to authenticate as (AUTH PLAIN) and a file holding its password, read at each connection. Set both or neither |
+| `CONSOLE_SMTP_USERNAME`, `CONSOLE_SMTP_PASSWORD_FILE` | none | The account to authenticate as and a file holding its password, read at each connection. Set both or neither |
 | `CONSOLE_SMTP_FROM` | `syncd@<host>` | The sender address |
 | `CONSOLE_SMTP_TIMEOUT_SECONDS` | `30` | |
 
@@ -293,15 +347,20 @@ check that reads other entities cannot quarantine.
 | `syncd quality <view> --check C --list` | The failing entities: ids, the check, the severity, since when and the message. Never values |
 | Prometheus | `syncd_quality_failing{view,check,severity}` |
 | Alert | `SyncdQualityErrors`: a check of severity `error` has failed for an hour |
+| Webhook | `quality.errors` (new in 0.5.0): a view's entities failing checks of severity `error` went from none to some, or rose by `CONSOLE_WEBHOOKS_QUALITY_ERRORS_RISE` (10; 0 tells only from none to some) since it was last told. An endpoint gets it once the event is added to its list (see [Webhooks](webhooks.md)) |
 | The console's API | `GET /api/v1/engines/{id}/quality` and `/quality/entities` (sessions, and tokens with `engines:read`) |
 
 ### The console's Data quality page
 
 An engine's page links to **Data quality**. Per view it shows a table of checks with the severity,
-the entities failing each now, since when, and a sparkline of the last seven days, filtered by
-severity. A check opens its failing entities, each linking to the object explorer. The console
-keeps the daily counts itself (the day's latest and highest per engine, view and check), which the
-sparkline reads.
+the entities failing each now, since when, and two sparklines, filtered by severity: the last 24
+hours (new in 0.5.0) and the last seven days. A check opens its failing entities, each linking to
+the object explorer.
+
+- **The 24-hour trend** is kept by the engine: per check, the highest failing count in each hour
+  of the last day, saved in its store so a restart keeps it.
+- **The seven-day trend** is kept by the console: the daily counts (the day's latest and highest
+  per engine, view and check).
 
 Each engine's card on the dashboard has a quality tile: how many checks fail with errors, and with
 warnings.
@@ -310,8 +369,8 @@ In the Computed Attribute Studio, the **Quality check** block writes a check in 
 editor, tries it on a random sample of the view's entities from the engine (how many fail, and
 which), and adds it to the view. Sensitive attributes are not read for the trial.
 
-**Limitations.** There is no `quality.errors` webhook event. The engine's status has no 24-hour
-trend; the console's daily counts give the trend.
+**Limitations.** `syncd status` and `syncd quality` show the counts now, not the trend: the
+24-hour trend is drawn on the console's Data quality page.
 
 ## Correlation assistance
 
@@ -336,6 +395,7 @@ views:
         - { entity: dob, source: source.dob, weight: 0.8 }
       accept_at: 0.95             # the default threshold for bulk accepts
       unmatched_alert_after: 7d   # records waiting longer are ageing
+      other_views: [contractor]   # also look for the record there (0.5.0)
 ```
 
 | Key | Default | What |
@@ -343,6 +403,7 @@ views:
 | `suggest` | none | Extra conditions to score: an entity attribute, an expression over the record (`source`), a `weight` (above 0, at most 10; default 1.0) and `similar` (default `false`) |
 | `accept_at` | `0.95` | The score from which bulk accepts take a suggestion. Above 0, at most 1 |
 | `unmatched_alert_after` | none | Records waiting longer than this are counted as ageing |
+| `other_views` | none | New in 0.5.0. Views whose entities a waiting record is also looked for in, by the same conditions on attributes of the same name. What is found there is shown beside the suggestions, with its view; it cannot be accepted as a join, since the record's source is not a source of that view |
 
 ### Scoring
 
@@ -354,7 +415,7 @@ condition's weight and similarity. Each condition is matched three ways:
 |---|---|
 | Exact, under the condition's own comparison | 1.0 |
 | Normalized: transliterated and case-folded | 0.9 |
-| Similar: a Jaro-Winkler similarity of at least 0.92 between the normalized texts (only with similarity on) | 0.7 |
+| Similar: a Jaro-Winkler similarity of at least 0.92 between the normalized texts, or from 0.5.0 one typo apart (a character replaced, dropped or added, or two neighbours swapped) when both have at least five characters (only with similarity on) | 0.7 |
 
 The score is the weighted mean over the conditions the record has a value for, so a sparse
 record can still reach the threshold on what it has. The top five candidates are returned,
@@ -363,8 +424,15 @@ value). Entities the record was unjoined from, and entities that already have a 
 same source, are left out.
 
 The work is bounded: exact and normalized matches come from the join index, and similarity
-compares at most 200 entities that share the first three characters of the normalized value. It
-never scans the view.
+compares at most 200 entities that share the first three characters of the normalized value. From
+0.5.0 a second pass compares at most 200 more that share the value's last characters or its middle,
+so a typo in the first characters is found too; a bucket of more than 2,000 entities (every
+address at one mail domain) is not read in that pass. It never scans the view.
+
+!!! warning "Review bulk accepts after upgrading"
+    Because 0.5.0 finds more (a typo at the start of a value, values one edit apart),
+    `syncd correlation accept --above` and **Accept all at or above** may take records they left
+    in 0.4.1. Run the dry run (without `--yes`), or read the dialog's count, before accepting.
 
 ### The unmatched queue
 
@@ -411,23 +479,30 @@ and a checkbox per suggestion. Operators and administrators can:
 Reading suggestions needs `engines:read` and is audited as `explore.suggestions`. Accepting needs
 `runs:run` and is audited as `correlation.accepted` with the count and how many were refused.
 
+With `other_views`, `syncd correlation suggest` adds an `in view <name>` line per look-alike, and
+the Correlation page a second table: a place to look (the person may already be known as a
+contractor, say), not something to accept.
+
 **Limitations.**
 
-- Suggestions do not look across views.
+- Suggestions join within the view only; `other_views` points to look-alikes in other views but
+  cannot join to them.
 - A hint's expression runs against every source of the view; a source without the field scores
   nothing for that condition.
 - Similarity is on text only: numbers and dates match exactly or normalized, never
   approximately.
-- A typo in a value's first three characters is not found by similarity. The other conditions
-  still score.
+- `other_views` has no console form field: write it in the configuration.
 
 ## Known limitations
 
-- **Reports** have no Excel (`.xlsx`) export: spreadsheets open the CSV. The summary has no
-  "adopted" count; it has the exported count and the last check's `missing` instead.
-- **The built-in SMTP client** speaks STARTTLS and AUTH PLAIN only: no SMTPS (implicit TLS) and no
-  AUTH LOGIN.
-- **Data quality:** there is no `quality.errors` webhook event, and the engine's status has no
-  24-hour trend (the console's daily counts give it).
-- **Correlation** doesn't suggest across views. Similarity is on text only, and a typo in a
-  value's first three characters isn't found by similarity.
+- **Reports:** the Excel files were read back with a zip reader in testing, not opened in Excel or
+  LibreOffice. The PDFs were checked with qpdf and poppler, not with veraPDF, PAC, Acrobat or a
+  screen reader, and claim no PDF/UA conformance; they have no right-to-left text, no shaping and
+  no Chinese, Japanese or Korean (such characters show as U+FFFD).
+- **Unmanaged entries:** 389 Directory Server and PingDirectory were unit-tested only; no real
+  Entra tenant or SCIM provider was used; SCIM and Entra ID targets have no privileged groups;
+  there is no search from an unmanaged entry to candidate entities.
+- **Data quality:** the 24-hour trend shows on the console only, not in `syncd status` or
+  `syncd quality`.
+- **Correlation** joins within a view only (`other_views` points, it does not join), and
+  similarity is on text only.

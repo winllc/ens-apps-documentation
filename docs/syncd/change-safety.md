@@ -4,7 +4,10 @@ A publication can say **when** its changes are applied, **how many** may go at o
 go first**. It can also run in a mode that writes nothing. Changes that wait are **held**. The
 engine can also act at a set time: an attribute that applies from a start date, a leaver who is
 disabled at once and deleted ninety days later, a group that expires. All of this is new in syncd
-0.4.0.
+0.4.0. This page describes syncd 0.5.0 (`main` at commit `a9d17c6`), which adds group reviews
+that reach a person, `placeholder_member`, leavers stripped of groups syncd does not manage,
+unique `sAMAccountName`s, and held changes kept in the store; each is marked where it is
+described.
 
 Every setting on this page goes on a publication (or, for effective dates, in a rule).
 [Configuration](configuration.md) lists each key in one line; this page explains how they work
@@ -20,6 +23,7 @@ together. The rule functions `effective()` and `effective_until()` are in
 | `mode: report` | Nothing is written; every planned change is recorded | `report` |
 | `deprovision: { disable_after, ... }` | A leaver goes through stages, each at a set time | (timers) |
 | `groups[].expires`, `group_policy` | Groups have owners, expire and are reviewed | `expired` |
+| `sam_account_name: { on_conflict: unique }` | A second holder of a login gets a counter instead of a dead letter (new in 0.5.0) | |
 
 ## Held changes
 
@@ -27,12 +31,24 @@ A planned change that is not applied at once is held. The engine keeps one held 
 entity and publication in its store, with the reason, the kinds of change (`add`, `modify`,
 `move`, `delete`, `disable`, `strip_groups`, `password`), the DN, a summary of the operations
 without their values, when it was first held and when it was last planned. Held changes survive
-a restart.
+a restart. From 0.5.0 they are kept in the store and only counted in memory, which saves memory
+for a publication with many of them (40 MiB less at 475,000 held changes, in the release's
+measurement) and makes passes over it slower (18 to 35% in a debug build).
 
 **A held change is never replayed.** When its hold ends (the window opens, the canary has
 soaked, someone approves), the entity is planned again from its current state, and whatever that
 plan says is applied. A person who changed department twice while the window was closed gets
 one change, to the second department. An entity that no longer needs a change loses its hold.
+
+**Changes during long operations.** From 0.5.0 source changes that arrive during a
+reconciliation, a full sync or a reload are taken in between its pages and go through the same
+guards, instead of waiting for it to end. A pass also no longer drops a hold that was written for
+an entity after the pass had gone by it (0.4.1 could lose such a hold): the change stays in
+`syncd held` until it is applied. Source changes still wait during the end-of-pass checks of
+thresholds and canaries, the release of held changes, the reconciliation `syncd approve` runs, a
+full read's deletes, the first export after an initial load, drift checks, dead-letter retries
+and write-back. See
+[Troubleshooting](troubleshooting.md#the-engine-at-work).
 
 | Reason | Why it is held | How it ends |
 |---|---|---|
@@ -73,7 +89,14 @@ the thresholds stay in force for later changes.
 
 In the console, an operator or administrator uses **Approve and apply** on the Held changes card.
 It is the same approval (`POST /api/v1/engines/{id}/approvals` with the scope
-`publication <name>`), and API tokens need `runs:run`.
+`publication <name>`), and API tokens need `runs:run`. From 0.5.0 an operator's role may be
+limited to an environment or to engines: it approves only there.
+
+!!! note "Approvals under the license"
+    A license that blocks publishing (see [Licensing](licensing.md#what-publishing-is-blocked-blocks))
+    never blocks approving or rejecting held changes, dead-letter retries and discards, or joins:
+    held changes can always be released. Nor does it block publishing again a version that ran on the
+    engine before: a rollback is always allowed, and is audited as one.
 
 ## Change windows
 
@@ -121,7 +144,10 @@ What happens outside the window:
   only if a late lock is acceptable.
 - **Passwords are never held**, whatever `immediate` says. Captured passwords are delivered as
   they come. An initial password rides with its add: a held add holds its password too, and gets
-  a fresh one when it is planned again. See [Password synchronisation](password-sync.md).
+  a fresh one when it is planned again. From 0.5.0 an initial password an LDAP or Active Directory
+  target refuses is tried again, three attempts in all, and then the entry is held in the
+  dead-letter queue (see [Troubleshooting](troubleshooting.md#passwords)). See
+  [Password synchronisation](password-sync.md).
 - When the window opens, the held entities are planned again and applied as one pass, through
   the thresholds and the canary.
 - A change held longer than `max_delay` is applied anyway (`on_overdue: apply`) or becomes
@@ -151,6 +177,16 @@ entries, `count`, or both. More than either crosses the threshold. At least one 
 - Deletes still go through `deletion_threshold`. Its holds now also show among the held changes
   as `deletions` when a reconciliation finds them.
 - Writes to computed group entries are not counted and not held.
+
+**A truncated PostgreSQL table** (new in 0.5.0). A `TRUNCATE` of a table a PostgreSQL stream
+follows is read as a full read that finds every row gone (rows the same transaction put back
+excepted), so its entities are deleted in the targets, subject to the deletion thresholds; 0.4.1
+ignored a `TRUNCATE`. Give the source connector a `deletion_threshold` to have an emptied table
+held for approval as `source <connector>/<object>`. The stream has no next full read to clear the
+hold, so `syncd approve "source <connector>/<object>"` reads the table in full at once and applies
+what it finds gone; after repairing the table, the same command finds nothing gone and clears the
+hold. The PostgreSQL publication must publish truncates (`truncate` in its `publish` list,
+PostgreSQL's default): the engine warns at start when one made by hand leaves it out.
 
 ## Canary publishing
 
@@ -221,7 +257,8 @@ A timer found overdue after a stop fires at the next start, once the initial exp
 `syncd run --once` fires the timers due before its final reconciliation.
 
 Timers drive effective dates, leaver stages, change window openings and `max_delay`, canary
-soaks and group expiry. A timer that fires and finds nothing to do (a start date moved later, a
+soaks and group expiry, and from 0.5.0 group reviews and the retries of a refused initial
+password. A timer that fires and finds nothing to do (a start date moved later, a
 rehire) does nothing, and the next one is armed from what the rules say then.
 
 | Where | What |
@@ -236,8 +273,10 @@ rehire) does nothing, and the next one is armed from what the rules say then.
     refuses settings it does not know, so publish a configuration without the 0.4.0 settings
     before rolling back with the store kept. See [Installation](install.md).
 
-syncd 0.4.1 keeps the 0.4.0 store format, so timers and held changes survive an upgrade to 0.4.1
-and a rollback from it to 0.4.0.
+syncd 0.4.1 and 0.5.0 keep the 0.4.0 store format, so timers and held changes survive the
+upgrades. A rollback from 0.5.0 to 0.4.1 with the store kept loses the group-review timers (0.4.1
+drops them as unknown), and 0.4.1 refuses the settings new in 0.5.0: publish a configuration
+without them first (see [Installation](install.md)).
 
 ## Effective dates
 
@@ -275,6 +314,8 @@ publications:
     deprovision:
       disable_after: 0d                          # at once
       strip_groups_after: 7d                     # out of every group syncd manages
+      strip_unmanaged_groups: true               # and the others (0.5.0; LDAP and AD)
+      keep_groups: ["OU=Distribution Lists,DC=corp,DC=example,DC=com"]
       move_to: "OU=Leavers,DC=corp,DC=example,DC=com"
       delete_after: 90d                          # hard delete
 ```
@@ -285,6 +326,8 @@ publications:
 | `strip_groups_after` | Take the entry out of the publication's computed groups, and out of the reference attributes of other publications that list it. The entry itself is not changed |
 | `move_to` | Move the entry under this fixed container, with the earliest of the disable and the strip, or at once when neither is set |
 | `delete_after` | Delete the entry. The deletion threshold still applies, and `remove_empty_containers` as for any delete |
+| `strip_unmanaged_groups` | New in 0.5.0. With the strip, also take the entry out of the groups in the target that syncd does not manage (made by hand or by another tool): every group of the entry's naming context that lists it as `member` or `uniqueMember`, except `keep_groups` and the computed groups of the publications to the same target. Needs `strip_groups_after`. LDAP and Active Directory targets. Off by default |
+| `keep_groups` | New in 0.5.0. Groups `strip_unmanaged_groups` never touches: a group's DN, or a container whose groups are all kept |
 
 - Spans are `0d`, `7d`, `90d`, `12h`, `30m`, `45s` or combinations such as `1d12h` (whole
   units, largest first). At least one stage is needed, and `disable_after` and
@@ -300,6 +343,13 @@ publications:
   for the window unless listed in `immediate`.
 - **A rehire** (the entity comes back into scope) moves the entry back, updates and enables it,
   puts it back in its groups and clears the clocks. Leaving again starts new clocks.
+- **An entry recreated under a new entity** (new in 0.5.0): an entity added at the DN of a leaver's
+  disabled entry takes the entry over and enables it, and the log says `a leaver's disabled entry
+  is taken over by the entity added at its DN, and enabled`. 0.4.1 converged onto the entry and
+  left it disabled. A leaver moved aside (`move_to`) is not taken over.
+- **Groups syncd does not manage** keep the leaver unless `strip_unmanaged_groups` is set. A
+  group that cannot lose its last member (a `groupOfNames` must have one) is left as it is, with a
+  warning.
 
 | Where | What |
 |---|---|
@@ -308,9 +358,33 @@ publications:
 | Prometheus | `syncd_deprovision_pending{publication,stage}`, with `stage` one of `disable`, `strip_groups`, `move`, `delete` |
 | Reports | The leaver counts are columns of the reconciliation report |
 
-**Limitations.** An entry recreated under a new entity is not re-enabled. Memberships in groups
-syncd does not manage (groups in the target that list the entry but that no publication writes)
-are not stripped.
+**Limitations.** Stripping groups syncd does not manage was tested on OpenLDAP only. A leaver's
+entry that was moved aside is not taken over by a new entity at its old DN.
+
+## Unique `sAMAccountName`
+
+New in 0.5.0. Active Directory refuses a second entry with a `sAMAccountName` already taken, and
+before 0.5.0 the second person's export went to the dead-letter queue. With `on_conflict: unique`
+the second holder gets a counter from 2, in place of the name's last characters when both do not
+fit in `max_length`:
+
+```yaml
+publications:
+  - name: people_to_ad
+    sam_account_name: { from: e.uid, max_length: 20, on_conflict: unique }
+```
+
+- The name is kept in the engine's store as an attribute of the entity and claimed among the
+  publications of the same target that use the option. A name stays while `from` gives the same
+  value, and stays taken while its entry is in the directory, after the entity is gone too (a
+  disabled leaver keeps their name).
+- Names already written are claimed by their entries first, so turning the option on renames
+  nobody.
+- `max_length` must be at least 2. Without the option (`on_conflict: fail`, the default) a
+  duplicate still dead-letters.
+- **Limitation:** uniqueness is among the names syncd claims; the directory is not searched for
+  them, so a name taken by an account made outside syncd is not known to it, and the directory
+  refuses the write as before.
 
 ## Group lifecycle
 
@@ -327,6 +401,7 @@ publications:
       expires_after: 180d           # from the creation or the last review
       on_expiry: report             # report | empty | delete
       review_every: 90d
+      reviewers: [it-ops@example.gov]   # told when a review falls due (0.5.0)
     groups:
       - name: engineering
         filter: e.department == "Engineering"
@@ -351,6 +426,8 @@ publications:
 | `expires_after` | none | A span from the group's creation by the engine, or from its last review. Not with `expires` |
 | `on_expiry` | `report` | `report`, `empty` or `delete` |
 | `review_every` | none | A review is due this long after the creation or the last review |
+| `reviewers` | none | New in 0.5.0. Mail addresses the console writes to when the group's review falls due. Needs `review_every` |
+| `placeholder_member` | none | New in 0.5.0. A fixed DN written to the group while it has no other member and its entry is kept (`on_expiry: empty`, or `when_empty: keep`), for object classes that must have a member (`groupOfNames`, `groupOfUniqueNames`). Taken out again with the first real member. LDAP and Active Directory targets |
 
 ### Manual members and owners
 
@@ -371,7 +448,11 @@ At expiry the policy applies once:
   `expired`, which needs no approval and which `syncd approve` does not clear. A review does.
 - **`empty`**: every member is removed and the entry is kept, whatever `when_empty` says.
   Members joining meanwhile are not written. This suits object classes that allow an empty group,
-  such as Active Directory's `group`.
+  such as Active Directory's `group`. A `groupOfNames` or `groupOfUniqueNames` must have a member:
+  with `placeholder_member` it holds that DN while emptied; without one the directory refuses the
+  write and the group dead-letters. From 0.5.0 that combination (or `when_empty: keep` on such a
+  group without a placeholder) is warned about at validation and at engine start; it will be an
+  error in a later release.
 - **`delete`**: the entry is deleted, subject to the deletion threshold, and not added again
   while the group stays expired. Validation refuses it unless the publication's `deprovision`
   deletes (`delete`, or a staged policy with `delete_after`).
@@ -387,20 +468,33 @@ group back (members restored, or the entry added again). In the console, operato
 **Review** button on the engine page's Groups card. It is recorded in the group's history and
 audited as `group.reviewed`; API tokens need `runs:run`.
 
+**A due review reaches a person** (new in 0.5.0). When `review_every` falls due, a timer fires
+and:
+
+- the engine logs `computed group review is due: review it (syncd group review <publication>
+  <group>)`, and again at a start while it stays due;
+- the console raises the webhook event `group.review-due` (whether or not anyone is named), and
+  mails the group's `reviewers` (or the publication's `group_policy.reviewers`) once each time the
+  review falls due. The mail needs the console's mail settings, and the addresses must be inside
+  `CONSOLE_REPORTS_RECIPIENT_DOMAINS`: one outside is left out and named in the console's log;
+- `SyncdGroupReviewsDue` fires once a review has been due for a day.
+
+Nothing changes in the target when a review falls due.
+
 | Where | What |
 |---|---|
 | `syncd status` | `groups: N (N with manual members, N expired, N reviews due)` and a line per group with its owner, expiry and review |
 | The console | The engine page's **Groups** card, and the publication form's **Group policy** section and per-group **Lifecycle** fields |
 | Prometheus | `syncd_groups`, `syncd_groups_manual_members`, `syncd_groups_expired`, `syncd_groups_review_due` (all by `publication`), and `syncd_held_changes{reason="expired"}` |
-| Alerts and webhooks | `SyncdGroupsExpired`; the webhook event `group.expired` when a publication's expired count rises from 0 |
+| Alerts and webhooks | `SyncdGroupsExpired`, `SyncdGroupReviewsDue` (0.5.0); the webhook events `group.expired` when a publication's expired count rises from 0, and `group.review-due` (0.5.0) |
 
 **Limitations.**
 
-- `review_every` has no timer and sends no mail. A due review shows in the status, the metric
-  and the console only.
 - Reviews are per group: there is no "review every group of the publication".
-- An `on_expiry: empty` group whose object class needs a member (`groupOfNames`) is refused by
-  the directory and dead-letters. Use `delete`, or an object class that allows an empty group.
+- An `on_expiry: empty` group whose object class needs a member (`groupOfNames`) and that has no
+  `placeholder_member` is refused by the directory and dead-letters. Set `placeholder_member`, use
+  `delete`, or an object class that allows an empty group.
+- `placeholder_member` has no console form field: write it in the configuration.
 
 ## Worked examples
 
@@ -487,13 +581,20 @@ starts another ninety days.
 
 ## Known limitations
 
-- **Held changes** are counted in memory per publication, so report mode over a very large view
-  costs memory in proportion, as the dead-letter queue does.
+- **Held changes** are kept in the store from 0.5.0 but still counted in memory per
+  publication, and passes over a publication with very many of them are slower.
+- **Long operations:** source changes still wait during the end-of-pass checks of thresholds and
+  canaries, the release of held changes, `syncd approve`'s reconciliation, a full read's deletes,
+  the first export after an initial load, drift checks, dead-letter retries and write-back.
 - **A canary's drift check** follows the publication's drift policy, reverts included. There is
   no stricter "flag only" check for canaries.
-- **Leavers:** an entry recreated under a new entity is not re-enabled, and memberships in groups
-  syncd does not manage are not stripped.
-- **Groups:** `review_every` has no timer and sends no mail; reviews are per group; an
-  `on_expiry: empty` group whose object class needs a member dead-letters.
+- **Leavers:** a leaver moved aside is not taken over by a new entity at its old DN;
+  `strip_unmanaged_groups` was tested on OpenLDAP only.
+- **Groups:** reviews are per group; an `on_expiry: empty` group whose object class needs a member
+  still dead-letters without `placeholder_member`; `placeholder_member` has no console form field.
+- **`sAMAccountName`:** `on_conflict: unique` is uniqueness among the names syncd claims, not
+  checked in the directory.
+- **Initial passwords:** the number of attempts (three) and the delay between them are fixed.
 - **Rollback:** syncd 0.3.0 ignores the timers and held changes that 0.4.0 keeps, and refuses the
-  0.4.0 settings (see the warning under [Persisted timers](#persisted-timers)).
+  0.4.0 settings (see the warning under [Persisted timers](#persisted-timers)); 0.4.1 drops the
+  group-review timers 0.5.0 keeps, and refuses the 0.5.0 settings.

@@ -1,11 +1,22 @@
 # Troubleshooting
 
-Symptoms, likely causes and fixes. Start with `sudo syncd status`, `sudo syncdctl status` and the
-journal (`journalctl -u syncd -u syncd-console -e`). Commands, metrics and alert rules are in the
-[Operator guide](operator-guide.md); settings are in [Configuration](configuration.md). The source
+Symptoms, likely causes and fixes, for syncd 0.5.0 (`main` at commit `a9d17c6`). Start with
+`sudo syncd status`, `sudo syncdctl status` and the journal (`journalctl -u syncd -u syncd-console
+-e`). Commands, metrics and alert rules are in the [Operator guide](operator-guide.md); settings
+are in [Configuration](configuration.md); the license is in [Licensing](licensing.md). The source
 repository's `docs/RUNBOOK.md` has the same entries for each alert, and the support bundle
 (`sudo syncdctl support-bundle`) collects what support needs (see
 [Support bundle](operator-guide.md#support-bundle)).
+
+!!! tip "Just upgraded from 0.4.1?"
+    Most surprises after the upgrade are on purpose: role maps that now add up
+    ([Signing in](#signing-in)), `syncd apply-config` refused on a newly installed host
+    ([The command line](#the-command-line)), clear-text password delivery refused at validation
+    ([Installation and upgrade](#installation-and-upgrade)), capture agents that need `--source`
+    or a bind, initial passwords that end in the dead-letter queue ([Passwords](#passwords)),
+    a `TRUNCATE` that now deletes ([The engine at work](#the-engine-at-work)), and the 30-day
+    evaluation that ends in a publishing block about 60 days after the upgrade
+    ([The license](#the-license)).
 
 ## Installation and upgrade
 
@@ -75,6 +86,16 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
     block on an Active Directory target over plain LDAP, which 0.3.0 refused only when it wrote a
     password. Give the target an `ldaps://` URL or `starttls: true`, publish, and upgrade again.
 
+    Upgrading to 0.5.0, the usual reason is the same rule for every LDAP directory:
+    `publication <p>: passwords would go to target <t> in the clear (ldap://... without
+    starttls): use ldaps:// or starttls, or accept it with passwords: { allow_cleartext: true }`
+    (or `passwords.self_service: people's passwords would go to <source> in the clear ...`). A
+    configuration that delivers passwords, initial passwords or self-service changes to a
+    directory on another host over `ldap://` without `starttls` no longer validates. Loopback
+    addresses and `ldapi://` are exempt. Add TLS (from 0.5.0 an LDAP connector takes
+    `connection.ca_file` for a private CA), or accept it knowingly with `allow_cleartext`, which
+    `syncd status` then reports as `passwords: WARNING: sent in the CLEAR to ...`.
+
 ??? failure "`<version> is older than the installed <version>`"
     `syncdctl upgrade` only moves forward. To go back, use `syncdctl rollback` or restore a backup;
     to install the same version again, `--reinstall`.
@@ -92,6 +113,16 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
     `syncdctl rollback` restores the backup named `*-upgrade-<old>-to-<new>`, and it is gone (only
     the newest three backups are kept). Restore an older backup with `syncdctl restore`, or roll
     back the programs alone with `--keep-data` if the previous release reads the store's format.
+
+??? failure "After a rollback to 0.4.1 with `--keep-data`, the engine does not start, or agents, queued passwords or group reviews are gone"
+    The store's format did not change in 0.5.0, so 0.4.1 opens it, but 0.4.1 refuses settings it
+    doesn't know: publish a configuration without the settings new in 0.5.0 before rolling back
+    with the store kept. It also cannot read 0.5.0's password agent and queued password records
+    (do not roll back with agents enrolled or changes queued since the upgrade), ignores previous
+    password keys and a previous agent CA, and drops the group-review timers. The console's
+    database gained migrations 0018 to 0028 (and `users.role` is dropped), so a console rollback
+    needs the database backup taken before the upgrade, which `syncdctl rollback` and the
+    upgrade's own backup restore; what was done in the console since is lost.
 
 ??? failure "After a rollback to 0.3.0 with `--keep-data`, the engine does not start, or leavers, windows and canaries stopped"
     0.3.0 refuses settings it doesn't know: publish a configuration without the settings new in
@@ -184,7 +215,9 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
     - `... must use https (plain http only for loopback)`: the issuer is `http://` on another host;
     - `role map entry "..." is not value=role`, or `unknown role`: the roles are `admin`,
       `designer`, `operator`, `viewer` and `auditor`; use `;` between entries when values contain
-      commas;
+      commas. From 0.5.0 a role may carry a scope (`group=operator@prod`,
+      `group=designer@engine:hr-1,hr-2`), and `role map entry "...": ...` names what is wrong with
+      it. The same applies to `CONSOLE_SAML_ROLE_MAP` and `ENS_X509_ROLE_MAP`;
     - `CONSOLE_OIDC_DEFAULT_ROLE: unknown role ...`.
 
     Fix `/etc/syncd/console.env` and `systemctl restart syncd-console`. See
@@ -205,16 +238,21 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
     console with a new key, and the engines must be registered again.
 
 ??? failure "The console will not start: `the master key does not open the secrets the database holds (engine <name>'s client key)`"
-    Or `(webhook <name>'s URL)`, or `(environment <env>'s secret value <key>)`: from 0.4.1 the
-    check at start opens one sealed secret of any kind (an engine's client key, else a webhook's
-    URL, else a secret environment value), not only engine client keys, so a console with a wrong
-    key and only webhooks or secret environment values now refuses to start too.
+    Or `(webhook <name>'s URL)`, `(webhook <name>'s signing secret)`, `(environment <env>'s secret
+    value <key>)` or `(the ... configuration signing key <id>)`, several separated by commas. From
+    0.5.0 the check at start opens one sealed secret of each kind, not only the first one found as
+    in 0.4.1: **a database with secrets sealed under two keys that 0.4.1 started may now refuse to
+    start**, naming what the key does not open. Find the key those secrets were sealed with (an
+    older backup of `master.key`), or, if it is gone, start once with
+    `CONSOLE_NEW_MASTER_KEY=true` and set those secrets again.
     The key, from the file or `CONSOLE_MASTER_KEY`, is not the one the secrets were sealed with:
     often the key of another installation, or a database restored without its own key. Put back
     the key that belongs with this database. Only if it is lost for good, set
     `CONSOLE_NEW_MASTER_KEY=true` (or `--new-master-key`); the console logs that engines
-    registered with mTLS must be registered again. On Kubernetes, this is what a deleted
-    `syncd-console` Secret gives: see [Kubernetes](#kubernetes).
+    registered with mTLS must be registered again, webhooks given their URL and secret again,
+    secret environment values entered again and the configuration signing key rotated. On
+    Kubernetes, this is what a deleted `syncd-console` Secret gives: see [Kubernetes](#kubernetes).
+    With `CONSOLE_MASTER_KEY_KMS`, the console must also reach the KMS: there is no fallback.
 
 ??? failure "The console will not start: `reading the TLS certificate ...`, `... holds no certificate`, `reading the TLS key ...`, or `the TLS certificate and key do not go together`"
     `CONSOLE_TLS_CERT` or `CONSOLE_TLS_KEY` (the console's own HTTPS) names a file the console
@@ -235,7 +273,16 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
 
 ??? failure "The engine refuses its configuration: `engine.ha.lease: ttl_secs must be at least 3`, `engine.ha: snapshot_every_secs must be at least 10`"
     The pair's settings are checked with the rest of the configuration. Raise the values (the
-    defaults are 15 and 300). See [High availability](availability-and-sizing.md#high-availability).
+    defaults are 15 and, from 0.5.0, 60; 300 before). See
+    [High availability](availability-and-sizing.md#high-availability).
+
+??? warning "`password agents enrolled before 0.5.0 are bound to no source and may submit changes for any`"
+    New in 0.5.0. An agent enrolled before the upgrade keeps working, but may submit changes for any
+    source; the engine warns at every start, `syncd status` says `password agents: WARNING: ...
+    bound to no source`, and `syncd password agent list` marks it. Bind each:
+    `sudo syncd password agent bind <name> --source <connector>` (repeat `--source` for an agent
+    that serves several). Such agents are also asked to renew their certificate at their first
+    exchange; `syncd-capture` does it by itself.
 
 ??? failure "The engine will not start: `the key is sealed with a passphrase, and none is set`, or `the passphrase (SYNCD_PASSWORD_KEY_PASSPHRASE_FILE) does not open the sealed key`"
     New in 0.4.1. The password key or the agents' CA key is sealed (see
@@ -266,14 +313,32 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
     warning at startup when it listens beyond loopback over plain HTTP without an `https://`
     `CONSOLE_PUBLIC_URL`. On the host itself, `http://127.0.0.1:8080` works.
 
+??? warning "After the upgrade to 0.5.0, someone signed in through single sign-on has more rights than before"
+    From 0.5.0 **every role map entry that matches adds its role** (`CONSOLE_OIDC_ROLE_MAP`, and the
+    new `CONSOLE_SAML_ROLE_MAP` and `ENS_X509_ROLE_MAP`); in 0.4.1 the first match won. Someone in
+    two mapped groups gets both roles at their next sign-in. Review maps that relied on their
+    order: remove the entries that should no longer apply, or give a role a scope
+    (`operator@test`). The audit trail's sign-in records now carry `roles` (a list) instead of
+    `role`, and events carry `details.assignment`: update SIEM parsers.
+
+??? failure "`acknowledge the notice on the sign-in page before signing in` (403)"
+    New in 0.5.0. The notice-and-consent banner is on (`ENS_CONSENT_BANNER_ENABLED`), and every
+    sign-in method refuses until the banner was acknowledged from the same browser within 15
+    minutes. People press the banner's button. A script that signs in with a password must first
+    `POST /api/v1/auth/consent` and send the cookie it gets with the sign-in. API tokens are not
+    affected.
+
 ??? failure "`sign-in failed; after repeated failures an account locks for 15 minutes`"
     Every failed local sign-in gets this same answer, so it reveals nothing about the account.
-    The audit trail (**Audit log**, event `auth.login`) records the real reason:
+    The text says 15 minutes whatever the lockout settings are: from 0.5.0 `ENS_LOCKOUT_ATTEMPTS`
+    (5), `ENS_LOCKOUT_WINDOW` and `ENS_LOCKOUT_DURATION` (15 minutes; 0 locks until an
+    administrator unlocks) change them. The audit trail (**Audit log**, event `auth.login`)
+    records the real reason:
 
     | Reason | Fix |
     |---|---|
     | `wrong password`, `unknown account` | Check the username and password |
-    | `locked` | Five wrong passwords lock the account for 15 minutes. Wait, or have an administrator reset its password (**Users**, the reset button on the account), which also unlocks it |
+    | `locked` | Five wrong passwords (by default) lock the account for 15 minutes. Wait, or have an administrator reset its password (**Users**, the reset button on the account), which also unlocks it |
     | `disabled` | An administrator disabled the account in **Users** |
     | `no local password` | The account signs in through single sign-on; use the single sign-on button |
     | `local sign-in is limited to break-glass accounts` | An administrator limited local sign-in. Use single sign-on, or a break-glass account under "Break-glass sign-in" |
@@ -327,8 +392,9 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
     callback, or a slow sign-in at the provider, gets this. Start again.
 
 ??? failure "Single sign-on: `<user> has no console role: none of their groups matches the role map`"
-    The ID token's role claim (`CONSOLE_OIDC_ROLE_CLAIM`, default `groups`) has no value listed in
-    `CONSOLE_OIDC_ROLE_MAP`. Check that the provider puts the claim in the ID token (some need an
+    (With SAML, the same for its role attribute; with a client certificate, `nothing in the
+    certificate matches the role map`.) The ID token's role claim (`CONSOLE_OIDC_ROLE_CLAIM`,
+    default `groups`) has no value listed in `CONSOLE_OIDC_ROLE_MAP`. Check that the provider puts the claim in the ID token (some need an
     extra scope in `CONSOLE_OIDC_SCOPES`, or a mapper), that the values match exactly (group names
     or DNs as the provider sends them), or set `CONSOLE_OIDC_DEFAULT_ROLE`.
 
@@ -399,9 +465,15 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
     A `unix:` address that does not answer is usually one the console's account may not open: the
     socket is mode 0600, for the engine's own user. See [Registering engines](install.md#registering-engines).
 
-??? failure "`the <role> role cannot do this`"
+??? failure "`the <role> role cannot do this`, `none of your roles (...) allows this on ...`, or an engine that answers 404"
     The account's role does not allow the action: registering engines and managing accounts need
-    `admin`; editing and simulating configuration need `designer`. From 0.4.1 an environment's
+    `admin`; editing and simulating configuration need `designer`. From 0.5.0 a role may be held on
+    one environment or on named engines only: `none of your roles (operator@test) allows this on
+    ...` means it does not reach that engine, `this needs a role that covers everything` that the
+    action is global (accounts, settings, webhooks, Git sync, registering engines, the whole audit
+    trail), and an engine outside the account's roles answers 404 and is left out of lists. An
+    API token limited to an environment or engines behaves the same way. Upgraded accounts hold
+    their former role on everything. From 0.4.1 an environment's
     values (`GET /api/v1/environments[/{name}]`) need `admin` or `auditor`, or an API token with
     the `environments:read` scope (or `admin`); a script that read them with a `configs:read`
     token needs the new scope. Every role still reads the names (`GET /api/v1/environment-names`).
@@ -410,14 +482,39 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
 ??? failure "A published configuration is refused: `engine.data_dir cannot be changed through the control API`, `the api section can only be changed on the engine host` or `engine.ha can only be changed on the engine host`"
     The version changes settings that stay with the engine host. Start from the running
     configuration (import it in the console), keep its `engine.data_dir`, `api` and `engine.ha`
-    as they are, and change those only in `/etc/syncd/engine/engine.yaml` on the host.
+    as they are, and change those only in `/etc/syncd/engine/engine.yaml` on the host. From 0.5.0
+    so are `engine.require_signed_config` with `engine.config_signing_keys`, and
+    `engine.license_file`. The usual case after the upgrade: `syncdctl api-access strict` added
+    `api.access` on the host, and the console's next version still has the old `api` section;
+    import the running configuration once.
+
+??? failure "A publish is refused: `this engine applies only configurations its console signed`, or `the configuration's signature is not valid here: ...`"
+    New in 0.5.0. The engine has `engine.require_signed_config`. The first comes from
+    `syncd apply-config` or any client other than the console: publish from the console. The
+    second means the console signed with a key the engine's `engine.config_signing_keys` file does
+    not hold (a key rotated or replaced in the console, `--replace` after a lost master key):
+    install the console's current key (`sudo syncdctl api-access signing-key --from-console`, or
+    the file `syncd-console admin config-signing-key --out` writes), or finish the rotation with
+    `--activate` only after every engine has the new key.
+
+??? warning "The engine page warns that the engine runs a configuration the console did not publish (`config.unpublished-running`)"
+    New in 0.5.0. The engine's status says who applied its configuration, and it is not the version
+    the console last published: someone ran `syncd apply-config` (in compatible control API
+    access) or edited the file on the host. The console records it in its audit trail, raises the
+    webhook event of that name, and warns until a version is published from the console again.
+    Find out who (`syncd status` names the caller, or `the file on this host`), then import the
+    running configuration in the console or publish the version you want. Opt the host in to
+    strict access (`sudo syncdctl api-access strict`) so that it cannot happen around the console
+    again.
 
 ??? failure "A published configuration is refused: `not published: N of M test cases fail`"
     A computed attribute's test cases, a rule package's tests, or (with Git sync) a golden-file
     test fail, and the version cannot be published. The console lets such a version be saved,
     but not published. From 0.4.1 the golden tests in Git gate every publish: the editor's,
-    one through the API, Git auto-publish, and `syncd config promote`. Fix the rule or the test
-    case. `golden tests: not run, the configuration rendered for display does not compile: ...`
+    one through the API, Git auto-publish, and `syncd config promote`. From 0.5.0 they are read at
+    the version's own Git commit, not the branch head: a version saved while its golden files
+    failed stays refused after the files are fixed at the head, so save it again. Versions saved
+    before 0.5.0 are checked at the branch head, with a note. Fix the rule or the test case. `golden tests: not run, the configuration rendered for display does not compile: ...`
     means the golden tests could not run on the version as the console renders it for display. See
     [Rules](rules.md) and [Configuration as code](config-as-code.md).
 
@@ -440,6 +537,57 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
     hook's secret cannot be read: ...` (`CONSOLE_PUBLISH_HOOK_SECRET_FILE`, readable by
     `syncd-console`). `CONSOLE_PUBLISH_HOOK_ON_ERROR=allow` lets publishes go while the hook is
     down, recorded as `error-allowed`; choose it knowingly.
+
+## The license
+
+New in 0.5.0. How licensing works, its states and how to install a license are in
+[Licensing](licensing.md); these are the symptoms.
+
+??? failure "Publishing is refused: `not published: publishing configuration changes is blocked by the license (...)` (`SyncdLicensePublishingBlocked`, `license: BLOCKED`)"
+    The license expired, the managed identities went over its tier, or there is no license and the
+    30-day evaluation ended, and the 30-day grace period after that is over. On an upgraded
+    installation with no license, that is about 60 days after the first start of 0.5.0. **Sync keeps
+    running** with the published configuration, across restarts and failovers; only changing it is
+    refused (an engine without a console answers `not applied: ...` to `syncd apply-config`).
+
+    Still allowed meanwhile: approving or rejecting held changes, dead-letter retries and
+    discards, joins, password operations, backups, and **publishing again a version that was
+    published to that engine before** (a rollback, audited with a `license` note). See
+    [What publishing is blocked blocks](licensing.md#what-publishing-is-blocked-blocks).
+
+    1. Find the cause: the console's **License** page, `syncd license show`, or
+       `sudo syncdctl license status`. The first lines say which problem started the grace period.
+    2. Get a license that covers it from the licensing portal, with the installation id from the
+       same page if the portal asks for it.
+    3. Install it: **License** → **Install license**, or `sudo syncdctl license install FILE`
+       (see [Installing a license](licensing.md#installing-a-license)). The block ends at once;
+       publish again.
+    4. Over the tier and cannot wait: taking out what the count includes (a publication of people
+       no longer needed, leavers kept exported) lowers it at the engines' next count, every ten
+       minutes.
+
+??? warning "`SyncdLicenseWarning` or `SyncdLicenseGracePeriod`, a banner across the console, the webhook `license.state-changed`"
+    The license expires within 30 days, the managed identities are near (warning) or over (grace)
+    its tier, or the evaluation is ending or over. Nothing is refused yet. `syncd license show` (or
+    the License page) gives the reason and the date the block starts. Renew, or extend the tier,
+    before then.
+
+??? failure "A version is refused: `not published: connector <name> (<type>) needs the <pack> pack, which the license does not include`"
+    Not the block: this happens in any state. The version uses a connector or setting of a pack
+    (Cloud and SaaS, Enterprise Database, Password Sync, High Availability, Extensibility) the
+    license does not include. Get the pack, or take the connector or setting out of the version.
+    A version with it that ran on the engine before may still be published again as a rollback.
+    See [Packs](licensing.md#packs).
+
+??? warning "`SyncdLicenseDevelopmentKey`, or a build that says `DEVELOPMENT LICENSE KEY`"
+    The build accepts the development license key from the source repository (a build made
+    without the release's key), or the license was signed with it. Production runs release
+    builds; `syncd version` names the license keys a build accepts. See
+    [Release builds and the development key](licensing.md#release-builds-and-the-development-key).
+
+??? warning "The license stays expired after the clock was corrected"
+    The console and the engines keep the latest time they have seen, so a clock that ran ahead
+    past the license's expiry keeps it expired. Ask the portal for a license valid past that time.
 
 ## Held changes and change safety
 
@@ -500,18 +648,30 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
       console. The clocks start again, an emptied group gets its members back, a deleted one is
       added again.
     - Not wanted: remove it from the configuration.
-    - An `on_expiry: empty` group whose object class needs a member (`groupOfNames`)
-      dead-letters: use `report` or `delete` for those.
+    - An `on_expiry: empty` group whose object class needs a member (`groupOfNames`,
+      `groupOfUniqueNames`) dead-letters unless it has a `placeholder_member` (new in 0.5.0),
+      which the group holds while emptied. From 0.5.0 `syncd validate` and the engine's start
+      warn about the combination. Set `placeholder_member`, or use `report` or `delete`, then
+      review the group.
 
-    `REVIEW DUE` is the softer version: `review_every` passed and nothing changed. It sends no
-    mail; the same review clears it. See [Group lifecycle](change-safety.md#group-lifecycle).
+??? warning "A group review is due (`SyncdGroupReviewsDue`, `REVIEW DUE` in `syncd status`, `computed group review is due` in the log)"
+    The softer version of expiry: `review_every` passed since the creation or the last review, and
+    nothing changed in the target. From 0.5.0 the console also raises `group.review-due` and mails
+    the group's `reviewers`; the alert fires after a day. Look at the members and review the group
+    (`sudo syncd group review <publication> <group>`, or **Review** in the console). Reviewers who
+    got no mail: the console's mail settings, and their domains in
+    `CONSOLE_REPORTS_RECIPIENT_DOMAINS` (an address outside them is left out and named in the
+    console's log). See [Group lifecycle](change-safety.md#group-lifecycle).
 
 ??? warning "Records wait to join an entity (`SyncdUnmatchedRecordsAgeing`)"
     Records of a source found no entity by the view's join rules (or several), and some have
     waited longer than `correlation.unmatched_alert_after`. Nothing of theirs reaches the targets.
     `sudo syncd correlation suggest --view <view>` (or the console's Correlation page) scores
     each against the entities; accept the right ones (`syncd correlation accept --view <view>
-    --above 0.95`, a dry run until `--yes`). Fix the data for the rest. See
+    --above 0.95`, a dry run until `--yes`). Fix the data for the rest. From 0.5.0 correlation
+    finds more (a typo at the start of a value, values one edit apart), so a bulk accept may take
+    records 0.4.1 left: read the dry run. An `in view <name>` line points to a look-alike in
+    another view (`correlation.other_views`), which cannot be accepted. See
     [Correlation assistance](reports-and-data-quality.md#correlation-assistance).
 
 ??? warning "A data-quality check fails (`SyncdQualityErrors`, `quality ...: N entities fail (error)`)"
@@ -523,10 +683,28 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
     policy applies to their entries. See
     [Data-quality checks](reports-and-data-quality.md#data-quality-checks).
 
-??? warning "A leaver was not re-enabled, or kept memberships"
-    The staged leaver policy re-enables a rehire whose entity comes back. An entry recreated under
-    a new entity is not re-enabled, and memberships in groups syncd doesn't manage are not
-    stripped. See [Staged leaver policy](change-safety.md#staged-leaver-policy).
+??? warning "A leaver kept memberships, or a leaver's entry came back enabled"
+    The staged leaver policy strips the groups syncd manages. Groups made by hand or by another
+    tool keep the leaver unless the policy has `strip_unmanaged_groups: true` (new in 0.5.0, LDAP
+    and Active Directory, with `keep_groups` for the ones to leave alone); a `groupOfNames` that
+    would lose its last member is left as it is, with a warning.
+
+    From 0.5.0 an entity added at the DN of a leaver's disabled entry takes the entry over and
+    enables it (`a leaver's disabled entry is taken over by the entity added at its DN, and
+    enabled`); 0.4.1 left it disabled. A leaver moved aside (`move_to`) is not taken over. See [Staged leaver policy](change-safety.md#staged-leaver-policy).
+
+??? warning "Unmanaged entries or privileged members grew (`SyncdUnmanagedEntriesGrew`, `SyncdUnmanagedPrivilegedMembersGrew`)"
+    New in 0.5.0. The target holds more entries of the kind a publication manages that syncd never
+    exported than a day earlier, or a privileged group has more members no rule put there.
+    `sudo syncd unmanaged --last` lists them (`syncd unmanaged` reads the targets again); so does
+    the console's **Unmanaged entries** page. For each: adopt it if it belongs to a person syncd
+    knows (`syncd adopt --publication <p> --dn '<dn>' --entity <id>`, or **Adopt**); fix the
+    source or join the record if the person is known under another key; add a service or
+    break-glass account to `unmanaged.ignore`; or disable or remove it in the directory (syncd
+    never removes what it does not manage). For a privileged member, remove it in the directory or
+    make a rule account for it. The entries alert clears by itself a day later. A result marked
+    `stopped` could not finish (the target did not answer). See
+    [Unmanaged entries](operator-guide.md#unmanaged-entries).
 
 ## Passwords
 
@@ -544,10 +722,17 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
       `passwords.ttl_secs` (a day by default). It is dropped and counted as failed.
       `syncd_password_waiting` climbing before shows which publication was stuck.
     - **It could not be opened** (an empty `publication` label): the change was sealed to another
-      password key, such as one from before a restore with new keys. The capture point fetches
-      the current key again by itself.
-    - **Active Directory over plain LDAP**: AD takes `unicodePwd` only over LDAPS or StartTLS;
-      from 0.4.0 such a configuration is refused at validation.
+      password key, such as one from before a restore with new keys, or one retired after a
+      rotation (`syncd password rotate-key --retire`). The capture point fetches the current key
+      again by itself.
+    - **Plain LDAP**: AD takes `unicodePwd` only over LDAPS or StartTLS; from 0.4.0 such a
+      configuration is refused at validation, and from 0.5.0 so is one that sends passwords to any
+      LDAP directory on another host over `ldap://` without `starttls`, unless
+      `passwords.allow_cleartext` (see [Installation and upgrade](#installation-and-upgrade)).
+
+    `sudo syncd password queue` lists what is waiting, with who submitted each change (an agent,
+    the self-service page, a control API caller) and the publications it reached; never a
+    password (new in 0.5.0).
 
     See [Password synchronisation](password-sync.md).
 
@@ -563,21 +748,74 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
     [The password keys](operator-guide.md#the-password-keys)). Backups taken before still hold
     them in the clear.
 
-??? warning "`the target refused the initial password; the entry was created without it`"
-    A `passwords.initial` password (generated or read from the entity) was refused by the target,
-    usually its password policy. The entry exists without a password, and on Active Directory
-    stays disabled. A refused initial password is not retried: set one by hand, or make
-    `generate` meet the policy (`length`, `classes`). An entry a drift check puts back is
-    re-added without one. `the initial password rule failed; the entry is created without one`
-    means the `from` expression failed.
+??? warning "`the target refused the initial password; the entry is there without it`, or a dead letter `the initial password was refused 3 times, the last: ...`"
+    A `passwords.initial` password (generated or read from the entity) was refused by an LDAP or
+    Active Directory target, usually by its password policy. The entry exists without a password,
+    and on Active Directory stays disabled. `syncd status` counts it in `initial passwords: N set,
+    N refused`.
+
+    From 0.5.0 the engine tries again, a new password each time for `generate` and the entity's
+    current value for `from`: at the entity's next change, the next reconciliation, or a minute
+    later (two after the second refusal), three attempts in all. After the third the entry is held
+    in the dead-letter queue (`syncd dlq`, the console, `syncd_publication_dead_letters`,
+    `SyncdDeadLetters`) and tried no more, whatever else is exported for it. 0.4.1 only logged the
+    refusal; entries refused before the upgrade are not retried.
+
+    1. Fix the cause: a `generate` shorter, or with fewer character classes, than the target's
+       policy asks (`length`, `classes`), or a `from` value the policy refuses.
+    2. `sudo syncd retry --publication <p>` makes one more attempt. `syncd discard` gives up: the
+       entry stays without a password.
+
+    On SCIM and Entra ID targets the password goes with the create, so a refusal fails the create,
+    which is a dead letter retried like any other. From 0.5.0 an entry a drift check adds back gets
+    an initial password. `the initial password rule failed; the entry is created without one` means
+    the `from` expression failed.
 
 ??? warning "Password agents stop delivering after an HA failover"
-    Only the active engine of a pair runs the agents' ingest listener: an agent that reaches the
-    passive one is refused and must retry. Point agents at the engine that is now active, or at an
-    address that reaches both (on Kubernetes, the `syncd-engine-ingest` Service routes to both
-    pods). Self-service changes follow the lease from 0.4.1: the console sends them to the member
-    that holds it. With sealed keys, an engine with another passphrase does not start on the
-    snapshot's keys (above). See [Password synchronisation](password-sync.md#high-availability).
+    From 0.5.0 both engines of a pair answer on the ingest port: the passive one forwards what
+    agents send to the active one. In strict control API access that forward needs the certificate
+    the passive engine uses listed under `api.access.passwords` on both hosts (the container
+    image's file lists `syncd engine`); without it, the active engine logs `refused a password
+    request`. An agent enrolled or a key rotated after the last snapshot is lost with the active
+    engine: enroll it again. Self-service changes follow the lease from 0.4.1: the console sends
+    them to the member that holds it. With sealed keys, an engine with another passphrase does not
+    start on the snapshot's keys (above). See
+    [Password synchronisation](password-sync.md#high-availability).
+
+??? failure "`syncd password agent add`: `a new agent needs the source it captures passwords for: syncd password agent add <name> --source <connector>`"
+    New in 0.5.0. Give the source connector the agent captures for (`--source`, repeated for
+    several). The engine takes that agent's changes for those sources only; a change for another
+    is refused, never queued, and counted (`password agents: N changes refused for a source their
+    agent is not bound to`, `syncd_password_changes_refused_total`). On the agent's host,
+    `syncd-capture` says `the engine has this agent bound to no source` for an agent enrolled
+    before 0.5.0: bind it with `syncd password agent bind <name> --source <connector>`.
+
+??? failure "`<call> sets passwords: in strict mode it needs a client certificate listed under api.access.passwords on the engine's host, or the control socket`"
+    New in 0.5.0. In strict control API access, setting passwords (`syncd password set`, `agent
+    add` and `bind`, `rotate-key`, `rotate-agent-ca`) is a permission of its own. Run the command
+    with `sudo` on the engine's host, which uses the control socket, or list the caller's
+    certificate under `api.access.passwords`. See
+    [Control API access](operator-guide.md#control-api-access).
+
+??? warning "`SyncdPasswordKeyOld`, or `SyncdPasswordAgentCertExpiring`"
+    New in 0.5.0. The password key is more than a year old: rotate it with
+    `sudo syncd password rotate-key` (capture points pick the new key up by themselves; the old one
+    is retired after `passwords.rotation_overlap_days`). Or an agent's certificate expires within
+    14 days: `syncd-capture` renews in the last third of the certificate's life, so the agent is
+    down, cannot reach the engine, or was enrolled with `syncd password agent enroll`, which does
+    not renew by itself. Renew it on its host (`syncd password agent renew --dir <dir>`) while the
+    certificate is valid; after it expired, enroll the agent again. `syncd password agent list`
+    shows each agent's certificate. See
+    [Changing the passphrase and rotating the keys](operator-guide.md#changing-the-passphrase-and-rotating-the-keys).
+
+??? failure "`syncd password rekey` stops before changing anything"
+    New in 0.5.0. A key file opens with neither the current nor the new passphrase: the files came
+    from another engine, or an earlier rekey was finished with yet another passphrase. Nothing was
+    changed. An interrupted rekey is finished by running the same command again; the engine still
+    opens files sealed with the previous passphrase (`<passphrase file>.previous`) until
+    `syncd password rekey --forget-previous`. With the passphrase in
+    `SYNCD_PASSWORD_KEY_PASSPHRASE` (a value, not a file) the command cannot change the variable:
+    change it and restart the engine. On Kubernetes the Secret is read-only to the engine.
 
 ## Backups and restore
 
