@@ -175,6 +175,8 @@ version` lists the key ids a binary accepts.
 In FIPS mode the signature is checked through AWS-LC like any other P-256 signature, so licensing
 works the same (see [FIPS 140-3 and DISA STIG](fips-and-stig.md)).
 
+For what to do when the license warns or blocks, see [Troubleshooting](troubleshooting.md#the-license).
+
 ## Known limitations
 
 - syncd's own tests use development licenses. Files issued by the ENS licensing portal were

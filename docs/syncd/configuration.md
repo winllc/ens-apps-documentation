@@ -1376,7 +1376,7 @@ rule accounts for. It reads the target and never writes to it. It runs after eac
 scheduled drift check of a publication that has `drift` (with or without an `unmanaged`
 block), and on demand (`syncd unmanaged`); `syncd adopt` takes an entry over. LDAP and
 Active Directory targets, and the users of SCIM and Entra targets. See
-[Reports, lineage and data quality](reports-and-data-quality.md).
+[Reports, lineage and data quality](reports-and-data-quality.md). Running and adopting them is in the [Operator guide](operator-guide.md#unmanaged-entries).
 
 | Key | Type | Default | What |
 |---|---|---|---|
@@ -1475,7 +1475,7 @@ attribute in `attributes` too is refused. See
 | `home.drive` | `homeDrive`: a drive letter and a colon (`H:`), the same for everyone. |
 | `user_principal_name` | `userPrincipalName` from `{ from, suffix }`: CEL for the part before the `@`, and a domain of the forest. |
 | `sam_account_name` | `sAMAccountName` from `{ from, max_length, on_conflict }`: CEL for the login, cut to `max_length` (at most and by default 20). |
-| `sam_account_name.on_conflict` | Since 0.5.0. `fail` (the default): a duplicate is refused by the directory and dead-letters. `unique`: the second holder of a name gets a counter from 2, in place of the name's last characters when both do not fit in `max_length` (`jsmith`, `jsmith2`). Needs a `max_length` of at least 2. |
+| `sam_account_name.on_conflict` | Since 0.5.0. `fail` (the default): a duplicate is refused by the directory and dead-letters. `unique`: the second holder of a name gets a counter from 2, in place of the name's last characters when both do not fit in `max_length` (`jsmith`, `jsmith2`). Needs a `max_length` of at least 2. See [Unique `sAMAccountName`](change-safety.md#unique-samaccountname). |
 
 With `on_conflict: unique` the engine keeps each name in its store, as the entity
 attribute `<publication>.sAMAccountName` (a view's own computed attribute must not have
