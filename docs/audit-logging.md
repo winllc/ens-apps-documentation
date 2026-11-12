@@ -16,9 +16,13 @@ syncd (from 0.4.0; its console's trail, `product` `syncd`) and the ENS licensing
     syncd's console joined the format in 0.4.0. Entries written before the upgrade keep their older
     chain; at the first start the console records `audit.format-upgraded`, and the first new event
     continues the old chain's head, so **Verify integrity** checks both. Exports and the pull API carry
-    only `ens-audit/1` events. Its audit page has no filters or CSV export: it lists events, verifies
-    the chain (also against a recorded head, which finds entries removed from the end), shows each
-    output's delivery and exports NDJSON. Pull-API tokens are made on its **Integrations** page with
+    only `ens-audit/1` events. Its audit page lists events, filters them by time, category, action,
+    actor and outcome (from 0.5.0), verifies the chain (also against a recorded head, which finds
+    entries removed from the end), shows each output's delivery and exports NDJSON and, from 0.5.0,
+    CSV. From 0.5.0 sign-in events carry `roles` (a list of assignments) instead of `role`, and
+    events carry `details.assignment`, the role assignment that allowed the action: update SIEM
+    parsers that read `role`. Auditors whose role covers one environment or engine see its
+    entries. Pull-API tokens are made on its **Integrations** page with
     the `audit:read` scope. See [syncd's admin guide](syncd/admin-guide.md).
 
 ## For administrators: the audit page

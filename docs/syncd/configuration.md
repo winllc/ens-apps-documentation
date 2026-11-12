@@ -4,7 +4,7 @@ syncd has two programs, and each is configured in its own way:
 
 | Program | Configured by | Where (package install) |
 |---|---|---|
-| `syncd`, the engine | One YAML document: connectors, views, rules and publications, plus the engine's own settings. Secrets are never written in it; it names environment variables or files that hold them. | `/etc/syncd/engine/engine.yaml`, with the secrets in `/etc/syncd/engine.env` |
+| `syncd`, the engine | One YAML document: connectors, views, rules and publications, plus the engine's own settings. Secrets are never written in it; it names environment variables, files or (since 0.5.0) a vault that hold them. | `/etc/syncd/engine/engine.yaml`, with the secrets in `/etc/syncd/engine.env` |
 | `syncd-console`, the web console | Environment variables (or the matching command-line flags). | `/etc/syncd/console.env` |
 
 The container images and the Helm chart configure the same two programs; see
@@ -15,22 +15,25 @@ and why:
 
 | Topic | Guide |
 |---|---|
-| Sources and targets, the Active Directory conveniences, initial passwords on create | [Connectors](connectors.md) |
+| Sources and targets (REST and HR services included), the Active Directory conveniences, initial passwords on create | [Connectors](connectors.md) |
 | The rule language, effective dates, rule packages | [Computed attributes and rules](rules.md) |
 | Change windows, thresholds, canaries, report mode, held changes, the staged leaver policy, group lifecycle | [Change safety and lifecycle](change-safety.md) |
 | Captured passwords, capture agents, self-service, initial passwords | [Password synchronisation](password-sync.md) |
 | Semantic diff, environments, Git sync, promotion, golden tests | [Configuration as code](config-as-code.md) |
 | Reconciliation reports, lineage, history retention, data-quality checks, correlation assistance | [Reports, lineage and data quality](reports-and-data-quality.md) |
 | High availability, backups and recovery | [Sizing, availability and recovery](availability-and-sizing.md) |
+| The license, managed identities, and which connectors and features need which pack | [Licensing](licensing.md) |
 
 ## Files
 
 | Path | What | Owner and mode |
 |---|---|---|
 | `/etc/syncd/engine/engine.yaml` | The engine configuration. Publishing a configuration in the console, or `syncd apply-config`, replaces it. | `syncd:syncd`, `0640` |
-| `/etc/syncd/engine.env` | Secrets the engine configuration refers to (`password: { env: NAME }`), `SYNCD_FIPS_MODE`, `SYNCD_PASSWORD_KEY_PASSPHRASE_FILE`, and the other [engine variables](#engine-environment-variables-and-options). A systemd `EnvironmentFile`. | `root:syncd`, `0640` |
-| `/etc/syncd/console.env` | The console's settings: database URL, listen address, its own HTTPS certificate, proxies, single sign-on, the audit trail's outputs, API tokens, webhooks, reports and mail, the pre-publish hook and Git sync. A systemd `EnvironmentFile`. | `root:syncd-console`, `0640` |
-| `/etc/syncd/pki/` | The control API's CA, the engine's certificate, and the client certificates of the console and the command line. Issued by the installer. | |
+| `/etc/syncd/engine.env` | Secrets the engine configuration refers to (`password: { env: NAME }`), `SYNCD_FIPS_MODE`, `SYNCD_PASSWORD_KEY_PASSPHRASE_FILE`, where the engine finds a vault or a KMS, and the other [engine variables](#engine-environment-variables-and-options). A systemd `EnvironmentFile`. | `root:syncd`, `0640` |
+| `/etc/syncd/console.env` | The console's settings: database URL, listen address, its own HTTPS certificate, proxies, single sign-on (OpenID Connect, SAML, certificates), the sign-in policy, the audit trail's outputs, API tokens, webhooks, reports and mail, the pre-publish hook, Git sync and the license file. A systemd `EnvironmentFile`. | `root:syncd-console`, `0640` |
+| `/etc/syncd/pki/` | The control API's CA, the engine's certificate, and the client certificates of the console (`syncd console`) and the command line (`syncd command line`). Issued by the installer. `syncdctl api-access signing-key` adds the console's configuration signing key here (`console-signing.pub`). | |
+| `/etc/syncd/license.lic` | The license, when installed with `sudo syncdctl license install FILE`, which also sets `CONSOLE_LICENSE_FILE`. See [Licensing](licensing.md). | |
+| `/etc/syncd-keys/` | Where the runbook keeps the password keys' passphrase file, apart from `/etc/syncd`: since 0.5.0 `syncdctl backup --to` leaves a passphrase file inside `/etc/syncd` out of its archives, with a warning, so that a backup never carries the passphrase beside the keys it opens. | |
 
 `syncdctl install` writes each file only if it does not exist yet, so an upgrade keeps
 your changes. The release's own copies are in `/opt/syncd/current/share/config/`, so you
@@ -65,8 +68,8 @@ key is an error, not a silently ignored setting.
 | Key | Type | Default | What |
 |---|---|---|---|
 | `version` | integer | required | Must be `1`. |
-| `engine` | map | see [Engine](#engine-engine) | Data directory, shards, intervals, history, cache, backups, high availability. |
-| `api` | map | see [Control API](#control-api-api) | The engine's control API (gRPC), used by the console and the `syncd` command line. |
+| `engine` | map | see [Engine](#engine-engine) | Data directory, shards, intervals, history, cache, backups, high availability, signed configurations, the license file of an engine without a console, limits on custom functions. |
+| `api` | map | see [Control API](#control-api-api) | The engine's control API (gRPC), used by the console and the `syncd` command line, and who may do what on it. |
 | `attributes` | map | empty | Schema hints shared by every view and connector. |
 | `connectors` | list | empty | The systems syncd reads and writes, and the objects it reads from each. |
 | `views` | list | empty | Merged views: which sources feed them, how records join, attribute flows, precedence, computed attributes, correlation hints, data-quality checks. |
@@ -98,10 +101,16 @@ to read it:
 |---|---|
 | `{ env: NAME }` | The environment variable `NAME`. |
 | `{ file: /path/to/file }` | The file's contents, with a trailing newline (`\n` or `\r\n`) removed. |
+| `{ vault: { path, key } }` | A field of a secret in HashiCorp Vault (KV version 1 or 2). Since 0.5.0. |
+| `{ aws_secret: { id, key } }` | A secret in AWS Secrets Manager; `key` names a field of a JSON secret, and without it the whole secret string is the value. Since 0.5.0. |
+| `{ azure_keyvault: { vault, name } }` | A secret in Azure Key Vault. Since 0.5.0. |
 
 ```yaml
 password: { env: CORP_LDAP_PASSWORD }
 token: { file: /etc/syncd/bridge-token }
+password: { vault: { path: secret/data/syncd/corp-ldap, key: password } }
+password: { aws_secret: { id: prod/syncd/corp-ldap, key: password } }
+password: { azure_keyvault: { vault: https://corp.vault.azure.net, name: corp-ldap-password } }
 ```
 
 On a package install, define the variables in `/etc/syncd/engine.env`. The `syncd`
@@ -110,16 +119,49 @@ packaged configuration, so `syncd test-connection` finds the same passwords. Var
 already set in the environment win; `--env-file` (or `SYNCD_ENV_FILE`) names another file.
 A file named in `{ file: ... }` must be readable by the `syncd` user.
 
+**Secrets in a store** (`vault`, `aws_secret`, `azure_keyvault`) are read by the engine
+when a connector connects, over HTTPS through the engine's own TLS provider (the FIPS
+module in a FIPS build), without a vendor SDK. Where the store is and how the engine signs
+in to it belong to the engine's host: they come from the reference or, more usually, from
+the engine's [environment](#engine-environment-variables-and-options).
+
+| Reference | Keys |
+|---|---|
+| `vault` | `path`: the secret's path in Vault's API below `/v1/` (`secret/data/<name>` for the KV version 2 engine mounted at `secret`, `<mount>/<name>` for version 1). `key`: the field holding the value. Optional: `address` (else `VAULT_ADDR`), `namespace` (else `VAULT_NAMESPACE`), `ca_file` (else `VAULT_CACERT`, else the Mozilla root set), `auth` (else from the environment): `{ token_file: PATH }`, `{ approle: { role_id, secret_id_file, mount } }` or `{ kubernetes: { role, token_file, mount } }`. |
+| `aws_secret` | `id`: the secret's name or ARN. Optional: `key`, `region` (else `AWS_REGION` or `AWS_DEFAULT_REGION`), `endpoint` (a VPC endpoint, instead of `https://secretsmanager.<region>.amazonaws.com`). Credentials come from the environment: access keys, a web identity token (IRSA, EKS Pod Identity), the shared credentials file, or the EC2 instance's role. |
+| `azure_keyvault` | `vault`: the vault's URL. `name`: the secret's name. Optional: `version` (the current one by default), `client_id` (a user-assigned managed identity, when the VM has several). The engine signs in with a federated token (AKS workload identity: `AZURE_FEDERATED_TOKEN_FILE`, `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`), else as the VM's managed identity. |
+
+Each also takes `cache_secs`: how long a value read is reused before it is read again
+(300 by default; `0` reads it every time). A connection that fails with a value from a
+store (a refused LDAP bind, a source that restarts) drops it, so the next attempt reads it
+again and a rotated credential is picked up without a restart. The configuration, its
+diffs, simulations, exports, the status and the logs only ever show the reference, never
+the value. Secret stores are part of the Core [pack](licensing.md#packs).
+
+!!! warning "Tested against stand-ins only"
+    The Vault, AWS and Azure clients have been tested against doubles of the three
+    services written in the syncd repository, never against a real Vault, AWS account or
+    Azure tenant. Not built: Google Secret Manager, Vault's dynamic secret leases and
+    certificate auth, binary AWS secrets. SCIM's bearer token and basic password are not
+    read again after a `401`, and database connections already open keep the credential
+    they were opened with.
+
 Secret settings are:
 
 - `password` (databases, LDAP, Active Directory, MongoDB, JDBC);
 - `token` (Debezium, JDBC bridge, SCIM bearer token);
-- `auth.basic.password` and `auth.oauth2.client_secret` (SCIM);
-- `auth.client_secret` (Entra ID);
+- `auth.basic.password`, `auth.oauth2.client_secret` and
+  `auth.oauth2.private_key_jwt.private_key` (SCIM);
+- `auth.client_secret` and `auth.private_key` (Entra ID);
+- `auth.token`, `auth.basic.password`, `auth.api_key.value`, the `auth.oauth2` secrets
+  (`client_secret`, `refresh_token`, `private_key_jwt.private_key`,
+  `jwt_bearer.private_key`, `saml_bearer.assertion`, `saml_bearer.idp.private_key`) and
+  `tls.client_key` (REST and the HR connectors);
 - `engine.ha.lease.url` (the lease database's URL, which carries its password).
 
 The JDBC connector refuses a URL or driver property that carries a password in plain text.
-`syncd config diff` never prints a secret setting's value, nor any `*_file` path.
+`syncd config diff` never prints a secret setting's value, nor any `*_file` path, nor
+(since 0.5.0) a key ending in `_token` or named `assertion`.
 
 ### Environment placeholders
 
@@ -156,7 +198,31 @@ api:
     cert_file: /etc/syncd/pki/engine.crt
     key_file: /etc/syncd/pki/engine.key
     client_ca_file: /etc/syncd/pki/ca.crt
+  # Who may do what (docs/INSTALL.md, "Control API access"). Strict: a client
+  # certificate has the tier its common name is listed under, and nothing otherwise.
+  # The console's certificate (console-client.crt, "syncd console") applies
+  # configurations; the command line's (cli.crt, "syncd command line"), which the
+  # syncd group can read, reads and operates (runs, approvals, dead letters, backups)
+  # and cannot apply a configuration, so the console's approval and publish gates
+  # hold. An engine installed before 0.5.0 has no `access` section: every certificate
+  # of the CA may do everything until it is added.
+  access:
+    mode: strict
+    configure: [syncd console]
+    operate: [syncd command line]
+    # Who may set passwords through the API (`syncd password set`, adding and binding
+    # capture agents, rotating the password keys), on top of `operate`. Nobody by
+    # certificate: those commands are run with sudo on this host, through the control
+    # socket. With an HA pair and capture agents, list the certificate the passive
+    # engine reaches the active one with (docs/INSTALL.md, "High availability").
+    passwords: []
 ```
+
+The `access` section is new in 0.5.0, and only a new install gets it: an upgrade keeps
+`engine.yaml` as it was, so an engine installed before 0.5.0 stays **compatible**
+(every certificate the CA signed may do everything), with a warning at every start, in
+`syncd status` and on the console's engine page, until `sudo syncdctl api-access strict`
+adds the section. See [Control API](#control-api-api).
 
 and this `/etc/syncd/engine.env`, which defines nothing until you add your secrets:
 
@@ -171,6 +237,33 @@ and this `/etc/syncd/engine.env`, which defines nothing until you add your secre
 #
 # Only with a FIPS build of syncd:
 # SYNCD_FIPS_MODE=true
+#
+# Secrets in a vault (INSTALL.md, "Secrets from a vault or a KMS"): where the engine
+# finds the store a configuration's `vault`, `aws_secret` or `azure_keyvault`
+# references name.
+# HashiCorp Vault, with a token file (a Vault Agent's sink) or AppRole:
+# VAULT_ADDR=https://vault.example.gov:8200
+# VAULT_CACERT=/etc/syncd/vault-ca.pem
+# SYNCD_VAULT_TOKEN_FILE=/run/vault-agent/token
+# SYNCD_VAULT_ROLE_ID=...
+# SYNCD_VAULT_SECRET_ID_FILE=/etc/syncd-keys/vault-secret-id
+# AWS: the usual AWS_REGION and credentials; off EC2, skip the wait for the instance
+# metadata service:
+# AWS_EC2_METADATA_DISABLED=true
+#
+# The password keys' passphrase (RUNBOOK.md): a file outside /etc/syncd, which off-host
+# backups of /etc/syncd leave out. With a KMS key, the file holds the passphrase
+# wrapped by it (`syncd secrets wrap`): awskms:..., azurekv:... or vaulttransit:...
+# SYNCD_PASSWORD_KEY_PASSPHRASE_FILE=/etc/syncd-keys/password-key.passphrase
+# SYNCD_PASSWORD_KEY_PASSPHRASE_KMS=vaulttransit:transit/syncd
+#
+# An active/passive pair: `syncdctl ha init` and `ha join` write the SYNCD_HA_* settings
+# here. How long a submitted password change waits for the passive engine to have it
+# (milliseconds; 0: never wait):
+# SYNCD_HA_PASSWORD_REPLICATION_WAIT_MS=2000
+#
+# In FIPS mode, load custom functions in WebAssembly anyway (refused by default):
+# SYNCD_FIPS_ALLOW_WASM_FUNCTIONS=true
 ```
 
 The `syncd` unit starts the engine as
@@ -185,14 +278,26 @@ directory is fixed whatever a configuration says.
   the [user guide](user-guide.md). With Git sync, versions can also come from commits;
   see [Configuration as code](config-as-code.md).
 - **From the command line.** `syncd apply-config new.yaml` does the same through the
-  control API. `syncd simulate new.yaml` shows what applying it would send each target,
-  without applying it. `syncd config diff old.yaml new.yaml` (or `--running`) says what
-  changed, by meaning.
-- **Host-only settings.** `engine.data_dir`, `engine.ha` and the whole `api` section can
-  only be changed in the file on the engine host. The engine refuses a configuration sent
-  through the control API that changes them, so a mistake there cannot leave the engine
-  unreachable. Start a configuration in the console by importing the running one, which
-  copies them; an exported configuration file leaves them out.
+  control API, when the caller may: applying a configuration is the `configure` tier of
+  [`api.access`](#who-may-do-what-apiaccess), which a strict engine gives the console's
+  certificate only, so on a new install `syncd apply-config` is refused and
+  configurations go through the console. An engine with `engine.require_signed_config`
+  takes only configurations the console signed for it. `syncd simulate new.yaml` shows
+  what applying it would send each target, without applying it. `syncd config diff
+  old.yaml new.yaml` (or `--running`) says what changed, by meaning.
+- **Host-only settings.** `engine.data_dir`, `engine.ha`, the whole `api` section, and
+  since 0.5.0 `engine.require_signed_config`, `engine.config_signing_keys` and
+  `engine.license_file` can only be changed in the file on the engine host. The engine
+  refuses a configuration sent through the control API that changes them, so a mistake
+  there cannot leave the engine unreachable, and an applied configuration cannot say who
+  may apply the next one. Start a configuration in the console by importing the running
+  one, which copies them; an exported configuration file leaves them out.
+- **The license.** From 0.5.0 the console (or an engine without a console, at
+  `ApplyConfig`) checks a configuration against the license when it is validated, saved
+  and published: once the evaluation and its grace period are over without a license,
+  or for a connector or feature whose pack the license leaves out, publishing a changed
+  configuration is refused. Running configurations are never stopped. See
+  [Licensing](licensing.md).
 - **Checks.** `syncd validate -c file.yaml` checks structure and compiles every
   expression. `syncd test -c file.yaml` runs the test cases of every computed attribute
   and every rule package, and the golden-file tests in `--golden DIR` (by default
@@ -200,16 +305,22 @@ directory is fixed whatever a configuration says.
   one directory level down. A configuration whose tests fail can be saved in the console
   but not published. With Git sync the golden tests beside the configuration in the
   repository count too, for every publish: the editor's, the API's, Git auto-publish and
-  promotion (in 0.4.0 only the editor ran them). The engine refuses to apply a
+  promotion (in 0.4.0 only the editor ran them). Since 0.5.0 they are read at the
+  version's own Git commit, not at the branch head. The engine refuses to apply a
   configuration whose test cases fail.
 - **Warnings.** A rule that reads an attribute nothing in its view sets (a misspelt
   `e.departmnet`), or a lookup table the view does not have, is reported as a warning by
   `syncd validate`, in the reply to `apply-config`, in the log at start and in the
-  console. It is not an error: the rule reads the attribute as absent.
-- **Rolling back.** 0.4.1 adds no configuration settings, so a configuration for 0.4.1
-  works on 0.4.0. syncd 0.3.0 refuses settings it does not know: before a rollback to
-  0.3.0 that keeps the store, publish a configuration without the settings new in
-  0.4.0.
+  console. It is not an error: the rule reads the attribute as absent. Since 0.5.0 the
+  same goes for a computed group of class `groupOfNames` or `groupOfUniqueNames` with
+  `on_expiry: empty` or `when_empty: keep` and no `placeholder_member` (it will be an
+  error in a later release; see [Computed groups](#computed-groups-groups)). At start,
+  a PostgreSQL stream whose publication does not publish `TRUNCATE` is warned about in
+  the log; see [Connectors](connectors.md#postgresql).
+- **Rolling back.** syncd 0.4.1 refuses settings it does not know: before a rollback to
+  0.4.1 that keeps the store, publish a configuration without the settings new in 0.5.0
+  (every key this page marks "since 0.5.0"). 0.4.1 added no settings, so a configuration
+  for 0.4.1 works on 0.4.0.
 
 ### Spans of time
 
@@ -230,13 +341,18 @@ Settings that take a span of time as text (`soak`, `max_delay`, the leaver stage
 | `history.keep_days` | integer | `30` | Days of entity history to keep: what changed, what caused it, what was exported. `0` records no history. |
 | `history.keep_per_entity` | integer | `100` | History entries kept per entity (the newest). |
 | `history.min_per_entity` | integer | `10` | The newest entries of each entity kept past `keep_days`, so no entity's story is empty. See [History retention](reports-and-data-quality.md#history-retention). |
+| `cache_mb` | integer | `256` | MiB of memory caching the store's decompressed blocks. At most `32768`. Takes effect when syncd restarts. See [Availability and sizing](availability-and-sizing.md). |
+| `backup` | map | unset | Scheduled backups of the running engine; [below](#scheduled-backups-enginebackup). |
+| `ha` | map | unset | An active/passive pair; [below](#high-availability-engineha). Host-only. |
+| `require_signed_config` | boolean | `false` | Since 0.5.0. Apply a configuration through the control API only when the console signed exactly that configuration for this engine (an ECDSA P-256 signature bound to the engine's current challenge); anything else, `syncd apply-config` included, is refused. Needs `config_signing_keys`. Host-only. |
+| `config_signing_keys` | list of paths | empty | Since 0.5.0. Files holding the public keys (PEM `PUBLIC KEY`; one file may hold several, for a rotation) whose signatures are accepted: the console's configuration signing key (`syncd-console admin config-signing-key`). Read at each apply, so a key is added or removed without a restart. `sudo syncdctl api-access signing-key` installs it on a package host. Host-only. |
+| `license_file` | path | unset | Since 0.5.0. The license of an engine **without a console**, relative to the configuration's directory; read at start and every few minutes. An engine the console manages takes the console's license instead. See [Licensing](licensing.md#without-a-console). Host-only. |
+| `wasm_functions.fuel` | integer | `10000000` | Since 0.5.0. Fuel per call of a custom function in WebAssembly (a rule package's [`wasm`](#packages-packages)): about one unit per instruction run; a call that uses it up fails. 1,000 to 1,000,000,000. |
+| `wasm_functions.memory_mb` | integer | `16` | Since 0.5.0. The most memory one instance of a module may hold, in MiB; a call that needs more fails. 1 to 1024. |
 
 Every entry of an entity with an open held change or a dead letter is kept until it
 clears, past both `keep_days` and `keep_per_entity` (0.4.0 still cut such an entity's
 entries at `keep_per_entity`).
-| `cache_mb` | integer | `256` | MiB of memory caching the store's decompressed blocks. At most `32768`. Takes effect when syncd restarts. See [Availability and sizing](availability-and-sizing.md). |
-| `backup` | map | unset | Scheduled backups of the running engine; [below](#scheduled-backups-enginebackup). |
-| `ha` | map | unset | An active/passive pair; [below](#high-availability-engineha). Host-only. |
 
 ```yaml
 engine:
@@ -246,6 +362,9 @@ engine:
   reconcile_interval_secs: 86400
   history: { keep_days: 30, keep_per_entity: 100, min_per_entity: 10 }
   cache_mb: 256
+  # Host settings: only configurations the console signed for this engine.
+  require_signed_config: true
+  config_signing_keys: [/etc/syncd/pki/console-signing.pub]
 ```
 
 ### Scheduled backups (`engine.backup`)
@@ -293,16 +412,19 @@ active engine's snapshots, and takes over when the lease expires. See
 | `name` | text | required | The pair's name: the lease's key, the same on both engines. 1 to 64 letters, digits, `.`, `_` or `-`. |
 | `member` | text | the host name | This engine's name in the pair, up to 64 characters without spaces. `SYNCD_HA_MEMBER`, when set and not empty, overrides it. |
 | `role` | `auto`, `active`, `passive` | `auto` | `auto` competes for the lease. `passive` never takes it: a standby that only follows. `active` is `auto` by another name. |
-| `lease.backend` | `postgres`, `file` | required | Where the lease is. |
+| `lease.backend` | `postgres`, `kubernetes`, `file` | required | Where the lease is. `kind` is accepted for the same key. `kubernetes` is new in 0.5.0. |
 | `lease.url` | secret | | `postgres`: the database URL. The console's database works. |
 | `lease.tls_verify` | boolean | `false` | `postgres`: check the server's certificate. Without it TLS encrypts only. |
 | `lease.ca_file` | path | | `postgres`: PEM CA certificates for `tls_verify`. |
 | `lease.path` | path | | `file`: the lease file, on a file system both engines share. |
+| `lease.name` | text | the pair's `name` | `kubernetes`: the `coordination.k8s.io/v1` Lease object, a DNS subdomain name (lower-case letters, digits, `-` and `.`). Set it when the pair's name does not fit. Since 0.5.0. |
+| `lease.namespace` | text | the pod's own | `kubernetes`: the Lease's namespace. Since 0.5.0. |
 | `lease.ttl_secs` | integer | `15` | How long the lease holds without a renewal; renewed every third of it. At least `3`. A failover takes at most this, plus the new engine's reconciliation. |
 | `advertise` | `host:port` | `api.listen` (an unspecified address as the host name) | Where the other engine reaches this one's control API, recorded in the lease. `SYNCD_HA_ADVERTISE`, when set and not empty, overrides it. |
-| `snapshot_every_secs` | integer | `300` | Seconds between the store snapshots the active engine takes for the passive one. At least `10`. The failover window: what was exported since the last snapshot is found again by the reconciliation after a takeover. |
+| `snapshot_every_secs` | integer | `60` | Seconds between the store snapshots the active engine takes for the passive one. At least `10`. The failover window: what was exported since the last snapshot is found again by the reconciliation after a takeover. The default was `300` before 0.5.0, when every snapshot was sent whole; a value that is set is kept on upgrade. |
 | `peer.address` | `host:port` | the address in the lease | The other engine's control API, for snapshot pulls. |
-| `peer.ca_file`, `peer.cert_file`, `peer.key_file` | path | `api.tls`'s files | The CA the peer's certificate chains to, and this engine's client certificate and key. `cert_file` and `key_file` go together. |
+| `peer.ca_file`, `peer.cert_file`, `peer.key_file` | path | `api.tls`'s files | The CA the peer's certificate chains to, and this engine's client certificate and key. `cert_file` and `key_file` go together. With a strict [`api.access`](#who-may-do-what-apiaccess), the peer's certificate needs `operate` for snapshot pulls, and `passwords` too when the passive engine forwards capture agents' changes. |
+| `password_replication_wait_ms` | integer | `2000` | Since 0.5.0. How long a password change a capture agent or a person submits waits for the passive engine to have it too before it is answered. A change the passive engine does not acknowledge in time (or with the passive engine down) is accepted all the same, logged and counted in `syncd_ha_password_changes_unreplicated_total`. `0` does not wait. |
 
 `engine.ha` can also come from `SYNCD_HA_*` variables, for hosts whose configuration file
 the console publishes (the Helm chart does this). A file with an `engine.ha` of its own
@@ -311,11 +433,28 @@ keeps it, and `SYNCD_HA_NAME` is then ignored with a warning. `SYNCD_HA_MEMBER` 
 whichever way `engine.ha` was given (0.4.0 used the file's values first). With sealed
 password keys, both engines need the same passphrase.
 
+Since 0.5.0:
+
+- **A Kubernetes Lease** (`lease.backend: kubernetes`) keeps the pair's lease in the
+  cluster's API, read and written with the pod's service-account token, which needs
+  `get`, `create` and `update` on `leases` in its namespace (the Helm chart's
+  `engine.ha.lease.kind: kubernetes` makes the Lease and a Role for it). A freshly
+  started engine waits one lease duration before it takes over a lease whose holder is
+  gone. Changing a running pair's lease kind needs both engines stopped first.
+- **Snapshots are incremental**: a manifest of the store's files with their SHA-256,
+  and only the files the passive engine lacks are sent. A pair with one engine still on
+  0.4.1 falls back to whole archives.
+- **Password changes survive a failover**: the passive engine follows the queue of
+  password changes between snapshots, and answers on the password ingest port too,
+  forwarding to the active engine.
+- `syncdctl ha init`, `ha join`, `ha register` and `ha status` set up a pair on two
+  hosts and write the `SYNCD_HA_*` settings to `engine.env`.
+
 !!! note "Limits"
-    The lease is in PostgreSQL or a file: there is no etcd or Kubernetes Lease backend.
-    Each snapshot is a full archive, not a delta. Password changes the old engine queued
-    after its last snapshot are not delivered again after a failover. `syncdctl` does not
-    set up a pair.
+    There is no etcd backend. The Kubernetes Lease backend has been tested against a fake
+    API server only, never a real one. Snapshots were measured at 3,000 people. A capture
+    agent enrolled, or a password key rotated, after the last snapshot is lost with the
+    active engine. See [High availability](availability-and-sizing.md#high-availability).
 
 ## Control API (`api`)
 
@@ -329,15 +468,44 @@ The console and the `syncd` command line talk to the engine through its control 
 | `tls.cert_file` | path | | PEM certificate chain the API presents. |
 | `tls.key_file` | path | | Its private key. |
 | `tls.client_ca_file` | path | | PEM CA certificates that client certificates must chain to. With `tls`, every client needs a certificate (mutual TLS). |
-| `local_control` | boolean | `false` | Allow commands that change something (runs, approvals, dead-letter actions) on the plain-text loopback listener. With `tls` they are always allowed, to clients with a valid certificate. |
-| `local_reveal` | boolean | `false` | Allow requests for sensitive values (`reveal` in the object explorer, previews and simulations) on the plain-text loopback listener, where any local account can call. With `tls` they are always allowed. |
-| `control_socket` | path | unset | A Unix socket where the engine also serves the whole API, commands and reveals included, to its own user only (the socket is mode `0600`). `syncd` commands on the host use it when it exists. |
+| `local_control` | boolean | `false` | Allow commands that change something (runs, approvals, dead-letter actions) on the plain-text loopback listener. With `tls` they are always allowed, to clients whose certificate's tier allows them. |
+| `local_reveal` | boolean | `false` | Allow requests for sensitive values (`reveal` in the object explorer, previews and simulations) on the plain-text loopback listener, where any local account can call. With `tls` they are always allowed, to clients whose certificate's tier allows them. |
+| `control_socket` | path | unset | A Unix socket where the engine also serves the API to its own user only (the socket is mode `0600`): everything in compatible mode, everything but applying a configuration in strict mode. `syncd` commands on the host use it when it exists. |
 | `metrics_listen` | `host:port` | unset | Serve Prometheus metrics over plain HTTP at `GET /metrics` (`127.0.0.1:9464`). Off unless set. Counters and states only, no attribute values. See the [operator guide](operator-guide.md). |
+| `access` | map | unset (compatible) | Since 0.5.0. Who may do what; [below](#who-may-do-what-apiaccess). |
 
 With `tls` set, the engine logs each command with the client certificate's name. The
 packaged configuration uses mutual TLS on loopback with certificates from the installer's
 own CA; `sudo syncdctl cli-cert` issues a command-line certificate on a host that lacks
 one.
+
+### Who may do what (`api.access`)
+
+Every call of the control API belongs to one of three tiers, each including the one
+before, and is checked in one place before it runs:
+
+| Tier | Covers |
+|---|---|
+| `read` | The status, lists, the running configuration, simulations. |
+| `operate` | Runs, approving held changes, dead-letter actions, joins, password operations, backups, connector checks, asking for sensitive values; an HA pair's snapshot pulls. |
+| `configure` | Applying a configuration. |
+
+| Key | Type | Default | What |
+|---|---|---|---|
+| `mode` | `compatible`, `strict` | `compatible` | `compatible`: every certificate the client CA signed may do everything, as before 0.5.0. `strict`: a certificate gets the tier its identity is listed under, and nothing when it is listed nowhere; the control socket and the plain-text loopback listener stop at `operate`. |
+| `configure` | list | empty | Identities that may do everything. |
+| `operate` | list | empty | Identities that may read and operate. |
+| `read` | list | empty | Identities that may only read. |
+| `passwords` | list | empty | Identities that may, on top of `operate` or above, set passwords and decide who else can: `syncd password set`, adding and binding capture agents, rotating the password keys, and an HA pair's passive engine forwarding agents' changes. In strict mode nobody else may, except the control socket (the engine's own user). |
+
+An identity is a client certificate's subject common name (`syncd console`), or one of
+its URI subject alternative names written with a `uri:` prefix
+(`uri:spiffe://prod/syncd/console`); `*` is every certificate the client CA signed. The
+four lists need `mode: strict`. A new install (the packaged `engine.yaml`, the image's
+initial configuration) is strict; an upgraded one keeps its file and stays compatible,
+with a warning, until `sudo syncdctl api-access strict` (or, on Kubernetes, an edit of the
+engine's file on its volume: the chart cannot set `api.access`). See
+[the packaged configuration](#the-packaged-configuration).
 
 !!! note "A control socket on a package install"
     The packaged configuration has `control_socket: /run/syncd/control.sock` commented
@@ -378,6 +546,7 @@ calls work.
 | `from` | path | unset | A package file, relative to the configuration file's directory. |
 | `pin` | text | unset | `sha256:` and the file's 64 hex digits: a file with other content is refused. Only with `from`. |
 | `description`, `functions`, `lookups`, `tests`, `requires` | | | The package written inline, as in a package file, instead of `from`. |
+| `wasm` | map | unset | Since 0.5.0, inline or in the package file: custom functions in a WebAssembly module, which rules call like the package's own functions. `sha256` (required): the module's SHA-256 (`sha256:<hex>` or the hex), so a module with other bytes is refused. `from`: the module file, relative to the package file's directory (the configuration's for a package written inline); without it the console fills the module in from its module store, by `sha256`, once it is approved there. 1 MiB at most. Calls are limited by [`engine.wasm_functions`](#engine-engine). |
 
 ```yaml
 packages:
@@ -387,6 +556,29 @@ packages:
     pin: "sha256:3f2a..."
 ```
 
+A package file with a module (`examples/packages/checksum.yaml` in the source
+repository):
+
+```yaml
+name: checksum
+version: 1.0.0
+wasm:
+  from: ../wasm-functions/checksum.wasm
+  sha256: 66671f4139a1260cefc07746952e2497b74233539c002b4972d49d257c1258a8
+functions:
+  employee_id:
+    params: [n: string]
+    expr: n + luhn_digit(n)
+```
+
+The module travels inside the configuration (its bytes, in base64), so a signed
+configuration carries it, and the configuration differ shows its size and the function
+signatures its manifest declares rather than the bytes. Modules get no host functions.
+The runtime is an interpreter (wasmi). In FIPS mode the engine and the console refuse
+modules unless `SYNCD_FIPS_ALLOW_WASM_FUNCTIONS=true`. Custom functions are the
+Extensibility [pack](licensing.md#packs). The source repository's
+`docs/CUSTOM-FUNCTIONS.md` describes writing and building a module.
+
 ## Connectors (`connectors`)
 
 A connector is one system syncd reads, writes, or both. Each has a type, connection
@@ -395,7 +587,7 @@ settings that match the type, the objects it reads, and an optional deletion thr
 | Key | Type | Default | What |
 |---|---|---|---|
 | `name` | text | required | Unique; views and publications refer to it. |
-| `type` | enum | required | `postgres`, `mysql` (MySQL 8 and MariaDB 10.5+), `sql_server` (SQL Server 2016+ and Azure SQL Managed Instance), `mongodb`, `ldap`, `active_directory`, `debezium`, `jdbc`, `csv` (a delimited file), `scim` (a SCIM 2.0 application, as a target), `entra` (Microsoft Entra ID through Microsoft Graph). |
+| `type` | enum | required | `postgres`, `mysql` (MySQL 8 and MariaDB 10.5+), `sql_server` (SQL Server 2016+ and Azure SQL Managed Instance), `mongodb`, `ldap`, `active_directory`, `debezium`, `jdbc`, `csv` (a delimited file), `scim` (a SCIM 2.0 application, as a target), `entra` (Microsoft Entra ID through Microsoft Graph); since 0.5.0, as sources, `rest` (a REST or OData service), `workday`, `successfactors` (SAP SuccessFactors) and `ukg` (UKG Pro). |
 | `connection` | map | required | The settings for the type, below. Settings of another type are refused. |
 | `objects` | list | empty | The object types read from it. A connector used only as a target needs none; a `scim` connector takes none. |
 | `deletion_threshold` | map | unset | Safety limit for deletes detected in one import run: `percent` and/or `count`. A run that deletes more than either is held until an operator approves it. |
@@ -407,7 +599,8 @@ deletion_threshold:
 ```
 
 Publication targets are `ldap`, `active_directory`, `scim` and `entra` connectors. See
-[Connectors](connectors.md) for what each does.
+[Connectors](connectors.md) for what each does, and for which [license
+pack](licensing.md#packs) each type belongs to.
 
 ### Database connections (`postgres`, `mysql`, `sql_server`)
 
@@ -429,14 +622,15 @@ Publication targets are `ldap`, `active_directory`, `scim` and `entra` connector
 | `failover_urls` | list | empty | Other servers holding the same data (replicas, other domain controllers), tried in order when `url` does not answer. |
 | `bind_dn` | text | required | The bind identity (a DN, or `user@domain` for Active Directory). |
 | `password` | secret | required | |
-| `starttls` | boolean | `false` | Upgrade an `ldap://` connection to TLS. An Active Directory target that takes passwords needs `ldaps://` or `starttls`. |
+| `starttls` | boolean | `false` | Upgrade an `ldap://` connection to TLS. An Active Directory target that takes passwords needs `ldaps://` or `starttls`; since 0.5.0 so does any other directory that takes passwords on another host, unless `passwords.allow_cleartext` (see [Passwords](#passwords-passwords)). |
+| `ca_file` | path | the system trust store | Since 0.5.0. PEM CA certificates the server's certificate must chain to, for `ldaps://` and `starttls`: a directory with a private CA, an Active Directory domain's own. With it, only these CAs are trusted for this connector. Read at each connection, so a renewed file counts from the next one. Used for reads, exports, password delivery and self-service alike. Refused when no URL is `ldaps://` and `starttls` is off. |
 | `max_inflight` | integer | `32` | Operations in flight per connection: the ceiling of the writer's adaptive limit. 1 to 256. |
 | `operation_timeout_secs` | integer | `60` | Seconds a bind, search or write may take before it fails and the connection counts as down. 1 to 3600. |
 | `idle_timeout_secs` | integer | `900` | Seconds a persistent search (syncrepl) may stay silent before the session is reconnected. A quiet session is probed every minute. Must be at least `operation_timeout_secs`. |
 | `profile` | `generic`, `openldap`, `389ds` (alias `rhds`), `unboundid` (aliases `ping`, `pingdirectory`) | `generic` | `ldap` connectors only: the directory server, for what LDAP leaves to each server, such as how `deprovision: disable` disables an account. Refused on `active_directory` connectors. See [Target profiles](connectors.md#target-profiles). |
 
-There is no `ca_file`: the server's certificate is checked against the system's trust
-store.
+Without `ca_file` the server's certificate is checked against the system's trust store,
+as before 0.5.0.
 
 ### MongoDB connections (`mongodb`)
 
@@ -482,7 +676,7 @@ See [CSV and flat files](connectors.md#csv-and-flat-files).
 | `header` | boolean | `true` | The first row names the columns. Without it, `columns` names them in order. |
 | `columns` | list | empty | Names, or `{ name, type }` with `string`, `int`, `bool`, `date`, `timestamp` or `multi:<separator>`. With `header`, the names must match the header's. |
 | `quote` | text | `"` | The quote character. |
-| `watch` | boolean | `false` | Read the file again two seconds after it stops changing, on top of the object's `interval_secs` or `schedule`. |
+| `watch` | boolean | `false` | Read the file again two seconds after it stops changing, or when its done file appears, on top of the object's `interval_secs` or `schedule`. (0.4.1 could miss a done file that appeared just after a read had found it missing.) |
 | `done_file` | text | unset | Read only when this file exists (`.done` for `<file>.done`, or an absolute path), and delete it after the read. |
 | `max_bytes` | integer | `1073741824` (1 GiB) | A larger file is refused. |
 | `on_error` | `fail`, `skip` | `fail` | What a bad row does: fail the whole read, or skip the row, counted and reported. |
@@ -496,13 +690,16 @@ A SCIM 2.0 application, as a publication target. See [SCIM targets](connectors.m
 | `base_url` | URL | required | The provider's base, `https://app.example.com/scim/v2`. `https://` unless on loopback. |
 | `auth.token` | secret | | A bearer token. |
 | `auth.basic` | map | | `{ username, password }`; `password` is a secret. |
-| `auth.oauth2` | map | | OAuth 2.0 client credentials: `token_url` (`https://` unless on loopback), `client_id`, `client_secret` (a secret), optional `scope`. |
+| `auth.oauth2` | map | | OAuth 2.0 client credentials: `token_url` (`https://` unless on loopback), `client_id`, optional `scope`, and exactly one of `client_secret` (a secret) and, since 0.5.0, `private_key_jwt`. |
+| `auth.oauth2.private_key_jwt` | map | | Since 0.5.0. A client assertion (RFC 7523) signed with a key, in place of a client secret: `private_key` (a secret: PEM, RSA or P-256), `key_id` (the `kid` the provider knows the key by) or `certificate_file` (a certificate whose thumbprint names it), `algorithm` (`PS256`, the default for an RSA key, `RS256`, or `ES256` for a P-256 key), `audience` (the token URL unless set). |
 | `tls.ca_file` | path | unset | PEM CA certificates trusted besides the Mozilla root set. |
 | `rate_limit` | integer | `20` | Requests per second at most. At least `1`. |
 | `page_size` | integer | `100` | Resources per page when listing. 1 to 1000. |
 | `timeout_secs` | integer | `30` | Seconds one request may take. 1 to 3600. |
 
-`auth` takes exactly one of `token`, `basic` and `oauth2`.
+`auth` takes exactly one of `token`, `basic` and `oauth2`. The client secret or the
+assertion's key is read where its reference says with every token request, so a rotated
+one is used from the next token.
 
 ### Entra ID (`entra`)
 
@@ -512,13 +709,92 @@ roles, and a source of users and groups. See [Microsoft Entra ID](connectors.md#
 | Key | Type | Default | What |
 |---|---|---|---|
 | `tenant` | text | required | The tenant's domain (`contoso.onmicrosoft.com`) or id. |
-| `auth.client_id` | text | required | The application registered in the tenant. |
-| `auth.client_secret` | secret | required | Its client secret. A certificate is not supported. |
+| `auth.client_id` | text | required, except as below | The application registered in the tenant. With `workload_identity`, `AZURE_CLIENT_ID` when unset; not used with `managed_identity`, which has its own. |
+| `auth.client_secret` | secret | | A client secret. |
+| `auth.certificate_file` | path | | Since 0.5.0. A certificate registered on the application (PEM). Each token request carries a client assertion signed with its private key. Needs one of the next two. |
+| `auth.private_key_file`, `auth.private_key` | path, secret | | Since 0.5.0. The certificate's private key (PEM, RSA), in a file or as a secret reference. |
+| `auth.assertion_algorithm` | `PS256`, `RS256` | `PS256` | Since 0.5.0, with `certificate_file`: `PS256` with the certificate's SHA-256 thumbprint, or `RS256` with its SHA-1 thumbprint, for tenants that still want it. |
+| `auth.federated_token_file` | path | | Since 0.5.0. A token another issuer gave this workload, accepted through a federated credential of the application; the file is read for every token request. |
+| `auth.workload_identity` | boolean | `false` | Since 0.5.0. The federated token file from `AZURE_FEDERATED_TOKEN_FILE`, and the client id from `AZURE_CLIENT_ID` when `client_id` is unset: what AKS workload identity sets in a pod. Not with `federated_token_file`. |
+| `auth.managed_identity` | map | | Since 0.5.0. The managed identity of the Azure VM the engine runs on: `{}` for the system-assigned one, `{ client_id: ... }` for a user-assigned one. |
 | `cloud` | `global`, `usgov`, `usgovdod`, `china` | `global` | The national cloud, which picks the Graph and sign-in hosts. |
 | `endpoint` | URL | the cloud's (`https://graph.microsoft.com/v1.0`) | Another Graph endpoint, for a test double. |
 | `token_endpoint` | URL | the cloud's | Another token endpoint, for a test double. |
 | `tls.ca_file` | path | unset | PEM CA certificates trusted besides the Mozilla root set. |
 | `timeout_secs` | integer | `30` | Seconds one request may take. 1 to 3600. |
+
+`auth` takes exactly one way of signing in: `client_secret`; `certificate_file` with
+`private_key_file` or `private_key`; `federated_token_file` or `workload_identity`; or
+`managed_identity`. Only the client secret has run against a real tenant; the other
+three are tested against syncd's fake Microsoft Graph. See
+[Microsoft Entra ID](connectors.md#microsoft-entra-id).
+
+### REST and HR services (`rest`, `workday`, `successfactors`, `ukg`)
+
+Since 0.5.0. Sources only, read page by page as JSON. `rest` is the generic reader;
+`workday`, `successfactors` and `ukg` are presets of it that fill in their service's
+paths, paging, delta filter and token endpoint, and what the configuration sets wins. See
+[REST and HR services](connectors.md#rest-and-odata-services) for how they read, and for
+what they have been tested against (fakes only).
+
+| Key | Type | Default | What |
+|---|---|---|---|
+| `url` | URL | required | The service's base; object paths are relative to it. `https://` unless on loopback. Workday: the services host; SuccessFactors: the API server; UKG Pro: the service host. |
+| `auth` | map | required | One of `token` (a secret), `basic` (`{ username, password }`) and `oauth2`, with or without `api_key` (`{ header, value }`: `header` is `X-API-Key` unless set, `US-Customer-Api-Key` for `ukg`) beside it; or `{}` when a client certificate alone signs in. |
+| `auth.oauth2` | map | | `client_id`, `grant` (`client_credentials` by default, `refresh_token`, `jwt_bearer`, `saml2_bearer`), `token_url` (required for `rest`; the preset's for `workday` and `successfactors`), `client_secret` or `private_key_jwt` (as for SCIM), `client_auth` (`form` by default, or `basic`), `refresh_token`, `jwt_bearer` (`{ private_key, subject, audience, algorithm, key_id }`), `saml_bearer` (`{ assertion }` or `{ idp: { url, user_id, private_key } }`), `scope`, `params` (more form fields). |
+| `tenant` | text | | `workday`, required: the tenant name in its URLs. |
+| `company_id` | text | | `successfactors`, required: the company id, added to the basic user name (`<user>@<company id>`) and to the token request. |
+| `tls.ca_file` | path | | PEM CA certificates trusted besides the Mozilla root set. |
+| `tls.client_certificate_file`, `tls.client_key` | path, secret | | Mutual TLS: the client certificate (PEM, its chain after it) and its key. They go together. |
+| `headers` | map | empty | Headers sent with every request; not secrets, and not `Authorization`. |
+| `rate_limit` | integer | `10` | Requests per second at most, over every object of the connector; `0` for no ceiling. |
+| `max_concurrency` | integer | `2` | Requests in flight at once, over every object of the connector. 1 to 64. |
+| `timeout_secs` | integer | `60` | Seconds one request may take. 1 to 3600. |
+| `max_retries` | integer | `5` | How often a request answered `429` or `503`, or not answered, is tried again (after `Retry-After` or a growing pause) before the read fails. |
+
+`ukg` needs `auth.api_key` (the customer API key). An object of these types takes a
+`rest` block:
+
+| Key | What |
+|---|---|
+| `path` | The path under `url` (or a full URL). The presets derive it from `report` (Workday RaaS: `<owner>/<report>`), `resource` (Workday: `workers`; UKG Pro: `person-details`, `employment-details`, ...) or `entity` (SuccessFactors: `PerPerson`, `EmpJob`, ...). Required for `rest`. |
+| `query` | Query parameters of every request. |
+| `records` | JSON path to the array of records in a page (`$.data`, `$.value`; `$` when the page is the array). |
+| `fields` | Attribute name to a JSON path relative to the record, or `{ path, type, format, zone, flatten }`: `type` is `string` (default), `int`, `bool`, `timestamp` or `list`; `format` a strftime pattern for a `timestamp`, read in `zone` (UTC by default); `flatten` `first` or `all`. Empty: every top-level field, as text. With `fields`, the object's `anchor` must be one of them. |
+| `paging` | `style`: `none` (default), `next_link`, `link_header`, `offset`, `page`, `odata` or `cursor`; with `next` (a JSON path; required for `next_link` and `cursor`), `page_size`, `size_param`, `offset_param`, `page_param`, `first_page`, `cursor_param`, `total`. |
+| `delta` | For `mode: delta`, required: `query` with `{since}` in a value (`{ updated_since: "{since}" }`), or `style: odata` (the service's delta links). `format` writes `{since}` (a strftime pattern, `epoch`, `epoch_ms`; RFC 3339 in UTC by default); `server_time_header` (`Date` by default) or `server_time` (a JSON path) says where the service's own time is read; `overlap_secs` (60) reaches back; `modified` (a JSON path) drops records read again unchanged. |
+| `deletes` | For `mode: delta`: `tombstone` (`{ path, equals }`, `equals` `true` by default) or `endpoint` (`{ path, query, records, anchor, paging }`, a "deleted since" listing whose `query` has `{since}`). |
+
+```yaml
+- name: hr
+  type: rest
+  connection:
+    url: https://api.example.com/v1
+    auth: { token: { env: HR_TOKEN } }
+  objects:
+    - type: person
+      anchor: id
+      mode: delta
+      interval_secs: 60
+      full_interval_secs: 86400
+      rest:
+        path: /people
+        records: $.data
+        paging: { style: next_link, next: $.links.next }
+        fields:
+          id: $.id
+          givenName: $.name.first
+          mail: $.emails[?(@.type=='work')].value
+          hired: { path: $.hireDate, type: timestamp }
+        delta:
+          query: { updated_since: "{since}" }
+          modified: $.updatedAt
+        deletes:
+          tombstone: { path: $.deleted }
+```
+
+JSON paths are a subset of JSONPath: `$`, `.name`, `['odd name']`, `[n]`, `[*]`, and
+`[?(@.field=='value')]` (or `!=`).
 
 ### Objects
 
@@ -539,6 +815,7 @@ on the connector type:
 | `attributes` | LDAP, AD, MongoDB, Entra | empty (all user attributes, or whole documents) | Attributes or fields to read. For `entra`, the properties selected. |
 | `collection` | MongoDB | | The collection to read. |
 | `file` | `csv` | the connection's `path` | The file or glob this object reads, so one connector can read several files of one inbox. |
+| `rest` | `rest`, `workday`, `successfactors`, `ukg` | | What to read; see [REST and HR services](#rest-and-hr-services-rest-workday-successfactors-ukg). Required for `rest`. Since 0.5.0. |
 | `changelog` | `ldap` with `mode: stream` | | Follow the directory's change log instead of syncrepl; see [LDAP change logs](#ldap-change-logs-changelog). |
 | `poll_interval_secs` | streams that poll | `10` (DirSync), `5` (change logs), `30` (Entra delta queries) | Seconds between polls. Only for Active Directory streams, `changelog` streams and `entra` objects. |
 | `interval_secs` | scrape, delta | `engine.scrape_interval_secs` | Seconds between reads (delta: between reads of what changed). Not for streams. |
@@ -553,15 +830,16 @@ on the connector type:
 An object sets exactly one of `table`, `query` (databases, JDBC, Debezium `table` only),
 `base` (LDAP and Active Directory) or `collection` (MongoDB), and only the options that
 belong to it. A `csv` object sets none of them (or `file`); an `entra` object sets only
-`type`, `anchor: id`, `mode: stream`, `attributes` and `poll_interval_secs`.
+`type`, `anchor: id`, `mode: stream`, `attributes` and `poll_interval_secs`; an object of
+a REST connector sets none of them and has a `rest` block instead.
 
 #### Read modes
 
 | Mode | What it does | Allowed for |
 |---|---|---|
 | `scrape` | A full read every `interval_secs` (or on `schedule`), diffed against what is staged. Records not seen are deleted. | Every type except `debezium` and `entra`. The only mode for `csv`. |
-| `delta` | Every `interval_secs`, reads what changed since the last read by the `watermark`; every `full_interval_secs` (or on `schedule`) reads everything, which finds deletes. | Every type except `debezium`, `csv` and `entra`. |
-| `stream` | Follows changes as they happen, from a checkpoint committed with the changes. | PostgreSQL, MySQL, SQL Server (with `cdc`), MongoDB, LDAP (syncrepl or `changelog`), Active Directory (DirSync), Debezium (required), Entra ID (delta queries, required). Not `jdbc` or `csv`. |
+| `delta` | Every `interval_secs`, reads what changed since the last read by the `watermark` (REST connectors: by `rest.delta`); every `full_interval_secs` (or on `schedule`) reads everything, which finds deletes. | Every type except `debezium`, `csv` and `entra`. |
+| `stream` | Follows changes as they happen, from a checkpoint committed with the changes. | PostgreSQL, MySQL, SQL Server (with `cdc`), MongoDB, LDAP (syncrepl or `changelog`), Active Directory (DirSync), Debezium (required), Entra ID (delta queries, required). Not `jdbc`, `csv` or the REST connectors. |
 
 Anchor rules for streams, checked by validation:
 
@@ -758,6 +1036,7 @@ Nothing joins without an operator. See
 | `suggest` | list | empty | Conditions scored beside the join rules' own, each `{ entity, source, weight, similar }`: an entity attribute, CEL over `source` giving the record's value, a weight above 0 and at most 10 (default `1`), and whether a value within a Jaro-Winkler similarity of 0.92 also counts, at 0.7. A hint on an attribute a join rule matches replaces that condition's weight and similarity. |
 | `accept_at` | number | `0.95` | The score from which `syncd correlation accept --above` and the console's **Accept all at or above** take a suggestion by default. Above 0, at most 1. |
 | `unmatched_alert_after` | span | unset | Unjoined records older than this are counted as ageing: in the status, the metric, the `SyncdUnmatchedRecordsAgeing` alert and the `correlation.unmatched-ageing` event. |
+| `other_views` | list of view names | empty | Since 0.5.0. Views whose entities an unjoined record of this view is also looked for in, by the same conditions on attributes of the same name. What is found there is shown beside the suggestions, with its view: a pointer to a look-alike, which cannot be accepted as a join. Not the view itself, each view once. |
 
 ```yaml
 correlation:
@@ -765,7 +1044,13 @@ correlation:
     - { entity: mail, source: lower(source.mail), weight: 2 }
     - { entity: sn, source: source.lastName, similar: true }
   unmatched_alert_after: 3d
+  other_views: [contractors]
 ```
+
+Since 0.5.0 `similar` also counts two values of at least five characters that one typo
+(a character replaced, dropped or added) turns into each other, wherever the typo is,
+so `syncd correlation accept --above` may take records it left before: review its dry
+run.
 
 ### Data-quality checks (`quality`)
 
@@ -826,6 +1111,7 @@ SCIM application or Entra ID.
 | `group_policy` | map | unset | Defaults for the computed groups' lifecycle; see [Group lifecycle](#group-lifecycle) and [the guide](change-safety.md#group-lifecycle). |
 | `adopt` | map | unset | Take over entries already in the target; below. Directories only: SCIM and Entra adopt by themselves. |
 | `drift` | map | unset | Read the target back and act on changes made there; below. |
+| `unmanaged` | map | unset | Since 0.5.0. The unmanaged-entries pass: entries of the target nobody exported, and members of privileged groups nothing accounts for; [below](#unmanaged-entries-unmanaged). |
 | `writeback` | map | unset | After a target outage, write changes made in the target back to an LDAP source; below. |
 | `passwords` | map | unset | Passwords this publication delivers: captured ones and the initial password of new entries; see [Publication passwords](#publication-passwords). |
 | `exchange`, `account_control`, `home`, `user_principal_name`, `sam_account_name` | map | unset | Active Directory conveniences; see [below](#active-directory-conveniences). |
@@ -918,6 +1204,8 @@ See [Staged leaver policy](change-safety.md#staged-leaver-policy).
 | `strip_groups_after` | Take the entry out of every group syncd manages: the publication's computed groups, and the reference attributes of other publications that list it. |
 | `move_to` | Move the entry under this fixed container, with the first of the two stages above, or at once when neither is set. |
 | `delete_after` | Delete the entry. The deletion threshold still applies. Must not come before `disable_after` or `strip_groups_after`. |
+| `strip_unmanaged_groups` | Since 0.5.0, with `strip_groups_after`: also take the entry out of the groups in the target that syncd does not manage (made by hand, by another tool), except `keep_groups` and the computed groups of the publications to the same target. LDAP and Active Directory targets. Off by default: those memberships stay. A group that cannot lose its last member (a `groupOfNames`) is left as it is, with a warning. |
+| `keep_groups` | Since 0.5.0, with `strip_unmanaged_groups`: groups it never touches, each a group's DN or a container whose groups are all kept. |
 
 At least one stage is required.
 
@@ -925,12 +1213,16 @@ At least one stage is required.
 deprovision:
   disable_after: 0d
   strip_groups_after: 7d
+  strip_unmanaged_groups: true
+  keep_groups: ["OU=Distribution Lists,DC=corp,DC=example,DC=com"]
   move_to: "OU=Leavers,DC=corp,DC=example,DC=com"
   delete_after: 90d
 ```
 
-An entry recreated under a new entity is not re-enabled, and memberships in groups syncd
-does not manage are not stripped.
+Since 0.5.0, an entity added at the DN of a leaver's disabled entry (a person who comes
+back under a new HR record) takes the entry over and enables it; 0.4.1 converged onto it
+and left it disabled. A leaver moved aside is not taken over. Stripping unmanaged groups
+was tested on OpenLDAP only.
 
 ### Change safety
 
@@ -962,8 +1254,9 @@ add_threshold: { count: 200 }
 canary: { count: 10, soak: 30m, on: { count: 100 } }
 ```
 
-Held changes are counted in memory per publication, so report mode over a very large
-view costs memory in proportion. A canary's drift check follows the publication's
+Since 0.5.0 held changes are kept in the engine's store and only counted in memory per
+publication (40 MiB less at 475,000 held changes; passes over such a publication 18 to
+35 % slower, measured on a debug build). A canary's drift check follows the publication's
 `drift` policy, reverts included.
 
 ### Computed groups (`groups`)
@@ -979,7 +1272,7 @@ a predicate as a member.
 | `object_classes` | list | `[groupOfNames]` | |
 | `member_attribute` | text | `member` | The attribute holding member DNs. `members` for SCIM and Entra targets. |
 | `attributes` | map | empty | Other attributes of the group entry, with literal values. Must not set the member attribute, `objectClass` or the owner attribute. |
-| `when_empty` | `delete`, `keep` | `delete` | `delete` removes an empty group and adds it again with its first member (`groupOfNames` must have a member). `keep` keeps it with no members, for classes that allow that, such as Active Directory's `group`. |
+| `when_empty` | `delete`, `keep` | `delete` | `delete` removes an empty group and adds it again with its first member (`groupOfNames` must have a member). `keep` keeps it with no members, for classes that allow that, such as Active Directory's `group`, or with `placeholder_member`. |
 | `manual_members` | `revert`, `keep`, `report` | `group_policy`'s, else `revert` | A member added in the target that the filter does not give: removed, kept (and counted), or kept and counted as drift. |
 | `owner` | DN | unset | The group's owner, written with the members. |
 | `owner_from` | CEL over `group` | unset | Instead of `owner`: an expression over `group.name`, `group.dn` and `group.members`. No lookup tables. |
@@ -988,6 +1281,8 @@ a predicate as a member.
 | `expires_after` | span | `group_policy`'s | Instead of `expires`: this long after syncd created the group, or after its last review. |
 | `on_expiry` | `report`, `empty`, `delete` | `group_policy`'s, else `report` | At expiry: report it, remove every member, or delete the entry. Needs an expiry. `delete` needs a `deprovision` that deletes (`delete`, or a staged `delete_after`) and is subject to the deletion threshold. |
 | `review_every` | span | `group_policy`'s, else never | A review is due this long after creation or the last review (`syncd group review`, the console's **Review** button). |
+| `reviewers` | list of mail addresses | `group_policy`'s | Since 0.5.0. Who the console mails when the group's review falls due (with its mail settings, to domains in `CONSOLE_REPORTS_RECIPIENT_DOMAINS`). Needs `review_every`. |
+| `placeholder_member` | DN | `group_policy`'s | Since 0.5.0. A member written to the group while it has no other, when its entry is kept (an expired group with `on_expiry: empty`, an empty one with `when_empty: keep`), for classes that must have a member (`groupOfNames`, `groupOfUniqueNames`). Taken out again with the first real member. A fixed DN. LDAP and Active Directory targets only: a SCIM or Entra group may be empty. |
 
 ```yaml
 groups:
@@ -997,7 +1292,10 @@ groups:
     attributes: { description: Everyone in engineering }
     owner: uid=jlee,ou=People,dc=example,dc=com
     expires_after: 365d
-    on_expiry: report
+    on_expiry: empty
+    placeholder_member: cn=nobody,ou=Service,dc=example,dc=com
+    review_every: 90d
+    reviewers: [idm-team@example.com]
 ```
 
 Groups whose members come from a group view in the source are published as an ordinary
@@ -1015,10 +1313,18 @@ setting wins. See [Group lifecycle](change-safety.md#group-lifecycle).
 | `expires_after` | Span after creation or the last review. |
 | `on_expiry` | `report`, `empty` or `delete`. |
 | `review_every` | Span between reviews. |
+| `reviewers` | Mail addresses told when a review falls due. Since 0.5.0. |
+| `placeholder_member` | The member a kept group without members holds. Since 0.5.0. |
 
-`review_every` has no timer and sends no mail: a due review shows in the status, the
-metric and the console only. Reviews are per group. An `on_expiry: empty` group whose
-object class needs a member (`groupOfNames`) dead-letters.
+Since 0.5.0 a due review reaches a person: a timer brings it due on time, the console
+mails the `reviewers` and sends the `group.review-due` webhook event (whether or not
+anyone is named), and the `SyncdGroupReviewsDue` alert fires; it also shows in the
+status, the metric and the console as before. Reviews are per group.
+
+An `on_expiry: empty` or `when_empty: keep` group whose object class needs a member
+(`groupOfNames`, `groupOfUniqueNames`) and that has no `placeholder_member` is warned
+about at validation and at engine start, and dead-letters when the directory refuses to
+empty it. It is not refused yet; it will be an error in a later release.
 
 ### Adopting existing entries (`adopt`)
 
@@ -1059,6 +1365,34 @@ drift:
   default: flag
   attributes: { title: revert, mail: accept }
 ```
+
+### Unmanaged entries (`unmanaged`)
+
+Since 0.5.0. The engine lists the entries of the publication's object classes under its
+base (the fixed end of its `dn`, or the containers its entries are in) and reports those
+that no publication of the same target has exported: accounts made by hand, accounts
+older than syncd, service accounts. It also reports members of privileged groups that no
+rule accounts for. It reads the target and never writes to it. It runs after each
+scheduled drift check of a publication that has `drift` (with or without an `unmanaged`
+block), and on demand (`syncd unmanaged`); `syncd adopt` takes an entry over. LDAP and
+Active Directory targets, and the users of SCIM and Entra targets. See
+[Reports, lineage and data quality](reports-and-data-quality.md). Running and adopting them is in the [Operator guide](operator-guide.md#unmanaged-entries).
+
+| Key | Type | Default | What |
+|---|---|---|---|
+| `scheduled` | boolean | `true` | `false` keeps the pass out of the drift check's schedule; `syncd unmanaged --publication` still runs it. |
+| `bases` | list of DNs | what `dn` gives | Subtrees to look in instead. Fixed DNs. LDAP and Active Directory only. |
+| `ignore` | list | empty | Entries left out of the findings (counted, not listed), and left out of privileged groups' members too: an LDAP filter in parentheses (`(description=service account*)`), or a DN pattern with `*` for any text (`cn=svc-*,ou=People,dc=example,dc=com`), compared without case. A SCIM or Entra target takes patterns only, for the user's name (`svc-*@example.com`). |
+| `privileged_groups` | list of DNs | empty | Groups of the target whose members must be accounted for: a member is accounted for when a computed group of this target puts it there, or when a publication of this target exports the group with that member. Every computed group with `manual_members: report` is looked at as well. In Active Directory, members through nested groups count. LDAP and Active Directory only. |
+
+```yaml
+unmanaged:
+  ignore: ["(description=service account*)", "*,OU=Service Accounts,DC=corp,DC=example,DC=com"]
+  privileged_groups: ["CN=Domain Admins,CN=Users,DC=corp,DC=example,DC=com"]
+```
+
+389 Directory Server and Ping were unit-tested only for this pass, and Entra ID and SCIM
+only against syncd's fakes.
 
 ### Write-back (`writeback`)
 
@@ -1105,6 +1439,15 @@ created with a password, [Initial passwords on Active Directory](connectors.md#i
 `passwords` needs `from` or `initial`, and `initial` exactly one of `from` and `generate`.
 On an Active Directory target the connection must be `ldaps://` or use `starttls`; a
 `passwords` block over plain `ldap://` is refused when the configuration is validated.
+Since 0.5.0 the same holds for any other LDAP directory reached over `ldap://` without
+`starttls` on another host (a loopback address and `ldapi://` are exempt), unless the
+engine's `passwords.allow_cleartext` is `true`; Active Directory never takes passwords in
+the clear, whatever that says.
+
+An initial password the directory refuses is tried again, up to three attempts with the
+add's, and then the entry is held in the dead-letter queue, where `syncd retry` tries
+once more (0.4.1 only logged it). See
+[Initial passwords](password-sync.md#initial-passwords).
 
 ```yaml
 passwords:
@@ -1131,10 +1474,18 @@ attribute in `attributes` too is refused. See
 | `home.directory`, `home.profile_path`, `home.script_path` | `homeDirectory`, `profilePath`, `scriptPath`, from CEL. No share is created. |
 | `home.drive` | `homeDrive`: a drive letter and a colon (`H:`), the same for everyone. |
 | `user_principal_name` | `userPrincipalName` from `{ from, suffix }`: CEL for the part before the `@`, and a domain of the forest. |
-| `sam_account_name` | `sAMAccountName` from `{ from, max_length }`: CEL for the login, cut to `max_length` (at most and by default 20). |
+| `sam_account_name` | `sAMAccountName` from `{ from, max_length, on_conflict }`: CEL for the login, cut to `max_length` (at most and by default 20). |
+| `sam_account_name.on_conflict` | Since 0.5.0. `fail` (the default): a duplicate is refused by the directory and dead-letters. `unique`: the second holder of a name gets a counter from 2, in place of the name's last characters when both do not fit in `max_length` (`jsmith`, `jsmith2`). Needs a `max_length` of at least 2. See [Unique `sAMAccountName`](change-safety.md#unique-samaccountname). |
 
-`sam_account_name` has no `on_conflict: unique`: a duplicate dead-letters. Mint the login
-once as a computed attribute with `unique()` instead.
+With `on_conflict: unique` the engine keeps each name in its store, as the entity
+attribute `<publication>.sAMAccountName` (a view's own computed attribute must not have
+that name), and claims it in one scope per target, so names are unique among the
+publications to one directory that use the option. A name stays while `from` gives the
+same value, and stays taken while its entry is in the directory, after the entity has
+gone (a disabled leaver's account) too. Names already written are claimed by their
+entries first, so turning the option on renames nobody who has one. Uniqueness is among
+what syncd claims: accounts syncd does not manage are not searched. Without the option,
+mint the login once as a computed attribute with `unique()`, as before.
 
 ### SCIM and Entra ID publications
 
@@ -1185,6 +1536,8 @@ publication has `passwords`. See
 | `self_service.login` | text | | The attribute people type as their user name (`uid`, `sAMAccountName`, `mail`). |
 | `self_service.min_length` | integer | `12` | The shortest new password. At least `8`. |
 | `self_service.min_classes` | integer | `3` | How many of lower case, upper case, digits and other characters it needs. At most `4`. |
+| `allow_cleartext` | boolean | `false` | Since 0.5.0. Let passwords go to an LDAP directory in the clear: one reached with `ldap://` and without `starttls`, beyond this host. Without it, such a directory is refused as a target of password delivery and of initial passwords, and as the self-service source. Active Directory never takes passwords in the clear. |
+| `rotation_overlap_days` | integer | `7` | Since 0.5.0. After a rotation (`syncd password rotate-key`, `rotate-agent-ca`), how many days the replaced password key keeps opening what was sealed to it, and the replaced agent CA stays trusted, before the engine retires them. At least `1`, and no shorter than `ttl_secs`. |
 
 ```yaml
 passwords:
@@ -1213,8 +1566,21 @@ need the passphrase the keys were sealed with; a lost one cannot be recovered. s
 cannot open sealed keys: before rolling back, put back the plain files from the upgrade's
 backup. See [Password synchronisation](password-sync.md).
 
-There is no rotation of the password key or of the agent CA, and no command to change the
-passphrase.
+Since 0.5.0:
+
+- **The passphrase can be wrapped by a KMS.** With `SYNCD_PASSWORD_KEY_PASSPHRASE_KMS`
+  naming a key (`awskms:...`, `azurekv:...` or `vaulttransit:<mount>/<key>`), the
+  passphrase file holds the passphrase wrapped by it (`syncd secrets wrap` makes it),
+  and the passphrase itself exists only in the engine's memory. A KMS that cannot be
+  asked stops the engine; there is no fallback.
+- **Keys rotate.** `syncd password rekey` changes the passphrase, `rotate-key` keeps a
+  ring of password keys (files `password.key.<id>`) and retires the replaced one after
+  `rotation_overlap_days`, and `rotate-agent-ca` replaces the agent CA with the same
+  overlap; agents renew their certificates by themselves. Nothing rotates keys on a
+  schedule. A 0.4.1 engine ignores previous password keys and a previous agent CA:
+  rotate nothing before you are sure of the upgrade.
+
+See [Password synchronisation](password-sync.md) for the commands.
 
 ## Schedules
 
@@ -1268,18 +1634,35 @@ above, a configuration is refused when:
 
 - `version` is not `1`;
 - `api.listen` is not an address and port, or is not on loopback and `tls` is not set;
+  `api.access` has identity lists without `mode: strict`, or an entry that is not an
+  identity;
 - `engine.reconcile_interval_secs` is `0` or `engine.cache_mb` is above 32768;
+  `engine.require_signed_config` is set without `engine.config_signing_keys`;
+  `engine.wasm_functions` is out of range;
 - `engine.backup` or `engine.ha` has a value out of range (an interval, a `to` that is not
-  a directory or `s3://` URL, a lease without its `url` or `path`);
+  a directory or `s3://` URL, a lease without its `url` or `path`), a `kubernetes` lease
+  has a name or namespace Kubernetes would refuse, or `lease.name` or
+  `lease.namespace` is set on another kind of lease;
+- `passwords.rotation_overlap_days` is `0` or shorter than `ttl_secs`;
 - a connector's connection settings do not match its type, or an object's source
   (`table`, `query`, `base`, `collection`, `file`) does not fit the connector type;
 - a `csv` connector has no object, a typed column has an unknown type, an object's anchor
   is not one of `columns`, a file without a header has no `columns`, or an object is not
   `mode: scrape`;
-- a `scim` connector has objects, or its `auth` does not have exactly one way; an `entra`
-  connector has no `client_secret`, or an object that is not `user` or `group` with
-  `anchor: id` and `mode: stream`; a `base_url`, `token_url` or `endpoint` beyond
+- a `scim` connector has objects, or its `auth` does not have exactly one way, or its
+  `oauth2` not exactly one of `client_secret` and `private_key_jwt`; an `entra`
+  connector's `auth` does not have exactly one way of signing in, or a certificate
+  without its key (or the other way round), or an object that is not `user` or `group`
+  with `anchor: id` and `mode: stream`; a `base_url`, `token_url` or `endpoint` beyond
   loopback is not `https://`;
+- an LDAP connector has `ca_file` with neither an `ldaps://` URL nor `starttls`;
+- a REST connector's `auth` has more than one of `token`, `basic` and `oauth2`, or the
+  grant lacks what it needs (a `refresh_token`, a `jwt_bearer`, a `saml_bearer`); a
+  `workday` connection has no `tenant`, a `successfactors` one no `company_id`, a `ukg`
+  one no `auth.api_key`; a REST object is streamed, has a JSON path the reader does not
+  understand, an anchor that is not one of its `fields`, `mode: delta` without
+  `rest.delta` (or a `delta.query` without `{since}`), or `deletes` without
+  `mode: delta`; a `rest` block is on another type of connector;
 - a streamed database `table` or `query` object has no `cdc`, or a streamed `query`
   object has no `cdc.watch`;
 - a delta database or MongoDB object has no `watermark`; `watermark` or
@@ -1292,7 +1675,8 @@ above, a configuration is refused when:
   object read with `mode: stream` or `delta`;
 - a view has no source that projects, a source neither projects nor joins, a join rule
   mixes `entity`/`source` with `all`, precedence names a connector that is not a source,
-  or a reference names an unknown view;
+  or a reference names an unknown view; `correlation.other_views` names the view
+  itself, an unknown view, or a view twice;
 - a computed attribute uses `on_error: default` without `default`, or has `permanent`
   without `mode: assign_once`, or with a key that is not another attribute of the view;
 - a quality check has both or neither of `check` and `unique`, a `unique` check does not
@@ -1306,18 +1690,33 @@ above, a configuration is refused when:
 - a change window does not parse, `on_overdue: hold` has no `max_delay`, a threshold has
   neither `percent` nor `count`, or a canary has no `count` or `percent` or a `soak` of
   `0s`;
-- a staged `deprovision` has no stage or a stage after `delete_after`; a group sets both
-  `expires` and `expires_after`, or both `owner` and `owner_from`, or `on_expiry: delete`
-  with a `deprovision` that never deletes;
+- a staged `deprovision` has no stage or a stage after `delete_after`, or
+  `strip_unmanaged_groups` without `strip_groups_after` or on a target that is not LDAP
+  or Active Directory, or `keep_groups` without `strip_unmanaged_groups`; a group sets
+  both `expires` and `expires_after`, or both `owner` and `owner_from`, or
+  `on_expiry: delete` with a `deprovision` that never deletes, or `reviewers` that are
+  not mail addresses or without `review_every`, or a `placeholder_member` that is not a
+  fixed DN or is on a SCIM or Entra target;
+- an `unmanaged` block has an empty or unbalanced `ignore` entry, a filter for a SCIM or
+  Entra target, or `bases` and `privileged_groups` that are not fixed DNs or are on a
+  SCIM or Entra target;
 - a publication's `passwords` takes them from a connector that is not a source of its
-  view, or from its own target, or writes to Active Directory over plain `ldap://`;
+  view, or from its own target, or writes to Active Directory over plain `ldap://`, or
+  (without `passwords.allow_cleartext`) to another directory over `ldap://` without
+  `starttls` beyond this host; the self-service source is such a directory;
   `must_change` is set for a target that is not Active Directory;
 - an Active Directory convenience is set on another target, or writes an attribute the
-  publication also maps; a flag name is unknown;
+  publication also maps; a flag name is unknown; `sam_account_name.on_conflict: unique`
+  has a `max_length` under 2, or its view has a computed attribute named
+  `<publication>.sAMAccountName`;
 - a SCIM or Entra publication has no `external_id`, or has `dn`, `object_classes`,
   containers, a moving `deprovision`, `writeback` or `adopt`;
 - a package is listed twice, has a bad version or pin, or a `requires` the listed version
-  does not meet;
+  does not meet; its `wasm` module is not pinned by a SHA-256, does not match it, is
+  larger than 1 MiB, or cannot be read;
+- in the console (and, for an engine without a console, at `ApplyConfig`) since 0.5.0:
+  a connector type or a feature whose [pack](licensing.md#packs) the license does not
+  include, named with its pack;
 - every expression is also compiled: syntax and type errors, unknown functions,
   `unique()` outside computed attributes, more than one `unique()` scope in one computed
   attribute, package functions called with the wrong arguments or calling themselves, and
@@ -1335,26 +1734,38 @@ The `syncd` command reads these; a flag wins over its variable.
 | `SYNCD_INITIAL_CONFIG` | `--initial-config` | unset | When the configuration file does not exist yet, create it as a copy of this one. The container image uses it to seed a configuration on the data volume from a read-only file. |
 | `SYNCD_DATA_DIR` | `--data-dir` | `engine.data_dir` | Overrides the data directory. |
 | `SYNCD_FIPS_MODE` | `--fips` | off | Use the FIPS 140-3 crypto provider; set to `true`. Requires a FIPS build: the standard builds and images refuse it. See [FIPS 140-3 and STIG](fips-and-stig.md). |
+| `SYNCD_FIPS_ALLOW_WASM_FUNCTIONS` | `--fips-allow-wasm-functions` | off | Since 0.5.0. In FIPS mode, load rule packages' custom functions in WebAssembly anyway. Refused there by default: a module's code runs outside the validated module. |
 | `SYNCD_API` | `--api` | `api.control_socket` if it exists here, else `api.listen` | How commands reach the running engine: `host:port`, or `unix:/path`. |
 | `SYNCD_API_CA` | `--api-ca` | `ca.crt` next to `api.tls.client_ca_file`, else that file | CA that signed the API's certificate. |
 | `SYNCD_API_CERT` | `--api-cert` | `cli.crt`, else `client.crt`, next to `api.tls.client_ca_file` | Client certificate for mutual TLS. |
 | `SYNCD_API_KEY` | `--api-key` | `cli.key` / `client.key` next to it | The client certificate's private key file (not a token). |
-| `SYNCD_HA_NAME` | | unset | Sets `engine.ha` from the environment, with this pair name, when the file has none. Needs `SYNCD_HA_LEASE_URL` or `SYNCD_HA_LEASE_PATH`. |
+| `SYNCD_HA_NAME` | | unset | Sets `engine.ha` from the environment, with this pair name, when the file has none. Needs `SYNCD_HA_LEASE_KIND=kubernetes`, `SYNCD_HA_LEASE_URL` or `SYNCD_HA_LEASE_PATH`. |
+| `SYNCD_HA_LEASE_KIND` | | what the other variables name | Since 0.5.0. With `SYNCD_HA_NAME`: `kubernetes`, `postgres` or `file`. |
 | `SYNCD_HA_LEASE_URL` | | unset | With `SYNCD_HA_NAME`: a PostgreSQL lease at this URL. |
 | `SYNCD_HA_LEASE_PATH` | | unset | With `SYNCD_HA_NAME`: a file lease at this path, when there is no URL. |
+| `SYNCD_HA_LEASE_NAME`, `SYNCD_HA_LEASE_NAMESPACE` | | the pair's name, the pod's namespace | Since 0.5.0. With `SYNCD_HA_LEASE_KIND=kubernetes`: `lease.name` and `lease.namespace`. |
 | `SYNCD_HA_LEASE_TTL_SECS` | | `15` | With `SYNCD_HA_NAME`: `lease.ttl_secs`. |
-| `SYNCD_HA_SNAPSHOT_EVERY_SECS` | | `300` | With `SYNCD_HA_NAME`: `snapshot_every_secs`. |
+| `SYNCD_HA_SNAPSHOT_EVERY_SECS` | | `60` (`300` before 0.5.0) | With `SYNCD_HA_NAME`: `snapshot_every_secs`. A pair set up by `syncdctl ha init` before 0.5.0 has `300` in `engine.env`, which is kept. |
+| `SYNCD_HA_PASSWORD_REPLICATION_WAIT_MS` | | `2000` | Since 0.5.0. With `SYNCD_HA_NAME`: `password_replication_wait_ms`. |
 | `SYNCD_HA_MEMBER` | | `engine.ha.member`, else the host name | This engine's name in the pair. When set and not empty it overrides `engine.ha.member` (since 0.4.1; 0.4.0 used the file's value first). |
 | `SYNCD_HA_ADVERTISE` | | `engine.ha.advertise`, else `api.listen` | Where the other engine reaches this one. When set and not empty it overrides `engine.ha.advertise` (since 0.4.1). |
 | `SYNCD_PASSWORD_KEY_PASSPHRASE_FILE` | | unset | A file holding the passphrase the password key and the agent CA key are sealed with (line breaks at its end are not part of it). Unset: the keys are stored in the clear, with a warning. See [Passwords](#passwords-passwords). |
 | `SYNCD_PASSWORD_KEY_PASSPHRASE` | | unset | The passphrase itself, read only when `SYNCD_PASSWORD_KEY_PASSPHRASE_FILE` is not set: for tests and containers that cannot mount a file. Prefer the file. |
+| `SYNCD_PASSWORD_KEY_PASSPHRASE_KMS` | | unset | Since 0.5.0. The KMS key the passphrase file is wrapped with: `awskms:<key id, ARN or alias>[?region=...]`, `azurekv:https://<vault>.vault.azure.net/keys/<name>`, or `vaulttransit:<mount>/<key>`. The file then holds the wrapped passphrase (`syncd secrets wrap`). |
+| `VAULT_ADDR`, `VAULT_NAMESPACE`, `VAULT_CACERT` | | unset | Since 0.5.0. Where Vault is, its Enterprise namespace and the CA its certificate chains to, for `vault` references and `vaulttransit:` keys that do not say. |
+| `SYNCD_VAULT_TOKEN_FILE` | | unset | Since 0.5.0. Sign in to Vault with the token in this file (a Vault Agent's sink), read at each login. |
+| `SYNCD_VAULT_ROLE_ID`, `SYNCD_VAULT_SECRET_ID_FILE` | | unset | Since 0.5.0. Or with AppRole: the role id, and a file holding the secret id. |
+| `SYNCD_VAULT_KUBERNETES_ROLE` | | unset | Since 0.5.0. Or with Kubernetes auth: the Vault role, with the pod's service-account token. |
+| `SYNCD_VAULT_AUTH_MOUNT` | | `approle`, `kubernetes` | Since 0.5.0. Another mount for the auth method. |
+| `AZURE_FEDERATED_TOKEN_FILE`, `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` | | unset | Since 0.5.0. A federated token (AKS workload identity) for `azure_keyvault` references and `azurekv:` keys, else the VM's managed identity is used. The first two also serve an Entra connector with `workload_identity: true`. |
 | `SYNCD_CONSOLE` | `--console` | unset | `syncd config promote`: the console's address. |
 | `SYNCD_CONSOLE_TOKEN_FILE` | `--token-file` | unset | `syncd config promote`: a file holding an API token with `configs:publish`. |
 | `SYNCD_AGENT_TOKEN` | `--token` | unset | `syncd password agent enroll`: the one-time token `syncd password agent add` printed. |
-| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` | | unset | S3 credentials for backups. |
-| `AWS_WEB_IDENTITY_TOKEN_FILE`, `AWS_ROLE_ARN`, `AWS_ROLE_SESSION_NAME` | | unset | S3 credentials from a Kubernetes service account token exchanged with STS (IRSA, EKS Pod Identity). `AWS_ENDPOINT_URL_STS` names another STS endpoint. |
-| `AWS_SHARED_CREDENTIALS_FILE`, `AWS_PROFILE` | | `~/.aws/credentials`, `default` | S3 credentials from a credentials file, when none of the above is set. |
-| `AWS_REGION`, `AWS_DEFAULT_REGION` | | `us-east-1` | The bucket's region, when `engine.backup.region` is not set. |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` | | unset | AWS credentials: for S3 backups and, since 0.5.0, `aws_secret` references and `awskms:` keys. |
+| `AWS_WEB_IDENTITY_TOKEN_FILE`, `AWS_ROLE_ARN`, `AWS_ROLE_SESSION_NAME` | | unset | AWS credentials from a Kubernetes service account token exchanged with STS (IRSA, EKS Pod Identity). `AWS_ENDPOINT_URL_STS` names another STS endpoint. |
+| `AWS_SHARED_CREDENTIALS_FILE`, `AWS_PROFILE` | | `~/.aws/credentials`, `default` | AWS credentials from a credentials file, when none of the above is set. Since 0.5.0, last of all, the EC2 instance's role (the instance metadata service). |
+| `AWS_EC2_METADATA_DISABLED` | | unset | Since 0.5.0. `true` skips the instance's role: off EC2 with no other credentials, the error then comes at once instead of after a short wait. |
+| `AWS_REGION`, `AWS_DEFAULT_REGION` | | `us-east-1` | The bucket's region, when `engine.backup.region` is not set; the region of an `aws_secret` without its own. |
 | `AWS_ENDPOINT_URL_S3`, `AWS_ENDPOINT_URL` | | AWS | An S3-compatible endpoint, when `engine.backup.endpoint` is not set. |
 | `RUST_LOG` | | `info` | Log level filter (`debug`, `syncd=debug`). |
 
@@ -1375,18 +1786,21 @@ The console reads its settings from environment variables, or from the matching 
 | `CONSOLE_TLS_KEY` | `--tls-key` | unset | The certificate's private key, PEM. Needs `CONSOLE_TLS_CERT`. |
 | `CONSOLE_DATA_DIR` | `--data-dir` | `./console-data`; the unit sets `/var/lib/syncd/console` | Local files: the master key, the initial admin password, and with Git sync the clone (`git/`). |
 | `CONSOLE_UI_DIR` | `--ui-dir` | unset; the unit sets `/opt/syncd/current/share/console-ui` | The built web UI, served at `/`. Without it only the API is served. |
-| `CONSOLE_MASTER_KEY` | `--master-key` | read from, or created in, `<data dir>/master.key` | Master key for stored secrets (base64, 32 bytes). Back it up: stored secrets cannot be decrypted without it. The console refuses to start when the key does not open the secrets the database holds, or when `master.key` is missing while the database holds secrets. Since 0.4.1 the check covers every kind of sealed secret: engine client keys, webhook URLs and secret environment values (0.4.0 checked engine keys only). |
+| `CONSOLE_MASTER_KEY` | `--master-key` | read from, or created in, `<data dir>/master.key` | Master key for stored secrets (base64, 32 bytes). Back it up: stored secrets cannot be decrypted without it. The console refuses to start when the key does not open the secrets the database holds, or when `master.key` is missing while the database holds secrets. Since 0.5.0 the check tries one sealed secret of each kind (an engine's client key, a webhook's URL and signing secret, a secret environment value, the configuration signing key), not only the first one found, so a database with secrets sealed under two keys may now refuse to start, naming what the key does not open. |
+| `CONSOLE_MASTER_KEY_KMS` | `--master-key-kms` | unset | Since 0.5.0. The KMS key that wraps the master key (`awskms:...`, `azurekv:...` or `vaulttransit:<mount>/<key>`): `master.key` then holds the wrapped key (`syncd-console admin wrap-master-key` wraps a plain one in place), the console asks the KMS to unwrap it at every start, and does not start when the KMS cannot be asked. |
+| `CONSOLE_LICENSE_FILE` | `--license-file` | unset | Since 0.5.0. The license as a file instead of an upload on the License page (an air-gapped host, a Kubernetes Secret); read every few minutes, so a new file needs no restart. `sudo syncdctl license install FILE` sets it. See [Licensing](licensing.md). |
 | `CONSOLE_NEW_MASTER_KEY` | `--new-master-key` | off | Set to `true` to start anyway when the master key does not open the stored secrets, creating a new key if there is none. Those secrets are lost: every engine registered with mutual TLS must be registered again (`syncd-console admin register-engine --update`), webhooks need their URL and secret again, and secret environment values must be entered again. Only for starting over on purpose; restore `master.key` instead when you can. |
 | `CONSOLE_ADMIN_PASSWORD` | `--admin-password` | generated | Initial admin password for a production install. `admin` and empty passwords are refused. |
 | `CONSOLE_ADMIN_PASSWORD_FILE` | `--admin-password-file` | unset | A file holding the initial admin password, instead. |
 | `CONSOLE_SESSION_IDLE_MINUTES` | `--session-idle-minutes` | `30` | Minutes a session stays valid without activity. |
 | `CONSOLE_SESSION_MAX_HOURS` | `--session-max-hours` | `12` | Hours a session stays valid at most. |
-| `CONSOLE_REVEAL_ROLES` | `--reveal-roles` | `admin` | Roles that may reveal sensitive attributes (each reveal is audited), comma-separated, or `none`. |
+| `CONSOLE_REVEAL_ROLES` | `--reveal-roles` | `admin` | Roles that may reveal sensitive attributes (each reveal is audited), comma-separated, or `none`. Since 0.5.0 an account reveals on an engine when one of its role assignments that reach the engine has such a role, and an entry can carry a scope: `admin,auditor@prod` (auditors on production's engines only), `operator@engine:lab`. |
 | `CONSOLE_TRUSTED_PROXIES` | `--trusted-proxies` | empty | Reverse proxies whose `X-Forwarded-For` names the client: addresses or CIDR ranges, comma-separated (`127.0.0.1` for nginx on the same host). The client address goes to the audit log and the per-address sign-in limit. Only list proxies you run. |
 | `CONSOLE_PUBLIC_URL` | `--public-url` | unset | The console's address as users reach it, through the proxy (`https://syncd.example.com`). Needed for single sign-on; with an `https://` value, the startup warning about plain-HTTP remote access is not shown. |
-| `CONSOLE_SELF_SERVICE_ENGINE` | `--self-service-engine` | unset | The registered engine (by name) that changes people's own passwords, for the public self-service page (`/password`). The page is off unless set; the engine needs `passwords.self_service`. When it names one engine of an HA pair, a change goes to the member that holds the lease (since 0.4.1). After `syncd-console admin rename-engine`, change it by hand. See [Password synchronisation](password-sync.md). |
+| `CONSOLE_SELF_SERVICE_ENGINE` | `--self-service-engine` | unset | The registered engine (by name) that changes people's own passwords, for the public self-service page (`/password`). The page is off unless set; the engine needs `passwords.self_service`. When it names one engine of an HA pair, a change goes to the member that holds the lease (since 0.4.1). After `syncd-console admin rename-engine`, change it by hand; since 0.5.0 the console warns at start, at `rename-engine` and on the Engines page when it names no registered engine (as for `CONSOLE_CONFIG_GIT_ENGINES`). See [Password synchronisation](password-sync.md). |
 | `SYNC_DEV_MODE` | `--dev` | off | Development mode: `admin`/`admin` is allowed, the password change can be skipped, cookies work over plain HTTP, and the UI shows a warning banner. Never in production. Note the name: `SYNC_`, not `SYNCD_`. |
 | `SYNCD_FIPS_MODE` | `--fips` | off | Use the FIPS 140-3 crypto provider; passwords are hashed with PBKDF2 instead of Argon2id. |
+| `SYNCD_FIPS_ALLOW_WASM_FUNCTIONS` | `--fips-allow-wasm-functions` | off | Since 0.5.0. In FIPS mode, accept custom functions in WebAssembly anyway (uploads, previews, checks), as the engine's variable of the same name. |
 | `RUST_LOG` | | `info` | Log level filter. |
 
 Session cookies carry `Secure` outside development mode, so browsers send them over HTTPS,
@@ -1407,14 +1821,16 @@ With a certificate:
 
 The settings in the sections below are off, or at safe defaults, until set. Each has a
 flag named after it: drop `CONSOLE_` or `ENS_`, lower-case it and use `-` for `_`
-(`ENS_AUDIT_FILE` is `--audit-file`, `CONSOLE_SMTP_HOST` is `--smtp-host`). Settings
-marked *(hidden)* are left out of `--help`. A setting that cannot work (a file that does
+(`ENS_AUDIT_FILE` is `--audit-file`, `CONSOLE_SMTP_HOST` is `--smtp-host`), except
+`ENS_X509_ENABLED` (`--x509`) and `ENS_CONSENT_BANNER_ENABLED` (`--consent-banner`).
+Settings marked *(hidden)* are left out of `--help`. A setting that cannot work (a file that does
 not exist, a hook URL that is not `https://`) refuses the start with a message naming it.
 
 ### Single sign-on
 
-Single sign-on is OpenID Connect only; it is off unless `CONSOLE_OIDC_ISSUER` is set. See
-[Single sign-on](single-sign-on.md) for setting it up.
+Single sign-on is OpenID Connect, off unless `CONSOLE_OIDC_ISSUER` is set, and since 0.5.0
+also [SAML 2.0](#saml-sign-in) and [client certificates](#certificate-sign-in-cacpiv),
+beside it or instead of it. See [Single sign-on](single-sign-on.md) for setting them up.
 
 | Variable | Flag | Default | What |
 |---|---|---|---|
@@ -1424,14 +1840,98 @@ Single sign-on is OpenID Connect only; it is off unless `CONSOLE_OIDC_ISSUER` is
 | `CONSOLE_OIDC_CLIENT_SECRET_FILE` | `--oidc-client-secret-file` | unset | A file holding the client secret, instead. |
 | `CONSOLE_OIDC_SCOPES` | `--oidc-scopes` | `openid profile email` | Scopes requested. Add what your provider needs for the role claim. |
 | `CONSOLE_OIDC_ROLE_CLAIM` | `--oidc-role-claim` | `groups` | The ID token claim holding the user's groups or roles (a string or a list). |
-| `CONSOLE_OIDC_ROLE_MAP` | `--oidc-role-map` | empty | Claim values to console roles, first match wins: `syncd-admins=admin,syncd-designers=designer`. Separate entries with `;` when values contain commas (group DNs). |
-| `CONSOLE_OIDC_DEFAULT_ROLE` | `--oidc-default-role` | unset | Role for users no mapping matches; unset, they are refused. |
+| `CONSOLE_OIDC_ROLE_MAP` | `--oidc-role-map` | empty | Claim values to console roles: `syncd-admins=admin,syncd-designers=designer`. **Since 0.5.0 every entry that matches adds its role** (in 0.4.1 the first match won), and a role can carry a scope: an environment (`syncd-prod-ops=operator@prod`) or engines (`hr-team=designer@engine:hr-1,hr-2`); without one it is on everything. Separate entries with `;` when values contain commas (group DNs). An entry that cannot be read stops the console at start. |
+| `CONSOLE_OIDC_DEFAULT_ROLE` | `--oidc-default-role` | unset | Role for users no mapping matches, with a scope if wanted (`viewer@test`); unset, they are refused. |
 | `CONSOLE_OIDC_USERNAME_CLAIM` | `--oidc-username-claim` | `preferred_username` | The claim used as the console username; `email`, then `sub`, when it is missing. |
 | `CONSOLE_OIDC_LABEL` | `--oidc-label` | `single sign-on` | The sign-in button says "Sign in with <label>". |
 | `CONSOLE_OIDC_CA_FILE` | `--oidc-ca-file` | unset | PEM CA certificates for a provider without a public certificate. |
 
 The redirect URI to register with the provider is
 `<CONSOLE_PUBLIC_URL>/api/v1/auth/oidc/callback`.
+
+**Review role maps on upgrade.** Since every matching entry now adds its role, someone in
+two mapped groups can hold more after their next sign-in than under 0.4.1. A map that
+relied on its order to hold someone to the first entry's role must be rewritten so that
+only that entry matches them. The same goes for the SAML and certificate role maps below.
+
+### SAML sign-in
+
+Since 0.5.0. SAML 2.0 as a service provider (Web Browser SSO), off unless
+`CONSOLE_SAML_IDP_METADATA_FILE` or `_URL` is set. Needs `CONSOLE_PUBLIC_URL` (HTTPS, or
+loopback). The console's metadata is at `<CONSOLE_PUBLIC_URL>/api/v1/auth/saml/metadata`.
+The provider must sign the assertion or the response, must not encrypt the assertion and
+must not require signed requests; IdP-initiated sign-in and single logout are not
+supported. Tested against Keycloak only.
+
+| Variable | Default | What |
+|---|---|---|
+| `CONSOLE_SAML_IDP_METADATA_FILE` | unset | The provider's metadata, in a file. Turns SAML sign-in on. Read at start. |
+| `CONSOLE_SAML_IDP_METADATA_URL` | unset | Or its URL: fetched at the first sign-in, every hour, and when a response verifies with none of the known certificates. HTTPS unless on loopback. |
+| `CONSOLE_SAML_IDP_ENTITY_ID` | unset | The provider's entityID, when the metadata describes several. |
+| `CONSOLE_SAML_ENTITY_ID` | the metadata address | The console's own entityID. |
+| `CONSOLE_SAML_ROLE_ATTRIBUTE` | `groups` | The attribute, by its `Name`, with the user's groups. |
+| `CONSOLE_SAML_ROLE_MAP` | empty | Attribute values to roles, as `CONSOLE_OIDC_ROLE_MAP`: every entry that matches adds its role, with an optional scope. |
+| `CONSOLE_SAML_DEFAULT_ROLE` | unset | The role when nothing matches, with a scope if wanted; unset, such users are refused. |
+| `CONSOLE_SAML_USERNAME_ATTRIBUTE` | the `NameID` | The attribute used as the console username. |
+| `CONSOLE_SAML_DISPLAY_NAME_ATTRIBUTE` | `displayName` | The attribute with the person's name. |
+| `CONSOLE_SAML_LABEL` | `SAML single sign-on` | The sign-in button says "Sign in with <label>". |
+| `CONSOLE_SAML_CA_FILE` | unset | PEM CA certificates for the metadata URL. |
+| `CONSOLE_SAML_CLOCK_SKEW_SECONDS` | `60` | How far the provider's clock may be off; at most `600`. |
+
+### Certificate sign-in (CAC/PIV)
+
+Since 0.5.0. Sign-in with an X.509 client certificate, off unless `ENS_X509_ENABLED` is
+`true`. The console checks the path to an allowed issuer, then revocation (OCSP, then the
+CRL), and refuses a certificate whose status cannot be learned unless told otherwise.
+Tested with test PKIs only: no real CAC or PIV card, no DoD PKI, no nginx in front.
+
+| Variable | Default | What |
+|---|---|---|
+| `ENS_X509_ENABLED` | `false` | Offer certificate sign-in. |
+| `ENS_X509_MODE` | `direct` | `direct`: browsers present the certificate to the console's own HTTPS (needs `CONSOLE_TLS_CERT`). `proxy`: a TLS proxy passes it in a header, believed only from `ENS_X509_TRUSTED_PROXIES`. |
+| `ENS_X509_CA_FILE` | required | The allowed issuers, PEM. |
+| `ENS_X509_TRUSTED_PROXIES` | empty | Proxy mode, required: the proxies whose header is believed (addresses or CIDR ranges). |
+| `ENS_X509_CERT_HEADER` | `X-SSL-Client-Cert` | Proxy mode: the header holding the certificate. |
+| `ENS_X509_VERIFY_HEADER` | unset | Proxy mode: a header that must say `SUCCESS`. |
+| `ENS_X509_USERNAME_RULE` | `upn` | The console username: `upn`, `edipi`, `cn` or `email`. |
+| `ENS_X509_ROLE_MAP` | empty | Certificates to roles: a value is the username, `OU=...`, `O=...` or `issuer=...` (`OU=USAF=operator,1234567890=admin`). Every entry that matches adds its role, with an optional scope. |
+| `ENS_X509_DEFAULT_ROLE` | unset | The role when nothing matches; unset, such certificates are refused. |
+| `ENS_X509_REVOCATION` | `ocsp,crl` | What is asked, in order: `ocsp`, `crl`, both, or `none`. |
+| `ENS_X509_REVOCATION_FAIL_OPEN` | `false` | Accept a certificate whose status cannot be learned. A revoked one is refused either way. |
+| `ENS_X509_OCSP_URL`, `ENS_X509_CRL_URL` | unset | A responder, or a CRL, to use instead of those the certificates name. |
+| `ENS_X509_OCSP_NONCE` | `send` | `send` (and accept an answer without one), `require`, or `off`. |
+| `ENS_X509_CRL_CACHE` | `1h` | The longest a fetched CRL is used, never past its next update. |
+| `ENS_X509_CRL_MAX_BYTES` | `67108864` | The largest CRL read. |
+| `ENS_X509_REVOCATION_TIMEOUT` | `10s` | How long a responder or CRL server may take. |
+| `ENS_X509_LABEL` | `a certificate (CAC/PIV)` | The button says "Sign in with <label>". |
+
+### Sign-in policy
+
+Since 0.5.0, under the suite's `ENS_*` names. Unset, every setting keeps what the console
+did in 0.4.1, except HSTS: a console that serves HTTPS itself now sends
+`Strict-Transport-Security` by default. **Users** → Local sign-in shows what is in
+effect.
+
+| Variable | Default | What |
+|---|---|---|
+| `ENS_CONSENT_BANNER_ENABLED` | `false` | A notice that must be acknowledged before any sign-in, enforced by the server and audited with the session. Scripts that sign in with a password must first `POST /api/v1/auth/consent`. |
+| `ENS_CONSENT_BANNER_TEXT`, `ENS_CONSENT_BANNER_TEXT_FILE` | the DoD notice | The notice's text, or a file holding it. |
+| `ENS_SESSION_MAX_PER_USER` | `0` (no limit) | Sessions one account may have at a time; one more ends its oldest. |
+| `ENS_SESSION_ADMIN_IDLE_TIMEOUT` | unset | Minutes an administrator's session stays valid without activity, when shorter than `CONSOLE_SESSION_IDLE_MINUTES` (`10`, `10m`, `600s`). |
+| `ENS_LOCKOUT_ATTEMPTS` | `5` | Failed sign-ins after which a local account locks; `0` never locks. |
+| `ENS_LOCKOUT_WINDOW` | `0` | The time those failures must fall within; `0`: they count until a sign-in succeeds. |
+| `ENS_LOCKOUT_DURATION` | `15` | How long the account stays locked (`15`, `15m`, `1h`); `0`: until an administrator unlocks it. |
+| `ENS_PASSWORD_MIN_LENGTH` | `12` | The fewest characters of a local password. |
+| `ENS_PASSWORD_MIN_UPPERCASE`, `_MIN_LOWERCASE`, `_MIN_DIGITS`, `_MIN_SPECIAL` | `0` | The fewest characters of each kind. |
+| `ENS_PASSWORD_HISTORY` | `0` | How many recent passwords, the current one included, a new one must differ from. |
+| `ENS_PASSWORD_MAX_AGE_DAYS` | `0` (never) | Days after which a password must be changed at the next sign-in. |
+| `ENS_PASSWORD_REJECT_USERNAME` | `false` | Refuse a password that contains the username. |
+| `ENS_HSTS_MAX_AGE` | `31536000` (a year) | `Strict-Transport-Security` on the console's own HTTPS, in seconds; `0` sends none. Behind a proxy, the proxy sends it. |
+| `ENS_HSTS_INCLUDE_SUBDOMAINS` | `false` | Add `includeSubDomains`. |
+
+The source repository's `console/README.md` ("Values for a STIG review") lists the values
+a review against the Application Security and Development STIG usually asks for; see also
+[FIPS 140-3 and STIG](fips-and-stig.md).
 
 ### Audit trail
 
@@ -1481,6 +1981,7 @@ Signed HTTPS posts in JSON, Slack, Teams or PagerDuty format, added on the
 | `CONSOLE_WEBHOOKS_ALLOWED_HOSTS` | empty (any host the address rules allow) | Hosts a webhook may go to: names, `*.suffix` or CIDR ranges, comma-separated. A host listed here may be on a private network. |
 | `CONSOLE_WEBHOOKS_BLOCK_PRIVATE_NETWORKS` | unset | Private addresses (10/8, 172.16/12, 192.168/16, 100.64/10, fc00::/7). Unset: refused for webhooks saved from now on, while a webhook saved earlier keeps its address. `true`: refused for every webhook. `false`: allowed. |
 | `CONSOLE_WEBHOOKS_CA_FILE` | unset | PEM CA certificates receivers may use besides the public roots. |
+| `CONSOLE_WEBHOOKS_QUALITY_ERRORS_RISE` | `10` | Since 0.5.0. `quality.errors` is sent when a view's entities failing checks of severity `error` go from none to some, and again each time they rise by this many since last told; `0`: only from none to some. |
 | `CONSOLE_WEBHOOKS_ALLOW_LOOPBACK` | `false` | *(hidden)* Let webhooks go to loopback addresses. Test systems only. |
 | `CONSOLE_WEBHOOKS_POLL_SECONDS` | `30` | *(hidden)* How often the sender looks for due deliveries. |
 | `CONSOLE_WEBHOOKS_WATCH_SECONDS` | `10` | *(hidden)* How often the engines' status is read for state-change events. |
@@ -1558,8 +2059,10 @@ set. See [E-mail](reports-and-data-quality.md#e-mail).
 | `CONSOLE_SMTP_HOST` | unset | The mail server. Turns e-mail on. |
 | `CONSOLE_SMTP_PORT` | `587` | |
 | `CONSOLE_SMTP_STARTTLS` | `true` | Upgrade the connection with STARTTLS; the server's certificate is checked. `false` sends in plain text: a relay on the host or a private network only. |
+| `CONSOLE_SMTP_IMPLICIT_TLS` | `false` | Since 0.5.0. Speak TLS from the first byte (SMTPS, usually port `465`) instead of STARTTLS; the certificate is checked the same way, and `CONSOLE_SMTP_STARTTLS` is not used. |
 | `CONSOLE_SMTP_CA_FILE` | unset | PEM CA certificates the server's certificate may chain to, besides the public roots. |
-| `CONSOLE_SMTP_USERNAME` | unset | The account to authenticate as (AUTH PLAIN). Needs `CONSOLE_SMTP_PASSWORD_FILE` and STARTTLS. |
+| `CONSOLE_SMTP_USERNAME` | unset | The account to authenticate as, over TLS only. Needs `CONSOLE_SMTP_PASSWORD_FILE`. |
+| `CONSOLE_SMTP_AUTH` | `auto` | Since 0.5.0. How: `auto` (AUTH PLAIN when the server offers it or lists nothing, else AUTH LOGIN), `plain` or `login`. |
 | `CONSOLE_SMTP_PASSWORD_FILE` | unset | A file holding its password, read at each connection. |
 | `CONSOLE_SMTP_FROM` | `syncd@<host name>` | The sender address (`syncd@example.gov`, or `syncd <syncd@example.gov>`). |
 | `CONSOLE_SMTP_TIMEOUT_SECONDS` | `30` | *(hidden)* How long one SMTP exchange may take. |
@@ -1569,8 +2072,9 @@ set. See [E-mail](reports-and-data-quality.md#e-mail).
 | `CONSOLE_MAIL_GIVE_UP_AFTER_SECONDS` | `86400` | *(hidden)* A message this old is given up, and its report raises `report.failed`. |
 | `CONSOLE_MAIL_KEEP_DAYS` | `14` | *(hidden)* Days sent and failed messages are kept. |
 
-The SMTP client speaks STARTTLS and AUTH PLAIN only: there is no SMTPS (implicit TLS on
-port 465) and no AUTH LOGIN.
+Since 0.5.0 the SMTP client speaks SMTPS as well as STARTTLS, and AUTH LOGIN as well as
+AUTH PLAIN. The console also mails group reviewers (a computed group's `reviewers`)
+through the same relay, to the domains `CONSOLE_REPORTS_RECIPIENT_DOMAINS` allows.
 
 ### The packaged console.env
 
@@ -1607,7 +2111,103 @@ CONSOLE_LISTEN=@LISTEN@
 #CONSOLE_OIDC_ISSUER=https://login.example.com/realms/corp
 #CONSOLE_OIDC_CLIENT_ID=syncd-console
 #CONSOLE_OIDC_CLIENT_SECRET_FILE=/etc/syncd/oidc-client-secret
-#CONSOLE_OIDC_ROLE_MAP=syncd-admins=admin,syncd-operators=operator
+# Groups to roles; every entry that matches adds its role. A role can be limited to an
+# environment (operator@prod) or to engines (designer@engine:hr-1,hr-2); see
+# console/README.md, "Roles and scopes".
+#CONSOLE_OIDC_ROLE_MAP=syncd-admins=admin,syncd-operators=operator,syncd-prod-ops=operator@prod
+
+# Single sign-on (SAML 2.0), beside OpenID Connect or instead of it; see
+# console/README.md, "SAML sign-in". Needs CONSOLE_PUBLIC_URL. Register the console at
+# the provider with <CONSOLE_PUBLIC_URL>/api/v1/auth/saml/metadata.
+#CONSOLE_SAML_IDP_METADATA_FILE=/etc/syncd/idp-metadata.xml
+# Or the metadata's address (fetched hourly) in place of the file:
+#CONSOLE_SAML_IDP_METADATA_URL=https://idp.example.com/metadata
+#CONSOLE_SAML_ROLE_ATTRIBUTE=groups
+#CONSOLE_SAML_ROLE_MAP=syncd-admins=admin,syncd-operators=operator
+#CONSOLE_SAML_USERNAME_ATTRIBUTE=uid
+#CONSOLE_SAML_LABEL=the agency sign-on
+# The provider's entityID, when the metadata describes several:
+#CONSOLE_SAML_IDP_ENTITY_ID=https://idp.example.com/idp
+# The console's own entityID (default: <CONSOLE_PUBLIC_URL>/api/v1/auth/saml/metadata):
+#CONSOLE_SAML_ENTITY_ID=https://syncd.example.com/api/v1/auth/saml/metadata
+#CONSOLE_SAML_DISPLAY_NAME_ATTRIBUTE=displayName
+# The role for users no entry matches (a scope may follow: viewer@test); unset, they
+# are refused:
+#CONSOLE_SAML_DEFAULT_ROLE=viewer
+# CA certificates for the metadata URL, when it does not use a public CA:
+#CONSOLE_SAML_CA_FILE=/etc/syncd/idp-ca.pem
+# Seconds the provider's clock may differ from the console's (at most 600):
+#CONSOLE_SAML_CLOCK_SKEW_SECONDS=60
+
+# Sign-in with a client certificate (CAC/PIV); see console/README.md, "Certificate
+# sign-in". The console validates the certificate against the allowed issuers and checks
+# revocation (OCSP, then the CRL); a certificate whose status cannot be learned is refused.
+#ENS_X509_ENABLED=true
+# direct: browsers present the certificate to the console's own HTTPS (CONSOLE_TLS_CERT).
+# proxy: a TLS proxy passes it in a header, believed only from ENS_X509_TRUSTED_PROXIES.
+#ENS_X509_MODE=direct
+#ENS_X509_TRUSTED_PROXIES=127.0.0.1
+# The CAs whose certificates may sign in (PEM):
+#ENS_X509_CA_FILE=/etc/syncd/x509-issuers.pem
+# The console username: upn, edipi, cn or email.
+#ENS_X509_USERNAME_RULE=edipi
+# Every entry that matches adds its role (which can carry a scope, as above); a value is
+# the username, OU=..., O=... or issuer=...:
+#ENS_X509_ROLE_MAP=OU=USAF=operator,1234567890=admin
+# ocsp, crl, both in order, or none:
+#ENS_X509_REVOCATION=ocsp,crl
+# Accept a certificate whose status cannot be learned (a revoked one is refused either
+# way). Unset: refused.
+#ENS_X509_REVOCATION_FAIL_OPEN=true
+#ENS_X509_REVOCATION_TIMEOUT=10s
+# A responder or a CRL to use instead of those the certificates name:
+#ENS_X509_OCSP_URL=http://ocsp.example.mil
+#ENS_X509_CRL_URL=http://crl.example.mil/issuing-ca.crl
+# OCSP nonces: send (and accept an answer without one), require, or off:
+#ENS_X509_OCSP_NONCE=send
+# The longest a fetched CRL is used (never beyond its next update), and its largest size:
+#ENS_X509_CRL_CACHE=1h
+#ENS_X509_CRL_MAX_BYTES=67108864
+# Proxy mode: the header with the certificate, and one that must say SUCCESS when the
+# proxy verifies it too (nginx: $ssl_client_escaped_cert, $ssl_client_verify):
+#ENS_X509_CERT_HEADER=X-SSL-Client-Cert
+#ENS_X509_VERIFY_HEADER=X-SSL-Client-Verify
+# The role for certificates no entry matches (a scope may follow); unset, refused:
+#ENS_X509_DEFAULT_ROLE=viewer
+#ENS_X509_LABEL=a certificate (CAC/PIV)
+
+# The sign-in baseline (console/README.md, "Sign-in policy"; the values a STIG review
+# expects are listed there). Unset, the console keeps its defaults: no banner, sessions
+# of 30 minutes idle and 12 hours at most, a 15-minute lock after 5 failed sign-ins,
+# passwords of 12 characters.
+# A notice that must be acknowledged before any sign-in (the DoD text unless given):
+#ENS_CONSENT_BANNER_ENABLED=true
+#ENS_CONSENT_BANNER_TEXT_FILE=/etc/syncd/consent-banner.txt
+# Or the text itself, for a notice of one paragraph:
+#ENS_CONSENT_BANNER_TEXT=You are accessing a system for authorized use only.
+#CONSOLE_SESSION_IDLE_MINUTES=15
+# Minutes, for accounts with the admin role, when shorter:
+#ENS_SESSION_ADMIN_IDLE_TIMEOUT=10
+# Sessions per account; one more ends the oldest. 0 for no limit:
+#ENS_SESSION_MAX_PER_USER=3
+# Lock after this many failures within the window (minutes; 0: until a sign-in
+# succeeds), for the duration (minutes; 0: until an administrator unlocks):
+#ENS_LOCKOUT_ATTEMPTS=3
+#ENS_LOCKOUT_WINDOW=15
+#ENS_LOCKOUT_DURATION=0
+#ENS_PASSWORD_MIN_LENGTH=15
+#ENS_PASSWORD_MIN_UPPERCASE=1
+#ENS_PASSWORD_MIN_LOWERCASE=1
+#ENS_PASSWORD_MIN_DIGITS=1
+#ENS_PASSWORD_MIN_SPECIAL=1
+# How many recent passwords a new one must differ from, and days until one expires:
+#ENS_PASSWORD_HISTORY=5
+#ENS_PASSWORD_MAX_AGE_DAYS=60
+#ENS_PASSWORD_REJECT_USERNAME=true
+# Strict-Transport-Security on the console's own HTTPS (seconds; 0 sends none). Behind
+# a proxy the proxy sends it (see the nginx file):
+#ENS_HSTS_MAX_AGE=31536000
+#ENS_HSTS_INCLUDE_SUBDOMAINS=true
 
 # The audit trail (ens-audit/1) goes to the database, and to these outputs besides: one
 # JSON line per event on stdout (the journal) unless ENS_AUDIT_STDOUT=false, an audit
@@ -1641,6 +2241,9 @@ CONSOLE_LISTEN=@LISTEN@
 #CONSOLE_WEBHOOKS_BLOCK_PRIVATE_NETWORKS=true
 # A private CA some receivers use:
 #CONSOLE_WEBHOOKS_CA_FILE=/etc/syncd/receivers-ca.pem
+# quality.errors is sent when a view's entities failing error-severity checks go from
+# none to some, and again each time they rise by this many (0: only from none):
+#CONSOLE_WEBHOOKS_QUALITY_ERRORS_RISE=10
 
 # Scheduled reconciliation reports (Reports in the console), e-mailed or written to a
 # share. Nothing is e-mailed until the recipient domains and a mail server are set. See
@@ -1650,9 +2253,14 @@ CONSOLE_LISTEN=@LISTEN@
 #CONSOLE_SMTP_HOST=relay.example.gov
 #CONSOLE_SMTP_PORT=587
 #CONSOLE_SMTP_STARTTLS=true
+# For a relay that speaks TLS from the first byte (SMTPS) instead of STARTTLS:
+#CONSOLE_SMTP_IMPLICIT_TLS=true
+#CONSOLE_SMTP_PORT=465
 #CONSOLE_SMTP_FROM=syncd@example.gov
 #CONSOLE_SMTP_USERNAME=syncd
 #CONSOLE_SMTP_PASSWORD_FILE=/etc/syncd/smtp-password
+# auto (AUTH PLAIN when offered or nothing is listed, else AUTH LOGIN), plain or login:
+#CONSOLE_SMTP_AUTH=auto
 
 # The pre-publish hook: a change ticket a publish must carry, and a change-management
 # system asked before each publish. See console/README.md, "Pre-publish hook".
@@ -1681,8 +2289,20 @@ CONSOLE_LISTEN=@LISTEN@
 # The engines the repository is for; all when unset:
 #CONSOLE_CONFIG_GIT_ENGINES=dev
 
+# The license (docs/LICENSING.md): a file instead of an upload on the License page, for
+# an air-gapped host (`syncdctl license install FILE` sets this). Without a license the
+# console runs a 30-day evaluation, then a grace period, then blocks publishing.
+#CONSOLE_LICENSE_FILE=/etc/syncd/license.lic
+
+# The master key wrapped by a KMS key (awskms:..., azurekv:... or vaulttransit:...);
+# `syncd-console admin wrap-master-key` wraps the key file in place. The console does
+# not start when the KMS cannot be asked. See INSTALL.md, "Secrets from a vault or a KMS".
+#CONSOLE_MASTER_KEY_KMS=awskms:arn:aws:kms:us-gov-west-1:111122223333:key/example
+
 # Only with a FIPS build of syncd:
 #SYNCD_FIPS_MODE=true
+# In FIPS mode, load custom functions in WebAssembly anyway (refused by default):
+#SYNCD_FIPS_ALLOW_WASM_FUNCTIONS=true
 ```
 
 `syncdctl install` fills in the database URL and the listen address, and
@@ -1699,9 +2319,10 @@ page. This section is a reference for what differs; [Install](install.md) has th
 procedure. They are published when a release is tagged; none has been tagged yet, so build
 them from the source repository until then.
 
-The images are built for `linux/amd64` and `linux/arm64`. The `<version>-fips` images
-(amd64 only) are the FIPS build, which takes `SYNCD_FIPS_MODE=true`; the standard images
-refuse it.
+The images are built for `linux/amd64` and `linux/arm64` (unless a release was built with
+the arm64 jobs switched off). The `<version>-fips` images, for the same platforms since
+0.5.0, are the FIPS build, which takes `SYNCD_FIPS_MODE=true`; the standard images refuse
+it.
 
 ### The engine image
 
@@ -1730,8 +2351,26 @@ api:
     cert_file: /etc/syncd/pki/engine.crt
     key_file: /etc/syncd/pki/engine.key
     client_ca_file: /etc/syncd/pki/ca.crt
+  # Who may do what (docs/KUBERNETES.md, "Control API access"). Strict: the console's
+  # certificate ("syncd console") applies configurations; the engine's own ("syncd
+  # engine"), with which the passive engine of an HA pair pulls snapshots from the
+  # active one, operates and cannot apply a configuration. An engine whose data volume
+  # was first written by an image before 0.5.0 keeps its own file, without this section:
+  # every certificate of the CA may do everything there until it is added.
+  access:
+    mode: strict
+    configure: [syncd console]
+    operate: [syncd engine]
+    # Who may set passwords through the API (`syncd password set`, adding and binding
+    # capture agents, rotating the password keys), on top of `operate`. Operators run
+    # those commands with `kubectl exec`, through the control socket, which needs no
+    # entry here. The engines' own certificate is listed for an HA pair: the passive
+    # engine hands what capture agents send to its ingest listener on to the active
+    # one. Only the engine pods hold that certificate, beside the password key itself.
+    passwords: [syncd engine]
   # `kubectl exec ... -- syncd status` and the other commands use the socket, without
-  # certificates.
+  # certificates. In strict mode the socket reads and operates, and applies no
+  # configuration.
   control_socket: /run/syncd/control.sock
   # Prometheus metrics, and the health checks.
   metrics_listen: 0.0.0.0:9464
@@ -1743,7 +2382,10 @@ before the first start: once the copy on the data volume exists, that copy is th
 engine reads. The chart uses the image's file as it is, and sets `engine.ha` through the
 `SYNCD_HA_*` variables. There is no `engine.env` in a container: the secrets a
 configuration refers to (`{ env: NAME }`) are ordinary environment variables of the
-container, which the chart takes from a Secret (`engine.envFromSecret`).
+container, which the chart takes from a Secret (`engine.envFromSecret`). The chart does
+not write the engine's configuration, so it has no value for `api.access` or
+`engine.require_signed_config`: an engine first installed before 0.5.0 opts in by an edit
+of the file on its data volume.
 
 ### The console image
 
@@ -1764,7 +2406,7 @@ system. Their base images are pinned by digest.
 
 ### Helm chart values
 
-The chart's `values.yaml`, by key. The chart's version is the release's (`0.4.1`).
+The chart's `values.yaml`, by key. The chart's version is the release's (`0.5.0`).
 
 | Key | Default | What |
 |---|---|---|
@@ -1777,20 +2419,25 @@ The chart's `values.yaml`, by key. The chart's version is the release's (`0.4.1`
 | `engine.environment` | empty | The console environment the engine runs in, passed at each registration (`--environment`). Empty: a new engine runs in `default`, and a registered one keeps the environment it has. |
 | `engine.envFromSecret` | empty | A Secret whose keys become the engine's environment variables: the secrets the configuration refers to. |
 | `engine.env` | `[]` | More environment variables (`RUST_LOG`, `SYNCD_FIPS_MODE`, `AWS_*` for backups). |
-| `engine.extraVolumes`, `engine.extraVolumeMounts` | `[]` | More volumes on the engine's pod: a CSV inbox, a CA bundle for a source's TLS. |
+| `engine.serviceAccount.create`, `name`, `annotations` | `false`, empty, `{}` | Since 0.5.0. The engine pods' service account: none by default (the namespace's `default`), one of the chart's with `create: true` (`<fullname>-engine`, or `name`), or an existing one by `name`. What a vault role, IRSA or another workload identity is bound to. With `engine.ha.lease.kind: kubernetes` the chart makes one regardless. |
+| `engine.configSigning.publicKey`, `existingConfigMap`, `existingSecret`, `key` | empty, empty, empty, `console-signing.pub` | Since 0.5.0. The console's configuration signing key (the PEM that `syncd-console admin config-signing-key` prints), inline or from a ConfigMap or a Secret, mounted at `/etc/syncd/config-signing/<key>`. It changes nothing by itself: the engine's file must name it in `engine.config_signing_keys`, with `require_signed_config: true` to refuse unsigned configurations. |
+| `engine.extraCaCertificates.configMap`, `secret` | empty | Since 0.5.0. CA certificates for connections to systems with a private CA: every key of the ConfigMap or Secret becomes a file under `/etc/syncd/ca`, for a connector's `ca_file`. |
+| `engine.extraVolumes`, `engine.extraVolumeMounts` | `[]` | More volumes on the engine's pod: a CSV inbox, a Kerberos keytab, secrets from a vault. |
 | `engine.passwordKeyPassphrase.existingSecret`, `key` | empty, `passphrase` | A Secret holding the passphrase that seals the password key and the agent CA key, under `key`. Mounted read-only in `/run/secrets/syncd-password-key`, and named by `SYNCD_PASSWORD_KEY_PASSPHRASE_FILE`. Empty: the keys are plain files on the data volume. |
+| `engine.passwordKeyPassphrase.previousKey` | empty | Since 0.5.0. While the passphrase is being changed: the Secret's key holding the passphrase before the change, with which the engine opens a key file the new one does not, and seals it again. Remove it once every engine pod has started since. |
 | `engine.persistence.size` | `10Gi` | The store's volume; size it as [Availability and sizing](availability-and-sizing.md) says. |
 | `engine.persistence.storageClass` | the cluster's default | |
 | `engine.persistence.accessModes` | `[ReadWriteOnce]` | |
 | `engine.resources` | requests `250m` CPU, `512Mi`; limit `4Gi` | |
 | `engine.terminationGracePeriodSeconds` | `90` | Time to finish the batch and stop. |
 | `engine.service.type` | `ClusterIP` | Ports `7443` and `9464`. |
-| `engine.passwordIngest.enabled` | `false` | Expose the password ingest listener (`passwords.ingest`): the pods' port and a Service of its own, `<fullname>-engine-ingest`. The configuration must listen on the same port. With `engine.ha`, the Service routes to both pods but only the active engine listens. |
+| `engine.passwordIngest.enabled` | `false` | Expose the password ingest listener (`passwords.ingest`): the pods' port and a Service of its own, `<fullname>-engine-ingest`. The configuration must listen on the same port. With `engine.ha`, the Service routes to both pods, and since 0.5.0 both answer (the passive engine forwards to the active one). The chart's `values.yaml` comment still says only the active engine listens; the engine's code and `KUBERNETES.md` say both. |
 | `engine.passwordIngest.port` | `7445` | The ingest port. |
 | `engine.passwordIngest.service.type`, `annotations` | `ClusterIP`, `{}` | `LoadBalancer` or `NodePort` for agents outside the cluster; the control API and the metrics stay on the engine's own Service. |
-| `engine.ha.enabled` | `false` | An active/passive pair: two engine pods, a headless Service, the lease in the console's database, anti-affinity and a PodDisruptionBudget. |
+| `engine.ha.enabled` | `false` | An active/passive pair: two engine pods, a headless Service, the lease, anti-affinity and a PodDisruptionBudget. |
+| `engine.ha.lease.kind` | `postgres` | Since 0.5.0. `postgres`: a row in the console's database, as before 0.5.0. `kubernetes`: a Lease object named after the release, in its namespace, with a service account and a Role that may read and update that one Lease. Changing the kind of a running pair needs both engine pods stopped first. |
 | `engine.ha.leaseTtlSeconds` | `15` | `SYNCD_HA_LEASE_TTL_SECS`. |
-| `engine.ha.snapshotEverySeconds` | `300` | `SYNCD_HA_SNAPSHOT_EVERY_SECS`. |
+| `engine.ha.snapshotEverySeconds` | `60` | `SYNCD_HA_SNAPSHOT_EVERY_SECS`. `300` before 0.5.0; an upgrade with `--reuse-values` keeps the old value. |
 | `engine.ha.antiAffinity` | `soft` | `soft` prefers two nodes; `hard` requires them. Ignored when `engine.affinity` is set. |
 | `engine.ha.podDisruptionBudget.enabled` | `true` | A drain evicts one engine at a time. |
 | `engine.metrics.job` | `syncd` | The `job` label the ServiceMonitor gives the engine's metrics, which the alert rules select by. |
@@ -1798,6 +2445,8 @@ The chart's `values.yaml`, by key. The chart's version is the release's (`0.4.1`
 | `engine.metrics.prometheusRule.enabled` | `false` | The shipped alert rules as a PrometheusRule, with `labels` for the Prometheus `ruleSelector`. One release per Prometheus is enough. |
 | `engine.nodeSelector`, `tolerations`, `affinity`, `podAnnotations` | empty | |
 | `console.replicas` | `1` | |
+| `console.serviceAccount.create`, `name`, `annotations` | `false`, empty, `{}` | Since 0.5.0. The service account of the console's pods and the registration Job, as `engine.serviceAccount`. |
+| `console.license.existingSecret`, `key` | empty, `license.lic` | Since 0.5.0. A Secret holding the license file under `key`, mounted at `/etc/syncd/license` and read through `CONSOLE_LICENSE_FILE`; the License page then takes no uploads. Empty: install the license on the License page. |
 | `console.database.url` | empty | The console's PostgreSQL URL, kept in a Secret the chart makes. This or `existingSecret` is required. |
 | `console.database.existingSecret`, `existingSecretKey` | empty, `url` | A Secret of your own holding the URL, instead. |
 | `console.adminPassword` | generated | The initial admin password, changed at first sign-in; `helm status` says how to read a generated one. |
@@ -1807,7 +2456,7 @@ The chart's `values.yaml`, by key. The chart's version is the release's (`0.4.1`
 | `console.publicUrl` | `https://<ingress.host>` when the ingress is on | `CONSOLE_PUBLIC_URL`. |
 | `console.oidc.issuer`, `clientId` | empty | Single sign-on; off while `issuer` is empty. |
 | `console.oidc.existingSecret`, `existingSecretKey` | empty, `client-secret` | A Secret of your own holding the client secret, mounted as `CONSOLE_OIDC_CLIENT_SECRET_FILE`. |
-| `console.oidc.roleClaim`, `roleMap`, `defaultRole` | empty | `CONSOLE_OIDC_ROLE_CLAIM`, `_ROLE_MAP`, `_DEFAULT_ROLE`. |
+| `console.oidc.roleClaim`, `roleMap`, `defaultRole` | empty | `CONSOLE_OIDC_ROLE_CLAIM`, `_ROLE_MAP`, `_DEFAULT_ROLE` (every matching entry adds its role since 0.5.0). The SAML, certificate and sign-in policy settings have no values of their own: they go in `console.env`. |
 | `console.oidc.ca.configMap`, `ca.secret`, `ca.key` | empty, empty, `ca.crt` | CA certificates for the provider, from one key of a ConfigMap or a Secret (`CONSOLE_OIDC_CA_FILE`). |
 | `console.tls.existingSecret` | empty | A `kubernetes.io/tls` Secret: the console serves HTTPS itself, and the probes, the Service's port name and the Ingress backend follow. Set the controller's backend-protocol annotation on the ingress. |
 | `console.extraVolumes`, `console.extraVolumeMounts` | `[]` | More volumes on the console's pod: a hook secret, a Git deploy key. |
@@ -1850,12 +2499,20 @@ What the chart makes on its own:
   `CONSOLE_CONFIG_GIT_ENGINES`: change them by hand.
 - **A Service for password ingest**, `<fullname>-engine-ingest`, with
   `engine.passwordIngest.enabled`.
-- **A PrometheusRule** with `engine.metrics.prometheusRule.enabled`, and
+- **A PrometheusRule** with `engine.metrics.prometheusRule.enabled` (since 0.5.0 with
+  nine more rules: copy the rule file again, or upgrade with the value on), and
   **NetworkPolicies** with `networkPolicy.enabled`.
+- Since 0.5.0: **service accounts** with `serviceAccount.create`; with
+  `engine.ha.lease.kind: kubernetes`, **the Lease, a Role** limited to it and a service
+  account for the engine pods; **a ConfigMap** `<fullname>-config-signing` with
+  `engine.configSigning.publicKey`.
 
-The chart's HA templates are linted and rendered in CI, but no test installs a pair on
-Kubernetes or fails one over; the HA rename init container was likewise checked with
-`helm template` and `helm lint` only.
+A kind test (`tests/k8s/ha.sh`) installs a pair, turns HA on for an existing release and
+fails it over by lease expiry, with the PostgreSQL lease. The chart's 0.5.0 additions
+(service accounts, the signing key, CA certificates, the Kubernetes Lease and its RBAC,
+the license Secret, `previousKey`) had not been rendered by `helm` or installed on a
+cluster when 0.5.0 was released, and the Kubernetes Lease variant of the kind test has
+not run.
 
 ## Complete example
 
@@ -1863,7 +2520,8 @@ An HR database and a corporate directory merged into a people view and published
 OpenLDAP, from `examples/hr-to-openldap.yaml` in the source repository (comments
 shortened). The source repository has further examples for MySQL, SQL Server, MongoDB,
 Oracle through Debezium, Db2 through the JDBC bridge, a CSV inbox, Active Directory with
-the conveniences, a SCIM application and Entra ID; [Connectors](connectors.md) shows their
+the conveniences, a SCIM application, Entra ID, and (since 0.5.0) Workday with effective
+dates (`examples/workday-to-openldap.yaml`); [Connectors](connectors.md) shows their
 connector sections.
 
 ```yaml

@@ -67,8 +67,10 @@ Also:
   still be running.
 - **syncd** runs its engine as one instance, or from 0.4.0 as an **active/passive pair** on hosts or
   with the Helm chart (`engine.ha.enabled`). The pair shares a lease in PostgreSQL (the console's
-  database works) or a file; the standby keeps a warm copy of the store from snapshots and takes over
-  within the lease's TTL (15 s by default). A single engine restarts on failure and resumes each
+  database works), a file, or from 0.5.0 a Kubernetes Lease; the standby keeps a warm copy of the
+  store from incremental snapshots (every 60 s by default from 0.5.0) and takes over within the
+  lease's TTL (15 s by default). From 0.5.0 `syncdctl ha` sets a pair up on two hosts, and queued
+  password changes survive a failover. A single engine restarts on failure and resumes each
   source from its checkpoint.
 
 ## Backups and disaster recovery
@@ -114,7 +116,8 @@ run on data a newer one has written. Every rollback therefore means:
 
 syncd automates step 2: `syncdctl upgrade` rolls back by itself when the new release is not
 healthy, and `syncdctl rollback` goes back to the previous release later. It keeps the console's
-database unless the newer release changed its schema. See
+database unless the newer release changed its schema; going back from 0.5.0 to 0.4.1 needs the
+console database backup taken before the upgrade, which `syncdctl` takes. See
 [syncd's install guide](syncd/install.md#rollback).
 
 Anything recorded since the upgrade is lost from the application; forwarded audit events stay in

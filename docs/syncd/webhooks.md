@@ -3,8 +3,11 @@
 From 0.4.0, the syncd console can tell other systems what happened by posting signed HTTPS
 requests: to an integration of your own, to a Slack channel, to a Microsoft Teams workflow or to
 PagerDuty. Webhooks are managed on **Integrations** (`/integrations`): administrators add, change,
-test and delete them; auditors can look. Webhooks are for people with a session only: no
-[API token](api-reference.md#api-tokens) can see or change them.
+test and delete them; auditors can look. Webhooks belong to the whole console: from 0.5.0, when
+roles can be limited to an environment or an engine, managing them takes `admin` on everything
+and seeing them `auditor` (or `admin`) on everything. They are for people with a session only: no
+[API token](api-reference.md#api-tokens) can see or change them. This page describes syncd 0.5.0
+(commit `a9d17c6`).
 
 Nothing is sent until an administrator adds a webhook. The engine sends nothing itself: the
 console watches each registered engine and posts on its behalf.
@@ -27,10 +30,12 @@ delivery log.
 | `run.completed`, `run.failed` | A run ended: a full sync, a reconciliation (scheduled or asked for), a reload, a drift check (scheduled or asked for), an approval or a dead-letter retry; `failed` when a source failed to read meanwhile (see [`run.failed` is a heuristic](#runfailed-is-a-heuristic)) |
 | `dead_letters.rising` | A publication's dead letters crossed 1, 10, 100, 1 000, ... |
 | `quarantine.rising` | A view's quarantined entities crossed 1, 10, 100, ... |
+| `quality.errors` | From 0.5.0: a view's entities failing data-quality checks of severity `error` (summed over its checks) went from none to some, or rose by `CONSOLE_WEBHOOKS_QUALITY_ERRORS_RISE` (10) since last told. A falling count lowers the mark it is measured from (see [Reports, lineage and data quality](reports-and-data-quality.md)) |
 | `hold.created` | Changes were held by a change window, a modification, add or deletion threshold, a canary or report mode (see [Change safety and lifecycle](change-safety.md)) |
 | `hold.released` | A publication has no held changes any more |
 | `password.delivery-failed` | An engine could not deliver a password change (see [Password synchronisation](password-sync.md)) |
 | `group.expired` | A publication's computed groups expired: the count of expired groups rose from 0 |
+| `group.review-due` | From 0.5.0: a computed group's review fell due (`review_every` after its creation or its last review). Told once each time it falls due. The group's `reviewers` are also mailed (see [Group reviews by mail](#group-reviews-by-mail)) |
 | `correlation.unmatched-ageing` | A view's unjoined records older than its `correlation.unmatched_alert_after` rose from 0 |
 | `report.failed` | A scheduled report's mail could not be delivered after a day of retries (see [Reports, lineage and data quality](reports-and-data-quality.md)) |
 | `backup.failed` | An engine's scheduled backup (`engine.backup`) failed |
@@ -41,26 +46,43 @@ delivery log.
 | `config.rejected` | A publish was refused by the pre-publish hook (see [Security](security.md#the-pre-publish-hook)) |
 | `config.git-refused` | Git sync refused a commit: an environment file in Git holds a secret value (see [Configuration as code](config-as-code.md)) |
 | `config.promoted` | A version was promoted to another environment's engines |
+| `config.unpublished-running` | From 0.5.0: an engine runs a configuration the console did not publish, applied by another client of its control API or edited on its host. Told once per configuration (see [Security](security.md#what-the-console-reports)) |
+| `license.state-changed` | From 0.5.0: the [license](licensing.md)'s state changed: a warning, the grace period, publishing blocked, or licensed again. Not tied to an engine. Told once per change |
 | `webhook.test` | **Send a test** on the Integrations page |
 
 Event ids are stable: an event is never renamed, only added.
 
 ### Where the engine events come from
 
-The `engine.*`, `source.*`, `target.*`, `run.*`, `dead_letters.*`, `quarantine.*`, `hold.*`,
-`password.*`, `group.*`, `correlation.*`, `backup.*` and `ha.*` events come from the console's
-**status watcher**. It reads every registered engine's status every ten seconds and raises an event
+The `engine.*`, `source.*`, `target.*`, `run.*`, `dead_letters.*`, `quarantine.*`, `quality.*`,
+`hold.*`, `password.*`, `group.*`, `correlation.*`, `backup.*` and `ha.*` events, and
+`config.unpublished-running`, come from the console's **status watcher**. It reads every registered engine's status every ten seconds and raises an event
 on each change worth telling (edge-triggered), so one change of state sends one event, not one
 per poll. A rising count is told once per order of magnitude it crosses.
 
 - What the watcher last saw is kept in the database (`webhook_engine_state`), so a console
   restart fires nothing again.
 - The first look at an engine is a baseline: nothing fires for what is already so, except
-  `engine.down` for an engine that cannot be reached.
+  `engine.down` for an engine that cannot be reached, a configuration the console did not
+  publish, and a group review that is due (something to do, not a change of state).
 - Several consoles on one database compare under a row lock, so each change fires once.
 
-The `config.*` events are raised where they happen (a publish, an approval, a Git sync pass, a
-promotion), in the same database transaction.
+The other `config.*` events are raised where they happen (a publish, an approval, a Git sync
+pass, a promotion), in the same database transaction. `license.state-changed` is raised when the
+console assesses the license and finds its state changed; its first look is a baseline unless the
+state is already a problem.
+
+### Group reviews by mail
+
+From 0.5.0 a computed group can name who reviews it (`reviewers` on the group, or
+`group_policy.reviewers` for a publication's groups: mail addresses, beside `review_every` in the
+engine's configuration). When the review falls due the console mails them, through the mail
+settings scheduled reports use and under the same rule: only to addresses in
+`CONSOLE_REPORTS_RECIPIENT_DOMAINS` (others are left out and named in the console's log; without
+mail settings nothing is sent and the log says so). The mail names the engine, the publication,
+the group and its entry, and says how to review it. It is queued in the same transaction that
+records the review as told, so it is sent once each time the review falls due, across console
+restarts. `group.review-due` is raised whether or not anyone is named.
 
 ## Formats
 
@@ -95,16 +117,20 @@ sentence. `data` depends on the event:
 | `run.completed`, `run.failed` | `activity` (what ended), `elapsedMs`, `sourceFailures` (how many source failures were counted while it ran), and from 0.4.1 `runs` (how many runs ended since the watcher's last look; the event is about the last of them) |
 | `dead_letters.rising` | `publication`, `count`, `previous` |
 | `quarantine.rising` | `view`, `count`, `previous` |
+| `quality.errors` | `view`, `count` (entities failing checks of severity `error`), `previous` (the count last told; 0 when it rose from none) |
 | `hold.created` | `publication`, `total`, `adds`, `modifies`, `deletes`, `moves`, `reasons` (each reason with its count), `needsApproval`, `detail` |
 | `hold.released` | `publication`, `released` |
 | `password.delivery-failed` | `failed` (new failures), `totalFailed`, `error` (never any password material) |
 | `group.expired` | `publication`, `expired` |
+| `group.review-due` | `publication`, `group`, `dn`, `due_micros`, `reviewers` |
 | `correlation.unmatched-ageing` | `view`, `count`, `oldestMicros` |
 | `report.failed` | `report` (its id), `name`, `owner`, `publication`, `recipients`, `error` |
 | `backup.failed` | `error`, `failedAtMicros` |
 | `ha.failover` | `pair`, `from`, `to` |
 | `config.published` | `version`, `publishedBy`, `ticket`, `note`, ... |
 | `config.promoted` | `from`, `to`, `promotedBy`, `ticket`, and `results`: each target engine's outcome |
+| `config.unpublished-running` | `runningSha256`, `runningVersion`, `appliedBy`, `appliedAtMicros`, `throughApi` (applied through the control API, or the file on the host), `publishedVersion` (what the console last published) |
+| `license.state-changed` | `state`, `previous`, `licenseId`, `managedIdentities`, `limit`, `graceEnds`, `publishingBlocked`, `messages`; `engine` is `null` |
 | `webhook.test` | `webhook`, `sentBy` |
 
 A `hold.created` example:
@@ -140,15 +166,16 @@ fact set of the engine, the event and the time.
   it is sealed with the master key and never shown again. Through the API it is
   `POST /api/v1/admin/webhooks/{id}/rotate-secret` with `{"secret": "<routing key>"}`. (In 0.4.0
   the page could only generate a random `whsec_` secret, which PagerDuty cannot use.)
-- The down, failed, rising, hold, password, expiry, ageing, report, backup and failover events
-  **trigger** an incident: `error` for `engine.down`, `source.down`, `target.down` and
-  `run.failed`; `warning` for the others.
+- The down, failed, rising, hold, password, expiry, ageing, report, backup and failover events,
+  and from 0.5.0 `quality.errors`, `group.review-due`, `config.unpublished-running` and
+  `license.state-changed`, **trigger** an incident: `error` for `engine.down`, `source.down`,
+  `target.down` and `run.failed`; `warning` for the others.
 - The matching up, completed and released events **resolve** it. They are paired on a
   `dedup_key` of the engine and what the event is about (`syncd:<engine>:target:<name>`,
   `syncd:<engine>:hold:<publication>`, `syncd:<engine>:engine`, ...), so `target.up` resolves
   the incident `target.down` opened.
-- The `config.*` and `webhook.test` events trigger an `info` incident of their own, which nothing
-  resolves.
+- The other `config.*` events and `webhook.test` trigger an `info` incident of their own, which
+  nothing resolves. Nothing resolves the 0.5.0 events either: resolve them in PagerDuty.
 
 ```json
 {"routing_key":"<routing key>","event_action":"trigger","dedup_key":"syncd:prod:target:ad-users",
@@ -293,6 +320,7 @@ In `/etc/syncd/console.env` (or the Helm chart's `console.env` list), then resta
 | `CONSOLE_WEBHOOKS_ALLOWED_HOSTS` | empty | Hosts a webhook may go to: names, `*.suffix` or CIDR ranges, comma-separated. Empty: any host the address rules allow. A host listed here may be on a private network |
 | `CONSOLE_WEBHOOKS_BLOCK_PRIVATE_NETWORKS` | unset | Unset: private addresses refused for webhooks saved from now on, existing ones keep theirs. `true`: refused for all. `false`: allowed for all. See [Where a webhook may go](#where-a-webhook-may-go) |
 | `CONSOLE_WEBHOOKS_CA_FILE` | none | PEM CA certificates receivers may use besides the public roots (an internal relay with a private CA) |
+| `CONSOLE_WEBHOOKS_QUALITY_ERRORS_RISE` | `10` | From 0.5.0: after `quality.errors` was told for a view, it is told again each time the count rises by this many; `0`: only when it goes from none to some |
 
 The timings above can be changed but rarely need to be: `CONSOLE_WEBHOOKS_POLL_SECONDS` (30),
 `_WATCH_SECONDS` (10, the status watcher), `_CONNECT_TIMEOUT_SECONDS` (5),
@@ -305,7 +333,8 @@ The Helm chart has no webhook values of its own: set these in `console.env`.
 
 ## Administration endpoints
 
-Session only (API tokens are refused):
+Session only (API tokens are refused). From 0.5.0, "admin" and "auditor" here mean the role on
+everything: an administrator or auditor of one environment or engine gets `403`.
 
 | Method | Path | Access | Purpose |
 |---|---|---|---|
@@ -345,9 +374,9 @@ alerting, prefer `source.down`, `target.down` and `dead_letters.rising`, or the 
 
 ### Other limitations
 
-- There is no `quality.errors` event for data-quality checks: use the `SyncdQualityErrors` alert
-  (see [Reports, lineage and data quality](reports-and-data-quality.md)).
 - Webhooks cannot go through an HTTP proxy.
+- Webhooks are global: there is no webhook limited to an environment or an engine, and every
+  webhook may subscribe to every engine's events.
 - Webhooks are a console feature: an engine run without a console sends none.
 
 ## Without webhooks

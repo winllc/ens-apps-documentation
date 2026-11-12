@@ -17,7 +17,7 @@ configurations. The YAML keys are listed in
 Each expression reads one root variable: `source`, the staged record of one source; `e`,
 the merged entity; or, for a group's owner, `group`.
 
-| Where | Reads | Lookup tables | `unique()` | Other entities (`ref()` ...) |
+| Where | Reads | Lookup tables | `unique()`, `unique_within()` | Other entities (`ref()` ...) |
 |---|---|---|---|---|
 | View source `flows` | `source` | Yes | No | No |
 | Join rule `source` and `when` | `source` | Yes | No | No |
@@ -69,11 +69,15 @@ than on an entity (`e.a.b`).
 ### Attributes
 
 - `e.mail` or `source.mail` reads an attribute. A name with characters CEL does not allow
-  in an identifier cannot be read this way; MongoDB embedded fields therefore arrive as
-  `outer_inner` (`source.name_given`).
+  in an identifier, such as an LDAP attribute with a dash, is read **quoted** (new in
+  0.5.0): `e["mail-alias"]`, `source["employee-id"]`, `ref(e.manager)["mail-alias"]`. The
+  name must be a literal string: `e[...]` or `source[...]` with anything else is an error. MongoDB
+  embedded fields still arrive as `outer_inner` (`source.name_given`).
 - **An absent attribute.** Reading one is an "attribute not set" error, not an empty
   string. `has(e.nickname)` tests for it without failing, and
-  `coalesce(e.preferredName, e.givenName)` takes the first that has a value.
+  `coalesce(e.preferredName, e.givenName)` takes the first that has a value. For a quoted
+  name, `"mail-alias" in e` is the test (`has()` takes `x.name` only, and its syntax error
+  says so).
 - **Missing input is not a failure.** When a flow or a computed attribute fails only
   because an attribute it reads is absent (or a referenced entity does not exist), the
   attribute gets no value from it. The error policy is for real errors.
@@ -94,7 +98,9 @@ than on an entity (`e.a.b`).
 | `&&`, `||`, `!` | Bools. As in CEL, the deciding side wins even if the other errors: `false && error` is `false`. |
 | `c ? a : b` | A bool condition. |
 | `x in list` | Membership. A one-valued attribute counts as a one-element list. |
+| `"name" in e` | Whether the record or entity (`e`, `source`, `ref(...)`) has the attribute, as `has()` does. |
 | `list[i]` | Indexing from 0. Index `0` of a single value is that value. |
+| `e["name"]` | The attribute `name`, as `e.name` reads it: for names that are not identifiers. |
 | `has(e.x)` | Whether the attribute has a value. |
 
 ### Macros
@@ -185,6 +191,7 @@ data is compiled at run time, limited to 1 000 characters.
 |---|---|---|
 | `lookup(table, key, default)` | The value for `key` in one of the view's lookup tables, or `default`. | `lookup("dept_codes", e.department, "GEN")` |
 | `unique(scope, candidates)` | The first candidate not yet taken in the scope; `{n}` in a candidate counts up. Use with `mode: assign_once`. | `unique("uid", [lower(e.sn), lower(e.sn) + "{n}"])` |
+| `unique_within(scope, value, max_length)` | The value cut to `max_length` if nobody holds it in the scope, else with a counter from 2 in place of its last characters. New in 0.5.0. | `unique_within("sAMAccountName", e.uid, 20)` |
 | `uuid()` | A new random UUID (version 4), in lower case with hyphens: `0f8fad5b-d9cb-469f-a165-70867728950e`. Different on every call: use with `mode: assign_once`, and `permanent` to keep it for good. | `uuid()` |
 | `ulid()` | A new ULID, 26 characters that sort by when they were made: `01ARZ3NDEKTSV4RRFFQ69G5FAV`. Different on every call, like `uuid()`. | `ulid()` |
 
@@ -269,10 +276,11 @@ Functions that take a timestamp also take text, read as `timestamp()` reads it. 
 zone, format or duration is checked when the rule compiles.
 
 !!! note "Not in the library"
-    The product plan also lists padding, hashing, DN parsing, reading a named source's
-    value (`src.hr_db.title`) and custom WASM functions. None of these is built: the
-    tables above are the whole built-in library. Functions of your own go in
-    [rule packages](#rule-packages).
+    The product plan also lists padding, hashing, DN parsing and reading a named source's
+    value (`src.hr_db.title`). None of these is built: the tables above are the whole
+    built-in library. Functions of your own go in [rule packages](#rule-packages), written
+    in CEL or, since 0.5.0, compiled to WebAssembly
+    ([custom functions](#custom-functions-in-webassembly)).
 
 ## Computed attributes
 
@@ -303,8 +311,8 @@ computed:
 - Computed attributes may read each other. They are evaluated in dependency order, and a
   cycle is refused with the path it takes.
 - On a change, the engine evaluates again only the attributes whose inputs changed.
-  Attributes that call `now()`, `effective()`, `effective_until()`, `unique()`, `uuid()`
-  or `ulid()`, read other entities, or quarantine on error are always evaluated when their
+  Attributes that call `now()`, `effective()`, `effective_until()`, `unique()`,
+  `unique_within()`, `uuid()` or `ulid()`, read other entities, or quarantine on error are always evaluated when their
   entity is recomputed.
 - A computed attribute with the same name as a flowed attribute replaces the flowed value,
   unless its mode is `only_if_empty`.
@@ -455,6 +463,31 @@ scope, and claims it for this entity.
   join rules. Generate values in a computed attribute and map that attribute in
   publications.
 - Previews and test cases treat every candidate as free, so the first candidate wins.
+
+### `unique_within()`: a value cut to a length
+
+`unique_within(scope, value, max_length)` (new in 0.5.0) makes one value unique within a
+length limit, as an Active Directory `sAMAccountName` (20 characters) needs:
+
+```yaml
+- name: samAccountName
+  mode: assign_once
+  output: unique_within("sAMAccountName", lower(e.givenName.substring(0, 1) + e.sn), 20)
+```
+
+- When nobody holds the value cut to `max_length`, that is the result: `jsmith`, or
+  `christopher.columb` for `christopher.columbus` at 18.
+- When it is taken, a counter from 2 is appended while it fits, else it takes the place of
+  the last characters: `jsmith2`, `christopher.colum2`, and `abcdef10` once `abcdefg2` to
+  `abcdefg9` are taken at 8. Claims are compared without case, as for `unique()`.
+- A value the entity holds is kept while it is the value or the value with a counter, so
+  the plain value coming free (its holder left) renames nobody. When the value itself
+  changes, the result follows it.
+- No value gives no result; a `max_length` under 1 is an error, and so is a scope with no
+  counter left ("no unique value left in scope ..."). The scope is a literal, and the
+  rules for `unique()` above apply: computed attributes only, one scope per attribute.
+- It is what a publication's `sam_account_name: { on_conflict: unique }` uses, in place of
+  a dead letter on a duplicate; see [Connectors](connectors.md#active-directory-conveniences).
 
 ## Permanent values
 
@@ -700,11 +733,11 @@ computed:
 too, and reports failures as `view <v>: computed <c>: test <n>: expected ..., got ...`.
 Publishing requires every test to pass: the console will save a version whose tests fail
 but not publish it, and the engine refuses to apply it. `syncd test --golden DIR` also
-runs golden-file tests of whole publications (the `*.yaml` files in `DIR` and, since
-0.4.1, one directory level down). With Git sync the console runs the golden tests beside
-the configuration for every publish, through the editor, the API, Git auto-publish or
-promotion, and refuses one that fails (0.4.0 ran them for the editor's check only); see
-[Golden-file tests](config-as-code.md#golden-file-tests).
+runs golden-file tests of whole publications (the `*.yaml` files in `DIR` and one
+directory level down). With Git sync the console runs the golden tests beside the
+configuration for every publish, through the editor, the API, Git auto-publish or
+promotion, and refuses one that fails; since 0.5.0 it reads them at the version's own Git
+commit. See [Golden-file tests](config-as-code.md#golden-file-tests).
 
 ## Rule packages
 
@@ -782,6 +815,7 @@ tests:
 | `lookups` | Lookup tables, as a view's. |
 | `tests` | Test cases; [below](#package-tests). |
 | `requires` | Other packages this one calls, name to a version range: `requires: { gov-common: "^1.0" }`. |
+| `wasm` | A module of [custom functions in WebAssembly](#custom-functions-in-webassembly): `{ from: <file>, sha256: <hex> }`. New in 0.5.0. |
 
 Parameter types are `entity`, `string`, `int`, `bool`, `list`, `timestamp` and `any`.
 
@@ -833,21 +867,137 @@ got ...`, and blocks publishing like any failing test.
 ### Where packages show
 
 - `syncd status` lists the running configuration's packages:
-  `package gov-naming 1.2.0 (packages/gov-naming.yaml sha256:3f2a...): 6 functions, 6 tests`.
+  `package gov-naming 1.2.0 (packages/gov-naming.yaml sha256:3f2a...): 6 functions, 6 tests`,
+  and names a package's module (`module sha256:66671f4139a1 with 3 functions`).
 - `syncd config diff` has a `packages` section: a version bump reads
-  `~ gov-naming 1.1.0 -> 1.2.0`, with the functions that changed. See
+  `~ gov-naming 1.1.0 -> 1.2.0`, with the functions that changed, and for a module its new
+  pin, size and every signature that changed (never its bytes). See
   [Configuration as code](config-as-code.md#rule-packages).
 - The console's Studio lists package functions in its catalog and its previews call them.
   The configuration editor's **Packages** panel lists a version's packages with their
   version, pin, source and counts, and **Check for update** compares the file at the Git
-  branch's head with the version's.
+  branch's head with the version's. Since 0.5.0 the console's **Compare** tab shows the
+  functions that changed too, reading each side's packages at its own Git commit.
 
 !!! note "Limits"
     The console stores no package files of its own. A configuration it publishes uses
     inline packages, packages from its Git repository, or files next to the engine's own
-    configuration file. The console's version compare shows a file package's name,
-    version, file and pin, not the functions that changed (`syncd config diff` shows
-    them). Custom functions in WASM are a separate piece of work.
+    configuration file; its module store holds only the WebAssembly modules of custom
+    functions. A version saved before 0.5.0 has no Git commit: its file packages are read
+    at the branch head, and the version compare falls back to their name, version, file
+    and pin when the file has moved on, with a note saying so.
+
+## Custom functions in WebAssembly
+
+New in 0.5.0. When the function library lacks something (a proprietary identifier
+checksum, a transliteration table for a script it does not cover, a legacy hashing
+scheme), a rule package can carry a **custom function**: a pure function compiled to a
+WebAssembly core module, called from any rule like the package's other functions. The
+source repository's guide is `docs/CUSTOM-FUNCTIONS.md`, with a complete example in
+`examples/wasm-functions` (a small Rust SDK and a module of check-digit functions).
+
+```yaml
+# packages/checksum.yaml
+name: checksum
+version: 1.0.0
+wasm:
+  from: ../wasm-functions/checksum.wasm      # relative to this package file
+  sha256: 66671f4139a1260cefc07746952e2497b74233539c002b4972d49d257c1258a8
+functions:                                    # CEL functions may call the module's
+  employee_id: { params: [n: string], expr: n + luhn_digit(n) }
+tests:
+  - { expr: 'luhn_digit("7992739871")', expect: "3" }
+```
+
+```yaml
+views:
+  - name: people
+    computed:
+      - name: employeeId
+        output: checksum.luhn_digit(e.employeeNumber)
+        on_error: quarantine
+```
+
+- **What a function is.** A function of syncd's values (strings, integers, booleans,
+  bytes, timestamps and durations, lists of those, and null) that answers with one such
+  value or with a message saying why it failed. The module declares its functions, their
+  parameter and result types and their documentation in a manifest (a `syncd.manifest`
+  custom section), and every call is checked against it: the number of arguments and the
+  types of literal ones when the rule compiles, the others as they are evaluated. A module
+  function takes values, not the entity: pass its attributes (`e.employeeNumber`), not `e`.
+- **What a module can never do.** It imports nothing: a module that imports anything is
+  refused when it is loaded. So it has no I/O, clock, random numbers, network, files,
+  environment or host functions (cryptographic ones included), and gives the same answer
+  for the same arguments on every engine, in every preview, test and replay. Pass `now()`
+  in from the rule if it needs the time. A start function, threads, SIMD, several memories
+  and 64-bit memory are refused, and no state is kept between calls.
+- **Pinned.** `wasm` needs `sha256`; a module whose bytes differ is refused when the
+  configuration is read (`syncd validate`, `syncd run`, the console's check and publish).
+  `from` is relative to the package file (to the configuration for an inline package).
+  Without `from`, the console fills the module in from its module store by its hash (see
+  below). A module is at most **1 MiB**: it travels inside the configuration, base64, so a
+  loaded configuration carries it.
+- **Calls.** Rules call `checksum.luhn_digit(...)`; the package's own CEL functions and
+  tests call it without the namespace. A CEL function and a module function may not share
+  a name. A changed module is a new package version.
+- **Failures.** A function that returns an error, traps, runs out of fuel or memory,
+  recurses past the call depth, or answers with a result that is too large or of another
+  type than declared fails **that one call**, with an error naming the function, the
+  module's hash and the cause. The rule's `on_error` decides; the engine carries on.
+
+| Limit | Default | What it bounds |
+|---|---|---|
+| `engine.wasm_functions.fuel` | 10,000,000 (1,000 to 10^9) | Instructions per call: an endless loop stops there |
+| `engine.wasm_functions.memory_mb` | 16 (1 to 1024) | The memory of one instance |
+| Call depth | 1,024 | Recursion |
+| Result size | 1 MiB | A larger answer is refused |
+| Module size | 1 MiB | Larger modules are refused |
+
+The runtime is **wasmi**, an interpreter (the product plan named Wasmtime, whose JIT cannot
+run under the units' `MemoryDenyWriteExecute=yes`). A call costs about 5 µs for the
+example's check digit on a release build, against about 0.1 µs for a built-in such as
+`upper()`: keep the library's functions for what they do.
+
+**FIPS mode.** Modules are refused by default in FIPS mode, since a module's own code runs
+outside the validated cryptographic module. `SYNCD_FIPS_ALLOW_WASM_FUNCTIONS=true` (or
+`--fips-allow-wasm-functions`), on the engine and on the console, allows them, for modules
+that do no security-relevant cryptography. See [FIPS 140-3 and DISA STIG](fips-and-stig.md).
+
+**Testing.** Package tests and rule tests call module functions like any other and run the
+module as the engine does, under the same limits: `syncd -c syncd.yaml test`. The console's
+Studio preview and test runner use the same code, so a test passes in the Studio exactly
+when it passes in `syncd test`.
+
+**Through the console.** A designer of the engine uploads the module on the engine's
+**Custom functions** page; someone else who edits that engine's configuration reviews it
+(size, hash, functions and signatures, the difference from the previous upload of the same
+name, the module itself) and approves it, both recorded in the audit trail with the
+module's hash. A package then names the module by its hash alone:
+
+```yaml
+packages:
+  - name: checksum
+    version: 1.0.0
+    wasm: { sha256: "66671f4139a1260cefc07746952e2497b74233539c002b4972d49d257c1258a8" }
+```
+
+The console fills the approved module in for its check, the Studio and publishing, and
+publishes each package whole, module bytes included, inside the configuration it signs. A
+module not uploaded, or not approved yet, makes the configuration fail its check. With Git
+sync, a module may instead sit in the repository beside its package file (`from`) and be
+reviewed with the change that adds it. See the
+[user guide](user-guide.md#custom-functions-enginesidfunctions).
+
+**License.** Custom functions belong to the Extensibility pack: when the license does not
+include it, the Studio marks them as locked, and a configuration that uses them cannot be
+saved or published (see [Licensing](licensing.md#packs)).
+
+!!! note "Limits"
+    The release notes list these: an interpreter, not Wasmtime; no component model (the
+    contract is a core ABI, described in WIT); FIPS mode was not run end to end; a module
+    next to a hand-written configuration on the engine's host is not in HA snapshots or
+    backups; the limits are the engine's, not per package; and the Studio's preview uses
+    the default limits whatever the engine's `engine.wasm_functions` says.
 
 ## Authoring in the console
 
@@ -865,7 +1015,10 @@ configuration version:
   the visual editor;
 - the function catalog, which lists the built-in functions and the functions of the
   configuration's rule packages, grouped by package with their descriptions, and offers
-  them as completions;
+  them as completions; custom functions in WebAssembly are listed with their signatures
+  and marked as WebAssembly (or as locked, when the license leaves them out);
+- completions of the view's attributes, a name that is not an identifier offered as
+  `e["mail-alias"]`;
 - a **Quality check** block, which tries a data-quality check on a sample of the view's
   entities from the engine: how many fail, and which.
 

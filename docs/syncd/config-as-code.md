@@ -8,12 +8,28 @@ production. syncd 0.4.0 adds the pieces a team needs to work that way:
 | [Semantic diff](#what-changed-syncd-config-diff) | Tells what changed between two configurations by meaning: per connector, view, rule and publication field, with secrets redacted | `syncd config diff`, the console's **Compare** tab |
 | [Environments](#environments) | `{{ env.<name> }}` placeholders in the base, filled from an environment's values | `syncd --env`, the console's **Environments** |
 | [Git sync](#git-sync) | Commits on a branch become configuration versions in the console, and can be published | `CONSOLE_CONFIG_GIT_*` |
-| [Promotion](#promotion) | Publishes a version proven in one environment to every engine of another | `syncd config promote`, `POST /api/v1/configs/promote` |
+| [Promotion](#promotion) | Publishes a version proven in one environment to every engine of another | `syncd config promote`, `POST /api/v1/configs/promote`, the console's **Promote** button |
 | [Golden-file tests](#golden-file-tests) | Check what whole publications contain after a run over fixture data | `syncd test --golden` |
 
 In syncd 0.4.1 the golden tests from Git gate every publish (the API, Git auto-publish and
 promotion, not only the editor), `syncd config promote` prints each engine's diff summary, and
 `syncd test` finds golden files one directory level down, as the console does.
+
+This page describes syncd 0.5.0 (`main` at commit `a9d17c6`), which adds:
+
+- **Each version's own Git commit.** The console keeps the commit a version came from, and reads
+  its golden tests and package files there, not at the branch head (see
+  [Golden tests in the console](#golden-tests-in-the-console)). **Compare** reads each side's
+  packages at its own commit and shows the functions, and WebAssembly signatures, that changed.
+- **A Promote button** in the console, with a dry-run preview, through the same gate as the command
+  (see [Promotion](#promotion)).
+- **Signed configurations.** The console signs every configuration it publishes, and an engine set
+  to strict access or to require signed configurations takes configuration from the console only
+  (see [Publishing to a strict engine](#publishing-to-a-strict-engine)).
+- **The license gate.** Validating, saving and publishing check the license; a rollback is always
+  allowed (see [The license](#the-license)).
+- **Scoped roles.** Git sync is for roles on everything; promotion needs the right to publish on
+  every engine of the target environment.
 
 Rule packages, functions and lookup tables shared between configurations, fit the same way of
 working; see [Rule packages](#rule-packages) below and [Computed attributes and rules](rules.md).
@@ -38,10 +54,11 @@ expression.
   on one side only (a computed attribute added, an object removed) is one change, not one per
   field it holds.
 - **Packages.** A package's version change shows as `gov-naming 1.1.0 -> 1.2.0`, with the
-  functions that changed.
+  functions that changed. A package's WebAssembly module shows as its pin (`wasm.sha256`), its
+  size and every signature that changed, never its bytes.
 - **Secrets are redacted.** A path segment that is or contains `password` or `secret`, is `token`
-  or `key`, or ends in `_file` or `_key`, the HA lease's `url`, and a URL carrying `password=` or
-  `pwd=`, shows as `<redacted> (changed)`. Not even where a secret lives is printed. Two Active
+  or `key`, ends in `_file`, `_key` or (since 0.5.0) `_token`, or is `assertion`, the HA lease's
+  `url`, and a URL carrying `password=` or `pwd=`, shows as `<redacted> (changed)`. Not even where a secret lives is printed. Two Active
   Directory flags, `password_never_expires` and `must_change_password`, are rules, not secrets,
   and are shown.
 
@@ -82,7 +99,11 @@ gives `from`, `to`, `same`, `summary` and the structured `diff`.
 
 In the console, the configuration page's **Compare** tab shows the semantic diff above the text
 diff, and the diff endpoint (`GET /api/v1/engines/{id}/configs/{version}/diff`) returns it as
-`semantic` and `summary` beside the unified text.
+`semantic` and `summary` beside the unified text. Since 0.5.0 each side's packages are read at that
+side's own Git commit (and modules from the engine's module store), so the console shows the
+functions that changed as `syncd config diff` does. A package that cannot be read on a side (a
+version older than 0.5.0 whose file has moved on, a module not approved) is compared by name,
+version, file and pin, and a note above the changes (`notes` in the API) says which and why.
 
 ## Environments
 
@@ -159,6 +180,10 @@ displayed rather than run.
 `/etc/syncd/engine.env` for the service. A configuration the console publishes arrives rendered
 already, so an engine registered with the console doesn't need `--env`.
 
+On an engine in strict access mode (every new 0.5.0 install), `syncd apply-config` on the host is
+refused: the command line's certificate may read and operate, not configure. The other commands in
+the table work as before; see [Publishing to a strict engine](#publishing-to-a-strict-engine).
+
 ### Environments in the console
 
 - **Each engine runs in an environment**, `default` unless one is given when it is registered
@@ -168,8 +193,9 @@ already, so an engine registered with the console doesn't need `--env`.
   chart's registration Job run) keeps its environment unless `--environment` is given; in 0.4.0
   it moved the engine back to `default`. On Kubernetes, the chart's `engine.environment` passes
   one at each registration.
-- **Environments are kept under Integrations > Environments** (admins change them; auditors see
-  them), or with `PUT /api/v1/environments/{name}`:
+- **Environments are kept under Integrations > Environments** (admins change them: an admin on
+  everything adds them, an admin of an environment changes its values; auditors see them), or with
+  `PUT /api/v1/environments/{name}`:
 
     ```json
     {"values": {"hr_host": {"value": "hr.prod.example.gov"},
@@ -183,10 +209,11 @@ already, so an engine registered with the console doesn't need `--env`.
     one.
 - **Who reads what.** Since 0.4.1 the values (`GET /api/v1/environments` and
   `GET /api/v1/environments/{name}`) are for admins and auditors, or a token with the
-  `environments:read` scope (or `admin`). In 0.4.0 any role, or a `configs:read` token, could
-  read them: scripts that read values with a `configs:read` token need the new scope. Every role
-  reads the names, with `GET /api/v1/environment-names` (`configs:read` for a token); the
-  **Compare** tab uses it. Changing environments is for admins, signed in.
+  `environments:read` scope (or `admin`); since 0.5.0, those on everything or on that environment.
+  In 0.4.0 any role, or a `configs:read` token, could read them: scripts that read values with a
+  `configs:read` token need the new scope. Every role reads the names of the environments it
+  reaches, with `GET /api/v1/environment-names` (`configs:read` for a token); the **Compare** tab
+  uses it. Changing environments is for admins, signed in.
 - **A version is the base.** Publishing a version to an engine renders it for the engine's
   environment, with secret values in clear, and sends that. A value the environment lacks refuses
   the publish and names it.
@@ -229,10 +256,16 @@ CONSOLE_CONFIG_GIT_ENGINES=dev-1,dev-2
 | `CONSOLE_CONFIG_GIT_POLL` | `60s` | How often the branch is fetched |
 | `CONSOLE_CONFIG_GIT_AUTO_PUBLISH` | `off` | `off`, `validate` or `publish` (below) |
 | `CONSOLE_CONFIG_GIT_PUSH_BACK` | `false` | Commit versions saved in the console to the branch |
-| `CONSOLE_CONFIG_GIT_ENGINES` | every engine | The engines the repository is for, comma-separated. Renaming an engine (`syncd-console admin rename-engine`) doesn't change this list: change it by hand |
+| `CONSOLE_CONFIG_GIT_ENGINES` | every engine | The engines the repository is for, comma-separated. Renaming an engine (`syncd-console admin rename-engine`) doesn't change this list: change it by hand. The command prints a warning saying so, the console logs one at start, and administrators see a notice on the **Engines** page while a name here matches no registered engine |
 
 The console checks these at start-up and refuses both credentials at once, absolute or `..`
 paths, and files that are not there.
+
+The repository holds every engine's configuration, so Git sync belongs to the console as a whole:
+its status and the **Git** card are for roles on everything, **Sync now** for designers and admins
+on everything, and an API token limited to an environment or to engines can do neither. A role
+limited to an environment or an engine still sees and publishes the versions Git sync made on its
+engines.
 
 ### What a pass does
 
@@ -247,14 +280,15 @@ For each commit:
 1. The environment files it changed are [taken in](#environment-files-from-git).
 2. If it changed the configuration file, that text becomes a new version on each engine the
    repository is for (source `git`, with the commit's sha and author, and its subject as the
-   comment), unless the engine's latest version already has the same text.
+   comment), unless the engine's latest version already has the same text. Since 0.5.0 the version
+   keeps the commit, and its golden tests and package files are read there.
 3. What happens next depends on `CONSOLE_CONFIG_GIT_AUTO_PUBLISH`:
 
 | Mode | What happens to the new version |
 |---|---|
 | `off` | It stays a draft. Someone publishes it from the console |
-| `validate` | It is checked: compiled, with the rules' test cases, the packages' tests and the [golden tests](#golden-tests-in-the-console) from the repository. Failures are recorded as `config.git-failed`. It stays a draft either way, and one that fails can't be published, by any route |
-| `publish` | It is checked as for `validate`, then published through the same gate as the **Publish** button: four-eyes approval (the version waits for approval), the pre-publish hook, and, when `CONSOLE_PUBLISH_TICKET_PATTERN` is set, a change-ticket reference found in the commit message (`HR port moved (CHG-12345)`). A commit without one is recorded as `config.git-failed` and its version stays a draft |
+| `validate` | It is checked: compiled, with the rules' test cases, the packages' tests and the [golden tests](#golden-tests-in-the-console) from the repository, at that commit. Failures are recorded as `config.git-failed`. It stays a draft either way, and one that fails can't be published, by any route |
+| `publish` | It is checked as for `validate`, then published through the same gate as the **Publish** button: four-eyes approval (the version waits for approval), the [license](#the-license), the pre-publish hook, and, when `CONSOLE_PUBLISH_TICKET_PATTERN` is set, a change-ticket reference found in the commit message (`HR port moved (CHG-12345)`). A commit without one is recorded as `config.git-failed` and its version stays a draft |
 
 The commit counts as seen whatever happened to it, so a bad commit is reported once, not every
 minute.
@@ -286,9 +320,9 @@ With push-back on, the repository needs a deploy key or token that may write to 
 
 - **The Git card** on the configuration page: the last commit seen (its author and message), the
   last sync and the last error (a fetch that failed, a commit that did not compile, a refused
-  secret, a rejected push), with **Sync now**. The same is `GET /api/v1/config-git` (anyone who
-  may view configuration; `configs:read`), and **Sync now** is `POST /api/v1/config-git/sync`
-  (designers and admins; `configs:write`).
+  secret, a rejected push), with **Sync now**. The same is `GET /api/v1/config-git` (any role on
+  everything; `configs:read` on a token with no limit), and **Sync now** is
+  `POST /api/v1/config-git/sync` (designers and admins on everything; `configs:write`).
 - **The audit trail:** `config.git-synced` for each commit taken in (the versions and environments
   it made, and its errors), `config.git-failed` and `config.git-refused`. See
   [Admin guide](admin-guide.md).
@@ -325,7 +359,7 @@ syncd config promote dev-1/v7 --to prod \
 | `<engine>/v<n>` | The version to promote, as the console names it. It must have been published |
 | `--to` | The environment whose engines get it |
 | `--console` | The console's address. `https://`, or plain `http://` only on this host. `SYNCD_CONSOLE` does the same |
-| `--token-file` | A file holding an [API token](api-reference.md) with `configs:publish`, created by a designer or admin. `SYNCD_CONSOLE_TOKEN_FILE` does the same |
+| `--token-file` | A file holding an [API token](api-reference.md) with `configs:publish`. Only administrators create tokens; the token's creator must reach the source engine and hold a designer or admin role on every engine of the target environment, and a limited token must reach them all too. `SYNCD_CONSOLE_TOKEN_FILE` does the same |
 | `--ticket` | A change-ticket reference. Required when `CONSOLE_PUBLISH_TICKET_PATTERN` is set |
 | `--note` | A note for the change record |
 | `--ca` | PEM CA certificates the console's certificate chains to, when it isn't publicly trusted |
@@ -333,9 +367,14 @@ syncd config promote dev-1/v7 --to prod \
 The command calls `POST /api/v1/configs/promote` with
 `{"engine", "version", "to", "ticket", "note"}`. Every engine of the target environment except
 the source gets the text as a version of its own (source `promotion`, `dev-1/v7`), rendered for
-its environment, and the usual gates apply **on each engine**: four-eyes approval, the rules' test
-cases, the [golden tests](#golden-tests-in-the-console) from Git (since 0.4.1), the ticket pattern
-and the pre-publish hook.
+its environment, keeping the source version's Git commit, and the usual gates apply **on each
+engine**: four-eyes approval, the rules' test cases, the
+[golden tests](#golden-tests-in-the-console) from Git (since 0.4.1), the [license](#the-license),
+the ticket pattern and the pre-publish hook.
+
+Since 0.5.0 the caller's roles are checked on every engine first: when they do not allow publishing
+to one of them, nothing is promoted ("promoting to environment prod publishes to every engine in
+it, and your roles (…) do not allow publishing to …").
 
 | Outcome per engine | Meaning |
 |---|---|
@@ -361,7 +400,67 @@ without the scope, a missing ticket.
 Each target engine's outcome is recorded as `config.promoted` in the audit trail (from, to, the
 status and the diff summary), and `config.promoted` is raised once as a webhook event.
 
-Promotion is command line and API only: **the web console has no Promote button**.
+### Promoting from the console
+
+Since 0.5.0, **Promote** on an engine's **Configuration** page does the same through the same
+endpoint, for designers and admins (the button shows once a version of that engine was published;
+the server decides whether the caller may publish to every engine of the target). In its dialog,
+pick the source engine, one of its published versions and the target environment, give the ticket
+and note, then:
+
+1. **Preview** sends the request with `"dry_run": true`: the same role checks, and per target
+   engine what would happen (`would_publish`, or `running` when the engine runs that text already)
+   and its diff summary, shown in the command's words. Nothing is saved, published or recorded, and
+   the test cases, golden tests, license and hook are not run.
+2. **Promote**, enabled once a preview succeeded (a change of any field asks for a new one),
+   promotes, and shows each engine's outcome and how many engines published.
+
+`syncd config promote` has no dry run; the API's `dry_run` is what the preview uses. See the
+[User guide](user-guide.md#promoting-a-version).
+
+## Publishing to a strict engine
+
+The console's gates (four-eyes approval, test cases, golden tests, the license, the change ticket
+and the pre-publish hook) hold only if configuration reaches the engine through the console alone.
+Since 0.5.0 the engine can enforce that:
+
+- **Strict access** (`api.access` with `mode: strict`, the default of a new install's
+  `engine.yaml`): only the console's certificate may apply a configuration. The command line's
+  certificate and the control socket read and operate, so `syncd apply-config` on the host is
+  refused ("ApplyConfig needs the configure tier"). An engine upgraded from 0.4.x stays compatible
+  until `sudo syncdctl api-access strict` is run on its host; then import the running configuration
+  in the console, because the `api` section of a published configuration must match the host's.
+- **Signed configurations** (`engine.require_signed_config`, with the console's public key in
+  `engine.config_signing_keys`): the console signs every configuration it publishes, after its gates
+  passed, with an ECDSA P-256 key of its own; the signature covers the configuration's SHA-256, the
+  version label and a value the engine issues anew at each start and reload, so it is for that text,
+  on that engine, once. The engine applies nothing else, whoever sends it.
+
+Nothing changes in how designers work: Git sync, the **Publish** button, the API and promotion all
+publish through the console, which signs. A configuration put in place around the console (a file
+edited as root on the engine's host, or `syncd apply-config` on an engine still compatible) is
+reported on the engine's page and as `config.unpublished-running`. Setting up an engine, rotating the
+signing key and the console's `syncd-console admin config-signing-key` are in the
+[Install guide](install.md) and the [Admin guide](admin-guide.md#syncd-console-admin-config-signing-key).
+
+## The license
+
+Since 0.5.0 the console checks the license when a configuration is validated (the editor's check,
+Git sync's `validate`), saved and published (the **Publish** button, the API, Git auto-publish,
+promotion):
+
+- a configuration that uses a connector or feature outside the license's packs does not validate and
+  cannot be saved or published, at any time; the check names the connector or setting and the pack;
+- once the license's grace period is over, publishing a version that was never published to that
+  engine is refused;
+- **a rollback is always allowed**: a version that was published to that engine before can be
+  published again whatever the license says, recorded with a `license` note in
+  `config.publish.start` ("published again as a rollback, which the license never blocks");
+- running sync never stops, whatever the license says.
+
+With no console, an engine applies the same rules to `ApplyConfig`. An installation upgraded from
+0.4.1 evaluates for 30 days and then has a 30-day grace period, so a pipeline that publishes keeps
+working for about 60 days without a license. See [Licensing](licensing.md).
 
 ## Golden-file tests
 
@@ -484,9 +583,20 @@ the rules' test cases:
 
 Without Git sync, the console has no golden tests: run `syncd test` in CI.
 
-The console reads the golden files at the **branch head**, not at the commit of the version being
-checked. A version from an older commit, or a draft that has moved ahead of the branch, is checked
-against the newest tests and expected files.
+**Which commit.** Since 0.5.0 the console keeps each version's Git commit: the commit Git sync took
+it from; for a version saved or imported in the console, the branch head when it was saved; for
+a promoted version, the source version's commit. A saved version is checked and published
+against the golden files (and package files) of **its own commit**, whatever the branch head holds
+now; an edited text, like any draft, against the branch head. The check names the commit
+(**Golden tests: N of M publications as expected (at commit …)**).
+
+- A version saved while its golden files failed stays refused after the files are fixed at the
+  head: save it again, which makes a version at the new commit.
+- A version saved before 0.5.0 has no commit: it is checked at the branch head, and the check and a
+  refused publish say so in a note.
+
+In 0.4.1 every check read the golden files at the branch head, so a version from an older commit
+was checked against the newest tests.
 
 ## A worked CI pipeline
 
@@ -568,7 +678,9 @@ jobs:
 ```
 
 The promotion token needs `engines:read` and `configs:read` (to find the version) and
-`configs:publish`, and its creator must be a designer or admin. A version made from the commit
+`configs:publish`; its creator, an administrator, must reach `dev-1` and hold a designer or admin
+role on every production engine, and a token limited to an environment would not reach both (use engines
+by name, or no limit). A version made from the commit
 exists only if the commit changed `syncd.yaml` and the text was new; otherwise promote the version
 the console shows as running on `dev-1`. With four-eyes approval on, production engines answer
 `pending_approval` and wait for a second person in the console.
@@ -582,21 +694,37 @@ inline. In a configuration-as-code repository, packages are files in the same re
 
 - `syncd validate`, `syncd test` and the publish gate run each package's own tests.
 - `syncd config diff` shows a package's version change and the functions that changed.
-- With Git sync, the console reads package files from the repository (at the branch head), and
-  the configuration editor's Packages panel says when the branch has a newer file. The console
-  keeps no package files of its own: a configuration it publishes uses inline packages, packages
-  from its Git repository, or files next to the engine's own configuration file.
+- With Git sync, the console reads package files from the repository at the version's commit
+  (at the branch head for a version saved before 0.5.0), and the configuration editor's Packages
+  panel says when the branch has a newer file. The console keeps no package files of its own: a
+  configuration it publishes uses inline packages, packages from its Git repository, or files next
+  to the engine's own configuration file.
+- A package's WebAssembly module of custom functions (`wasm: { from, sha256 }`) is read from the
+  repository beside its package file, like the file, and reviewed with the change that adds it; or,
+  named by its hash alone, filled in from the console's module store once uploaded and approved
+  there. Either way it is pinned by its SHA-256, and the console publishes it inside the
+  configuration it signs. See
+  [Computed attributes and rules](rules.md#custom-functions-in-webassembly).
 
 [Computed attributes and rules](rules.md) documents packages, how rules call them, and test cases.
 
 ## Known limitations
 
-- **Promotion** is command line and API only. There is no Promote button in the web console.
-- **The console's golden tests** (and the package files it reads from Git) come from the branch
-  head, not from the commit of the version being checked.
-- **The console's version compare** shows a file package's name, version, file and pin, not the
-  functions that changed. `syncd config diff` does show them.
+- **Versions saved before 0.5.0** have no Git commit: their golden tests and package files are
+  read at the branch head, and the version compare may fall back to a package's name, version,
+  file and pin, with a note.
+- **A version saved while its golden files failed** stays refused after the files are fixed at the
+  branch head, since it is checked at its own commit: save it again.
+- **The Promote preview** checks roles and shows each engine's diff summary only: the test cases,
+  golden tests, license and hook run when you promote. `syncd config promote` has no dry run.
+- **Roles:** Git sync is for roles on everything, and an API token limited to an environment or to
+  engines cannot use it; there are no per-view scopes.
+- **Strict engines:** `syncd apply-config` on the engine's host is refused once the engine is
+  strict or requires signed configurations; configuration goes through the console. Changing the
+  configuration without the console means editing the file as root on the host, which the console
+  then reports.
 - **Renaming an engine** (`syncd-console admin rename-engine`, run by the Helm chart when it turns
-  HA on) doesn't update `CONSOLE_CONFIG_GIT_ENGINES`: change it by hand.
+  HA on) doesn't update `CONSOLE_CONFIG_GIT_ENGINES`: change it by hand (the command and the
+  console warn about it).
 - **Git sync** runs the `git` program: `file://` repositories don't work in the container image,
   which has no shell.

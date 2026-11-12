@@ -1,10 +1,11 @@
 # Connectors
 
 A connector is one system syncd reads, writes, or both. Sources are SQL databases,
-MongoDB, LDAP directories, Active Directory, CSV and other delimited files, and Microsoft
-Entra ID, plus any database that Debezium Server can capture or that has a JDBC driver.
-Targets are LDAP directories, Active Directory, SaaS applications that speak SCIM 2.0, and
-Entra ID.
+MongoDB, LDAP directories, Active Directory, CSV and other delimited files, Microsoft
+Entra ID, and since 0.5.0 REST and OData services and the HR services Workday, SAP
+SuccessFactors and UKG Pro, plus any database that Debezium Server can capture or that has
+a JDBC driver. Targets are LDAP directories, Active Directory, SaaS applications that
+speak SCIM 2.0, and Entra ID.
 
 This page says how each connector reads, what it needs on the source side, and which
 settings matter. Every key is listed in [Configuration](configuration.md#connectors-connectors);
@@ -13,22 +14,30 @@ the rules that turn source records into entities are in
 
 ## At a glance
 
-| Type | Reads | Streams changes with | Delta reads by | Checkpoint |
-|---|---|---|---|---|
-| `postgres` | Tables, views, SQL queries | Logical replication (`pgoutput`) through a replication slot | A column (`updated_at`, a counter) | LSN |
-| `mysql` | Tables, views, SQL queries (MySQL 8, MariaDB 10.5+) | The row-based binary log, read as a replica | A column | Binary log file and position |
-| `sql_server` | Tables, views, SQL queries (SQL Server 2016+, Azure SQL Managed Instance) | Change data capture, or change tracking | A column (`rowversion`) | LSN, or change tracking version |
-| `mongodb` | Collections | Change streams (replica set or sharded cluster) | A field | Resume token |
-| `ldap` | Entries under a base | syncrepl (RFC 4533), or the directory's change log (`cn=changelog`, OpenLDAP access log) | `modifyTimestamp`, or another ordered attribute | Sync cookie, or change number / log time |
-| `active_directory` | Entries under a base | DirSync | `uSNChanged` | DirSync cookie, or USN, per domain controller |
-| `debezium` | Change events from a Debezium Server sidecar (Oracle, Db2 and others) | Always streams | | Debezium keeps its own offsets |
-| `jdbc` | Tables and queries through the JDBC bridge (Db2, Informix, Oracle, any JDBC database) | Not supported; use `debezium` | A column | Watermark |
-| `csv` | A delimited file (CSV, TSV), or the newest file matching a glob | Not supported: every read is a full snapshot (`watch: true` reads again when the file changes) | | None |
-| `entra` | Entra ID users and groups, through Microsoft Graph | Delta queries (always streams) | | Delta link |
-| `scim` | Nothing: a target only | | | |
+| Type | Reads | Streams changes with | Delta reads by | Checkpoint | Pack |
+|---|---|---|---|---|---|
+| `postgres` | Tables, views, SQL queries | Logical replication (`pgoutput`) through a replication slot | A column (`updated_at`, a counter) | LSN | Core |
+| `mysql` | Tables, views, SQL queries (MySQL 8, MariaDB 10.5+) | The row-based binary log, read as a replica | A column | Binary log file and position | Core |
+| `sql_server` | Tables, views, SQL queries (SQL Server 2016+, Azure SQL Managed Instance) | Change data capture, or change tracking | A column (`rowversion`) | LSN, or change tracking version | Enterprise Database |
+| `mongodb` | Collections | Change streams (replica set or sharded cluster) | A field | Resume token | Enterprise Database |
+| `ldap` | Entries under a base | syncrepl (RFC 4533), or the directory's change log (`cn=changelog`, OpenLDAP access log) | `modifyTimestamp`, or another ordered attribute | Sync cookie, or change number / log time | Core |
+| `active_directory` | Entries under a base | DirSync | `uSNChanged` | DirSync cookie, or USN, per domain controller | Core |
+| `debezium` | Change events from a Debezium Server sidecar (Oracle, Db2 and others) | Always streams | | Debezium keeps its own offsets | Enterprise Database |
+| `jdbc` | Tables and queries through the JDBC bridge (Db2, Informix, Oracle, any JDBC database) | Not supported; use `debezium` | A column | Watermark | Enterprise Database |
+| `csv` | A delimited file (CSV, TSV), or the newest file matching a glob | Not supported: every read is a full snapshot (`watch: true` reads again when the file changes) | | None | Core |
+| `entra` | Entra ID users and groups, through Microsoft Graph | Delta queries (always streams) | | Delta link | Cloud and SaaS |
+| `rest` | Records of a REST or OData service, page by page | Not supported | An "updated since" parameter in the service's own time, or OData delta links | The service's time, or the delta link | Cloud and SaaS |
+| `workday`, `successfactors`, `ukg` | Workday (a RaaS report, or the staffing API's workers), SAP SuccessFactors (OData v2 entities), UKG Pro (personnel APIs), through the REST reader | Not supported | The service's "updated since" filter | As `rest` | Cloud and SaaS |
+| `scim` | Nothing: a target only | | | | Cloud and SaaS |
 
 Publication targets are `ldap`, `active_directory`, `scim` and `entra` connectors. One
 connector can be both a source and a target.
+
+From 0.5.0 each connector type belongs to a license pack: Core is in every license, the
+others are named in it. Under a license, a configuration that uses a type the license
+leaves out cannot be saved or published (during the evaluation and its grace period
+nothing is locked); one that already runs keeps running. Feature packs (Password Sync, High Availability, Extensibility) and
+the details are in [Licensing](licensing.md#packs).
 
 ## Read modes
 
@@ -50,7 +59,9 @@ Every object has a `mode`:
   between. Each checkpoint is committed in the same write as the changes before it, so a
   restart resumes where it left off, and a change delivered twice is harmless.
 
-A `csv` object is always `scrape`, and an `entra` object always `stream`.
+A `csv` object is always `scrape`, an `entra` object always `stream`, and an object of a
+REST connector (`rest`, `workday`, `successfactors`, `ukg`) `scrape` or `delta`, never
+`stream`.
 
 When a stream's position is no longer available on the server (a purged binary log, CDC
 cleanup, an expired resume token, a trimmed change log, a failover to a server with
@@ -129,6 +140,24 @@ On the source side:
 
 A row whose large (TOASTed) values did not change arrives without them; syncd then reads
 the row again.
+
+**`TRUNCATE`.** Since 0.5.0 a `TRUNCATE` of a followed table **deletes the table's
+entries in the targets**; 0.4.1 ignored it. When the transaction commits, the stream
+reads the object in full, so rows the same transaction put back stay and the rest are
+deleted, subject to the deletion thresholds. Set a `deletion_threshold` on the source
+connector to have an emptied table held for approval; `syncd approve "source
+<connector>/<object>"` then has the stream read the object in full at once and apply it.
+A publication syncd creates publishes truncates. One created by hand without `truncate`
+in its `publish` list is warned about at start (a `TRUNCATE` then goes unnoticed until the
+next full read); to have it noticed:
+
+```sql
+ALTER PUBLICATION syncd_hr_pub SET (publish = 'insert, update, delete, truncate');
+```
+
+**An idle stream.** Since 0.5.0 an idle stream reports its position regularly and is no
+longer restarted every five minutes; a dropped connection is noticed within about two
+minutes. A stream resumed with nothing to read shows `streaming` at once.
 
 ### Streaming a query
 
@@ -348,11 +377,27 @@ results control, 500 entries per page. `failover_urls` lists replicas tried in o
       attributes: [uid, mail, employeeNumber, telephoneNumber, title, jpegPhoto]
 ```
 
-The bind account needs read access to the entries and attributes the objects read. An
-`ldap` or `active_directory` connection takes no CA file: an `ldaps://` or StartTLS
-server's certificate is checked against the system's trust store, so a directory with a
-private CA needs that CA installed on the engine's host (or, in a container, mounted
-into the system trust store).
+The bind account needs read access to the entries and attributes the objects read.
+
+**A private CA.** An `ldaps://` or StartTLS server's certificate is checked against the
+system's trust store unless the connection names a `ca_file` (since 0.5.0): PEM CA
+certificates, then the only ones trusted for that connector, such as an Active Directory
+domain's own CA. The file is read at each connection, so a renewed CA counts from the
+next one, and it serves reads, exports, password delivery and self-service alike. On
+Kubernetes, `engine.extraCaCertificates` mounts such files under `/etc/syncd/ca`.
+
+```yaml
+connection:
+  url: ldaps://dc1.corp.example.com
+  ca_file: /etc/syncd/corp-ca.pem
+```
+
+**Passwords in the clear.** Since 0.5.0 a configuration that sends passwords (password
+delivery, initial passwords, self-service) to a directory on another host over `ldap://`
+without `starttls` no longer validates: add TLS, or set
+`passwords: { allow_cleartext: true }`. A loopback address and `ldapi://` are exempt.
+Active Directory never takes passwords in the clear. A password read from a vault is read
+again after a refused bind, so a rotated one is picked up without a restart.
 
 ### Containers renamed in a source
 
@@ -644,7 +689,10 @@ read them. A `csv` connector reads such a file in full (keys in
   once the done file exists, and the done file is deleted after the read. `max_bytes`
   (1 GiB by default) refuses a larger file.
 - **Watch.** `watch: true` reads the file again two seconds after it stops changing, or
-  when its done file appears, on top of the schedule.
+  when its done file appears, on top of the schedule. Fixed in 0.5.0: a done file that
+  appeared just after a read had found it missing could be missed by the watch, leaving
+  the file for the next scheduled read; the watch now compares with the file as that read
+  judged it.
 - **Probes.** `syncd test-connection` names the file, its size and age, whether its done
   file is there, the encoding, the delimiter and the header's columns, reading only the
   first 64 KiB. `syncd discover` lists the files a glob matches, and for one file its
@@ -652,6 +700,158 @@ read them. A `csv` connector reads such a file in full (keys in
 
 The engine's user must be able to read the inbox, and to delete done files. On Kubernetes
 the inbox is mounted through `engine.extraVolumes`.
+
+## REST and OData services
+
+Since 0.5.0. A `rest` connector reads a JSON API page by page and sends each record to the
+engine as it arrives, so memory holds one page at a time. It is the reader under the HR
+connectors below, which fill in what their service fixes. Keys in
+[Configuration](configuration.md#rest-and-hr-services-rest-workday-successfactors-ukg).
+
+!!! warning "Tested against fakes only"
+    The REST reader and the Workday, SuccessFactors and UKG Pro presets are built from the
+    vendors' published API shapes and tested against fakes of them written in the syncd
+    repository (`syncd-fakes rest`, `workday`, `successfactors`, `ukg`). **None has run
+    against a real service or tenant.** Nightly tests against real tenants exist, and run
+    only once their credentials are configured in the syncd repository; at release they
+    were not. Treat these connectors as unverified until you have tried them against your
+    own tenant.
+
+```yaml
+- name: hr
+  type: rest
+  connection:
+    url: https://api.example.com/v1     # object paths are relative to it
+    auth:
+      token: { env: HR_TOKEN }           # or basic, oauth2; api_key may go with any
+    rate_limit: 10                       # requests per second, over every object
+    max_concurrency: 2
+  objects:
+    - type: person
+      anchor: id
+      mode: delta
+      interval_secs: 60
+      full_interval_secs: 86400
+      rest:
+        path: /people
+        records: $.data
+        paging: { style: next_link, next: $.links.next }
+        fields:
+          id: $.id
+          givenName: $.name.first
+          mail: $.emails[?(@.type=='work')].value
+          hired: { path: $.hireDate, type: timestamp }
+        delta:
+          query: { updated_since: "{since}" }
+          modified: $.updatedAt
+        deletes:
+          tombstone: { path: $.deleted }
+```
+
+- **Signing in.** A bearer `token`, `basic` credentials, or `oauth2`, with or without an
+  `api_key` header beside it; or a client certificate alone (`tls.client_certificate_file`
+  and `tls.client_key`). `oauth2` takes the grants `client_credentials` (with a client
+  secret or `private_key_jwt`), `refresh_token`, `jwt_bearer` and `saml2_bearer`. The
+  token is renewed a minute before it expires and once after a `401`.
+- **Records and fields.** `records` is the JSON path to the array of records in a page;
+  `fields` maps each attribute to a JSON path in the record, with a `type` (`string`,
+  `int`, `bool`, `timestamp`, `list`). Timestamp fields arrive typed: rules compute with
+  them, LDAP targets get GeneralizedTime, `effective()` reads them. Paths are a subset of
+  JSONPath, enough to flatten a nested array "where a field is a value"
+  (`$.emails[?(@.type=='work')].value`).
+- **Paging** in seven styles: `none`, `next_link`, `link_header`, `offset`, `page`,
+  `odata` (`@odata.nextLink` or `__next`) and `cursor`.
+- **Changes** (`mode: delta`). The object is read in full first and every
+  `full_interval_secs` (or on `schedule`); in between, a delta read adds `delta.query`
+  with `{since}`: the **service's own time** at the start of the last read (from its
+  `Date` header or a body field), less `overlap_secs` (60). The engine's clock is never
+  used, so a service whose clock disagrees with the engine's loses nothing. Records read
+  again in the overlap with an unchanged `delta.modified` stamp are not sent again.
+  `delta.style: odata` follows the service's delta links instead. The position is a
+  checkpoint, so a restart resumes without a full read.
+- **Deletes.** A full read deletes what it no longer finds, under the source's deletion
+  threshold. A delta read finds deletes sooner with `deletes.tombstone` (a field that
+  marks a deleted record) or `deletes.endpoint` (a "deleted since" listing).
+- **Throttling.** `429` and `503` wait for `Retry-After` (five minutes at most) or a
+  growing pause, and are tried again up to `max_retries`, as are server errors and
+  answers that do not come. Throttled requests are counted (`throttled=` in
+  `syncd status`, the metric `syncd_source_throttled_total`). A read that still fails
+  ends where it is: nothing is deleted, and the source is restarted as any source is.
+- **Probes.** `syncd test-connection <connector>` signs in and reads the first page of the
+  first object; `syncd discover <connector>` lists the objects and samples one. In the
+  console, the connector form has the connection fields, the object's path (or report,
+  entity, resource), records and read mode; fields, paging, delta and OAuth grants are
+  edited in the YAML tab.
+
+Not built: writing to a REST service (it is a source only), queries sent as a `POST`
+body, and JSONPath beyond the subset (no recursive descent, slices or other
+expressions). A report that comes as one answer, rather than in pages, is held in memory
+while it is parsed.
+
+### HR services: Workday, SuccessFactors, UKG Pro
+
+The three presets are the REST reader with their service's paths, paging, delta filter
+and token endpoint filled in; anything the configuration sets wins, so each assumption
+below can be overridden.
+
+| Type | Connection | Objects | Preset |
+|---|---|---|---|
+| `workday` | `url` (the tenant's services host), `tenant`; `auth.oauth2` with `grant: refresh_token` (an API client for integrations, `client_auth: basic`) or `jwt_bearer` (an x509 API client; audience `wd2`, subject the integration system user) | `rest.report: <owner>/<report>` (a RaaS custom report, the recommended path), or `rest.resource: workers` (the staffing REST API, full reads only) | Token endpoint `<url>/ccx/oauth2/<tenant>/token`; a report at `/ccx/service/customreport2/<tenant>/<owner>/<report>?format=json`, records `$.Report_Entry`, `mode: delta` by an `Updated_From` prompt; workers at `/ccx/api/staffing/v6/<tenant>/workers`, 100 a page |
+| `successfactors` | `url` (the data center's API server), `company_id`; `auth.basic` (sent as `<user>@<company id>`) or `auth.oauth2` with `grant: saml2_bearer` (an assertion from the instance's `/oauth/idp`, or one made elsewhere) | `rest.entity`: one OData v2 entity per object (`PerPerson`, `PerPersonal`, `EmpEmployment`, `EmpJob`, `PerEmail`, ...), joined by the view | `/odata/v2/<entity>`, `$format=json`, records `$.d.results`, OData paging, `mode: delta` by `lastModifiedDateTime` |
+| `ukg` | `url` (the tenant's service host); `auth.basic` (a web service account) **and** `auth.api_key` (the customer API key, sent as `US-Customer-Api-Key`) | `rest.resource`: `person-details`, `employment-details`, ..., joined by the view on `employeeId` | `/personnel/v1/<resource>`, `page` and `per_Page` paging (100 a page), `mode: delta` by `changedSince` |
+
+```yaml
+- name: workday
+  type: workday
+  connection:
+    url: https://wd2-impl-services1.workday.com
+    tenant: acme
+    auth:
+      oauth2:
+        client_id: <API client id>
+        grant: refresh_token
+        client_auth: basic
+        client_secret: { env: WORKDAY_CLIENT_SECRET }
+        refresh_token: { env: WORKDAY_REFRESH_TOKEN }
+  objects:
+    - type: worker
+      anchor: Employee_ID
+      mode: delta
+      interval_secs: 300
+      full_interval_secs: 86400
+      rest:
+        report: ISU_syncd/Workers_for_syncd
+        fields:
+          Employee_ID: Employee_ID
+          givenName: Legal_Name_First_Name
+          hired: { path: Hire_Date, type: timestamp }
+          leaves: { path: Termination_Date, type: timestamp }
+        delta:
+          modified: Last_Updated
+```
+
+- **Effective dates.** Hire and termination dates are fields of the report (or of
+  SuccessFactors' `EmpEmployment`), typed as timestamps, and rules follow them with
+  `effective()`, which the engine evaluates again at the instant it changes, whether a
+  read happens then or not. `examples/workday-to-openldap.yaml` in the source
+  repository has an account appear three days before the hire date and go through a
+  staged leaver policy after the termination day, with golden tests at three instants.
+  See [Effective dates](rules.md#effective-dates).
+- **Not built:** Workday's SOAP `Get_Workers` (a RaaS report covers effective dating and
+  incremental reads); SuccessFactors `$expand` (the view joins the entities instead),
+  signing a SAML assertion locally and SAP's X.509 grant, and future-dated `EmpJob` rows
+  (one record per anchor is kept, the last read); OAuth against UKG's own endpoints (it
+  is a setting, never tried, even against a fake).
+- **Assumed, and settings:** the report's field names and its `Updated_From` prompt are
+  the report author's; SuccessFactors' paging by `__next` on every entity (some need
+  `paging=snapshot` or `customPageSize` in `rest.query`); UKG's `changedSince`
+  parameter, its `per_Page` spelling and the field names. The syncd repository's
+  `docs/progress/phase6/hr-saas-sources.md` lists every assumption. SuccessFactors and
+  UKG Pro have no tombstones here: deletes are found by full reads.
+
+Setting up the tenant side (Workday's integration system user and API client,
+SuccessFactors' OAuth client, UKG's web service account) is described in the syncd
+repository's `docs/connectors/workday.md`, `successfactors.md` and `ukg.md`.
 
 ## Binary values and dates from sources
 
@@ -667,7 +867,8 @@ the inbox is mounted through `engine.extraVolumes`.
   comparison with a timestamp reads it automatically. An object's `timestamps` list types
   the listed attributes or columns when a record arrives, so rules get a timestamp and
   LDAP targets get GeneralizedTime. Turning it on for an object already synced makes each
-  of its records read as changed once.
+  of its records read as changed once. A REST connector's fields typed `timestamp` arrive
+  typed the same way.
 
 See [Dates and times](rules.md#dates-and-times) and [Binary values](rules.md#binary-values).
 
@@ -701,6 +902,12 @@ targets too; see [SCIM targets](#scim-targets) and
   of every publication against what it exported, and `syncd reconcile` does it on
   demand. With `drift` set, entries are also read back from the target; see
   [Drift detection](configuration.md#drift-detection-drift).
+- **Entries nobody manages.** Since 0.5.0, after each scheduled drift check (and with
+  `syncd unmanaged`), the engine lists the target's entries of the publication's object
+  classes under its base with a read-only paged search, and reports those no publication
+  exported, and members of privileged groups no rule accounts for (through nested groups
+  in Active Directory). Nothing is written; `syncd adopt` takes an entry over. See
+  [Unmanaged entries](configuration.md#unmanaged-entries-unmanaged).
 
 The bind account needs the rights to add, modify, rename and delete entries under the
 publication's DNs (and to create containers, with `create_containers`, and delete them,
@@ -818,8 +1025,10 @@ records that the entry is disabled.
 A staged leaver policy (`disable_after`, `strip_groups_after`, `move_to`,
 `delete_after`) disables, strips the groups syncd manages, moves and deletes at set times
 after the entity left; see [Change safety and lifecycle](change-safety.md#staged-leaver-policy).
-An entry recreated under a new entity is not re-enabled, and memberships in groups syncd
-does not manage are not stripped.
+Since 0.5.0, `strip_unmanaged_groups` takes the leaver out of groups syncd does not
+manage too, except `keep_groups` (LDAP and Active Directory targets; tested on OpenLDAP
+only), and an entity added at the DN of a leaver's disabled entry takes the entry over
+and enables it (a leaver moved aside is not taken over).
 
 ### Active Directory targets
 
@@ -830,7 +1039,8 @@ does not manage are not stripped.
 - Accounts can be created with a password (below), and captured password changes are
   delivered as `unicodePwd`; see
   [How a change travels](password-sync.md#how-a-change-travels). Both need
-  `ldaps://` or `starttls`.
+  `ldaps://` or `starttls`; a domain whose certificate comes from its own CA needs that
+  CA in the connection's `ca_file` (since 0.5.0) or the system trust store.
 - Disabling and enabling read the `userAccountControl` the directory holds and set or
   clear ACCOUNTDISABLE on it, so the other flags stay, whether mapped or set by hand.
 - `writeback` is refused for Active Directory targets, which have no change log syncd can
@@ -899,7 +1109,7 @@ engine writes the attributes (keys in
 | `account_control` | `userAccountControl` from flag names (or an int expression), `NORMAL_ACCOUNT` when unset; `password_never_expires` sets or clears `DONT_EXPIRE_PASSWORD`; `must_change_password` writes `pwdLastSet` `0` (change at next logon) or `-1`. Once the person changes their password the directory keeps its own clock in `pwdLastSet`, so a drift policy of `accept` suits it. |
 | `home` | `homeDirectory`, `homeDrive` (a letter and a colon), `profilePath`, `scriptPath`: plain attributes. No share is created. |
 | `user_principal_name` | `userPrincipalName` as `<from>@<suffix>`. |
-| `sam_account_name` | `sAMAccountName`, cut to `max_length` characters (20, the directory's limit, at most). |
+| `sam_account_name` | `sAMAccountName`, cut to `max_length` characters (20, the directory's limit, at most). With `on_conflict: unique` (since 0.5.0), a second holder of a name gets a counter. |
 
 Each block is sugar for the attributes it writes. The planner, drift checks, adoption,
 the object explorer and previews see plain attributes, so a drift policy or an `adopt`
@@ -912,9 +1122,20 @@ The blocks are refused on any other target, and so is mapping an attribute both 
 `attributes` and through a block.
 
 !!! note "`sAMAccountName` must be unique"
-    The directory enforces it, and a duplicate fails the export into the dead-letter
-    queue: there is no `on_conflict: unique`. Mint the login once as a computed attribute
-    with `unique()` and `mode: assign_once`, then write it with `sam_account_name`:
+    The directory enforces it, and by default a duplicate fails the export into the
+    dead-letter queue. Since 0.5.0, `on_conflict: unique` lets the publication resolve
+    it: the second holder of a name gets a counter from 2 in place of the name's last
+    characters (`jsmith`, `jsmith2`), the name is kept in the engine's store, and a
+    leaver's name stays taken while the account is in the directory. Turning it on renames
+    nobody who has a name already. Uniqueness is among the names syncd claims: accounts it
+    does not manage are not searched.
+
+    ```yaml
+    sam_account_name: { from: e.login, max_length: 20, on_conflict: unique }
+    ```
+
+    Or mint the login once as a computed attribute with `unique()` and
+    `mode: assign_once`, then write it with `sam_account_name`:
 
     ```yaml
     - name: login
@@ -951,13 +1172,22 @@ replace with `write: replace`, after the add.
 - **TLS is required.** Active Directory takes passwords only over LDAPS or StartTLS. A
   `passwords` block on an Active Directory target whose connection is `ldap://` without
   `starttls` is refused when the configuration is validated, and the writer refuses again
-  before anything is sent.
-- **A refused password** (the directory's password policy) does not fail the export. The
+  before anything is sent. Since 0.5.0 other directories on another host are held to the
+  same rule unless `passwords.allow_cleartext` is set (see
+  [above](#ldap-directories)).
+- **A refused password** (the directory's password policy) does not fail the add. The
   entry stays without the password, disabled on Active Directory. It is counted
-  (`initial passwords: N set, N refused` in `syncd status`), logged by DN and publication,
-  never by value, and not retried.
+  (`initial passwords: N set, N refused` in `syncd status`) and logged by DN and
+  publication, never by value. Since 0.5.0 it is **tried again**, up to three attempts in
+  all (the next one at the entity's next change or reconciliation, or at the latest a
+  minute times the refusals so far), and then the entry is
+  **held in the dead-letter queue**, where it shows in `syncd dlq`, the console,
+  `syncd_publication_dead_letters` and the `SyncdDeadLetters` alert, and `syncd retry`
+  tries once more; 0.4.1 only logged it. Entries refused before the upgrade are not
+  retried. The number of attempts and the wait are fixed.
 - **A change captured later** replaces the initial password.
-- An entry a drift check puts back is re-added without one.
+- An entry a drift check puts back gets an initial password since 0.5.0 (it was re-added
+  without one before).
 - Telling the person their password is out of scope: the log and the status say that one
   was set, never what it is.
 
@@ -1007,6 +1237,8 @@ connectors:
       # or basic: { username: syncd, password: { env: SCIM_PASSWORD } }
       # or oauth2: { token_url: https://login.example.com/oauth2/token, client_id: syncd,
       #              client_secret: { file: /run/secrets/scim-client-secret }, scope: scim }
+      # (or, in place of client_secret, a signed assertion:
+      #  private_key_jwt: { private_key: { file: /etc/syncd-keys/scim-client.key }, key_id: key-1 })
       rate_limit: 20
 publications:
   - name: people_to_saas
@@ -1046,11 +1278,20 @@ publications:
   it again.
 - **Authentication** is a bearer token, basic credentials, or an OAuth 2.0
   client-credentials token fetched from `token_url` and renewed before it expires.
-  `base_url` and `token_url` must be `https://` unless on loopback.
+  Since 0.5.0 the client can prove itself with `private_key_jwt` (RFC 7523: an assertion
+  signed with an RSA or P-256 key, `PS256`, `RS256` or `ES256`) in place of a client
+  secret. The secret or the key is read where its reference says with every token
+  request, so a rotated one is used from the next token; a bearer token or a basic
+  password is not read again after a `401`. `base_url` and `token_url` must be
+  `https://` unless on loopback.
 - **Passwords.** A captured password replaces `password` (see
   [What is built](password-sync.md#what-is-built)). A provider that does not
   announce `changePassword` support is refused at connect when a publication delivers
   passwords to it.
+- **Users nobody manages.** Since 0.5.0 the unmanaged-entries pass lists the provider's
+  users page by page (`startIndex` and `count`, paced and retried like every request),
+  each named by its `userName`, and reports those syncd did not export. There are no
+  privileged groups for SCIM.
 
 `syncd test-connection` reports what the provider supports (patch, change password,
 ETags, filter) and its resource types. `syncd discover` lists the resource types, and for
@@ -1097,11 +1338,34 @@ publications:
       - { name: engineering, filter: e.department == "Engineering", dn: displayName=Engineering, member_attribute: members }
 ```
 
-**Authentication** is OAuth 2.0 client credentials with a client secret, against the
-cloud's sign-in host; the token is renewed a minute before it expires. A certificate
-(client assertion) is not supported. The application needs Graph application
-permissions for what the publications do: `User.ReadWrite.All`, `Group.ReadWrite.All`,
-`Directory.ReadWrite.All` for licences, `AppRoleAssignment.ReadWrite.All` for app roles.
+**Authentication** is OAuth 2.0 against the cloud's sign-in host; the token is renewed a
+minute before it expires. `auth` takes exactly one way of signing in (keys in
+[Configuration](configuration.md#entra-id-entra)):
+
+| Method | What the engine sends | Notes |
+|---|---|---|
+| `client_secret` | The secret, with each token request | Read where its reference says every time, so a rotated secret is used with the next token. |
+| `certificate_file` with `private_key_file` or `private_key` (since 0.5.0) | A client assertion, a JWT valid ten minutes, signed with the certificate's key | RSA keys; `PS256` with the SHA-256 thumbprint by default, `assertion_algorithm: RS256` with the SHA-1 thumbprint. Upload the certificate (not the key) to the app registration. The files are read when the connector starts. No EC keys, `x5c` or PFX. |
+| `federated_token_file`, or `workload_identity: true` (since 0.5.0) | The token in the file, as the client assertion, accepted through a federated credential of the application | The file is read for every token request. `workload_identity` takes it from `AZURE_FEDERATED_TOKEN_FILE`, and the client id from `AZURE_CLIENT_ID` when `client_id` is unset: what AKS workload identity sets. |
+| `managed_identity` (since 0.5.0) | Nothing: the token comes from the Azure VM's instance metadata service | `{ client_id: ... }` picks a user-assigned identity. Grant the identity's service principal the Graph application permissions (with PowerShell or the Graph API, not the portal's app registration pages). |
+
+```yaml
+      auth: { client_id: <application id>, certificate_file: /etc/syncd-keys/entra-app.crt, private_key_file: /etc/syncd-keys/entra-app.key }
+      # auth: { workload_identity: true }      # AKS workload identity
+      # auth: { managed_identity: {} }         # the Azure VM's managed identity
+```
+
+**Only the client secret has run against a real tenant.** The certificate, the federated
+token and the managed identity are tested against syncd's fake Microsoft Graph, whose
+token endpoint checks an assertion as Entra ID documents it. A nightly test signs in to a
+real tenant with a certificate once the syncd repository has the credentials for it,
+which it did not at release; a federated token and a managed identity cannot be tested
+from its CI at all. The console has no form fields for the new methods: write them in the
+YAML tab.
+
+The application needs Graph application permissions for what the publications do:
+`User.ReadWrite.All`, `Group.ReadWrite.All`, `Directory.ReadWrite.All` for licences,
+`AppRoleAssignment.ReadWrite.All` for app roles.
 
 **National clouds.** `cloud` picks the Graph and sign-in hosts:
 
@@ -1141,6 +1405,9 @@ permissions for what the publications do: `User.ReadWrite.All`, `Group.ReadWrite
   page and in the metric `syncd_entra_skipped_synced_users{target}`.
 - **Throttling.** A `429` waits for `Retry-After` (a minute at most, three times). A lost
   connection marks the target down until a probe finds it again.
+- **Users nobody manages.** Since 0.5.0 the unmanaged-entries pass lists the tenant's
+  users and reports those syncd did not export (tested against the fake Graph only).
+  There are no privileged groups for Entra ID.
 
 ### As a source
 
@@ -1167,36 +1434,44 @@ sudo syncd discover hr_db public.people  # a container's fields and a few record
 ```
 
 `test-connection` reports a directory's change log and change numbers when its root DSE
-publishes them, and for a Debezium connector checks that the address can be listened on.
+publishes them, for a Debezium connector checks that the address can be listened on, and
+for a REST connector signs in and reads the first page of the first object.
 The console's configuration editor runs the same checks, with a schema browser and sample
 records read as the engine would read them, for designers; each check is audited and
 sensitive values stay hidden unless revealed.
 
 ## Tested servers
 
-The continuous integration suite runs each connector end to end against real servers on
-Ubuntu 24.04 runners (`tests/e2e` and `.github/workflows/ci.yml` in the source
-repository):
+The continuous integration suite runs each connector end to end against real servers, or
+the stand-ins named below, on Ubuntu 24.04 runners (`tests/e2e` and
+`.github/workflows/ci.yml` in the source repository; `docs/TESTED.md` there says which
+rows are the real product and which are stand-ins). 0.5.0's CI had not run in GitHub
+Actions before the release's own pull request:
 
 | Connector | Tested against | What is covered |
 |---|---|---|
-| PostgreSQL | PostgreSQL 16 | Logical replication of tables and a query with watched tables, a publication completed with a watched table it lacked, delta reads |
+| PostgreSQL | PostgreSQL 16 | Logical replication of tables and a query with watched tables, a publication completed with a watched table it lacked, delta reads; since 0.5.0 a `TRUNCATE` whose transaction puts rows back, an emptying `TRUNCATE` held by the deletion threshold and approved, a resumed idle stream showing `streaming` |
 | MySQL / MariaDB | The MySQL 8 and MariaDB packages of Ubuntu 24.04 | Binary log streaming and delta reads |
 | SQL Server | SQL Server 2019 and 2022 (Microsoft's container images) | Change data capture, change tracking, delta reads, lost history |
 | MongoDB | MongoDB 8.0 | Change streams and delta reads |
 | LDAP source | OpenLDAP 2.6 | Full reads, delta reads, syncrepl, failover to a second URL, the access log, a container renamed under the base, case-only renames |
 | LDAP source | 389 Directory Server 2.4 | Retro Changelog (`cn=changelog`), anchored on `nsUniqueId` |
 | Active Directory source | Samba AD DC (4.19 in the benchmarks) | DirSync streaming |
-| LDAP target | OpenLDAP 2.6, with and without ppolicy | Adds, renames, moves, case-only renames, containers created and removed when empty, groups, references, adoption, drift, write-back, entries moved by hand put back (`entryUUID`), permanent values, `openldap` profile |
+| LDAP target | OpenLDAP 2.6, with and without ppolicy | Adds, renames, moves, case-only renames, containers created and removed when empty, groups, references, adoption, drift, write-back, entries moved by hand put back (`entryUUID`), permanent values, `openldap` profile; since 0.5.0 unmanaged entries and privileged members (`tests/e2e/unmanaged.sh`), a leaver taken out of groups made by hand except `keep_groups`, a rehired person taking over their locked entry |
 | LDAP target | 389 Directory Server 2.4 | `389ds` profile: disable and re-enable, case-only renames, entries moved by hand put back (`nsUniqueId`), a move aside into a taken RDN |
-| Active Directory target | Samba AD DC | Users and groups, containers, disable and move, group membership following moves, entries moved by hand put back (`objectGUID`), two users swapping names, a move aside into a taken RDN |
+| Active Directory target | Samba AD DC | Users and groups, containers, disable and move, group membership following moves, entries moved by hand put back (`objectGUID`), two users swapping names, a move aside into a taken RDN; since 0.5.0 unmanaged entries with a nested privileged group, `sam_account_name.on_conflict: unique` |
+| Initial passwords on Active Directory | Samba AD DC over LDAPS and StartTLS, its certificate trusted through `ca_file` (`tests/e2e/ad-passwords.sh`, since 0.5.0) | Users created enabled with the password HR chose (they bind with it) or a generated one they must change; a connector with another CA, or none, refused the connection. The syncd repository's `docs/TESTED.md` still says the Samba row does not cover `unicodePwd`; its CI workflow runs this scenario |
 | Debezium | Debezium Server 3.0, with PostgreSQL standing in for Oracle and Db2 | Snapshot, changes, tokens, either side stopping |
 | JDBC bridge | PostgreSQL and Apache Derby through their JDBC drivers | Scrape and delta reads, tokens, TLS, the bridge stopping |
 | CSV | Files written by the test | A glob, a done file, `watch`, a byte order mark, a sniffed delimiter, quoted and multi-valued cells; a replaced file applying its changes and deletes; skipped rows in the metrics and the status; a partial file not read until its done file appears; the probes |
 | SCIM target | Two instances of syncd's fake SCIM provider (`syncd-fakes scim`): one with every feature, one without `PATCH` and with strict ETags | Users with e-mail addresses and booleans, a group with members, a changed row patched, a leaver disabled on one and deleted on the other, a resource that already existed adopted, drift reverted, the probes |
-| Entra ID | syncd's fake Microsoft Graph (`syncd-fakes graph`), seeded with SKUs, a synced and a cloud-only user | Users with licences and a group; the synced user's properties skipped and counted (no dead letter) while its group and licence are written; the tenant read back as a source into OpenLDAP, and a change in the tenant following through the delta query |
+| Entra ID | syncd's fake Microsoft Graph (`syncd-fakes graph`), seeded with SKUs, a synced and a cloud-only user | Users with licences and a group; the synced user's properties skipped and counted (no dead letter) while its group and licence are written; the tenant read back as a source into OpenLDAP, and a change in the tenant following through the delta query; since 0.5.0 signing in with a certificate, and an assertion signed with another key refused |
+| SCIM `private_key_jwt` | The fake Graph's token endpoint, standing in for the provider's authorization server | An assertion signed with the registered key buys a token; one signed with another key, or about another client, buys nothing |
+| REST source | syncd's fake HR service (`syncd-fakes rest`), whose clock runs an hour behind (`tests/e2e/rest-source.sh`) | A full read in pages, delta reads by the service's own time, a delete by tombstone, `429` and `503` with `Retry-After`, a full read that breaks off and deletes nothing, a restart resuming from the checkpoint |
+| Workday, SuccessFactors, UKG Pro | Fakes built from the vendors' published API shapes (`tests/e2e/hr-saas.sh`) | Workday's RaaS report with a refresh token and effective dates; SuccessFactors' OData entities joined into one person; UKG's personnel resources joined the same way |
+| Secrets from a vault | A double of HashiCorp Vault (`syncd-fakes vault`), with AppRole (`tests/e2e/secrets-vault.sh`) | Two OpenLDAP connections bound with passwords read from it, both passwords rotated, the connections cut and remade with the new ones without a restart, only references in the configuration, status and logs |
 | Active Directory conveniences | `syncd preview` against the running engine | The attributes computed from CSV records; `syncd validate` refusing the blocks on an LDAP target |
-| Initial passwords | OpenLDAP with PostgreSQL streaming (`tests/e2e/passwords.sh`) | A person provisioned with an initial password binds with it; a change captured later replaces it; `generate` creates every entry with a password; the counts in `syncd status`; no password in the engine's log |
+| Initial passwords | OpenLDAP with PostgreSQL streaming (`tests/e2e/passwords.sh`) | A person provisioned with an initial password binds with it; a change captured later replaces it; `generate` creates every entry with a password; the counts in `syncd status`; no password in the engine's log; since 0.5.0 a directory on another host over `ldap://` refused unless `allow_cleartext` |
 
 What a connector does when its server fails is also tested without real servers, against
 servers the tests run themselves (in the `test` job): one that accepts connections and
@@ -1212,30 +1487,44 @@ returns a result code, goes silent or drops the connection per request. They cov
   limit, naming the server; a refused one failing at once.
 - **MongoDB:** a silent server failing the first operation at the limit.
 
+Since 0.5.0 a nightly workflow (`nightly-real.yml`) has jobs against real systems:
+Microsoft Active Directory on Windows Server, a test Entra ID tenant, hosted SCIM
+applications, PingDirectory, and Workday, SuccessFactors and UKG Pro tenants. Each runs
+only once its credentials (or, for Active Directory, a self-hosted runner) are configured
+in the syncd repository, and **at release none of them was**: those jobs have never run.
+The one real-system job that runs every night needs nothing: the open-source SCIM server
+`scim2-server`.
+
 Not tested against a real server:
 
-- **Ping Identity / UnboundID** (`unboundid` profile): only the mapping is unit-tested.
+- **Ping Identity / UnboundID** (`unboundid` profile): only the mapping is unit-tested
+  (a PingDirectory job is in the nightly workflow, not yet run).
 - **Microsoft Active Directory** itself: Active Directory is tested through Samba AD DC.
-- **Initial passwords on Active Directory**: the Samba scenario is not run, because the
-  LDAP connector cannot take a CA file yet and the Samba DC's certificate is self-signed.
-  The sequence Active Directory needs is tested against a scripted LDAP server.
 - **Microsoft Entra ID** and **real SCIM applications**: the end-to-end tests use syncd's
-  fake Graph and fake SCIM provider, which implement the subset syncd uses.
+  fake Graph and fake SCIM provider, which implement the subset syncd uses. Entra ID's
+  certificate, federated-token and managed-identity sign-in are tested against the fake
+  only.
+- **REST services, Workday, SAP SuccessFactors and UKG Pro**: fakes only.
+- **Vault, AWS Secrets Manager and Azure Key Vault**: doubles only.
 - **Oracle and Db2**: their container images do not fit the CI runners, so PostgreSQL
   (Debezium) and Apache Derby (JDBC) stand in. Debezium's change events have the same
   shape for every database it captures.
 - **Red Hat Directory Server, ForgeRock / OpenDJ, Oracle DSEE and Oracle Unified
   Directory**: supported through the same standards (`389ds` profile, `cn=changelog`) but
   not in the suite.
+- **Unmanaged entries on 389 Directory Server and Ping**: unit-tested only.
 
 ## Not supported
 
-- **Other source families**: HR or SaaS APIs, Kafka and inbound SCIM are not planned until
-  a customer needs them.
-- **Other targets**: databases, files, and applications that do not speak SCIM 2.0.
+- **Other source families**: Kafka and inbound SCIM are not planned until a customer
+  needs them. HR and SaaS services are read through the REST reader since 0.5.0; Workday
+  SOAP and SuccessFactors `$expand` are not built.
+- **Other targets**: databases, files, REST services, and applications that do not speak
+  SCIM 2.0.
 - **eDirectory's change cache** as a stream.
-- **Entra ID with a certificate**: the connector takes a client secret only.
-- **Password capture plugins** for the Windows password filter and the 389 and OpenLDAP
-  directories are not built: changes come from the console's self-service page,
-  `syncd password set` and capture agents; see
-  [What is built](password-sync.md#what-is-built).
+- **Entra ID with EC keys, an `x5c` header or a PFX file**: a certificate's key must be
+  RSA, in PEM.
+- **Password capture**: since 0.5.0 the OpenLDAP overlay and the 389 Directory Server
+  plugin capture changes (built from source on the directory's host, tested on Ubuntu
+  24.04 only), and the Windows password filter is compile-checked only, never loaded on a
+  domain controller; see [Password synchronisation](password-sync.md).

@@ -36,10 +36,12 @@ use is RSA's to state.
 | RSA Operations Portal | `ubi9/ubi` with `java-17-openjdk-headless`, for the Portal and the Connector | Red Hat OpenJDK 17 |
 
 **syncd** is the exception: it is written in Rust, its images are distroless rather than UBI (with `-fips`
-images for amd64 from 0.4.0), and it takes its cryptography from rustls with aws-lc-rs (AWS-LC). A FIPS build (`-fips` in the release
-file's name; built from source, since the published release has none), installed with `--fips`, uses the AWS-LC FIPS 140-3 module and refuses to start in
+images for amd64 and, from 0.5.0, arm64), and it takes its cryptography from rustls with aws-lc-rs (AWS-LC). A FIPS build (`-fips` in the release
+file's name; the release workflow builds one for x86_64 and, from 0.5.0, aarch64, though no release has been published yet), installed with `--fips`, uses the AWS-LC FIPS 140-3 module and refuses to start in
 FIPS mode on a standard build. The console then hashes passwords with PBKDF2-HMAC-SHA512 instead of
-Argon2id, and its own HTTPS (when it serves it rather than a proxy) uses the same FIPS provider. The optional JDBC bridge is Java and takes its cryptography from its Java runtime. See
+Argon2id, and its own HTTPS (when it serves it rather than a proxy) uses the same FIPS provider. Its license
+check (from 0.5.0) verifies ECDSA P-256 through the same module, so it needs no re-signed file. Custom
+functions in WebAssembly are refused in FIPS mode unless `SYNCD_FIPS_ALLOW_WASM_FUNCTIONS` is set. The optional JDBC bridge is Java and takes its cryptography from its Java runtime. See
 [syncd's page](syncd/fips-and-stig.md).
 
 **Turning FIPS mode on.** Run the images on a RHEL host with FIPS mode enabled
@@ -162,10 +164,16 @@ product's page has the full table.
 | Prometheus metrics on a separate management port (`MANAGEMENT_SERVER_PORT`) | Yes | Yes | Yes | Yes |
 | Helm chart: non-root, read-only root file system, no capabilities | Yes | Yes | Yes | Yes |
 
-syncd implements only part of this baseline: from 0.4.0 its audit trail is the ENS one, with the
-`ENS_AUDIT_*` settings and SIEM outputs, but not the other `ENS_*` settings. Its console has its own
-classification banners, idle (30 minutes) and absolute (12 hours) session limits, and sign-in
-throttling and lockout, and its services run as hardened systemd units or in a hardened Helm chart; [its page](syncd/fips-and-stig.md) maps them to the STIG.
+syncd implements part of this baseline. From 0.4.0 its audit trail is the ENS one, with the
+`ENS_AUDIT_*` settings and SIEM outputs. From 0.5.0 its console also takes a notice-and-consent banner
+(`ENS_CONSENT_BANNER_ENABLED`), sessions per account and an administrators' idle limit
+(`ENS_SESSION_MAX_PER_USER`, `ENS_SESSION_ADMIN_IDLE_TIMEOUT`), lockout and password rules
+(`ENS_LOCKOUT_*`, `ENS_PASSWORD_*`), HSTS (`ENS_HSTS_*`) and X.509 (CAC/PIV) sign-in with revocation
+checking (`ENS_X509_*`, with `ENS_X509_CA_FILE` rather than an issuer list). Those names were chosen in
+syncd and not yet compared with the other applications', and syncd has no `ENS_CSP_REPORT_ONLY` or
+`ENS_COOKIE_SECURE`. Its console keeps its own classification banners and idle (30 minutes) and
+absolute (12 hours) session limits, and its services run as hardened systemd units or in a hardened
+Helm chart; [its page](syncd/fips-and-stig.md) maps them to the STIG.
 
 Settings worth fixing for every STIG deployment:
 

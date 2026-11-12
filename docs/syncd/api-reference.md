@@ -1,12 +1,12 @@
 # API reference
 
-syncd has these programmable interfaces:
+syncd has these programmable interfaces. This page describes syncd 0.5.0 (commit `a9d17c6`).
 
 | Interface | Served by | Used by | Authentication |
 |---|---|---|---|
 | [Console REST API](#console-rest-api) (`/api/v1`) | `syncd-console` | The console UI, scripts, pipelines | The console's session cookie, or an [API token](#api-tokens) |
 | [Audit pull API](#audit-trail) (`GET /api/audit/events`) | `syncd-console` | A SIEM collector | An API token with `audit:read`, or an admin's or auditor's session |
-| [Engine control API](#engine-control-api-grpc) (gRPC, `syncd.v1.EngineControl`) | `syncd` | The console, the `syncd` command line, the other engine of an HA pair | Mutual TLS, or the loopback listener and the control socket |
+| [Engine control API](#engine-control-api-grpc) (gRPC, `syncd.v1.EngineControl`) | `syncd` | The console, the `syncd` command line, the other engine of an HA pair | Mutual TLS, or the loopback listener and the control socket; from 0.5.0 each caller has an [access tier](#access-tiers) |
 | [Password ingest API](#password-ingest-api-grpc) (gRPC, `syncd.v1.PasswordIngest`) | `syncd`, on `passwords.ingest.listen` | Password capture agents | Mutual TLS with the engine's agent CA, or a one-time token to enroll |
 | [Prometheus metrics](#prometheus-metrics) (`GET /metrics`) | `syncd` | Prometheus | None (plain HTTP) |
 
@@ -35,9 +35,27 @@ From 0.4.0 the API takes either of:
 
 A request with `Authorization: Bearer` is checked as a token request only: it never reads or sets
 the session cookie. Some endpoints stay with people (accounts, settings, tokens, webhooks,
-changes to environments, approvals, simulations, previews, connector checks, the object
-explorer, scheduled reports, the support bundle): a valid token there gets
-`403 insufficient_scope`.
+changes to environments, approvals of versions and of WebAssembly modules, simulations, previews,
+connector checks, the object explorer, scheduled reports, the license, the support bundle): a
+valid token there gets `403 insufficient_scope`.
+
+### Role assignments and scopes
+
+From 0.5.0 an account holds role assignments, each a role on everything, on one environment or on
+named engines (see [Security](security.md#authorization)). Every operation of the API is held to
+one rule, checked before its handler runs and before its body is read:
+
+| The operation is about | Needs | Examples |
+|---|---|---|
+| An engine (`/api/v1/engines/{id}/...`) | The permission through an assignment that reaches the engine: on everything, on its environment, or on the engine | Status, runs, approvals, configuration versions, publishing, the explorer, WebAssembly modules |
+| An environment (`/api/v1/environments/{name}`) | The permission on everything, or on that environment | Reading its values (admin, auditor), changing them (admin) |
+| The whole console | The permission on everything | Accounts, settings, the license, the support bundle, webhooks, Git sync, registering, moving and removing engines, verifying, pulling and exporting the audit trail |
+| No engine in particular | The permission in any scope; the handler then checks the engines the request names, or answers with what the caller reaches | The engine list, environment names, scheduled reports, API tokens, the audit page, promotion, validating a text |
+
+An engine outside every assignment answers `404`, in the same words as an id never used, and is in
+no list; what the caller's roles could not do on any engine is `403`. In the tables below, a role
+means that role in a scope that reaches what the call is about, and "admin" on a console-wide
+call means `admin` on everything.
 
 ## API tokens
 
@@ -75,11 +93,18 @@ makes the last call from the command line (see [Configuration as code](config-as
   characters: 32 random bytes, base64url) is shown **once**, in the response that creates it. The
   console keeps only its SHA-256 and its first four characters (for the list); the token is never
   written to a log, the audit trail or the session.
-- **Never more than its creator, now.** Each scope needs a role of the creator (below), both to be
-  granted and, at every use, to work. On **every use** the creator's account is read: an account
-  that is gone or disabled refuses the token (`401`). Otherwise the token does no more than the
-  creator's role allows today, so a demoted creator's token keeps its reads and loses its writes.
-  A good answer is reused for a minute (and dropped when the account changes); a refusal never is.
+- **Limited, if wanted, to an environment or to engines** (from 0.5.0): `"environment": "test"`
+  (its engines, and its values) or `"engines": ["hr-1", "hr-2"]` (those engines, by name). A
+  limited token does nothing on the console as a whole (no audit pull or export, no Git sync), and
+  an engine outside its limit does not exist for it (`404`). The limit follows an engine's rename.
+- **Never more than its creator, now.** The creator must be an administrator of all the token
+  reaches (everything, for a token without a limit), and each scope needs a role of the creator
+  there (below), both to be granted and, at every use, to work. On **every use** the creator's
+  account is read: an account that is gone or disabled refuses the token (`401`). Otherwise the
+  token does no more than the creator's role assignments allow today, within its limit, so a
+  demoted creator's token keeps its reads and loses its writes, and one whose creator was moved to
+  another environment reaches nothing. A good answer is reused for a minute (and dropped when the
+  account changes); a refusal never is.
 - **A year at most.** `CONSOLE_API_MAX_TOKEN_LIFETIME` (`365d`) is the expiry of a token created
   without one, the most that may be asked for, and the age at which any token stops working; `0`
   removes the limit.
@@ -89,8 +114,9 @@ makes the last call from the command line (see [Configuration as code](config-as
 - **Out of scope** (`403`, `WWW-Authenticate: Bearer error="insufficient_scope"`) for an endpoint
   its scopes do not cover, one its creator's role no longer allows, or one that stays with people.
   No token, whatever its scopes, can create or revoke tokens, manage accounts, settings, webhooks,
-  environments or scheduled reports, sign in through single sign-on, approve a configuration, simulate or
-  preview one, test connectors, use the object explorer, or download the support bundle.
+  environments, the license or scheduled reports, sign in by any method, approve a configuration or
+  a WebAssembly module, simulate or preview a configuration, test connectors, use the object
+  explorer, or download the support bundle.
 - **Rate-limited** per token: `CONSOLE_API_REQUESTS_PER_MINUTE` (300). Beyond it, `429
   rate_limited` with `Retry-After` (seconds). The count is kept in each console process, so with
   several console replicas each allows that many.
@@ -104,10 +130,10 @@ makes the last call from the command line (see [Configuration as code](config-as
 | Scope | Needs the creator to be | Allows |
 |---|---|---|
 | `engines:read` | any role | The engines, their status, dead letters, quarantine, held changes, data quality, correlation suggestions, and the reconciliation report export |
-| `configs:read` | any role | Configuration versions, the running configuration, diffs, exports, packages, the environments' names and the Git sync status |
-| `configs:write` | designer or admin | Validate and save a configuration version, import one, start a Git sync (not publish) |
+| `configs:read` | any role | Configuration versions, the running configuration, diffs, exports, packages, the environments' names, the Git sync status, and from 0.5.0 the engine's WebAssembly modules (list, review, download) |
+| `configs:write` | designer or admin | Validate and save a configuration version, import one, start a Git sync, and from 0.5.0 upload a WebAssembly module (not publish, not approve) |
 | `configs:publish` | designer or admin | Publish a version, and promote one. Approval, when required, stays with people |
-| `runs:run` | operator or admin | Start runs and drift checks, approve held deletions and changes, review groups, accept correlation suggestions, retry and discard dead letters |
+| `runs:run` | operator or admin | Start runs and drift checks, approve held deletions and changes, review groups, accept correlation suggestions, retry and discard dead letters, and from 0.5.0 check for unmanaged entries and adopt one |
 | `audit:read` | auditor or admin | The audit log, its verification, the pull API, the export and the outputs' status |
 | `environments:read` | auditor or admin | From 0.4.1: the environments with their plain values, the names of their secret ones, and their engines. Before 0.4.1 `configs:read` read them; a script that reads values with a `configs:read` token needs this scope now |
 | `admin` | admin | Everything above |
@@ -126,10 +152,10 @@ The tables below give each endpoint's scope in the **Token** column; `—` means
 
 | Method | Path | Access | Purpose |
 |---|---|---|---|
-| GET | `/api/v1/admin/api-tokens` | admin, auditor | The tokens, newest first, without their values: name, prefix, scopes, creator, created, expiry, last use, revoked |
+| GET | `/api/v1/admin/api-tokens` | admin, auditor | The tokens, newest first, without their values: name, prefix, scopes, limit (`environment` or `engines`), creator, created, expiry, last use, revoked. With the role on everything, all of them; else those limited to within what the role reaches |
 | GET | `/api/v1/admin/api-tokens/scopes` | admin, auditor | The scopes, what each allows and the role it needs |
-| POST | `/api/v1/admin/api-tokens` | admin (session only) | Create: `{"name", "scopes": [...], "expires_at"}`; the answer holds the token, once |
-| DELETE | `/api/v1/admin/api-tokens/{id}` | admin (session only) | Revoke; the next use is refused |
+| POST | `/api/v1/admin/api-tokens` | admin of all the token reaches (session only) | Create: `{"name", "scopes": [...], "expires_at", "environment" or "engines": [...]}`; the answer holds the token, once |
+| DELETE | `/api/v1/admin/api-tokens/{id}` | admin of all the token reaches (session only) | Revoke; the next use is refused. `404` for a token that reaches more than the caller administers |
 
 ## Signing in with a session
 
@@ -144,9 +170,14 @@ curl -sS -b cookies.txt -X POST https://syncd.example.com/api/v1/auth/logout
 ```
 
 - The cookie is `Secure` outside development mode, so call the API over HTTPS.
+- With the consent banner on (`ENS_CONSENT_BANNER_ENABLED`, from 0.5.0), a script must first
+  `POST /api/v1/auth/consent` and send the cookie it sets with the sign-in: every sign-in is
+  refused (`403`) without an acknowledgement from the same client in the last 15 minutes. API
+  tokens are not affected.
 - Sessions end after 30 idle minutes and 12 hours (`CONSOLE_SESSION_IDLE_MINUTES`,
-  `CONSOLE_SESSION_MAX_HOURS`). The per-address limit (20 sign-ins in 5 minutes) and the account
-  lockout apply to scripts too.
+  `CONSOLE_SESSION_MAX_HOURS`). From 0.5.0 `ENS_SESSION_MAX_PER_USER` can limit an account's
+  sessions, so a script's sign-in may end a person's oldest session. The per-address limit (20
+  sign-ins in 5 minutes) and the account lockout (`ENS_LOCKOUT_*`) apply to scripts too.
 - A new account must change its one-time password before anything else works: sign in once and
   call `POST /api/v1/auth/password`.
 - Prefer an API token for automation. With local sign-in limited to break-glass accounts, only
@@ -166,11 +197,11 @@ curl -sS -b cookies.txt -X POST https://syncd.example.com/api/v1/auth/logout
 | 401 | `sign_in_failed` | Any failed sign-in, whatever the reason |
 | 401 | `invalid_token` | An API token that is unknown, revoked, expired, turned off, or whose creator is gone or disabled. With `WWW-Authenticate: Bearer error="invalid_token"` |
 | 401 | `wrong_credentials` | A self-service password change with a wrong user name or current password (the same answer for both) |
-| 403 | `forbidden` | The role cannot do this, or the engine refused the call on its listener |
+| 403 | `forbidden` | The caller's roles cannot do this on any engine, the engine refused the call (its listener, or from 0.5.0 its [access tier](#access-tiers)), or with the consent banner on, a sign-in without an acknowledgement |
 | 403 | `insufficient_scope` | An API token outside its scopes, beyond its creator's role now, or on an endpoint for people. With `WWW-Authenticate: Bearer error="insufficient_scope"` |
 | 403 | `password_change_required` | The account must set a new password first |
-| 404 | `not_found` | No such engine, version, entity, webhook, report or endpoint |
-| 409 | `conflict` | A name in use, a newer version saved meanwhile, the last admin or break-glass account, a simulation already running, a publish the pre-publish hook refused (with its reason), a promotion of a version never published |
+| 404 | `not_found` | No such engine, version, entity, webhook, report or endpoint; from 0.5.0 also an engine outside every assignment of the caller, or outside a token's limit |
+| 409 | `conflict` | A name in use, a newer version saved meanwhile, the last admin or break-glass account, a simulation already running, a publish the pre-publish hook or the golden tests refused (with the reason), a promotion of a version never published, and from 0.5.0 a publish the license does not allow (publishing blocked, or a pack the license lacks) |
 | 429 | `too_many_requests` | Over the sign-in or self-service limit |
 | 429 | `rate_limited` | An API token over its requests per minute, with `Retry-After` |
 | 503 | `engine_unavailable` | The engine cannot be reached, failed, or is busy with a long operation |
@@ -181,19 +212,21 @@ curl -sS -b cookies.txt -X POST https://syncd.example.com/api/v1/auth/logout
   `next_after` (entities), or `after` / `next` (held changes, correlation suggestions, the pull
   API), with `limit`.
 - `reveal=true` (or `"reveal": true` in a body) asks for sensitive attribute values. It needs a role
-  in `CONSOLE_REVEAL_ROLES` (default `admin`), is audited, and is refused (and audited) for other
-  roles. See [Security](security.md#sensitive-attributes-and-reveal).
+  in `CONSOLE_REVEAL_ROLES` (default `admin`) through an assignment that reaches the engine (from
+  0.5.0 an entry there can carry a scope, `auditor@prod`), is audited, and is refused (and
+  audited) otherwise. See [Security](security.md#sensitive-attributes-and-reveal).
 - Calls that act on an engine go through to its control API; they wait for it, and are refused as
   busy while it runs a long operation. The passive engine of an HA pair refuses commands, naming
   the active one.
 
-**Roles** in the tables below: *any* is every signed-in role. Admins can do everything.
+**Roles** in the tables below: *any* is every signed-in role. Admins can do everything their
+assignments reach.
 
 ### Public
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/v1/system` | Version, development and FIPS mode, the single sign-on label, who may sign in locally, whether configuration approval is required, the banners, and the publish policy (the ticket pattern, whether a pre-publish hook is asked) |
+| GET | `/api/v1/system` | Version, development and FIPS mode, the single sign-on label, who may sign in locally, whether configuration approval is required, the banners, and the publish policy (the ticket pattern, whether a pre-publish hook is asked). From 0.5.0 also the SAML and certificate sign-in labels when configured, the consent banner's text when it is on, and the password policy for a new local password |
 | GET | `/api/v1/self-service` | Whether the self-service password page is on, and from 0.4.1 the engine's policy for a new password (`min_length`, `min_classes`; absent when the engine cannot be asked; read at most once a minute) |
 | POST | `/api/v1/self-service/password` | A person changes their own directory password: `{"login", "current_password", "new_password"}`. See [Self-service password change](#self-service-password-change) |
 | GET | `/api/openapi.json` | The OpenAPI document |
@@ -205,16 +238,21 @@ Session only.
 
 | Method | Path | Role | Purpose |
 |---|---|---|---|
+| POST | `/api/v1/auth/consent` | none | From 0.5.0: acknowledge the notice-and-consent banner; every sign-in method refuses until this was called from the same browser in the last 15 minutes. Audited as `auth.consent`. 404 when no banner is configured |
 | POST | `/api/v1/auth/login` | none | Sign in with a local account (`username`, `password`); sets the cookie, returns the account |
 | POST | `/api/v1/auth/logout` | signed in | End the session |
-| GET | `/api/v1/auth/me` | signed in | The account: role, pending password change, whether it may reveal |
+| GET | `/api/v1/auth/me` | signed in | The account: from 0.5.0 its `assignments`, what it may do on the whole console (`global`) and somewhere (`anywhere`), pending password change, whether it may reveal somewhere |
 | POST | `/api/v1/auth/password` | signed in | Change the password (`current_password`, `new_password`); the one call open during a forced change. Signs out the account's other sessions |
 | POST | `/api/v1/auth/password/skip` | signed in | Development mode only: keep the current password |
 | GET | `/api/v1/auth/oidc/login` | none | Start single sign-on (`next`: where to go after); 404 when it is not configured |
 | GET | `/api/v1/auth/oidc/callback` | none | Where the identity provider sends the browser back. See [Single sign-on](single-sign-on.md) |
-| GET | `/api/v1/users` | admin | List accounts |
-| POST | `/api/v1/users` | admin | Create a local account (`username`, `display_name`, `role`); returns its one-time password, shown once |
-| PATCH | `/api/v1/users/{id}` | admin | Change the display name, role, disabled flag or break-glass flag |
+| GET | `/api/v1/auth/saml/metadata` | none | From 0.5.0: the console's SAML metadata, to register it at the provider; 404 when SAML is not configured |
+| GET | `/api/v1/auth/saml/login` | none | From 0.5.0: start a SAML sign-in (a redirect to the provider); 404 when it is not configured |
+| POST | `/api/v1/auth/saml/acs` | none | From 0.5.0: the assertion consumer service the provider posts back to; sets the cookie |
+| POST | `/api/v1/auth/x509/login` | none | From 0.5.0: sign in with this connection's client certificate, or the one a trusted proxy passes on; 404 when certificate sign-in is not configured, 403 with the reason when the certificate is missing or refused |
+| GET | `/api/v1/users` | admin | List accounts, each with its `assignments`, and whether it is locked |
+| POST | `/api/v1/users` | admin | Create a local account (`username`, `display_name`, and `assignments` (from 0.5.0: `[{"role": "operator", "scope": "environment", "name": "prod"}, ...]`) or `role`, short for one role on everything); returns its one-time password, shown once |
+| PATCH | `/api/v1/users/{id}` | admin | Change the display name, assignments (or `role`), disabled flag or break-glass flag, or from 0.5.0 `"unlock": true` to lift a lock from failed sign-ins. For an account that signs in through single sign-on or a certificate, assignments set here last until its next sign-in |
 | POST | `/api/v1/users/{id}/reset-password` | admin | Issue a new one-time password (local accounts only) |
 
 ### Settings
@@ -223,20 +261,22 @@ Session only.
 
 | Method | Path | Role | Purpose |
 |---|---|---|---|
-| GET | `/api/v1/settings/sign-in` | admin | Who may sign in locally, whether single sign-on is configured, the break-glass accounts |
+| GET | `/api/v1/settings/sign-in` | admin | Who may sign in locally, whether single sign-on or certificate sign-in is configured, the break-glass accounts, and from 0.5.0 the sign-in policy in effect (read-only: the `ENS_*` settings decide it) |
 | PUT | `/api/v1/settings/sign-in` | admin | `local_sign_in`: `everyone` or `break_glass` |
 | PUT | `/api/v1/settings/config-approval` | admin | Configuration approval: `off` or `required` |
 | PUT | `/api/v1/settings/banners` | admin | The top and bottom banners: text (up to 200 characters), background and text colours (at least 4.5:1 contrast) |
+| GET | `/api/v1/settings/config-signing-keys` | admin | From 0.5.0: the public halves of the console's configuration signing keys, for `engine.config_signing_keys` (see [Security](security.md#signed-configurations)). Rotation is done on the console's host |
+| GET | `/api/v1/admin/notices` | admin | From 0.5.0: settings that name an engine that is not registered (`CONSOLE_SELF_SERVICE_ENGINE`, `CONSOLE_CONFIG_GIT_ENGINES`) |
 
 ### Engines
 
 | Method | Path | Role | Token | Purpose |
 |---|---|---|---|---|
-| GET | `/api/v1/engines` | any | `engines:read` | Registered engines, with their environment and `certificate_expires_at` (when the console's client certificate for the engine expires; mTLS only) |
+| GET | `/api/v1/engines` | any | `engines:read` | The registered engines the caller's assignments reach, with their environment, `certificate_expires_at` (when the console's client certificate for the engine expires; mTLS only), and from 0.5.0 `permissions` (what the caller may do on each) and `can_reveal` |
 | POST | `/api/v1/engines` | admin | — | Register an engine: `name`, `address` (`host:port` of `api.listen`, or `unix:` and the absolute path of the engine's `api.control_socket`), `environment` (`default` for a new engine; from 0.4.1, with `replace`, the engine keeps its environment unless one is given), and for mTLS `server_ca_pem`, `client_cert_pem`, `client_key_pem` (the key is stored encrypted and never returned). Checks that it answers unless `verify` is false. `replace: true` replaces the address and credentials of an engine with that name, keeping its id and versions. A name whose stored client key the master key no longer opens is refused with that reason unless `replace` is set (audited as `engine.re-registered`) |
 | PATCH | `/api/v1/engines/{id}` | admin | — | Move an engine to another environment (`{"environment": "prod"}`). What it runs is not touched: the next publish renders for the new environment |
 | DELETE | `/api/v1/engines/{id}` | admin | — | Remove the registration (the engine keeps running) |
-| GET | `/api/v1/engines/{id}/status` | any | `engines:read` | The engine's status: sources, publications (with held changes, report mode, leavers by stage, groups), targets, counters, timers, history, backups, HA role, password delivery (from 0.4.1 also per publication, and `keys_sealed`), quarantined entities, unmatched records per view, rule packages, the environment, the process's CPU and memory (Linux only), and from 0.4.1 `runs` (runs ended since the engine started, and the last one) and `self_service` (the self-service password policy) |
+| GET | `/api/v1/engines/{id}/status` | any | `engines:read` | The engine's status: sources, publications (with held changes, report mode, leavers by stage, groups), targets, counters, timers, history, backups, HA role, password delivery (from 0.4.1 also per publication, and `keys_sealed`), quarantined entities, unmatched records per view, rule packages, the environment, the process's CPU and memory (Linux only), and from 0.4.1 `runs` (runs ended since the engine started, and the last one) and `self_service` (the self-service password policy). From 0.5.0 also who applied the running configuration and whether it was signed (`config_applied`), the control API's access mode (`access`), the license, each publication's unmanaged entries, the password keys and agents, and the HA pair's snapshot and password-queue figures |
 | GET | `/api/v1/engines/{id}/status/stream` | any | — | Server-sent events: a `status` event every second, an `error` event if the engine goes away. Ends when the session does |
 | GET | `/api/v1/engines/{id}/dead-letters` | any | `engines:read` | Failed exports waiting (`publication`, `limit`) |
 | GET | `/api/v1/engines/{id}/quarantine` | any | `engines:read` | Entities whose exports a failing rule (`on_error: quarantine`) holds back (`view`, `limit` up to 500) |
@@ -245,6 +285,8 @@ Session only.
 | POST | `/api/v1/engines/{id}/approvals` | operator | `runs:run` | `{"scope": ...}`, as the status lists it. Lets deletes over a deletion threshold through once; with `publication <name>`, also the changes its change window (overdue), its modification or add threshold, or a failed canary holds |
 | POST | `/api/v1/engines/{id}/groups/review` | operator | `runs:run` | `{"publication", "group"}`: a computed group's expiry and review clocks start again, and an expired group comes back |
 | POST | `/api/v1/engines/{id}/drift-check` | operator | `runs:run` | Read a publication's entries (or every checking publication's) back from the target now |
+| POST | `/api/v1/engines/{id}/unmanaged/check` | operator | `runs:run` | From 0.5.0: look in a publication's target (`{"publication"}`, or every one's) for entries the engine does not manage and members of privileged groups no rule accounts for. Reads the target and writes nothing there; the result is in the status |
+| POST | `/api/v1/engines/{id}/unmanaged/adopt` | operator | `runs:run` | From 0.5.0: `{"publication", "dn", "entity_id"}`: make an entry already in the target the entry of an entity that has none in the publication yet (moved to the entity's DN when it is elsewhere, given the exported attributes, managed from then on) |
 | POST | `/api/v1/engines/{id}/dead-letters/retry` | operator | `runs:run` | Export dead letters again now (all, a publication's, or one entity's) |
 | POST | `/api/v1/engines/{id}/dead-letters/discard` | operator | `runs:run` | Remove one dead letter without retrying it |
 
@@ -254,8 +296,9 @@ Registrations are audited as `engine.register`, replacements and environment mov
 when HA is turned on) renames a registration, keeping its id, and is audited as `engine.renamed`
 (see [Admin guide](admin-guide.md#syncd-console-admin-rename-engine)). Operator calls are
 audited with their request and outcome (`engine.run`, `engine.approve_deletions`,
-`engine.check_drift`, `engine.dead_letters.retry`, `engine.dead_letters.discard`, and the group
-review).
+`engine.check_drift`, `engine.check_unmanaged`, `engine.adopt_entry`, `engine.dead_letters.retry`,
+`engine.dead_letters.discard`, and the group review), from 0.5.0 with the assignment the call was
+allowed under (`details.assignment`).
 
 ### Correlation
 
@@ -284,8 +327,8 @@ See [Reports, lineage and data quality](reports-and-data-quality.md) for the sug
 | POST | `/api/v1/engines/{id}/configs/{version}/packages/check` | any | `configs:read` | Compare each package read from a file with the file at the Git branch head now |
 | POST | `/api/v1/engines/{id}/configs/{version}/simulate` | designer | — | Dry-run the version on the engine: what each target would receive (`samples`, `reveal`). Nothing is applied |
 | POST | `/api/v1/engines/{id}/configs/{version}/approve` | designer | — | Approve a version for publishing, as someone other than its author |
-| POST | `/api/v1/engines/{id}/configs/{version}/publish` | designer | `configs:publish` | Publish, with an optional body `{"ticket", "note"}`: rendered for the engine's environment, checked against the ticket pattern, approval, test cases and the pre-publish hook, then the engine validates, saves, reloads and runs a full sync. Returns once the engine runs it (up to 60 seconds). From 0.4.1, with Git sync, the golden-file tests in the repository (`tests/golden` beside the configuration, at the branch head) run too, as the editor's check runs them, and a failure refuses the publish (409); 0.4.0 ran them only from the editor's **Publish** button. This covers Git auto-publish and promotion as well |
-| POST | `/api/v1/configs/promote` | designer | `configs:publish` | `{"engine", "version", "to", "ticket", "note"}`: publish a version published on one engine to every engine of another environment, each through its own gates. The answer lists each engine's outcome; 409 when the version was never published or no engine runs in that environment |
+| POST | `/api/v1/engines/{id}/configs/{version}/publish` | designer | `configs:publish` | Publish, with an optional body `{"ticket", "note"}`: rendered for the engine's environment, checked against the ticket pattern, approval, test cases, the license (from 0.5.0) and the pre-publish hook, then signed by the console (from 0.5.0) and sent; the engine validates, saves, reloads and runs a full sync. Returns once the engine runs it (up to 60 seconds). With Git sync, the golden-file tests in the repository (`tests/golden` beside the configuration) run too, and a failure refuses the publish (409). From 0.5.0 they are read at the **version's own Git commit**, not the branch head; a version saved before 0.5.0 is checked at the branch head, with a note. This covers Git auto-publish and promotion as well |
+| POST | `/api/v1/configs/promote` | designer | `configs:publish` | `{"engine", "version", "to", "ticket", "note", "dry_run"}`: publish a version published on one engine to every engine of another environment, each through its own gates. The caller's roles must let it read the source engine and publish to every engine of the target environment: a promotion is not carried out in part. From 0.5.0 `"dry_run": true` only shows what would happen (the same checks of the caller's roles, each target engine's diff summary), saving, publishing and recording nothing: the console's **Promote** button shows it before the caller confirms. The answer lists each engine's outcome; 409 when the version was never published or no engine runs in that environment |
 | GET | `/api/v1/engines/{id}/configs/{version}/export` | any | `configs:read` | An export file of the version (without the `engine` and `api` sections), with a SHA-256 of the configuration |
 | POST | `/api/v1/engines/{id}/configs/import-file` | designer | `configs:write` | Import an export file as a new draft, keeping this engine's `engine` and `api` sections; returns what the host must provide |
 | POST | `/api/v1/engines/{id}/connectors/test` | designer | — | Connect with one connector of a candidate configuration (`yaml`, `connector`) |
@@ -297,17 +340,35 @@ promotions are audited (`config.*`, `connector.*`). See [Configuration as code](
 for environments, promotion and Git sync, and [Security](security.md#the-pre-publish-hook) for the
 pre-publish hook.
 
+### WebAssembly modules
+
+From 0.5.0 rule packages can carry custom functions compiled to WebAssembly (see
+[Computed attributes and rules](rules.md)). The console keeps a store of modules per engine; a
+package names a module by its SHA-256 and the console fills the approved module in when it checks
+and publishes the configuration.
+
+| Method | Path | Role | Token | Purpose |
+|---|---|---|---|---|
+| GET | `/api/v1/engines/{id}/wasm-modules` | any | `configs:read` | The modules uploaded for the engine, newest first |
+| POST | `/api/v1/engines/{id}/wasm-modules` | designer | `configs:write` | Upload a module (`{"name", "module"` (the bytes, base64, at most 1 MiB)`, "comment"}`): checked as the engine checks it (no imports, the ABI's exports, a manifest of its functions, the FIPS policy), kept by its SHA-256, audited as `wasm_module.upload`. Used only once someone else approves it |
+| GET | `/api/v1/engines/{id}/wasm-modules/{sha256}` | any | `configs:read` | The review: name, size, hash, the functions and their signatures, and how it differs from the previous upload of the same name |
+| GET | `/api/v1/engines/{id}/wasm-modules/{sha256}/download` | any | `configs:read` | The module itself, for review |
+| POST | `/api/v1/engines/{id}/wasm-modules/{sha256}/approve` | designer | — | Approve a module, as someone other than its uploader (the database refuses an approval by the uploader, and an approval cannot be changed). Audited as `wasm_module.approve` |
+
+In FIPS mode the console refuses modules unless `SYNCD_FIPS_ALLOW_WASM_FUNCTIONS=true` (see
+[FIPS 140-3 and DISA STIG](fips-and-stig.md#what-changes-in-fips-mode)).
+
 ### Environments and Git sync
 
 | Method | Path | Role | Token | Purpose |
 |---|---|---|---|---|
-| GET | `/api/v1/environment-names` | any | `configs:read` | From 0.4.1: the environments' names (those with saved values, and those an engine runs in), for the Compare tab and the publish dialog |
+| GET | `/api/v1/environment-names` | any | `configs:read` | From 0.4.1: the environments' names (those with saved values, and those an engine runs in), for the Compare tab and the publish dialog; from 0.5.0 only those the caller's assignments name or whose engines it reaches |
 | GET | `/api/v1/environments` | admin, auditor | `environments:read` | The environments with their values, and the engines that run in each. Before 0.4.1 any role, or `configs:read`, could read them |
 | GET | `/api/v1/environments/{name}` | admin, auditor | `environments:read` | One environment. A secret value shows as `{"secret": true}`, never its value |
 | PUT | `/api/v1/environments/{name}` | admin | — | Replace its values: `{"values": {"hr_host": {"value": "..."}, "hr_password_file": {"value": "...", "secret": true}}}`. A secret value is sealed with the master key; a `PUT` that leaves its value out keeps it. Audited as `environment.changed` (the keys, never the values) |
 | DELETE | `/api/v1/environments/{name}` | admin | — | Remove its values; refused while an engine runs in it |
-| GET | `/api/v1/config-git` | any | `configs:read` | What the console last saw of the Git repository: last commit, sync time, last error |
-| POST | `/api/v1/config-git/sync` | designer | `configs:write` | Fetch and take in new commits now; 409 when Git sync is not configured |
+| GET | `/api/v1/config-git` | any, on everything | `configs:read` | What the console last saw of the Git repository: last commit, sync time, last error |
+| POST | `/api/v1/config-git/sync` | designer, on everything | `configs:write` | Fetch and take in new commits now; 409 when Git sync is not configured |
 
 ### Object explorer and lineage
 
@@ -335,7 +396,7 @@ Every search and entity view is audited (`explore.search`, `explore.entity`, `ex
 
 | Method | Path | Role | Token | Purpose |
 |---|---|---|---|---|
-| POST | `/api/v1/engines/{id}/reports/reconciliation/export` | any | `engines:read` | `?format=csv\|pdf[&publication=]`: the reconciliation report as a file, at most `CONSOLE_EXPORTS_MAX_ROWS` rows (`X-Syncd-Truncated: true` when capped). Audited as `data.exported` first |
+| POST | `/api/v1/engines/{id}/reports/reconciliation/export` | any | `engines:read` | `?format=csv\|xlsx\|pdf[&publication=]` (`xlsx` from 0.5.0): the reconciliation report as a file, at most `CONSOLE_EXPORTS_MAX_ROWS` rows (`X-Syncd-Truncated: true` when capped). From 0.5.0 the summary includes adopted and unmanaged entries. Audited as `data.exported` first |
 | GET | `/api/v1/reports` | admin, operator, auditor | — | The scheduled reports with their next and last run |
 | GET | `/api/v1/reports/settings` | admin, operator, auditor | — | Whether mail is configured, the recipient domains, whether a share is set |
 | POST | `/api/v1/reports` | admin, operator | — | Add a scheduled report |
@@ -360,16 +421,37 @@ The console's trail is in the ENS format, `ens-audit/1` (see [Audit logging](../
 
 | Method | Path | Role | Token | Purpose |
 |---|---|---|---|---|
-| GET | `/api/v1/audit` | auditor | `audit:read` | The audit log for the Audit log page, newest first (`before`, `limit` up to 500), including entries from before 0.4.0 |
+| GET | `/api/v1/audit` | auditor | `audit:read` | The audit log for the Audit log page, newest first (`before`, `limit` up to 500), including entries from before 0.4.0. From 0.5.0 filtered server-side by `from`, `to` (RFC 3339), `category`, `action`, `actor` and `outcome` (`success`, `failure`, `denied`); an auditor of an environment or engines gets the entries recorded about those (not sign-ins or account changes, and nothing recorded before 0.5.0) |
+| GET | `/api/v1/audit/csv` | auditor | `audit:read` | From 0.5.0: what the page lists, with the same filters and scope, as CSV (UTF-8 with a byte-order mark, RFC 4180, the formula-injection guard), newest first, at most 100,000 rows (`X-Syncd-Truncated: true` when cut). Recorded as `data.exported` first, with the filters. For a check of the chain, use the NDJSON export |
+| GET | `/api/v1/audit/actions` | auditor | `audit:read` | From 0.5.0: every action the console records, with its category |
 | GET | `/api/v1/audit/verify` | auditor | `audit:read` | Recompute the hash chain (the entries from before 0.4.0, then the `ens-audit/1` chain): `entries`, `first_broken`, `head`, `legacy_entries`, `first_seq`. With `anchor_id` and `anchor_hash` (a head recorded earlier), also `anchor`: `found` and `matches`. A broken chain is recorded as `audit.verified` (alert) |
 | GET | `/api/audit/events` | auditor | `audit:read` | **The pull API**, at the path every ENS product serves it on: `?after=<seq>&limit=<1-1000>` (default 100). Events with `seq` above `after`, oldest first, as NDJSON (`application/x-ndjson`); with `Accept: application/json` as `{"events":[...],"next":<seq>}`. Start at `after=0`, then pass the last `seq` received. It needs only the database, so it works while the console is otherwise degraded |
 | GET | `/api/v1/audit/events` | auditor | `audit:read` | The same, under `/api/v1` |
 | GET | `/api/v1/audit/export` | auditor | `audit:read` | `?from=&to=` (RFC 3339, both optional): the trail as an NDJSON download, newest first, for `tools/audit/verify_chain.py`. Recorded as `data.exported` first, and refused when it cannot be |
 | GET | `/api/v1/audit/outputs` | auditor | `audit:read` | Each output's delivery position, backlog, last delivery, `failing_since` and last error |
 
-Events from before 0.4.0 are in `/api/v1/audit` but not in the pull API or the export. The family's
-Splunk add-on (`TA-ens-audit`, scripted input `ens_audit_pull.py`) pulls from
-`/api/audit/events`. See [Security](security.md#audit-trail).
+The verification, the pull API, the NDJSON export and the outputs' status need the auditor (or
+admin) role on everything, and a token without a limit. Events from before 0.4.0 are in
+`/api/v1/audit` but not in the pull API or the export. From 0.5.0 sign-in events carry `roles` (a
+list of assignments) instead of `role`, and events written for a request carry
+`details.assignment`. The family's Splunk add-on (`TA-ens-audit`, scripted input
+`ens_audit_pull.py`) pulls from `/api/audit/events`. See [Security](security.md#audit-trail).
+
+### License
+
+From 0.5.0 (see [Licensing](licensing.md)). Session only.
+
+| Method | Path | Role | Purpose |
+|---|---|---|---|
+| GET | `/api/v1/license` | admin | The license, its state and usage, and the packs |
+| PUT | `/api/v1/license` | admin | Install a license, or replace the one installed: `{"license": "<the file's text>"}`. It must verify with this build's keys, be valid now, and be bound to this installation or to none. The engines get it at once |
+| DELETE | `/api/v1/license` | admin | Remove the installed license. The installation is unlicensed again; its evaluation period, counted from its first start, does not start again |
+| GET | `/api/v1/license/usage` | admin | `?format=json\|csv`: the managed identities per day and the high-water mark, for true-up (CSV columns `day,managed_identities,limit,engines`). Audited (`license.usage-export`) |
+| GET | `/api/v1/license/entitlements` | any | What the license leaves locked, and its state, for the editors and the banner |
+
+Here "admin" is `admin` on everything. Installing, replacing and removing are audited
+(`license.upload`, `license.replace`, `license.remove`), and each change of state as
+`license.state` and the webhook event `license.state-changed`.
 
 ### Webhooks
 
@@ -410,13 +492,32 @@ The engine serves the gRPC service `syncd.v1.EngineControl`, defined in `proto/s
 the other engine of an HA pair are its clients. It listens on `api.listen` (default
 `127.0.0.1:7443`), and optionally on a Unix socket (`api.control_socket`).
 
-| Access | Calls |
+### Access tiers
+
+From 0.5.0 every RPC has a tier, and each caller is granted at most one, which includes the tiers
+before it (`RPC_TIERS` in `engine/crates/api/src/access.rs`; an RPC missing there is refused to
+everyone). Who gets which tier is `api.access` in the engine's configuration, in strict or
+compatible mode; see [Security](security.md#access-tiers).
+
+| Tier | Calls |
 |---|---|
-| Always (read-only) | `GetStatus`, `WatchStatus`, `ListDeadLetters`, `ListQuarantined`, `ListQuality`, `ListHeld`, `GetConfig`, `SearchEntities`, `GetEntity`, `GetEntityHistory`, `GetLineage`, `ReconciliationReport`, `GetPasswordKey`, `ListPasswordAgents` |
-| Commands: mTLS, the control socket, or `api.local_control: true` on loopback | `StartRun`, `ApproveDeletions`, `CheckDrift`, `RetryDeadLetters`, `DiscardDeadLetter`, `ApplyConfig`, `SimulateConfig`, `TestConnector`, `DiscoverSchema`, `PreviewConfig`, `ListUnjoined`, `JoinRecord`, `UnjoinRecord`, `SuggestJoins`, `AcceptJoins`, `ReviewGroup`, `PruneHistory`, `SubmitPasswords`, `AddPasswordAgent`, `RevokePasswordAgent`, `ChangeOwnPassword` |
-| Sensitive values (`reveal`): mTLS, the control socket, or `api.local_reveal: true` on loopback | The explorer calls, `GetLineage`, `ListUnjoined`, `SuggestJoins`, `SimulateConfig`, `DiscoverSchema`, `PreviewConfig` |
-| The whole store: what a reveal needs | `PullSnapshot` (on the active engine of a pair) |
-| The whole store: what a reveal needs, and command access | `Backup` |
+| `read` | `GetStatus`, `WatchStatus`, `ListDeadLetters`, `ListQuarantined`, `ListQuality`, `ListHeld`, `GetConfig`, `SimulateConfig`, `SearchEntities`, `GetEntity`, `GetEntityHistory`, `GetLineage`, `ListUnjoined`, `SuggestJoins`, `ReconciliationReport`, `GetPasswordKey`, `ListPasswordAgents`, `ListQueuedPasswords` |
+| `operate` | `StartRun`, `ApproveDeletions`, `CheckDrift`, `CheckUnmanaged`, `AdoptEntry`, `RetryDeadLetters`, `DiscardDeadLetter`, `JoinRecord`, `UnjoinRecord`, `AcceptJoins`, `ReviewGroup`, `PruneHistory`, `ChangeOwnPassword`, `RevokePasswordAgent`, `Backup`, `PullSnapshot`, `SnapshotManifest`, `PullSnapshotFiles`, `FollowPasswordQueue`, `TestConnector`, `DiscoverSchema`, `PreviewConfig`; and `reveal` on any call that takes it |
+| `operate`, and in strict mode `api.access.passwords` (or the control socket) | `SubmitPasswords`, `AddPasswordAgent`, `BindPasswordAgent`, `RotatePasswordKey`, `RotatePasswordAgentCa`, `ForwardPasswordIngest` |
+| `configure` | `ApplyConfig`, `SetLicense` |
+
+On top of the tier, each listener keeps its own limits:
+
+- **The plain-text loopback listener** (no `api.tls`) is read-only unless `api.local_control: true`,
+  and gives no sensitive values unless `api.local_reveal: true`. In strict mode it stops at
+  `operate` and may not set passwords.
+- **The control socket** reaches `configure` in compatible mode and stops at `operate` in strict
+  mode; it may set passwords.
+- **Sensitive values** (`reveal`) need mTLS, the control socket or `api.local_reveal: true`, and
+  the `operate` tier. **The whole store** (`Backup`, `PullSnapshot`, `SnapshotManifest`,
+  `PullSnapshotFiles`, `FollowPasswordQueue`) needs what a reveal needs.
+- In compatible mode (an install upgraded from 0.4.1 that has not opted in) every certificate the
+  client CA signed has every tier, as before 0.5.0.
 
 | RPC | Purpose |
 |---|---|
@@ -431,7 +532,8 @@ the other engine of an HA pair are its clients. It listens on `api.listen` (defa
 | `CheckDrift` | Read a publication's entries (or every checked publication's) back from the target and act by policy |
 | `RetryDeadLetters`, `DiscardDeadLetter` | Export dead letters again now; remove one without retrying |
 | `GetConfig` | The running configuration (YAML; secrets appear only as references) and its version label |
-| `ApplyConfig` | Validate, save and reload with a new configuration, then run a full sync. The answer comes before the reload |
+| `ApplyConfig` | Validate, save and reload with a new configuration, then run a full sync. The answer comes before the reload. From 0.5.0 it carries the console's `signature`, which an engine with `engine.require_signed_config` requires (see [Security](security.md#signed-configurations)), and the engine records who applied it |
+| `SetLicense` | From 0.5.0: the console gives the engine its license; the engine verifies and keeps it, and leaves enforcement to the console from then on |
 | `SimulateConfig` | Dry-run a configuration on a copy of the store: what each target would receive. One at a time |
 | `TestConnector`, `DiscoverSchema` | Connect with one connector of a candidate configuration; list what it holds. Write nothing |
 | `PreviewConfig` | Run a candidate over a sample of records in a scratch store |
@@ -442,24 +544,34 @@ the other engine of an HA pair are its clients. It listens on `api.listen` (defa
 | `ListUnjoined`, `JoinRecord`, `UnjoinRecord` | Correlation review and decisions by hand |
 | `SuggestJoins`, `AcceptJoins` | Correlation assistance: scored candidates for unjoined records (never joins); several joins in one transaction, with an outcome per decision |
 | `ReviewGroup` | Review a computed group: its clocks start again, and an expired group comes back |
+| `CheckUnmanaged`, `AdoptEntry` | From 0.5.0: look in a publication's target for entries the engine does not manage and for unaccounted members of privileged groups (reads only); make such an entry the entry of an entity that has none in the publication yet |
 | `GetPasswordKey` | The engine's public password key (an uncompressed P-256 point), its id and suite, which capture points seal changes to |
 | `SubmitPasswords` | Queue sealed password changes for delivery |
-| `AddPasswordAgent`, `ListPasswordAgents`, `RevokePasswordAgent` | A one-time enrollment token (and the agent CA's certificate) for a capture agent; the agents; revoking one |
+| `AddPasswordAgent`, `ListPasswordAgents`, `RevokePasswordAgent` | A one-time enrollment token (and the agent CA's certificate) for a capture agent, from 0.5.0 with the sources it is bound to; the agents; revoking one |
+| `BindPasswordAgent` | From 0.5.0: set the sources an agent may submit for, without enrolling it again |
+| `ListQueuedPasswords` | From 0.5.0: the password changes waiting for delivery: when each arrived, who submitted it and where it still has to go. Never a password, and not the account |
+| `RotatePasswordKey`, `RotatePasswordAgentCa` | From 0.5.0: a new password key, or a new agent CA; the one replaced keeps working until it is retired (`retire`, or by the engine after `passwords.rotation_overlap_days`) |
+| `ForwardPasswordIngest` | From 0.5.0: the passive engine of a pair hands on what a capture agent sent to its ingest listener, with the fingerprint of the agent's certificate |
 | `ChangeOwnPassword` | A person's own password change, sealed to the password key (the console's self-service page). `UNAUTHENTICATED` for a wrong user name or password, `FAILED_PRECONDITION` for the policy, `RESOURCE_EXHAUSTED` after too many failures |
 | `Backup` | A consistent backup of the running engine (store checkpoint, configuration file, password key and agent CA, as they are on disk: sealed when a passphrase is set) as a streamed `tar.zst`, its manifest last |
-| `PullSnapshot` | The active engine's newest store snapshot, for the passive engine of an HA pair |
+| `PullSnapshot` | The active engine's newest store snapshot, whole, for the passive engine of an HA pair |
+| `SnapshotManifest`, `PullSnapshotFiles` | From 0.5.0: the newest snapshot's manifest (every file with its size and SHA-256), and the files of it the passive engine lacks |
+| `FollowPasswordQueue` | From 0.5.0: the active engine's password queue, write by write, for the passive engine to keep between snapshots; a submission is answered once the passive engine has it |
 
-Errors are gRPC statuses: `PERMISSION_DENIED` for a command or reveal on a listener that does not
-allow it, `UNAVAILABLE` when the engine is busy with a long operation (a command waits up to 10
+Errors are gRPC statuses: `PERMISSION_DENIED` for a call above the caller's tier, a password call
+without `api.access.passwords`, or a command or reveal on a listener that does not allow it, `UNAVAILABLE` when the engine is busy with a long operation (a command waits up to 10
 seconds first), has too many commands waiting, is stopping, or is the passive engine of a pair,
 `FAILED_PRECONDITION` for password calls when no publication delivers passwords, `INVALID_ARGUMENT`,
 `NOT_FOUND`, and `INTERNAL` for a command that failed.
 
 The `syncd` command line wraps these calls (`syncd status`, `dlq`, `held`, `reconcile`,
 `full-sync`, `approve`, `retry`, `discard`, `check-drift`, `apply-config`, `group review`,
-`correlation suggest`, `lineage`, `report`, `password ...`, `backup`, ...). `syncd quarantine`
+`correlation suggest`, `lineage`, `report`, `unmanaged`, `adopt`, `password ...`, `backup`, ...).
+From 0.5.0 `syncd apply-config` is refused on an engine in strict mode (`ApplyConfig needs the
+configure tier`), and on one that requires signed configurations. `syncd quarantine`
 reads the store directly (read-only), not through the API. On the engine's host the command line
-uses the control socket when it is configured, without a certificate; on Kubernetes,
+uses the control socket when it is configured, without a certificate (in strict mode it reads,
+operates and sets passwords there, and applies no configuration); on Kubernetes,
 `kubectl exec syncd-engine-0 -- syncd status` (for a release named `syncd`) does the same. See
 [Operator guide](operator-guide.md). For its certificates, see
 [Security](security.md#the-engine-control-api).
@@ -477,8 +589,9 @@ publication delivering passwords. The service is `syncd.v1.PasswordIngest`, in t
 | RPC | Who may call | Purpose |
 |---|---|---|
 | `Enroll` | Anyone with a one-time token | `{"name", "token", "csr_pem"}`: the agent sends a PKCS#10 request for its own key with the token `syncd password agent add` printed. The answer is a client certificate (subject: the agent's name, client authentication only, valid `passwords.ingest.agent_cert_days`), the agent CA's certificate and the expiry. The token is spent, and a certificate from an earlier enrollment of the same agent stops working |
-| `GetPublicKey` | Enrolled agents | The engine's password key, as `GetPasswordKey` |
-| `Submit` | Enrolled agents | Queue sealed password changes; the answer counts those queued |
+| `GetPublicKey` | Enrolled agents | The engine's current password key, as `GetPasswordKey` |
+| `Submit` | Enrolled agents | Queue sealed password changes; the answer counts those queued. From 0.5.0 the engine opens each change in memory and refuses one for a source the agent is not bound to, before anything is queued |
+| `Renew` | Enrolled agents | From 0.5.0: a new certificate for the key of the request, for an agent that presents its current one, before it expires or after the agent CA was rotated. The earlier certificate works until the new one is first used. `syncd-capture` renews on its own |
 
 - TLS is mutual with the engine's **agent CA**, which also issues the listener's own certificate
   (for the names in `passwords.ingest.names`). A client certificate is asked for, not required, so
@@ -489,8 +602,11 @@ publication delivering passwords. The service is `syncd.v1.PasswordIngest`, in t
   AES-256-GCM) to the engine's key, with the key's id as additional data. A change sealed to
   another key is refused, so the agent fetches the key again.
 - The sealed plaintext's layout is internal to syncd. Rather than writing an agent of your own,
-  run `syncd password agent enroll` once and `syncd password set --agent-dir DIR ...` from a
-  script.
+  use the `syncd-capture` agent (from 0.5.0), or run `syncd password agent enroll` once and
+  `syncd password set --agent-dir DIR ...` from a script.
+- From 0.5.0 both engines of an HA pair answer on the ingest listener: the passive one hands each
+  call to the active one (`ForwardPasswordIngest`), which checks the agent as its own listener
+  would. The passive engine's listener starts once it has its first snapshot.
 
 See [Password synchronisation](password-sync.md) for the agents and the commands, and
 [Security](security.md#password-synchronisation) for the cryptography.
@@ -559,6 +675,37 @@ Added in 0.4.1:
 `SyncdPasswordDeliveryFailures` (a publication's failed deliveries rose in 15 minutes) and
 `SyncdPasswordChangesDropped` (changes were dropped in the last hour because the publication is
 in report mode), both `warning`.
+
+Added in 0.5.0:
+
+| Metric | Type | Meaning |
+|---|---|---|
+| `syncd_source_throttled_total{source}` | counter | Requests a REST source's service throttled (429, 503), each waited for and tried again |
+| `syncd_target_unmanaged{publication}` | gauge | Entries of the kind the publication manages that its target holds and no publication exported, as of the last unmanaged-entries pass (ignored ones left out) |
+| `syncd_target_unmanaged_ignored{publication}` | gauge | Unmanaged entries an `unmanaged.ignore` pattern hides |
+| `syncd_target_unmanaged_privileged{publication}` | gauge | Members of privileged groups that no rule accounts for |
+| `syncd_target_unmanaged_checked_timestamp_seconds{publication}` | gauge | When the last unmanaged-entries pass ended |
+| `syncd_target_unmanaged_failed{publication}` | gauge | 1 when the last pass could not finish (the counts are then partial) |
+| `syncd_ha_snapshot_size_bytes`, `syncd_ha_snapshot_shipped_bytes`, `syncd_ha_snapshot_files`, `syncd_ha_snapshot_files_reused` (`{pair,name}`) | gauge | The newest snapshot's size, the bytes of it that were new, its files, and the files the passive engine held already |
+| `syncd_ha_password_follower_connected{pair,name}` | gauge | On the active engine: 1 while the passive engine follows the password queue |
+| `syncd_ha_password_changes_unreplicated_total{pair,name}` | counter | On the active engine: password changes accepted without the passive engine's acknowledgement |
+| `syncd_password_key_age_seconds` | gauge | Age of the current password key |
+| `syncd_password_previous_keys` | gauge | Rotated password keys still opening what was sealed to them |
+| `syncd_password_agent_ca_expiry_seconds` | gauge | Seconds until the agent CA's certificate expires |
+| `syncd_password_agent_cert_expiry_seconds` | gauge | Seconds until the first enrolled agent's certificate expires; negative once one has |
+| `syncd_password_changes_refused_total` | counter | Changes an agent submitted for a source it is not bound to |
+| `syncd_password_agents_unbound` | gauge | Enrolled agents bound to no source (enrolled before 0.5.0) |
+| `syncd_license_state{state,source}` | gauge | 0 licensed or evaluating, 1 a warning, 2 the grace period, 3 publishing blocked |
+| `syncd_license_managed_identities`, `syncd_license_managed_identities_limit` | gauge | People the engine exports to at least one target, each counted once; the license's limit |
+| `syncd_license_expiry_seconds` | gauge | Seconds until the license expires |
+| `syncd_license_development_key` | gauge | 1 when the build accepts the development license key, or the license was signed with it |
+
+0.5.0 adds nine alert rules: `SyncdGroupReviewsDue`, `SyncdLicenseWarning`,
+`SyncdLicenseGracePeriod`, `SyncdLicensePublishingBlocked`, `SyncdLicenseDevelopmentKey`,
+`SyncdPasswordAgentCertExpiring` (14 days before an agent's certificate expires),
+`SyncdPasswordKeyOld` (a password key older than a year), `SyncdUnmanagedEntriesGrew` and
+`SyncdUnmanagedPrivilegedMembersGrew`. Copy the rule file again, or upgrade the chart with
+`prometheusRule.enabled`; the unmanaged-entries expressions were not run through `promtool`.
 
 In 0.4.0 the shipped alert rules gained eight (the 0.4.0 release notes said seven): `SyncdChangesNeedApproval`, `SyncdCanaryFailed`,
 `SyncdGroupsExpired`, `SyncdUnmatchedRecordsAgeing`, `SyncdQualityErrors`, `SyncdBackupStale`,
