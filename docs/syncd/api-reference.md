@@ -492,13 +492,32 @@ The engine serves the gRPC service `syncd.v1.EngineControl`, defined in `proto/s
 the other engine of an HA pair are its clients. It listens on `api.listen` (default
 `127.0.0.1:7443`), and optionally on a Unix socket (`api.control_socket`).
 
-| Access | Calls |
+### Access tiers
+
+From 0.5.0 every RPC has a tier, and each caller is granted at most one, which includes the tiers
+before it (`RPC_TIERS` in `engine/crates/api/src/access.rs`; an RPC missing there is refused to
+everyone). Who gets which tier is `api.access` in the engine's configuration, in strict or
+compatible mode; see [Security](security.md#access-tiers).
+
+| Tier | Calls |
 |---|---|
-| Always (read-only) | `GetStatus`, `WatchStatus`, `ListDeadLetters`, `ListQuarantined`, `ListQuality`, `ListHeld`, `GetConfig`, `SearchEntities`, `GetEntity`, `GetEntityHistory`, `GetLineage`, `ReconciliationReport`, `GetPasswordKey`, `ListPasswordAgents` |
-| Commands: mTLS, the control socket, or `api.local_control: true` on loopback | `StartRun`, `ApproveDeletions`, `CheckDrift`, `RetryDeadLetters`, `DiscardDeadLetter`, `ApplyConfig`, `SimulateConfig`, `TestConnector`, `DiscoverSchema`, `PreviewConfig`, `ListUnjoined`, `JoinRecord`, `UnjoinRecord`, `SuggestJoins`, `AcceptJoins`, `ReviewGroup`, `PruneHistory`, `SubmitPasswords`, `AddPasswordAgent`, `RevokePasswordAgent`, `ChangeOwnPassword` |
-| Sensitive values (`reveal`): mTLS, the control socket, or `api.local_reveal: true` on loopback | The explorer calls, `GetLineage`, `ListUnjoined`, `SuggestJoins`, `SimulateConfig`, `DiscoverSchema`, `PreviewConfig` |
-| The whole store: what a reveal needs | `PullSnapshot` (on the active engine of a pair) |
-| The whole store: what a reveal needs, and command access | `Backup` |
+| `read` | `GetStatus`, `WatchStatus`, `ListDeadLetters`, `ListQuarantined`, `ListQuality`, `ListHeld`, `GetConfig`, `SimulateConfig`, `SearchEntities`, `GetEntity`, `GetEntityHistory`, `GetLineage`, `ListUnjoined`, `SuggestJoins`, `ReconciliationReport`, `GetPasswordKey`, `ListPasswordAgents`, `ListQueuedPasswords` |
+| `operate` | `StartRun`, `ApproveDeletions`, `CheckDrift`, `CheckUnmanaged`, `AdoptEntry`, `RetryDeadLetters`, `DiscardDeadLetter`, `JoinRecord`, `UnjoinRecord`, `AcceptJoins`, `ReviewGroup`, `PruneHistory`, `ChangeOwnPassword`, `RevokePasswordAgent`, `Backup`, `PullSnapshot`, `SnapshotManifest`, `PullSnapshotFiles`, `FollowPasswordQueue`, `TestConnector`, `DiscoverSchema`, `PreviewConfig`; and `reveal` on any call that takes it |
+| `operate`, and in strict mode `api.access.passwords` (or the control socket) | `SubmitPasswords`, `AddPasswordAgent`, `BindPasswordAgent`, `RotatePasswordKey`, `RotatePasswordAgentCa`, `ForwardPasswordIngest` |
+| `configure` | `ApplyConfig`, `SetLicense` |
+
+On top of the tier, each listener keeps its own limits:
+
+- **The plain-text loopback listener** (no `api.tls`) is read-only unless `api.local_control: true`,
+  and gives no sensitive values unless `api.local_reveal: true`. In strict mode it stops at
+  `operate` and may not set passwords.
+- **The control socket** reaches `configure` in compatible mode and stops at `operate` in strict
+  mode; it may set passwords.
+- **Sensitive values** (`reveal`) need mTLS, the control socket or `api.local_reveal: true`, and
+  the `operate` tier. **The whole store** (`Backup`, `PullSnapshot`, `SnapshotManifest`,
+  `PullSnapshotFiles`, `FollowPasswordQueue`) needs what a reveal needs.
+- In compatible mode (an install upgraded from 0.4.1 that has not opted in) every certificate the
+  client CA signed has every tier, as before 0.5.0.
 
 | RPC | Purpose |
 |---|---|
@@ -513,7 +532,8 @@ the other engine of an HA pair are its clients. It listens on `api.listen` (defa
 | `CheckDrift` | Read a publication's entries (or every checked publication's) back from the target and act by policy |
 | `RetryDeadLetters`, `DiscardDeadLetter` | Export dead letters again now; remove one without retrying |
 | `GetConfig` | The running configuration (YAML; secrets appear only as references) and its version label |
-| `ApplyConfig` | Validate, save and reload with a new configuration, then run a full sync. The answer comes before the reload |
+| `ApplyConfig` | Validate, save and reload with a new configuration, then run a full sync. The answer comes before the reload. From 0.5.0 it carries the console's `signature`, which an engine with `engine.require_signed_config` requires (see [Security](security.md#signed-configurations)), and the engine records who applied it |
+| `SetLicense` | From 0.5.0: the console gives the engine its license; the engine verifies and keeps it, and leaves enforcement to the console from then on |
 | `SimulateConfig` | Dry-run a configuration on a copy of the store: what each target would receive. One at a time |
 | `TestConnector`, `DiscoverSchema` | Connect with one connector of a candidate configuration; list what it holds. Write nothing |
 | `PreviewConfig` | Run a candidate over a sample of records in a scratch store |
@@ -524,24 +544,34 @@ the other engine of an HA pair are its clients. It listens on `api.listen` (defa
 | `ListUnjoined`, `JoinRecord`, `UnjoinRecord` | Correlation review and decisions by hand |
 | `SuggestJoins`, `AcceptJoins` | Correlation assistance: scored candidates for unjoined records (never joins); several joins in one transaction, with an outcome per decision |
 | `ReviewGroup` | Review a computed group: its clocks start again, and an expired group comes back |
+| `CheckUnmanaged`, `AdoptEntry` | From 0.5.0: look in a publication's target for entries the engine does not manage and for unaccounted members of privileged groups (reads only); make such an entry the entry of an entity that has none in the publication yet |
 | `GetPasswordKey` | The engine's public password key (an uncompressed P-256 point), its id and suite, which capture points seal changes to |
 | `SubmitPasswords` | Queue sealed password changes for delivery |
-| `AddPasswordAgent`, `ListPasswordAgents`, `RevokePasswordAgent` | A one-time enrollment token (and the agent CA's certificate) for a capture agent; the agents; revoking one |
+| `AddPasswordAgent`, `ListPasswordAgents`, `RevokePasswordAgent` | A one-time enrollment token (and the agent CA's certificate) for a capture agent, from 0.5.0 with the sources it is bound to; the agents; revoking one |
+| `BindPasswordAgent` | From 0.5.0: set the sources an agent may submit for, without enrolling it again |
+| `ListQueuedPasswords` | From 0.5.0: the password changes waiting for delivery: when each arrived, who submitted it and where it still has to go. Never a password, and not the account |
+| `RotatePasswordKey`, `RotatePasswordAgentCa` | From 0.5.0: a new password key, or a new agent CA; the one replaced keeps working until it is retired (`retire`, or by the engine after `passwords.rotation_overlap_days`) |
+| `ForwardPasswordIngest` | From 0.5.0: the passive engine of a pair hands on what a capture agent sent to its ingest listener, with the fingerprint of the agent's certificate |
 | `ChangeOwnPassword` | A person's own password change, sealed to the password key (the console's self-service page). `UNAUTHENTICATED` for a wrong user name or password, `FAILED_PRECONDITION` for the policy, `RESOURCE_EXHAUSTED` after too many failures |
 | `Backup` | A consistent backup of the running engine (store checkpoint, configuration file, password key and agent CA, as they are on disk: sealed when a passphrase is set) as a streamed `tar.zst`, its manifest last |
-| `PullSnapshot` | The active engine's newest store snapshot, for the passive engine of an HA pair |
+| `PullSnapshot` | The active engine's newest store snapshot, whole, for the passive engine of an HA pair |
+| `SnapshotManifest`, `PullSnapshotFiles` | From 0.5.0: the newest snapshot's manifest (every file with its size and SHA-256), and the files of it the passive engine lacks |
+| `FollowPasswordQueue` | From 0.5.0: the active engine's password queue, write by write, for the passive engine to keep between snapshots; a submission is answered once the passive engine has it |
 
-Errors are gRPC statuses: `PERMISSION_DENIED` for a command or reveal on a listener that does not
-allow it, `UNAVAILABLE` when the engine is busy with a long operation (a command waits up to 10
+Errors are gRPC statuses: `PERMISSION_DENIED` for a call above the caller's tier, a password call
+without `api.access.passwords`, or a command or reveal on a listener that does not allow it, `UNAVAILABLE` when the engine is busy with a long operation (a command waits up to 10
 seconds first), has too many commands waiting, is stopping, or is the passive engine of a pair,
 `FAILED_PRECONDITION` for password calls when no publication delivers passwords, `INVALID_ARGUMENT`,
 `NOT_FOUND`, and `INTERNAL` for a command that failed.
 
 The `syncd` command line wraps these calls (`syncd status`, `dlq`, `held`, `reconcile`,
 `full-sync`, `approve`, `retry`, `discard`, `check-drift`, `apply-config`, `group review`,
-`correlation suggest`, `lineage`, `report`, `password ...`, `backup`, ...). `syncd quarantine`
+`correlation suggest`, `lineage`, `report`, `unmanaged`, `adopt`, `password ...`, `backup`, ...).
+From 0.5.0 `syncd apply-config` is refused on an engine in strict mode (`ApplyConfig needs the
+configure tier`), and on one that requires signed configurations. `syncd quarantine`
 reads the store directly (read-only), not through the API. On the engine's host the command line
-uses the control socket when it is configured, without a certificate; on Kubernetes,
+uses the control socket when it is configured, without a certificate (in strict mode it reads,
+operates and sets passwords there, and applies no configuration); on Kubernetes,
 `kubectl exec syncd-engine-0 -- syncd status` (for a release named `syncd`) does the same. See
 [Operator guide](operator-guide.md). For its certificates, see
 [Security](security.md#the-engine-control-api).
