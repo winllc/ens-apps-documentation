@@ -48,8 +48,8 @@ set of guides, so you can find the same kind of information in the same place fo
 
     ---
 
-    Identity synchronisation. Reads databases, Active Directory and LDAP directories, in full or
-    from their change logs, merges each person's records into one view with computed
+    Identity synchronisation. Reads databases, HR services, Active Directory and LDAP directories,
+    in full or from their change logs, merges each person's records into one view with computed
     attributes, and keeps target directories in step. Designed and run from a web console.
 
     [:octicons-arrow-right-24: syncd](syncd/index.md)
@@ -60,7 +60,8 @@ set of guides, so you can find the same kind of information in the same place fo
 
 Each application needs a license file from ENS Solutions, issued through the ENS licensing portal,
 where customers can also take a free 30-day evaluation. See [Licensing](licensing.md) for what each
-license unlocks and where the file goes. syncd has no license check yet.
+license unlocks and where the file goes. syncd, from 0.5.0, takes its license from the same portal,
+in its own format and with its own rules: see [syncd's Licensing](syncd/licensing.md).
 
 ## Releases and downloads
 
@@ -73,7 +74,7 @@ for the files and how to verify them. syncd's releases are not on the portal yet
 
 Every application keeps the same tamper-evident audit trail. Administrators can search and export it
 in the application, and it can be sent to Splunk or any other SIEM. See [Audit logging](audit-logging.md).
-syncd's console joined the format in 0.4.0; its audit page has no filters or CSV export yet.
+syncd's console joined the format in 0.4.0, and from 0.5.0 its audit page filters and exports CSV.
 
 ## FIPS 140-3 and DISA STIG
 
@@ -82,7 +83,7 @@ Portal's web tier, nginx and OpenSSL) on Red Hat UBI 9 images, and share one pla
 of DISA STIG controls. ENS Solutions does not claim FIPS 140-3 validation. The license check works
 on a Java runtime in FIPS mode with a license file that carries an ECDSA P-256 signature; older files
 need re-signing first. syncd, written in Rust, takes its cryptography from AWS-LC, and a FIPS build
-uses the AWS-LC FIPS module. See [FIPS 140-3 and DISA STIG](fips-and-stig.md).
+uses the AWS-LC FIPS module; its license check uses ECDSA P-256, which works in FIPS mode. See [FIPS 140-3 and DISA STIG](fips-and-stig.md).
 
 ## Sizing, availability and recovery
 
@@ -115,13 +116,13 @@ Most sections also include **Architecture**, **Security**, **API reference** and
 |---|---|---|---|---|---|
 | Server | Spring Boot 4 / Java 21 | Spring Boot 4 / Java 21 + React | Spring Boot 4 / Java 21 | Spring Boot 4 / Java 17 + Tomcat 9 connector | Rust engine (`syncd`) + Rust (Axum) console with a React UI |
 | Data store | PostgreSQL | JSON configuration and audit files, or PostgreSQL for several instances | PostgreSQL | MySQL 8.4 | Embedded RocksDB store (engine); PostgreSQL (console) |
-| Directory | LDAP (IC FSD schema) | LDAP (any schema) | LDAP | RSA Authentication Manager | Reads databases, CSV files, LDAP, Active Directory and Entra ID; writes LDAP, Active Directory, Entra ID and SCIM applications |
-| Sign-in | X.509, directory password, or single sign-on (OIDC, SAML) | X.509, directory password, or single sign-on (OIDC, SAML) | X.509, LDAP password, single sign-on (OIDC, SAML), Kerberos (client) | RSA AM user ID + SecurID passcode; operators can start with single sign-on (OIDC, SAML) | Local accounts, or single sign-on (OIDC) |
+| Directory | LDAP (IC FSD schema) | LDAP (any schema) | LDAP | RSA Authentication Manager | Reads databases, CSV files, REST and OData services (Workday, SuccessFactors, UKG Pro), LDAP, Active Directory and Entra ID; writes LDAP, Active Directory, Entra ID and SCIM applications |
+| Sign-in | X.509, directory password, or single sign-on (OIDC, SAML) | X.509, directory password, or single sign-on (OIDC, SAML) | X.509, LDAP password, single sign-on (OIDC, SAML), Kerberos (client) | RSA AM user ID + SecurID passcode; operators can start with single sign-on (OIDC, SAML) | Local accounts, X.509 (CAC/PIV), or single sign-on (OIDC, SAML) |
 | Install | Release package (Docker or Podman Compose) or Helm chart | Release package (Docker or Podman Compose, or native systemd) or Helm chart | Release package (Docker or Podman Compose) or Helm chart, plus the Windows agent | Release package (Docker or Podman Compose) or Helm chart | Offline bundle, `.deb` or `.rpm` with systemd, or Helm chart |
 | Public API | `/api/v1` with scoped API tokens, OpenAPI document | `/api/v1` with scoped API tokens, OpenAPI document | Read-only `/api/v1` with scoped API tokens, OpenAPI document | `/api/v1` with scoped API tokens; changes are help-desk requests | Console `/api/v1` with scoped API tokens, OpenAPI document; engine gRPC control API with mTLS |
-| Webhooks | Expiry alerts and job results (JSON, Slack, Teams), HMAC-signed | Entry, membership and form events, HMAC-signed | Absence alerts and status changes, HMAC-signed | Help-desk, token and account events, HMAC-signed | Engine and target state, holds, dead letters, configuration lifecycle, backups and failovers (JSON, Slack, Teams, PagerDuty), HMAC-signed |
-| Exports | Certificate inventory as CSV or Excel, saved views, scheduled reports | Entries and group members as CSV or LDIF, import with a dry run | Group reports and people lists as CSV or Excel, scheduled reports | Trusted Agent and site reports; the audit log as CSV or NDJSON | Reconciliation reports as CSV or PDF, scheduled reports; lineage as JSON or PDF; configuration versions as files |
-| Accessibility | WCAG 2.1 AA target, draft VPAT | WCAG 2.1 A/AA checks, draft VPAT | WCAG 2.1 AA target, draft VPAT | WCAG A/AA checks, draft VPAT | No conformance target or VPAT yet; banner colours checked for 4.5:1 contrast |
+| Webhooks | Expiry alerts and job results (JSON, Slack, Teams), HMAC-signed | Entry, membership and form events, HMAC-signed | Absence alerts and status changes, HMAC-signed | Help-desk, token and account events, HMAC-signed | Engine and target state, holds, dead letters, configuration lifecycle, backups and failovers, license state, group reviews and data quality (JSON, Slack, Teams, PagerDuty), HMAC-signed |
+| Exports | Certificate inventory as CSV or Excel, saved views, scheduled reports | Entries and group members as CSV or LDIF, import with a dry run | Group reports and people lists as CSV or Excel, scheduled reports | Trusted Agent and site reports; the audit log as CSV or NDJSON | Reconciliation reports as CSV, Excel or PDF, scheduled reports; unmanaged target entries; lineage as JSON or PDF; configuration versions as files |
+| Accessibility | WCAG 2.1 AA target, draft VPAT | WCAG 2.1 A/AA checks, draft VPAT | WCAG 2.1 AA target, draft VPAT | WCAG A/AA checks, draft VPAT | WCAG 2.1 A/AA self-audit and automated checks, draft VPAT |
 | Demo | `docker-compose.demo.yml` | `docker-compose.demo.yml` | `docker-compose.demo.yml` | `docker-compose.demo.yaml` | None; development scripts in the source repository |
 
 !!! note "Source of truth"

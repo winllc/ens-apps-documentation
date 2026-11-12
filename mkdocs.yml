@@ -161,6 +161,7 @@ nav:
           - Connectors: syncd/connectors.md
           - Computed attributes and rules: syncd/rules.md
           - Password synchronisation: syncd/password-sync.md
+          - Licensing: syncd/licensing.md
           - Change safety and lifecycle: syncd/change-safety.md
           - Configuration as code: syncd/config-as-code.md
           - Reports, lineage and data quality: syncd/reports-and-data-quality.md

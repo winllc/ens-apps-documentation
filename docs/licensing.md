@@ -9,15 +9,20 @@ Each application checks its license offline, against public keys built into it, 
 same on an air-gapped network.
 
 !!! note "syncd"
-    syncd has no license check yet: it needs no license file and has no license screen. Licensing by
-    managed identities and connector packs is on its roadmap. The rest of this page does not apply to
-    it.
+    syncd (from 0.5.0) also takes its license from the portal, and the portal's account pages work
+    the same for it, but the file is syncd's own format and syncd applies its own rules: it is
+    sized by managed identities, sells connectors and features as packs, and never stops running
+    sync, only publishing configuration changes. Its [Licensing](syncd/licensing.md) page covers
+    installing and enforcement; from this page only [Getting a license](#getting-a-license) and
+    [For ENS: keys and issuing](#for-ens-keys-and-issuing) apply to it.
 
 ## Getting a license
 
 1. **Create an account** on the ENS licensing portal (`/account`) and confirm your email address.
 2. **Evaluate**: download a free 30-day evaluation license for any product, one per product. An
-   evaluation covers the smallest size band, unlocks every feature, and shows an evaluation banner.
+   evaluation covers the second size band, so a trial pointed at a real directory sees all of it,
+   unlocks every feature, and shows an evaluation banner. It can be extended once, by 30 days,
+   from its license page.
 3. **Buy**: licenses for your order (pilot, subscription or perpetual) are issued into the same
    account by ENS. Download them from **Account → Licenses**.
 4. **Bind (optional)**: a license can be tied to one installation by entering that installation's id,
@@ -190,6 +195,7 @@ band, evaluations and pilots, or when ENS adds them to an order.
 | Directory Services Portal (`directory-portal`) | `directory-editor`, `form-builder`, `self-service-profile`, `white-pages`, `smart-card-sign-in`, `metrics`, `data-analysis`, `schema-transfer`, `multi-directory` (Enterprise, from v0.0.6: several LDAP directories in one portal; failover within one directory needs no feature). Group access (v0.0.7) has no id of its own: `directory-editor` or `self-service-profile` turns it on |
 | ReadyRoom (`readyroom`) | `attendance`, `calendar`, `absence-alerts`, `metrics` (metrics and reports), `org-chart`, `classification-banners` |
 | RSA Operations Portal (`mfa-portal`) | `self-service`, `trusted-agents`, `help-desk`, `shipments`, `scheduled-jobs`, `branding`, `reports`, `bulk-upload`, `group-email` |
+| syncd (`syncd`) | Core: `directory-connectors`, `database-connectors`, `merged-views`, `console`. Enterprise, one per pack, written into the syncd file as its pack ids: `enterprise-database`, `cloud-saas`, `password-sync`, `high-availability`, `extensibility`. See [syncd's packs](syncd/licensing.md#packs) |
 
 The catalog lives in the portal's source, in `src/data/licensing.ts` in the products-page
 repository. Every feature is checked by its application, so moving one between tiers changes only
@@ -259,3 +265,12 @@ certification.
   mode will.
 - **The file format** is described in `licensing/README.md` in the products-page repository. That
   directory also holds the Java library every application embeds.
+- **syncd.** syncd licenses are written in syncd's own format (`docs/LICENSE-FORMAT.md` in the
+  syncd repository) and signed with the **P-256 key only**, since syncd verifies nothing else:
+  until `LICENSE_SIGNING_KEY_P256` is set, the portal refuses to issue syncd licenses, evaluations
+  included, and says why. syncd's release builds carry the portal's P-256 public key (key id
+  `e0a2e4ff9c4f5bfc`, in `deploy/licensing/ens-portal-public-keys.pem` in the syncd repository),
+  so the portal's P-256 private key must be the matching half. A syncd file is a new license id
+  for every revision (`<id>-r<revision>`), keeps installation ids in lower case, and gives a
+  perpetual license a far expiry date. Check one with syncd's own tool:
+  `cargo run -p license-sign -- verify --public-key portal-p256.pem FILE`.
