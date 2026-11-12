@@ -808,10 +808,10 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
     shows each agent's certificate. See
     [Changing the passphrase and rotating the keys](operator-guide.md#changing-the-passphrase-and-rotating-the-keys).
 
-??? failure "`syncd password rekey` stops before changing anything"
-    New in 0.5.0. A key file opens with neither the current nor the new passphrase: the files came
-    from another engine, or an earlier rekey was finished with yet another passphrase. Nothing was
-    changed. An interrupted rekey is finished by running the same command again; the engine still
+??? failure "`syncd password rekey`: `<file> opens with neither the engine's passphrase nor the new one; nothing was changed`"
+    New in 0.5.0. A key file opens with neither the passphrase the engine has (or the previous one
+    an interrupted rekey left) nor the new one: the files came from another engine, or the
+    engine's passphrase variable names another file. Nothing was changed. An interrupted rekey is finished by running the same command again; the engine still
     opens files sealed with the previous passphrase (`<passphrase file>.previous`) until
     `syncd password rekey --forget-previous`. With the passphrase in
     `SYNCD_PASSWORD_KEY_PASSPHRASE` (a value, not a file) the command cannot change the variable:
@@ -827,6 +827,23 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
     policy that refuses the key (`AccessDenied`, `SignatureDoesNotMatch`: a wrong secret or
     session token), a full disk for a directory destination. Fix it, then take one by hand:
     `sudo syncdctl backup --to <the same destination>`. The schedule carries on by itself.
+
+??? warning "An S3 backup waits a few seconds before `no AWS credentials: ...`"
+    New in 0.5.0. With none of the access key variables, a web identity token or a shared
+    credentials file, the engine asks the EC2 instance metadata service for the instance's role,
+    last. Off EC2 that answer never comes, and the error follows a short wait. Set
+    `AWS_EC2_METADATA_DISABLED=true` in `/etc/syncd/engine.env` to skip it, or give credentials.
+    On EC2, give the instance a role that may write the bucket.
+
+??? warning "`syncdctl backup --to`: `the password-key passphrase file ... is inside /etc/syncd: it is LEFT OUT of this backup ...`"
+    New in 0.5.0. The passphrase that seals the password keys would otherwise travel in the same
+    backup as the keys. Keep a copy apart from the backups (a restore needs it), and move the file
+    out of `/etc/syncd`, to `/etc/syncd-keys/` for example, updating
+    `SYNCD_PASSWORD_KEY_PASSPHRASE_FILE`. `engine.env sets SYNCD_PASSWORD_KEY_PASSPHRASE, the
+    passphrase itself, which is in this backup`: use a file outside `/etc/syncd` instead. On
+    restore, `the backup does not hold the password-key passphrase file ...`: put it back from
+    where you keep it, or the engine cannot open its keys. See
+    [The password keys](operator-guide.md#the-password-keys).
 
 ??? failure "`syncd backup`: `a backup carries the whole store: it needs mTLS (api.tls), the control socket, or api.local_reveal: true for the loopback listener`"
     The backup was asked over a plain-text loopback listener that may not reveal values. Use the
@@ -892,10 +909,33 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
     On the active engine, taking them fails (`taking a store snapshot failed`: a full disk under
     the data directory, say). On the passive one, pulling them does (`pulling a store snapshot
     failed`): the active engine's API unreachable on 7443, a client certificate it does not
-    accept, or a name its certificate does not carry. `this engine takes no snapshots: it is not
+    accept, or a name its certificate does not carry. In strict control API access the passive
+    engine's certificate must be listed under `operate` on the active host (`cli.crt` on hosts,
+    `syncd engine` on Kubernetes, which the shipped files list). From 0.5.0 the default interval
+    is 60 s, so the alert's three intervals pass sooner than with 0.4.1's 300 s. `this engine takes no snapshots: it is not
     the active engine of a pair` means the passive engine reached the wrong one. Until it is
     fixed, a takeover starts from an older store and has more to read and reconcile; nothing is
     lost.
+
+??? warning "`THE PASSIVE ENGINE IS NOT FOLLOWING THE PASSWORD QUEUE`, or `syncd_ha_password_changes_unreplicated_total` grows"
+    New in 0.5.0. On the active engine: the passive engine is down, cannot reach the active one's
+    API (the same path as its snapshot pulls), or did not answer within
+    `engine.ha.password_replication_wait_ms` (2000). Password changes are still accepted and
+    delivered, but one queued and not yet delivered when the active engine is lost, before the
+    passive one catches up or the next snapshot, is not delivered by the engine that takes over.
+    Bring the passive engine back; it catches up by itself. During an upgrade of the pair, the
+    queue is not followed until both engines run 0.5.0.
+
+??? failure "A Kubernetes lease: `LEASE ERROR` with 403, 404 or a timeout"
+    New in 0.5.0, with `engine.ha.lease.kind: kubernetes`. 403: the engine's service account may
+    not get or update the Lease (the chart's Role and RoleBinding; check with
+    `kubectl auth can-i update lease/<name> --as system:serviceaccount:<namespace>:<account>`). 404
+    on a create: the Lease is gone and the account may not create it (`helm upgrade` creates it
+    again). A timeout: the pods cannot reach the API server (a NetworkPolicy's egress).
+    `kubectl get lease -n <namespace> <name> -o yaml` shows the holder, the last renewal and the
+    takeovers. A pod that has just started waits one lease duration before it takes over from a
+    holder that is gone. Changing a pair's lease kind needs both engine pods stopped first. This
+    backend was tested against a fake API server only.
 
 ??? warning "`the pair's lease is lost: stopping the sources and the exports; this engine is now the passive one`"
     This engine could not renew the lease for longer than its TTL (cut off from the lease's
@@ -921,7 +961,9 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
 ??? warning "After a failover, a PostgreSQL source reads its tables in full"
     Expected. A logical replication slot cannot go back past what the old engine confirmed, so the
     new active engine reads the tables in full first (unchanged rows cost nothing), then streams.
-    Password changes the old engine had queued after its last snapshot are not delivered again.
+    From 0.5.0 password changes queued after the last snapshot survive when the passive engine was
+    following the queue (above); the log says `password queue: what the old active engine wrote
+    after the snapshot was applied`, or warns that its copy had a gap.
 
 ## Webhooks, reports and Git sync
 
@@ -964,15 +1006,19 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
     [Reports, lineage and data quality](reports-and-data-quality.md).
 
 ??? failure "Mail: `<host> does not offer STARTTLS`, `AUTH refused: 535 ...`, `the mail server did not greet`, `the mail server did not answer within 30 s`"
-    The console speaks SMTP itself, with STARTTLS and AUTH PLAIN only.
+    The console speaks SMTP itself: STARTTLS, or from 0.5.0 TLS from the first byte; AUTH PLAIN,
+    or from 0.5.0 AUTH LOGIN.
 
-    - **No STARTTLS offered**: the relay does not support it. Use one that does, or, for a relay
-      on this host or a private network, `CONSOLE_SMTP_STARTTLS=false`.
-    - **Port 465 (SMTPS, implicit TLS)** is not supported: the console waits for a greeting that
-      never comes. Use the submission port, 587, with STARTTLS.
+    - **No STARTTLS offered**: the relay does not support it. Use one that does, SMTPS
+      (`CONSOLE_SMTP_IMPLICIT_TLS=true` with `CONSOLE_SMTP_PORT=465`), or, for a relay on this host
+      or a private network, `CONSOLE_SMTP_STARTTLS=false`.
+    - **Port 465 (SMTPS, implicit TLS)** without `CONSOLE_SMTP_IMPLICIT_TLS=true`: the console
+      waits for a greeting that never comes. Set it (0.4.1 did not support SMTPS at all).
     - **`AUTH refused`**: the account or password (`CONSOLE_SMTP_USERNAME`,
-      `CONSOLE_SMTP_PASSWORD_FILE`) is wrong, or the server only offers AUTH LOGIN, which the
-      console does not speak. `CONSOLE_SMTP_PASSWORD_FILE is needed with a user name`: set it.
+      `CONSOLE_SMTP_PASSWORD_FILE`) is wrong, or the mechanism is: `CONSOLE_SMTP_AUTH` is `auto`
+      by default; try `login` or `plain`. `the mail server offers neither AUTH PLAIN nor AUTH LOGIN`:
+      it needs a mechanism the console does not speak. `CONSOLE_SMTP_PASSWORD_FILE is needed with
+      a user name`: set it.
     - **A certificate error**: set `CONSOLE_SMTP_CA_FILE` for a relay with a private CA.
 
     Queued mail is retried for a day. `SELECT last_error FROM mail_outbox WHERE failed_at IS NOT
@@ -1015,7 +1061,15 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
     A long operation runs: a full sync (after `syncd full-sync`, or after a configuration is
     published), a reconciliation, or the deletes a full read found. `syncd status` shows
     `busy: <activity> (for ...)`; alert `SyncdEngineBusy` fires after an hour. Commands wait 10 s,
-    then are refused rather than queued. Source changes wait until it ends; they aren't lost.
+    then are refused rather than queued.
+
+    From 0.5.0 source changes do not wait for a reconciliation, a full sync or a reload: the
+    engine takes them in between the operation's pages (queued password changes too). During a
+    reconciliation they are exported at once; while a full sync recomputes they are committed and
+    exported by the reconciliation that follows. After `syncd apply-config` the log shows `starting
+    sources` before the full sync's summary. They still wait for a full read's deletes, the first
+    export after an initial load, a drift check, the release of held changes, and the
+    reconciliation `syncd approve` runs; they aren't lost in any of these.
 
     At a million entities on 4 vCPU a full sync takes about 9 s, a reconciliation about 6 s, and
     a reload that changed every entity about 2 minutes; it grows linearly with the store. Wait and
@@ -1072,6 +1126,18 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
     allows. Nothing was deleted; other changes still flow. `syncd status` lists the scope, the
     count and since when; alert `SyncdDeletesHeld`.
 
+    **A truncated PostgreSQL table** (new in 0.5.0). A `TRUNCATE` of a table a stream follows is
+    read as a full read that finds every row gone, so it lands here when the source connector has
+    a `deletion_threshold`; the source's line in `syncd status` also says `warning: truncated at
+    the source ...; read in full, N rows remain`. 0.4.1 ignored a `TRUNCATE`. A stream has no next
+    full read coming, so the approval brings one: `syncd approve "source <connector>/<object>"`
+    reads the table again at once and applies what that read finds gone. Run the same command
+    after repairing the table: the read finds nothing gone and the hold clears. Without a
+    `deletion_threshold` on the source, the deletes go through (subject to the publications'
+    thresholds): set one before you need it. The publication must publish truncates; the engine
+    warns at start (`the publication does not publish truncates`) when one made by hand does
+    not.
+
     Find out why first: a source that came back empty or partial (a wrong filter, a failed view,
     an expired account) is the usual cause, and approving would delete real entries. If the
     source is wrong, fix it; the next full read clears the hold. If the deletes are intended,
@@ -1087,6 +1153,13 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
     <connector>` checks the connection with the same settings and secrets as the service. On the
     passive engine of a pair, sources do not run at all: that is expected.
 
+    A PostgreSQL stream: from 0.5.0 an idle stream is no longer restarted every five minutes. One
+    that has heard nothing for a minute asks the server whether it still serves the stream; `no
+    message from the server in 60 s, and it has not heard from this stream meanwhile` means the
+    connection was dropped on the way (a proxy or firewall idle timeout, a failover). A source
+    whose secrets come from a vault (`vault`, `aws_secret`, `azure_keyvault`) reads them again at
+    its restart. A REST source the service throttles shows `throttled=` in `syncd status`.
+
 ??? warning "A source is stalled (`SyncdSourceStalled`)"
     It sent changes, but its checkpoint hasn't moved for 15 minutes. Check whether the engine is
     busy or a target is unreachable (above); neither should hold sources for long. Otherwise the
@@ -1098,7 +1171,8 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
     systemd starts syncd again from its last commit, and it finishes any full sync it was in. The
     usual causes, in order: the store grew past what `MemoryMax` allows (about 1.2 GiB per
     million entities, twice that during the first load); a simulation running beside the engine;
-    a large number of held changes, or a very large view in report mode; a very large
+    a large number of held changes, or a very large view in report mode (from 0.5.0 held changes
+    are kept in the store and only counted in memory, so this weighs less); a very large
     `engine.cache_mb`. Raise `MemoryMax` (`systemctl edit syncd`) or the host's memory. Don't
     remove the limit. See [Sizing](availability-and-sizing.md#the-memory-limit).
 
@@ -1155,8 +1229,10 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
     `sudo syncd dlq` lists each failed export with its DN and error. Errors from the target
     (schema, access rights, a missing parent entry) need fixing there or in the publication;
     then `syncd retry`. `syncd discard` removes one you don't want sent. On Active Directory, a
-    duplicate `sam_account_name` dead-letters: it has no `on_conflict: unique`, so mint the login
-    once as a computed attribute with `unique()` instead.
+    duplicate `sam_account_name` dead-letters; from 0.5.0
+    `sam_account_name: { on_conflict: unique }` gives the second holder a counter instead (see
+    [Unique sAMAccountName](change-safety.md#unique-samaccountname)). An initial password refused
+    three times is a dead letter too (see [Passwords](#passwords)).
 
 ## The command line
 
@@ -1173,10 +1249,31 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
     was issued). `sudo syncdctl cli-cert` issues it; or pass `--api-cert` and `--api-key`, which
     go together (`--api-cert and --api-key go together`).
 
+??? failure "`ApplyConfig needs the configure tier, and this client certificate has operate (api.access on the engine's host)`"
+    New in 0.5.0. The host runs strict [control API access](operator-guide.md#control-api-access),
+    as every host installed with 0.5.0 does: the command line's certificate reads and operates but
+    does not apply configurations, so `syncd apply-config` is refused (on the control socket the
+    message ends `which in strict mode only a client certificate listed under api.access.configure
+    has`). Publish the configuration from the console. Without a console, and a configuration must
+    change now: edit `/etc/syncd/engine/engine.yaml` as root and restart the engine; the status then
+    says the engine runs `the file on this host`, and the console reports it. There is no
+    break-glass flag. Other commands refused with `... needs the operate tier` come from a
+    certificate listed under `read` only.
+
+??? failure "`this client certificate is not listed in api.access on the engine's host`"
+    New in 0.5.0. In strict mode a certificate listed under no tier gets nothing, not even the
+    status. Use the command line's own certificate (the default with `sudo`), or list the
+    certificate's common name (or `uri:` and a URI SAN) under the tier it needs, then restart the
+    engine. The engine logs `refused a client certificate that api.access does not list`. A
+    passive engine of a pair that pulls snapshots with its own `engine.ha.peer.cert_file` needs
+    that certificate listed under `operate`.
+
 ??? failure "`this listener is read-only: commands need mTLS (api.tls), or api.local_control: true`"
     The engine's control API has no `tls` section, and plain-text loopback listeners accept only
     reads. The installed configuration uses mutual TLS; keep it. Similarly,
     `revealing sensitive values needs mTLS (api.tls), or api.local_reveal: true` for `--reveal`.
+    In strict mode the loopback listener, like the control socket, stops at `operate`, on top of
+    these two settings.
 
 ??? failure "`the engine has too many commands waiting; try again shortly`, or `the engine is shutting down`"
     The engine's command queue is full, or it is stopping. Retry in a moment; check `systemctl
@@ -1270,6 +1367,14 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
     The image has no shell, so run `syncd` itself, as `kubectl -n syncd exec syncd-engine-0 --
     syncd status`, not through `sh -c`. The command reaches the engine through its control socket,
     `/run/syncd/control.sock`, which exists only while the engine runs.
+
+??? failure "`kubectl exec ... -- syncd apply-config` is refused: `ApplyConfig needs the configure tier, which in strict mode only a client certificate listed under api.access.configure has`"
+    New in 0.5.0, on a release first installed with 0.5.0: the image's initial configuration is
+    strict, and the control socket reads and operates but applies no configuration. Publish from
+    the console. A release first installed before 0.5.0 keeps its file on the data volume, stays
+    compatible, and warns; the chart cannot set `api.access`, so opting in means editing
+    `/var/lib/syncd/engine.yaml` on the volume (see the source repository's KUBERNETES.md,
+    "Control API access").
 
 ??? warning "Sources, the database or webhook receivers become unreachable after turning on NetworkPolicies"
     With `networkPolicy.egress.enabled`, the pods reach DNS and the engine's control API only,

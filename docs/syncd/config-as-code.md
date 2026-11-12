@@ -583,9 +583,20 @@ the rules' test cases:
 
 Without Git sync, the console has no golden tests: run `syncd test` in CI.
 
-The console reads the golden files at the **branch head**, not at the commit of the version being
-checked. A version from an older commit, or a draft that has moved ahead of the branch, is checked
-against the newest tests and expected files.
+**Which commit.** Since 0.5.0 the console keeps each version's Git commit: the commit Git sync took
+it from; for a version saved or imported in the console, the branch head when it was saved; for
+a promoted version, the source version's commit. A saved version is checked and published
+against the golden files (and package files) of **its own commit**, whatever the branch head holds
+now; an edited text, like any draft, against the branch head. The check names the commit
+(**Golden tests: N of M publications as expected (at commit …)**).
+
+- A version saved while its golden files failed stays refused after the files are fixed at the
+  head: save it again, which makes a version at the new commit.
+- A version saved before 0.5.0 has no commit: it is checked at the branch head, and the check and a
+  refused publish say so in a note.
+
+In 0.4.1 every check read the golden files at the branch head, so a version from an older commit
+was checked against the newest tests.
 
 ## A worked CI pipeline
 
@@ -667,7 +678,9 @@ jobs:
 ```
 
 The promotion token needs `engines:read` and `configs:read` (to find the version) and
-`configs:publish`, and its creator must be a designer or admin. A version made from the commit
+`configs:publish`; its creator, an administrator, must reach `dev-1` and hold a designer or admin
+role on every production engine, and a token limited to an environment would not reach both (use engines
+by name, or no limit). A version made from the commit
 exists only if the commit changed `syncd.yaml` and the text was new; otherwise promote the version
 the console shows as running on `dev-1`. With four-eyes approval on, production engines answer
 `pending_approval` and wait for a second person in the console.
@@ -681,21 +694,37 @@ inline. In a configuration-as-code repository, packages are files in the same re
 
 - `syncd validate`, `syncd test` and the publish gate run each package's own tests.
 - `syncd config diff` shows a package's version change and the functions that changed.
-- With Git sync, the console reads package files from the repository (at the branch head), and
-  the configuration editor's Packages panel says when the branch has a newer file. The console
-  keeps no package files of its own: a configuration it publishes uses inline packages, packages
-  from its Git repository, or files next to the engine's own configuration file.
+- With Git sync, the console reads package files from the repository at the version's commit
+  (at the branch head for a version saved before 0.5.0), and the configuration editor's Packages
+  panel says when the branch has a newer file. The console keeps no package files of its own: a
+  configuration it publishes uses inline packages, packages from its Git repository, or files next
+  to the engine's own configuration file.
+- A package's WebAssembly module of custom functions (`wasm: { from, sha256 }`) is read from the
+  repository beside its package file, like the file, and reviewed with the change that adds it; or,
+  named by its hash alone, filled in from the console's module store once uploaded and approved
+  there. Either way it is pinned by its SHA-256, and the console publishes it inside the
+  configuration it signs. See
+  [Computed attributes and rules](rules.md#custom-functions-in-webassembly).
 
 [Computed attributes and rules](rules.md) documents packages, how rules call them, and test cases.
 
 ## Known limitations
 
-- **Promotion** is command line and API only. There is no Promote button in the web console.
-- **The console's golden tests** (and the package files it reads from Git) come from the branch
-  head, not from the commit of the version being checked.
-- **The console's version compare** shows a file package's name, version, file and pin, not the
-  functions that changed. `syncd config diff` does show them.
+- **Versions saved before 0.5.0** have no Git commit: their golden tests and package files are
+  read at the branch head, and the version compare may fall back to a package's name, version,
+  file and pin, with a note.
+- **A version saved while its golden files failed** stays refused after the files are fixed at the
+  branch head, since it is checked at its own commit: save it again.
+- **The Promote preview** checks roles and shows each engine's diff summary only: the test cases,
+  golden tests, license and hook run when you promote. `syncd config promote` has no dry run.
+- **Roles:** Git sync is for roles on everything, and an API token limited to an environment or to
+  engines cannot use it; there are no per-view scopes.
+- **Strict engines:** `syncd apply-config` on the engine's host is refused once the engine is
+  strict or requires signed configurations; configuration goes through the console. Changing the
+  configuration without the console means editing the file as root on the host, which the console
+  then reports.
 - **Renaming an engine** (`syncd-console admin rename-engine`, run by the Helm chart when it turns
-  HA on) doesn't update `CONSOLE_CONFIG_GIT_ENGINES`: change it by hand.
+  HA on) doesn't update `CONSOLE_CONFIG_GIT_ENGINES`: change it by hand (the command and the
+  console warn about it).
 - **Git sync** runs the `git` program: `file://` repositories don't work in the container image,
   which has no shell.

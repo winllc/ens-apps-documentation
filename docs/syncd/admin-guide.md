@@ -10,9 +10,10 @@ Installing, upgrading and backing up are in the [Install guide](install.md) and 
 [Operator guide](operator-guide.md); the screens designers and operators use every day are in the
 [User guide](user-guide.md).
 
-This page describes syncd 0.5.0 (`main` at commit `a9d17c6`). Since 0.4.1, roles are held as
-**assignments** that can be limited to an environment or an engine, and role maps add up; see
-[Roles](#roles).
+This page describes syncd 0.5.0 (`main` at commit `a9d17c6`). The biggest change for administrators
+since 0.4.1: roles are held as **assignments** that can be limited to an environment or an engine,
+and role maps add up (see [Roles](#roles)); sign-in gains a policy of its own
+([Sign-in policy](#sign-in-policy)) and the product a [license](#the-license).
 
 ## Becoming an administrator
 

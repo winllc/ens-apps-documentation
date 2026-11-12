@@ -1,12 +1,12 @@
 # API reference
 
-syncd has these programmable interfaces:
+syncd has these programmable interfaces. This page describes syncd 0.5.0 (commit `a9d17c6`).
 
 | Interface | Served by | Used by | Authentication |
 |---|---|---|---|
 | [Console REST API](#console-rest-api) (`/api/v1`) | `syncd-console` | The console UI, scripts, pipelines | The console's session cookie, or an [API token](#api-tokens) |
 | [Audit pull API](#audit-trail) (`GET /api/audit/events`) | `syncd-console` | A SIEM collector | An API token with `audit:read`, or an admin's or auditor's session |
-| [Engine control API](#engine-control-api-grpc) (gRPC, `syncd.v1.EngineControl`) | `syncd` | The console, the `syncd` command line, the other engine of an HA pair | Mutual TLS, or the loopback listener and the control socket |
+| [Engine control API](#engine-control-api-grpc) (gRPC, `syncd.v1.EngineControl`) | `syncd` | The console, the `syncd` command line, the other engine of an HA pair | Mutual TLS, or the loopback listener and the control socket; from 0.5.0 each caller has an [access tier](#access-tiers) |
 | [Password ingest API](#password-ingest-api-grpc) (gRPC, `syncd.v1.PasswordIngest`) | `syncd`, on `passwords.ingest.listen` | Password capture agents | Mutual TLS with the engine's agent CA, or a one-time token to enroll |
 | [Prometheus metrics](#prometheus-metrics) (`GET /metrics`) | `syncd` | Prometheus | None (plain HTTP) |
 
@@ -35,9 +35,27 @@ From 0.4.0 the API takes either of:
 
 A request with `Authorization: Bearer` is checked as a token request only: it never reads or sets
 the session cookie. Some endpoints stay with people (accounts, settings, tokens, webhooks,
-changes to environments, approvals, simulations, previews, connector checks, the object
-explorer, scheduled reports, the support bundle): a valid token there gets
-`403 insufficient_scope`.
+changes to environments, approvals of versions and of WebAssembly modules, simulations, previews,
+connector checks, the object explorer, scheduled reports, the license, the support bundle): a
+valid token there gets `403 insufficient_scope`.
+
+### Role assignments and scopes
+
+From 0.5.0 an account holds role assignments, each a role on everything, on one environment or on
+named engines (see [Security](security.md#authorization)). Every operation of the API is held to
+one rule, checked before its handler runs and before its body is read:
+
+| The operation is about | Needs | Examples |
+|---|---|---|
+| An engine (`/api/v1/engines/{id}/...`) | The permission through an assignment that reaches the engine: on everything, on its environment, or on the engine | Status, runs, approvals, configuration versions, publishing, the explorer, WebAssembly modules |
+| An environment (`/api/v1/environments/{name}`) | The permission on everything, or on that environment | Reading its values (admin, auditor), changing them (admin) |
+| The whole console | The permission on everything | Accounts, settings, the license, the support bundle, webhooks, Git sync, registering, moving and removing engines, verifying, pulling and exporting the audit trail |
+| No engine in particular | The permission in any scope; the handler then checks the engines the request names, or answers with what the caller reaches | The engine list, environment names, scheduled reports, API tokens, the audit page, promotion, validating a text |
+
+An engine outside every assignment answers `404`, in the same words as an id never used, and is in
+no list; what the caller's roles could not do on any engine is `403`. In the tables below, a role
+means that role in a scope that reaches what the call is about, and "admin" on a console-wide
+call means `admin` on everything.
 
 ## API tokens
 
@@ -75,11 +93,18 @@ makes the last call from the command line (see [Configuration as code](config-as
   characters: 32 random bytes, base64url) is shown **once**, in the response that creates it. The
   console keeps only its SHA-256 and its first four characters (for the list); the token is never
   written to a log, the audit trail or the session.
-- **Never more than its creator, now.** Each scope needs a role of the creator (below), both to be
-  granted and, at every use, to work. On **every use** the creator's account is read: an account
-  that is gone or disabled refuses the token (`401`). Otherwise the token does no more than the
-  creator's role allows today, so a demoted creator's token keeps its reads and loses its writes.
-  A good answer is reused for a minute (and dropped when the account changes); a refusal never is.
+- **Limited, if wanted, to an environment or to engines** (from 0.5.0): `"environment": "test"`
+  (its engines, and its values) or `"engines": ["hr-1", "hr-2"]` (those engines, by name). A
+  limited token does nothing on the console as a whole (no audit pull or export, no Git sync), and
+  an engine outside its limit does not exist for it (`404`). The limit follows an engine's rename.
+- **Never more than its creator, now.** The creator must be an administrator of all the token
+  reaches (everything, for a token without a limit), and each scope needs a role of the creator
+  there (below), both to be granted and, at every use, to work. On **every use** the creator's
+  account is read: an account that is gone or disabled refuses the token (`401`). Otherwise the
+  token does no more than the creator's role assignments allow today, within its limit, so a
+  demoted creator's token keeps its reads and loses its writes, and one whose creator was moved to
+  another environment reaches nothing. A good answer is reused for a minute (and dropped when the
+  account changes); a refusal never is.
 - **A year at most.** `CONSOLE_API_MAX_TOKEN_LIFETIME` (`365d`) is the expiry of a token created
   without one, the most that may be asked for, and the age at which any token stops working; `0`
   removes the limit.
@@ -89,8 +114,9 @@ makes the last call from the command line (see [Configuration as code](config-as
 - **Out of scope** (`403`, `WWW-Authenticate: Bearer error="insufficient_scope"`) for an endpoint
   its scopes do not cover, one its creator's role no longer allows, or one that stays with people.
   No token, whatever its scopes, can create or revoke tokens, manage accounts, settings, webhooks,
-  environments or scheduled reports, sign in through single sign-on, approve a configuration, simulate or
-  preview one, test connectors, use the object explorer, or download the support bundle.
+  environments, the license or scheduled reports, sign in by any method, approve a configuration or
+  a WebAssembly module, simulate or preview a configuration, test connectors, use the object
+  explorer, or download the support bundle.
 - **Rate-limited** per token: `CONSOLE_API_REQUESTS_PER_MINUTE` (300). Beyond it, `429
   rate_limited` with `Retry-After` (seconds). The count is kept in each console process, so with
   several console replicas each allows that many.
@@ -104,10 +130,10 @@ makes the last call from the command line (see [Configuration as code](config-as
 | Scope | Needs the creator to be | Allows |
 |---|---|---|
 | `engines:read` | any role | The engines, their status, dead letters, quarantine, held changes, data quality, correlation suggestions, and the reconciliation report export |
-| `configs:read` | any role | Configuration versions, the running configuration, diffs, exports, packages, the environments' names and the Git sync status |
-| `configs:write` | designer or admin | Validate and save a configuration version, import one, start a Git sync (not publish) |
+| `configs:read` | any role | Configuration versions, the running configuration, diffs, exports, packages, the environments' names, the Git sync status, and from 0.5.0 the engine's WebAssembly modules (list, review, download) |
+| `configs:write` | designer or admin | Validate and save a configuration version, import one, start a Git sync, and from 0.5.0 upload a WebAssembly module (not publish, not approve) |
 | `configs:publish` | designer or admin | Publish a version, and promote one. Approval, when required, stays with people |
-| `runs:run` | operator or admin | Start runs and drift checks, approve held deletions and changes, review groups, accept correlation suggestions, retry and discard dead letters |
+| `runs:run` | operator or admin | Start runs and drift checks, approve held deletions and changes, review groups, accept correlation suggestions, retry and discard dead letters, and from 0.5.0 check for unmanaged entries and adopt one |
 | `audit:read` | auditor or admin | The audit log, its verification, the pull API, the export and the outputs' status |
 | `environments:read` | auditor or admin | From 0.4.1: the environments with their plain values, the names of their secret ones, and their engines. Before 0.4.1 `configs:read` read them; a script that reads values with a `configs:read` token needs this scope now |
 | `admin` | admin | Everything above |
@@ -126,10 +152,10 @@ The tables below give each endpoint's scope in the **Token** column; `—` means
 
 | Method | Path | Access | Purpose |
 |---|---|---|---|
-| GET | `/api/v1/admin/api-tokens` | admin, auditor | The tokens, newest first, without their values: name, prefix, scopes, creator, created, expiry, last use, revoked |
+| GET | `/api/v1/admin/api-tokens` | admin, auditor | The tokens, newest first, without their values: name, prefix, scopes, limit (`environment` or `engines`), creator, created, expiry, last use, revoked. With the role on everything, all of them; else those limited to within what the role reaches |
 | GET | `/api/v1/admin/api-tokens/scopes` | admin, auditor | The scopes, what each allows and the role it needs |
-| POST | `/api/v1/admin/api-tokens` | admin (session only) | Create: `{"name", "scopes": [...], "expires_at"}`; the answer holds the token, once |
-| DELETE | `/api/v1/admin/api-tokens/{id}` | admin (session only) | Revoke; the next use is refused |
+| POST | `/api/v1/admin/api-tokens` | admin of all the token reaches (session only) | Create: `{"name", "scopes": [...], "expires_at", "environment" or "engines": [...]}`; the answer holds the token, once |
+| DELETE | `/api/v1/admin/api-tokens/{id}` | admin of all the token reaches (session only) | Revoke; the next use is refused. `404` for a token that reaches more than the caller administers |
 
 ## Signing in with a session
 
@@ -144,9 +170,14 @@ curl -sS -b cookies.txt -X POST https://syncd.example.com/api/v1/auth/logout
 ```
 
 - The cookie is `Secure` outside development mode, so call the API over HTTPS.
+- With the consent banner on (`ENS_CONSENT_BANNER_ENABLED`, from 0.5.0), a script must first
+  `POST /api/v1/auth/consent` and send the cookie it sets with the sign-in: every sign-in is
+  refused (`403`) without an acknowledgement from the same client in the last 15 minutes. API
+  tokens are not affected.
 - Sessions end after 30 idle minutes and 12 hours (`CONSOLE_SESSION_IDLE_MINUTES`,
-  `CONSOLE_SESSION_MAX_HOURS`). The per-address limit (20 sign-ins in 5 minutes) and the account
-  lockout apply to scripts too.
+  `CONSOLE_SESSION_MAX_HOURS`). From 0.5.0 `ENS_SESSION_MAX_PER_USER` can limit an account's
+  sessions, so a script's sign-in may end a person's oldest session. The per-address limit (20
+  sign-ins in 5 minutes) and the account lockout (`ENS_LOCKOUT_*`) apply to scripts too.
 - A new account must change its one-time password before anything else works: sign in once and
   call `POST /api/v1/auth/password`.
 - Prefer an API token for automation. With local sign-in limited to break-glass accounts, only
@@ -166,11 +197,11 @@ curl -sS -b cookies.txt -X POST https://syncd.example.com/api/v1/auth/logout
 | 401 | `sign_in_failed` | Any failed sign-in, whatever the reason |
 | 401 | `invalid_token` | An API token that is unknown, revoked, expired, turned off, or whose creator is gone or disabled. With `WWW-Authenticate: Bearer error="invalid_token"` |
 | 401 | `wrong_credentials` | A self-service password change with a wrong user name or current password (the same answer for both) |
-| 403 | `forbidden` | The role cannot do this, or the engine refused the call on its listener |
+| 403 | `forbidden` | The caller's roles cannot do this on any engine, the engine refused the call (its listener, or from 0.5.0 its [access tier](#access-tiers)), or with the consent banner on, a sign-in without an acknowledgement |
 | 403 | `insufficient_scope` | An API token outside its scopes, beyond its creator's role now, or on an endpoint for people. With `WWW-Authenticate: Bearer error="insufficient_scope"` |
 | 403 | `password_change_required` | The account must set a new password first |
-| 404 | `not_found` | No such engine, version, entity, webhook, report or endpoint |
-| 409 | `conflict` | A name in use, a newer version saved meanwhile, the last admin or break-glass account, a simulation already running, a publish the pre-publish hook refused (with its reason), a promotion of a version never published |
+| 404 | `not_found` | No such engine, version, entity, webhook, report or endpoint; from 0.5.0 also an engine outside every assignment of the caller, or outside a token's limit |
+| 409 | `conflict` | A name in use, a newer version saved meanwhile, the last admin or break-glass account, a simulation already running, a publish the pre-publish hook or the golden tests refused (with the reason), a promotion of a version never published, and from 0.5.0 a publish the license does not allow (publishing blocked, or a pack the license lacks) |
 | 429 | `too_many_requests` | Over the sign-in or self-service limit |
 | 429 | `rate_limited` | An API token over its requests per minute, with `Retry-After` |
 | 503 | `engine_unavailable` | The engine cannot be reached, failed, or is busy with a long operation |
@@ -181,19 +212,21 @@ curl -sS -b cookies.txt -X POST https://syncd.example.com/api/v1/auth/logout
   `next_after` (entities), or `after` / `next` (held changes, correlation suggestions, the pull
   API), with `limit`.
 - `reveal=true` (or `"reveal": true` in a body) asks for sensitive attribute values. It needs a role
-  in `CONSOLE_REVEAL_ROLES` (default `admin`), is audited, and is refused (and audited) for other
-  roles. See [Security](security.md#sensitive-attributes-and-reveal).
+  in `CONSOLE_REVEAL_ROLES` (default `admin`) through an assignment that reaches the engine (from
+  0.5.0 an entry there can carry a scope, `auditor@prod`), is audited, and is refused (and
+  audited) otherwise. See [Security](security.md#sensitive-attributes-and-reveal).
 - Calls that act on an engine go through to its control API; they wait for it, and are refused as
   busy while it runs a long operation. The passive engine of an HA pair refuses commands, naming
   the active one.
 
-**Roles** in the tables below: *any* is every signed-in role. Admins can do everything.
+**Roles** in the tables below: *any* is every signed-in role. Admins can do everything their
+assignments reach.
 
 ### Public
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/v1/system` | Version, development and FIPS mode, the single sign-on label, who may sign in locally, whether configuration approval is required, the banners, and the publish policy (the ticket pattern, whether a pre-publish hook is asked) |
+| GET | `/api/v1/system` | Version, development and FIPS mode, the single sign-on label, who may sign in locally, whether configuration approval is required, the banners, and the publish policy (the ticket pattern, whether a pre-publish hook is asked). From 0.5.0 also the SAML and certificate sign-in labels when configured, the consent banner's text when it is on, and the password policy for a new local password |
 | GET | `/api/v1/self-service` | Whether the self-service password page is on, and from 0.4.1 the engine's policy for a new password (`min_length`, `min_classes`; absent when the engine cannot be asked; read at most once a minute) |
 | POST | `/api/v1/self-service/password` | A person changes their own directory password: `{"login", "current_password", "new_password"}`. See [Self-service password change](#self-service-password-change) |
 | GET | `/api/openapi.json` | The OpenAPI document |
@@ -205,16 +238,21 @@ Session only.
 
 | Method | Path | Role | Purpose |
 |---|---|---|---|
+| POST | `/api/v1/auth/consent` | none | From 0.5.0: acknowledge the notice-and-consent banner; every sign-in method refuses until this was called from the same browser in the last 15 minutes. Audited as `auth.consent`. 404 when no banner is configured |
 | POST | `/api/v1/auth/login` | none | Sign in with a local account (`username`, `password`); sets the cookie, returns the account |
 | POST | `/api/v1/auth/logout` | signed in | End the session |
-| GET | `/api/v1/auth/me` | signed in | The account: role, pending password change, whether it may reveal |
+| GET | `/api/v1/auth/me` | signed in | The account: from 0.5.0 its `assignments`, what it may do on the whole console (`global`) and somewhere (`anywhere`), pending password change, whether it may reveal somewhere |
 | POST | `/api/v1/auth/password` | signed in | Change the password (`current_password`, `new_password`); the one call open during a forced change. Signs out the account's other sessions |
 | POST | `/api/v1/auth/password/skip` | signed in | Development mode only: keep the current password |
 | GET | `/api/v1/auth/oidc/login` | none | Start single sign-on (`next`: where to go after); 404 when it is not configured |
 | GET | `/api/v1/auth/oidc/callback` | none | Where the identity provider sends the browser back. See [Single sign-on](single-sign-on.md) |
-| GET | `/api/v1/users` | admin | List accounts |
-| POST | `/api/v1/users` | admin | Create a local account (`username`, `display_name`, `role`); returns its one-time password, shown once |
-| PATCH | `/api/v1/users/{id}` | admin | Change the display name, role, disabled flag or break-glass flag |
+| GET | `/api/v1/auth/saml/metadata` | none | From 0.5.0: the console's SAML metadata, to register it at the provider; 404 when SAML is not configured |
+| GET | `/api/v1/auth/saml/login` | none | From 0.5.0: start a SAML sign-in (a redirect to the provider); 404 when it is not configured |
+| POST | `/api/v1/auth/saml/acs` | none | From 0.5.0: the assertion consumer service the provider posts back to; sets the cookie |
+| POST | `/api/v1/auth/x509/login` | none | From 0.5.0: sign in with this connection's client certificate, or the one a trusted proxy passes on; 404 when certificate sign-in is not configured, 403 with the reason when the certificate is missing or refused |
+| GET | `/api/v1/users` | admin | List accounts, each with its `assignments`, and whether it is locked |
+| POST | `/api/v1/users` | admin | Create a local account (`username`, `display_name`, and `assignments` (from 0.5.0: `[{"role": "operator", "scope": "environment", "name": "prod"}, ...]`) or `role`, short for one role on everything); returns its one-time password, shown once |
+| PATCH | `/api/v1/users/{id}` | admin | Change the display name, assignments (or `role`), disabled flag or break-glass flag, or from 0.5.0 `"unlock": true` to lift a lock from failed sign-ins. For an account that signs in through single sign-on or a certificate, assignments set here last until its next sign-in |
 | POST | `/api/v1/users/{id}/reset-password` | admin | Issue a new one-time password (local accounts only) |
 
 ### Settings
@@ -223,10 +261,12 @@ Session only.
 
 | Method | Path | Role | Purpose |
 |---|---|---|---|
-| GET | `/api/v1/settings/sign-in` | admin | Who may sign in locally, whether single sign-on is configured, the break-glass accounts |
+| GET | `/api/v1/settings/sign-in` | admin | Who may sign in locally, whether single sign-on or certificate sign-in is configured, the break-glass accounts, and from 0.5.0 the sign-in policy in effect (read-only: the `ENS_*` settings decide it) |
 | PUT | `/api/v1/settings/sign-in` | admin | `local_sign_in`: `everyone` or `break_glass` |
 | PUT | `/api/v1/settings/config-approval` | admin | Configuration approval: `off` or `required` |
 | PUT | `/api/v1/settings/banners` | admin | The top and bottom banners: text (up to 200 characters), background and text colours (at least 4.5:1 contrast) |
+| GET | `/api/v1/settings/config-signing-keys` | admin | From 0.5.0: the public halves of the console's configuration signing keys, for `engine.config_signing_keys` (see [Security](security.md#signed-configurations)). Rotation is done on the console's host |
+| GET | `/api/v1/admin/notices` | admin | From 0.5.0: settings that name an engine that is not registered (`CONSOLE_SELF_SERVICE_ENGINE`, `CONSOLE_CONFIG_GIT_ENGINES`) |
 
 ### Engines
 

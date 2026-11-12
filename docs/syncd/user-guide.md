@@ -9,8 +9,9 @@ the [Admin guide](admin-guide.md); the license and the **License** page are in
 [self-service page](#changing-your-directory-password-password), which needs no console account.
 
 It describes syncd 0.5.0 (`main` at commit `a9d17c6`). New screens since 0.4.1 are
-[Unmanaged entries](#unmanaged-entries-enginesidunmanaged), [Custom functions](#custom-functions-enginesidfunctions),
-the **Promote** dialog and the **License** page.
+[Unmanaged entries](#unmanaged-entries-enginesidunmanaged),
+[Custom functions](#custom-functions-enginesidfunctions), the **Promote** dialog and the
+**License** page.
 
 ## Roles at a glance
 
@@ -603,9 +604,10 @@ file could not be read.
 A package read `from` a file is read from the console's Git repository at the version's commit
 (kept with each version since 0.5.0; an older version is read at the branch head). The console keeps
 no package files of its own: without Git sync, write packages inline (its module store holds
-WebAssembly modules only; see [Custom functions](#custom-functions-enginesidfunctions)). **Check for update** compares the file at the branch head
-with the version's and says **Up to date with the branch**, or which version the file has now. How
-packages are written is in [Computed attributes and rules](rules.md).
+WebAssembly modules only; see [Custom functions](#custom-functions-enginesidfunctions)).
+**Check for update** compares the file at the branch head with the version's and says **Up to date
+with the branch**, or which version the file has now. How packages are written is in
+[Computed attributes and rules](rules.md).
 
 ### Live preview (designers)
 
