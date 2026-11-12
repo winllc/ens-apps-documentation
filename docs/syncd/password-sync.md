@@ -5,34 +5,52 @@ to that person's accounts in the target directories, usually within seconds. The
 sealed where it is captured and opened only in the engine's memory, to be written to the target.
 It is never written to disk, logs, history, the console or a support bundle in the clear.
 
-Password synchronisation is new in syncd 0.4.0. The engine's side is built: the sealed queue,
+Password synchronisation is new in syncd 0.4.0, which built the engine's side: the sealed queue,
 delivery to every kind of target, initial passwords on new accounts, a self-service page on the
-console, and enrolment for capture agents. syncd 0.4.1 adds sealing of the engine's password keys
-at rest, password metrics and alerts, and a Helm Service for the ingest listener. The capture
-plugins that sit inside a directory are not built yet (see [What is built](#what-is-built)).
+console, and enrolment for capture agents. 0.4.1 added sealing of the engine's keys at rest,
+metrics and alerts. **syncd 0.5.0** (commit `a9d17c6`, the version this page describes) adds the
+**capture points** inside the directories, with a packaged capture agent (`syncd-capture`); agents
+bound to the sources they speak for; rotation of the keys and a change of passphrase; queued
+changes that survive an HA failover; and a refusal to send passwords to a directory in clear text.
+
+!!! warning "Not yet for production capture from Active Directory"
+    The OpenLDAP overlay and the 389 Directory Server plugin were built and run end to end. The
+    **Windows password filter is compile-checked only**: it has never been loaded by LSASS or run
+    on a domain controller. The threat model is a **draft, not signed off**, and **no
+    penetration test** has been done; the plan makes both release gates for password
+    synchronisation. See [Known limitations](#known-limitations).
+
+Password synchronisation is in the **Password Sync** license pack (capture agents, self-service,
+delivery, initial passwords, key and CA rotation); see [Licensing](licensing.md#packs). During
+the evaluation and its grace period nothing is locked, and a configuration that already runs keeps
+running.
 
 ## What is built
 
-| Piece | In 0.4.1 |
+| Piece | In 0.5.0 |
 |---|---|
 | Delivery of captured changes to targets (the sealed queue, routing, retries, ordering, echo suppression) | Built |
-| Initial passwords: a password set as the account is created, read from the entity or generated | Built |
+| Initial passwords: a password set as the account is created, read from the entity or generated | Built; from 0.5.0 a refused one is tried again, then held as a dead letter |
 | The console's self-service page: people change their own password | Built |
-| Capture agents: enrolment, the ingest listener with per-agent certificates, revocation | Built |
+| Capture agents: enrolment, the ingest listener with per-agent certificates, revocation | Built; from 0.5.0 each agent is bound to its sources, and renews its own certificate |
 | `syncd password set`: submit one change from a script, as an operator or as an enrolled agent | Built |
-| The password key and the agent CA key sealed at rest with a passphrase | Built in 0.4.1 |
-| Password metrics and alert rules; per-publication counts on the console's engine page | Built in 0.4.1 |
-| The Windows password filter (an LSA filter DLL and a service on each writable domain controller) | **Not built** |
-| The 389 Directory Server / RHDS plugin and the OpenLDAP overlay | **Not built** |
-| Rotation of the password key and of the agent CA | **Not built** |
-| A command to change the passphrase that seals the keys | **Not built** |
-| A console page for agents, and an RBAC permission for password delivery | **Not built** |
-| The threat model and the third-party penetration test that the plan sets as release gates | **Not done** |
+| The `syncd-capture` agent and its package (`.deb`, `.rpm`), for the directory servers' hosts | Built in 0.5.0; never started under systemd in tests |
+| The OpenLDAP overlay (`syncd_capture`) | Built in 0.5.0, shipped as source; tested end to end with slapd 2.6.10 on Ubuntu 24.04 |
+| The 389 Directory Server plugin (`syncd-capture`) | Built in 0.5.0, shipped as source; tested end to end with 389-ds-base 2.4.5 on Ubuntu 24.04 |
+| The Windows password filter (an LSA filter DLL), the agent as a service, and its installer | **Written and compile-checked only**: never run on a domain controller, not built with MSVC or WiX, not signed, not in the release |
+| The keys sealed at rest with a passphrase | Built in 0.4.1; from 0.5.0 the passphrase can be changed (`rekey`) and wrapped by a KMS key |
+| Rotation of the password key and of the agent CA | Built in 0.5.0, by command; nothing rotates on a schedule |
+| Queued changes followed by the passive engine of an HA pair, and the ingest listener on both engines | Built in 0.5.0 |
+| Password metrics and alert rules; per-publication counts on the console's engine page | Built in 0.4.1; key and certificate metrics and alerts added in 0.5.0 |
+| A permission of its own for setting passwords through the control API | Built in 0.5.0 in the engine (`api.access.passwords`, strict mode only); the console has none |
+| A console page for agents | **Not built**: agents are managed with the command line |
+| The threat model sign-off and the third-party penetration test that the plan sets as release gates | **Not done**: the threat model is a draft |
 
-So in 0.4.1 a password reaches syncd in one of three ways: a person changes it on the console's
-self-service page, a publication creates an account with an initial password, or a script (or a
-home-made agent) submits it with `syncd password set`. A password changed directly in Active
-Directory, 389 DS or OpenLDAP is not captured.
+So in 0.5.0 a password reaches syncd in one of four ways: a person changes it in OpenLDAP or 389
+DS where a capture point is installed, a person changes it on the console's self-service page, a
+publication creates an account with an initial password, or a script submits it with `syncd
+password set`. A password changed directly in Active Directory is not captured in production
+yet.
 
 Cloud identity providers (Entra ID, Okta, SaaS applications) never reveal a plaintext password, so
 they can't be capture sources. Their users change their password on the self-service page instead.

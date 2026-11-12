@@ -362,13 +362,13 @@ In FIPS mode the console refuses modules unless `SYNCD_FIPS_ALLOW_WASM_FUNCTIONS
 
 | Method | Path | Role | Token | Purpose |
 |---|---|---|---|---|
-| GET | `/api/v1/environment-names` | any | `configs:read` | From 0.4.1: the environments' names (those with saved values, and those an engine runs in), for the Compare tab and the publish dialog |
+| GET | `/api/v1/environment-names` | any | `configs:read` | From 0.4.1: the environments' names (those with saved values, and those an engine runs in), for the Compare tab and the publish dialog; from 0.5.0 only those the caller's assignments name or whose engines it reaches |
 | GET | `/api/v1/environments` | admin, auditor | `environments:read` | The environments with their values, and the engines that run in each. Before 0.4.1 any role, or `configs:read`, could read them |
 | GET | `/api/v1/environments/{name}` | admin, auditor | `environments:read` | One environment. A secret value shows as `{"secret": true}`, never its value |
 | PUT | `/api/v1/environments/{name}` | admin | — | Replace its values: `{"values": {"hr_host": {"value": "..."}, "hr_password_file": {"value": "...", "secret": true}}}`. A secret value is sealed with the master key; a `PUT` that leaves its value out keeps it. Audited as `environment.changed` (the keys, never the values) |
 | DELETE | `/api/v1/environments/{name}` | admin | — | Remove its values; refused while an engine runs in it |
-| GET | `/api/v1/config-git` | any | `configs:read` | What the console last saw of the Git repository: last commit, sync time, last error |
-| POST | `/api/v1/config-git/sync` | designer | `configs:write` | Fetch and take in new commits now; 409 when Git sync is not configured |
+| GET | `/api/v1/config-git` | any, on everything | `configs:read` | What the console last saw of the Git repository: last commit, sync time, last error |
+| POST | `/api/v1/config-git/sync` | designer, on everything | `configs:write` | Fetch and take in new commits now; 409 when Git sync is not configured |
 
 ### Object explorer and lineage
 
@@ -589,8 +589,9 @@ publication delivering passwords. The service is `syncd.v1.PasswordIngest`, in t
 | RPC | Who may call | Purpose |
 |---|---|---|
 | `Enroll` | Anyone with a one-time token | `{"name", "token", "csr_pem"}`: the agent sends a PKCS#10 request for its own key with the token `syncd password agent add` printed. The answer is a client certificate (subject: the agent's name, client authentication only, valid `passwords.ingest.agent_cert_days`), the agent CA's certificate and the expiry. The token is spent, and a certificate from an earlier enrollment of the same agent stops working |
-| `GetPublicKey` | Enrolled agents | The engine's password key, as `GetPasswordKey` |
-| `Submit` | Enrolled agents | Queue sealed password changes; the answer counts those queued |
+| `GetPublicKey` | Enrolled agents | The engine's current password key, as `GetPasswordKey` |
+| `Submit` | Enrolled agents | Queue sealed password changes; the answer counts those queued. From 0.5.0 the engine opens each change in memory and refuses one for a source the agent is not bound to, before anything is queued |
+| `Renew` | Enrolled agents | From 0.5.0: a new certificate for the key of the request, for an agent that presents its current one, before it expires or after the agent CA was rotated. The earlier certificate works until the new one is first used. `syncd-capture` renews on its own |
 
 - TLS is mutual with the engine's **agent CA**, which also issues the listener's own certificate
   (for the names in `passwords.ingest.names`). A client certificate is asked for, not required, so
@@ -601,8 +602,11 @@ publication delivering passwords. The service is `syncd.v1.PasswordIngest`, in t
   AES-256-GCM) to the engine's key, with the key's id as additional data. A change sealed to
   another key is refused, so the agent fetches the key again.
 - The sealed plaintext's layout is internal to syncd. Rather than writing an agent of your own,
-  run `syncd password agent enroll` once and `syncd password set --agent-dir DIR ...` from a
-  script.
+  use the `syncd-capture` agent (from 0.5.0), or run `syncd password agent enroll` once and
+  `syncd password set --agent-dir DIR ...` from a script.
+- From 0.5.0 both engines of an HA pair answer on the ingest listener: the passive one hands each
+  call to the active one (`ForwardPasswordIngest`), which checks the agent as its own listener
+  would. The passive engine's listener starts once it has its first snapshot.
 
 See [Password synchronisation](password-sync.md) for the agents and the commands, and
 [Security](security.md#password-synchronisation) for the cryptography.
@@ -671,6 +675,37 @@ Added in 0.4.1:
 `SyncdPasswordDeliveryFailures` (a publication's failed deliveries rose in 15 minutes) and
 `SyncdPasswordChangesDropped` (changes were dropped in the last hour because the publication is
 in report mode), both `warning`.
+
+Added in 0.5.0:
+
+| Metric | Type | Meaning |
+|---|---|---|
+| `syncd_source_throttled_total{source}` | counter | Requests a REST source's service throttled (429, 503), each waited for and tried again |
+| `syncd_target_unmanaged{publication}` | gauge | Entries of the kind the publication manages that its target holds and no publication exported, as of the last unmanaged-entries pass (ignored ones left out) |
+| `syncd_target_unmanaged_ignored{publication}` | gauge | Unmanaged entries an `unmanaged.ignore` pattern hides |
+| `syncd_target_unmanaged_privileged{publication}` | gauge | Members of privileged groups that no rule accounts for |
+| `syncd_target_unmanaged_checked_timestamp_seconds{publication}` | gauge | When the last unmanaged-entries pass ended |
+| `syncd_target_unmanaged_failed{publication}` | gauge | 1 when the last pass could not finish (the counts are then partial) |
+| `syncd_ha_snapshot_size_bytes`, `syncd_ha_snapshot_shipped_bytes`, `syncd_ha_snapshot_files`, `syncd_ha_snapshot_files_reused` (`{pair,name}`) | gauge | The newest snapshot's size, the bytes of it that were new, its files, and the files the passive engine held already |
+| `syncd_ha_password_follower_connected{pair,name}` | gauge | On the active engine: 1 while the passive engine follows the password queue |
+| `syncd_ha_password_changes_unreplicated_total{pair,name}` | counter | On the active engine: password changes accepted without the passive engine's acknowledgement |
+| `syncd_password_key_age_seconds` | gauge | Age of the current password key |
+| `syncd_password_previous_keys` | gauge | Rotated password keys still opening what was sealed to them |
+| `syncd_password_agent_ca_expiry_seconds` | gauge | Seconds until the agent CA's certificate expires |
+| `syncd_password_agent_cert_expiry_seconds` | gauge | Seconds until the first enrolled agent's certificate expires; negative once one has |
+| `syncd_password_changes_refused_total` | counter | Changes an agent submitted for a source it is not bound to |
+| `syncd_password_agents_unbound` | gauge | Enrolled agents bound to no source (enrolled before 0.5.0) |
+| `syncd_license_state{state,source}` | gauge | 0 licensed or evaluating, 1 a warning, 2 the grace period, 3 publishing blocked |
+| `syncd_license_managed_identities`, `syncd_license_managed_identities_limit` | gauge | People the engine exports to at least one target, each counted once; the license's limit |
+| `syncd_license_expiry_seconds` | gauge | Seconds until the license expires |
+| `syncd_license_development_key` | gauge | 1 when the build accepts the development license key, or the license was signed with it |
+
+0.5.0 adds nine alert rules: `SyncdGroupReviewsDue`, `SyncdLicenseWarning`,
+`SyncdLicenseGracePeriod`, `SyncdLicensePublishingBlocked`, `SyncdLicenseDevelopmentKey`,
+`SyncdPasswordAgentCertExpiring` (14 days before an agent's certificate expires),
+`SyncdPasswordKeyOld` (a password key older than a year), `SyncdUnmanagedEntriesGrew` and
+`SyncdUnmanagedPrivilegedMembersGrew`. Copy the rule file again, or upgrade the chart with
+`prometheusRule.enabled`; the unmanaged-entries expressions were not run through `promtool`.
 
 In 0.4.0 the shipped alert rules gained eight (the 0.4.0 release notes said seven): `SyncdChangesNeedApproval`, `SyncdCanaryFailed`,
 `SyncdGroupsExpired`, `SyncdUnmatchedRecordsAgeing`, `SyncdQualityErrors`, `SyncdBackupStale`,
