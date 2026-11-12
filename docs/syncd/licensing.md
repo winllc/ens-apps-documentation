@@ -114,7 +114,8 @@ Never blocked:
 - pausing and resuming, approving or rejecting held changes, dead-letter retries and discards,
   joins and unjoins, password operations, backups;
 - **a rollback**: publishing again a version that was published to that engine before. It is
-  recorded in the audit trail as "published again as a rollback";
+  recorded in the audit trail as "published again as a rollback" (see
+  [Configuration as code](config-as-code.md#the-license));
 - the configuration file an engine starts with.
 
 ## Managed identities
@@ -142,7 +143,7 @@ each connector's pack.
 | Cloud and SaaS | Microsoft Entra ID, SCIM 2.0, REST and OData, Workday, SAP SuccessFactors, UKG Pro | Entra ID certificate, federated and managed-identity sign-in |
 | Password Sync | | Capture agents, self-service, password delivery, initial passwords, password key and agent CA rotation |
 | High Availability | | Active/passive pairs, with the PostgreSQL, file and Kubernetes Lease backends |
-| Extensibility | | Custom functions in WebAssembly |
+| Extensibility | | [Custom functions in WebAssembly](rules.md#custom-functions-in-webassembly) |
 
 What the license does not include is **locked**: the console's editor marks the connector type
 and won't add one, the Studio marks WebAssembly functions, validation names the setting and its

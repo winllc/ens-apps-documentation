@@ -316,7 +316,8 @@ When a publication manages groups with a lifecycle, the **Groups** card lists th
 
 Operators have **Review** on each row: it records a review, which starts the expiry and review
 clocks again and brings an expired group back. Since 0.5.0 a review that falls due also reaches
-someone: the group's `reviewers` get a mail from the console, and the `group.review-due` webhook
+someone: the group's `reviewers` get a mail from the console (when mail is set up and their addresses
+are in the allowed domains), and the `group.review-due` webhook
 event and the `SyncdGroupReviewsDue` alert fire. See
 [Change safety and lifecycle → Group lifecycle](change-safety.md#group-lifecycle).
 
