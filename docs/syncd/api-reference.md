@@ -272,11 +272,11 @@ Session only.
 
 | Method | Path | Role | Token | Purpose |
 |---|---|---|---|---|
-| GET | `/api/v1/engines` | any | `engines:read` | Registered engines, with their environment and `certificate_expires_at` (when the console's client certificate for the engine expires; mTLS only) |
+| GET | `/api/v1/engines` | any | `engines:read` | The registered engines the caller's assignments reach, with their environment, `certificate_expires_at` (when the console's client certificate for the engine expires; mTLS only), and from 0.5.0 `permissions` (what the caller may do on each) and `can_reveal` |
 | POST | `/api/v1/engines` | admin | — | Register an engine: `name`, `address` (`host:port` of `api.listen`, or `unix:` and the absolute path of the engine's `api.control_socket`), `environment` (`default` for a new engine; from 0.4.1, with `replace`, the engine keeps its environment unless one is given), and for mTLS `server_ca_pem`, `client_cert_pem`, `client_key_pem` (the key is stored encrypted and never returned). Checks that it answers unless `verify` is false. `replace: true` replaces the address and credentials of an engine with that name, keeping its id and versions. A name whose stored client key the master key no longer opens is refused with that reason unless `replace` is set (audited as `engine.re-registered`) |
 | PATCH | `/api/v1/engines/{id}` | admin | — | Move an engine to another environment (`{"environment": "prod"}`). What it runs is not touched: the next publish renders for the new environment |
 | DELETE | `/api/v1/engines/{id}` | admin | — | Remove the registration (the engine keeps running) |
-| GET | `/api/v1/engines/{id}/status` | any | `engines:read` | The engine's status: sources, publications (with held changes, report mode, leavers by stage, groups), targets, counters, timers, history, backups, HA role, password delivery (from 0.4.1 also per publication, and `keys_sealed`), quarantined entities, unmatched records per view, rule packages, the environment, the process's CPU and memory (Linux only), and from 0.4.1 `runs` (runs ended since the engine started, and the last one) and `self_service` (the self-service password policy) |
+| GET | `/api/v1/engines/{id}/status` | any | `engines:read` | The engine's status: sources, publications (with held changes, report mode, leavers by stage, groups), targets, counters, timers, history, backups, HA role, password delivery (from 0.4.1 also per publication, and `keys_sealed`), quarantined entities, unmatched records per view, rule packages, the environment, the process's CPU and memory (Linux only), and from 0.4.1 `runs` (runs ended since the engine started, and the last one) and `self_service` (the self-service password policy). From 0.5.0 also who applied the running configuration and whether it was signed (`config_applied`), the control API's access mode (`access`), the license, each publication's unmanaged entries, the password keys and agents, and the HA pair's snapshot and password-queue figures |
 | GET | `/api/v1/engines/{id}/status/stream` | any | — | Server-sent events: a `status` event every second, an `error` event if the engine goes away. Ends when the session does |
 | GET | `/api/v1/engines/{id}/dead-letters` | any | `engines:read` | Failed exports waiting (`publication`, `limit`) |
 | GET | `/api/v1/engines/{id}/quarantine` | any | `engines:read` | Entities whose exports a failing rule (`on_error: quarantine`) holds back (`view`, `limit` up to 500) |
@@ -285,6 +285,8 @@ Session only.
 | POST | `/api/v1/engines/{id}/approvals` | operator | `runs:run` | `{"scope": ...}`, as the status lists it. Lets deletes over a deletion threshold through once; with `publication <name>`, also the changes its change window (overdue), its modification or add threshold, or a failed canary holds |
 | POST | `/api/v1/engines/{id}/groups/review` | operator | `runs:run` | `{"publication", "group"}`: a computed group's expiry and review clocks start again, and an expired group comes back |
 | POST | `/api/v1/engines/{id}/drift-check` | operator | `runs:run` | Read a publication's entries (or every checking publication's) back from the target now |
+| POST | `/api/v1/engines/{id}/unmanaged/check` | operator | `runs:run` | From 0.5.0: look in a publication's target (`{"publication"}`, or every one's) for entries the engine does not manage and members of privileged groups no rule accounts for. Reads the target and writes nothing there; the result is in the status |
+| POST | `/api/v1/engines/{id}/unmanaged/adopt` | operator | `runs:run` | From 0.5.0: `{"publication", "dn", "entity_id"}`: make an entry already in the target the entry of an entity that has none in the publication yet (moved to the entity's DN when it is elsewhere, given the exported attributes, managed from then on) |
 | POST | `/api/v1/engines/{id}/dead-letters/retry` | operator | `runs:run` | Export dead letters again now (all, a publication's, or one entity's) |
 | POST | `/api/v1/engines/{id}/dead-letters/discard` | operator | `runs:run` | Remove one dead letter without retrying it |
 
@@ -294,8 +296,9 @@ Registrations are audited as `engine.register`, replacements and environment mov
 when HA is turned on) renames a registration, keeping its id, and is audited as `engine.renamed`
 (see [Admin guide](admin-guide.md#syncd-console-admin-rename-engine)). Operator calls are
 audited with their request and outcome (`engine.run`, `engine.approve_deletions`,
-`engine.check_drift`, `engine.dead_letters.retry`, `engine.dead_letters.discard`, and the group
-review).
+`engine.check_drift`, `engine.check_unmanaged`, `engine.adopt_entry`, `engine.dead_letters.retry`,
+`engine.dead_letters.discard`, and the group review), from 0.5.0 with the assignment the call was
+allowed under (`details.assignment`).
 
 ### Correlation
 
@@ -324,8 +327,8 @@ See [Reports, lineage and data quality](reports-and-data-quality.md) for the sug
 | POST | `/api/v1/engines/{id}/configs/{version}/packages/check` | any | `configs:read` | Compare each package read from a file with the file at the Git branch head now |
 | POST | `/api/v1/engines/{id}/configs/{version}/simulate` | designer | — | Dry-run the version on the engine: what each target would receive (`samples`, `reveal`). Nothing is applied |
 | POST | `/api/v1/engines/{id}/configs/{version}/approve` | designer | — | Approve a version for publishing, as someone other than its author |
-| POST | `/api/v1/engines/{id}/configs/{version}/publish` | designer | `configs:publish` | Publish, with an optional body `{"ticket", "note"}`: rendered for the engine's environment, checked against the ticket pattern, approval, test cases and the pre-publish hook, then the engine validates, saves, reloads and runs a full sync. Returns once the engine runs it (up to 60 seconds). From 0.4.1, with Git sync, the golden-file tests in the repository (`tests/golden` beside the configuration, at the branch head) run too, as the editor's check runs them, and a failure refuses the publish (409); 0.4.0 ran them only from the editor's **Publish** button. This covers Git auto-publish and promotion as well |
-| POST | `/api/v1/configs/promote` | designer | `configs:publish` | `{"engine", "version", "to", "ticket", "note"}`: publish a version published on one engine to every engine of another environment, each through its own gates. The answer lists each engine's outcome; 409 when the version was never published or no engine runs in that environment |
+| POST | `/api/v1/engines/{id}/configs/{version}/publish` | designer | `configs:publish` | Publish, with an optional body `{"ticket", "note"}`: rendered for the engine's environment, checked against the ticket pattern, approval, test cases, the license (from 0.5.0) and the pre-publish hook, then signed by the console (from 0.5.0) and sent; the engine validates, saves, reloads and runs a full sync. Returns once the engine runs it (up to 60 seconds). With Git sync, the golden-file tests in the repository (`tests/golden` beside the configuration) run too, and a failure refuses the publish (409). From 0.5.0 they are read at the **version's own Git commit**, not the branch head; a version saved before 0.5.0 is checked at the branch head, with a note. This covers Git auto-publish and promotion as well |
+| POST | `/api/v1/configs/promote` | designer | `configs:publish` | `{"engine", "version", "to", "ticket", "note", "dry_run"}`: publish a version published on one engine to every engine of another environment, each through its own gates. The caller's roles must let it read the source engine and publish to every engine of the target environment: a promotion is not carried out in part. From 0.5.0 `"dry_run": true` only shows what would happen (the same checks of the caller's roles, each target engine's diff summary), saving, publishing and recording nothing: the console's **Promote** button shows it before the caller confirms. The answer lists each engine's outcome; 409 when the version was never published or no engine runs in that environment |
 | GET | `/api/v1/engines/{id}/configs/{version}/export` | any | `configs:read` | An export file of the version (without the `engine` and `api` sections), with a SHA-256 of the configuration |
 | POST | `/api/v1/engines/{id}/configs/import-file` | designer | `configs:write` | Import an export file as a new draft, keeping this engine's `engine` and `api` sections; returns what the host must provide |
 | POST | `/api/v1/engines/{id}/connectors/test` | designer | — | Connect with one connector of a candidate configuration (`yaml`, `connector`) |
@@ -336,6 +339,24 @@ Saves, imports, exports, approvals, simulations, previews, connector checks, pub
 promotions are audited (`config.*`, `connector.*`). See [Configuration as code](config-as-code.md)
 for environments, promotion and Git sync, and [Security](security.md#the-pre-publish-hook) for the
 pre-publish hook.
+
+### WebAssembly modules
+
+From 0.5.0 rule packages can carry custom functions compiled to WebAssembly (see
+[Computed attributes and rules](rules.md)). The console keeps a store of modules per engine; a
+package names a module by its SHA-256 and the console fills the approved module in when it checks
+and publishes the configuration.
+
+| Method | Path | Role | Token | Purpose |
+|---|---|---|---|---|
+| GET | `/api/v1/engines/{id}/wasm-modules` | any | `configs:read` | The modules uploaded for the engine, newest first |
+| POST | `/api/v1/engines/{id}/wasm-modules` | designer | `configs:write` | Upload a module (`{"name", "module"` (the bytes, base64, at most 1 MiB)`, "comment"}`): checked as the engine checks it (no imports, the ABI's exports, a manifest of its functions, the FIPS policy), kept by its SHA-256, audited as `wasm_module.upload`. Used only once someone else approves it |
+| GET | `/api/v1/engines/{id}/wasm-modules/{sha256}` | any | `configs:read` | The review: name, size, hash, the functions and their signatures, and how it differs from the previous upload of the same name |
+| GET | `/api/v1/engines/{id}/wasm-modules/{sha256}/download` | any | `configs:read` | The module itself, for review |
+| POST | `/api/v1/engines/{id}/wasm-modules/{sha256}/approve` | designer | — | Approve a module, as someone other than its uploader (the database refuses an approval by the uploader, and an approval cannot be changed). Audited as `wasm_module.approve` |
+
+In FIPS mode the console refuses modules unless `SYNCD_FIPS_ALLOW_WASM_FUNCTIONS=true` (see
+[FIPS 140-3 and DISA STIG](fips-and-stig.md#what-changes-in-fips-mode)).
 
 ### Environments and Git sync
 
@@ -375,7 +396,7 @@ Every search and entity view is audited (`explore.search`, `explore.entity`, `ex
 
 | Method | Path | Role | Token | Purpose |
 |---|---|---|---|---|
-| POST | `/api/v1/engines/{id}/reports/reconciliation/export` | any | `engines:read` | `?format=csv\|pdf[&publication=]`: the reconciliation report as a file, at most `CONSOLE_EXPORTS_MAX_ROWS` rows (`X-Syncd-Truncated: true` when capped). Audited as `data.exported` first |
+| POST | `/api/v1/engines/{id}/reports/reconciliation/export` | any | `engines:read` | `?format=csv\|xlsx\|pdf[&publication=]` (`xlsx` from 0.5.0): the reconciliation report as a file, at most `CONSOLE_EXPORTS_MAX_ROWS` rows (`X-Syncd-Truncated: true` when capped). From 0.5.0 the summary includes adopted and unmanaged entries. Audited as `data.exported` first |
 | GET | `/api/v1/reports` | admin, operator, auditor | — | The scheduled reports with their next and last run |
 | GET | `/api/v1/reports/settings` | admin, operator, auditor | — | Whether mail is configured, the recipient domains, whether a share is set |
 | POST | `/api/v1/reports` | admin, operator | — | Add a scheduled report |
@@ -400,16 +421,37 @@ The console's trail is in the ENS format, `ens-audit/1` (see [Audit logging](../
 
 | Method | Path | Role | Token | Purpose |
 |---|---|---|---|---|
-| GET | `/api/v1/audit` | auditor | `audit:read` | The audit log for the Audit log page, newest first (`before`, `limit` up to 500), including entries from before 0.4.0 |
+| GET | `/api/v1/audit` | auditor | `audit:read` | The audit log for the Audit log page, newest first (`before`, `limit` up to 500), including entries from before 0.4.0. From 0.5.0 filtered server-side by `from`, `to` (RFC 3339), `category`, `action`, `actor` and `outcome` (`success`, `failure`, `denied`); an auditor of an environment or engines gets the entries recorded about those (not sign-ins or account changes, and nothing recorded before 0.5.0) |
+| GET | `/api/v1/audit/csv` | auditor | `audit:read` | From 0.5.0: what the page lists, with the same filters and scope, as CSV (UTF-8 with a byte-order mark, RFC 4180, the formula-injection guard), newest first, at most 100,000 rows (`X-Syncd-Truncated: true` when cut). Recorded as `data.exported` first, with the filters. For a check of the chain, use the NDJSON export |
+| GET | `/api/v1/audit/actions` | auditor | `audit:read` | From 0.5.0: every action the console records, with its category |
 | GET | `/api/v1/audit/verify` | auditor | `audit:read` | Recompute the hash chain (the entries from before 0.4.0, then the `ens-audit/1` chain): `entries`, `first_broken`, `head`, `legacy_entries`, `first_seq`. With `anchor_id` and `anchor_hash` (a head recorded earlier), also `anchor`: `found` and `matches`. A broken chain is recorded as `audit.verified` (alert) |
 | GET | `/api/audit/events` | auditor | `audit:read` | **The pull API**, at the path every ENS product serves it on: `?after=<seq>&limit=<1-1000>` (default 100). Events with `seq` above `after`, oldest first, as NDJSON (`application/x-ndjson`); with `Accept: application/json` as `{"events":[...],"next":<seq>}`. Start at `after=0`, then pass the last `seq` received. It needs only the database, so it works while the console is otherwise degraded |
 | GET | `/api/v1/audit/events` | auditor | `audit:read` | The same, under `/api/v1` |
 | GET | `/api/v1/audit/export` | auditor | `audit:read` | `?from=&to=` (RFC 3339, both optional): the trail as an NDJSON download, newest first, for `tools/audit/verify_chain.py`. Recorded as `data.exported` first, and refused when it cannot be |
 | GET | `/api/v1/audit/outputs` | auditor | `audit:read` | Each output's delivery position, backlog, last delivery, `failing_since` and last error |
 
-Events from before 0.4.0 are in `/api/v1/audit` but not in the pull API or the export. The family's
-Splunk add-on (`TA-ens-audit`, scripted input `ens_audit_pull.py`) pulls from
-`/api/audit/events`. See [Security](security.md#audit-trail).
+The verification, the pull API, the NDJSON export and the outputs' status need the auditor (or
+admin) role on everything, and a token without a limit. Events from before 0.4.0 are in
+`/api/v1/audit` but not in the pull API or the export. From 0.5.0 sign-in events carry `roles` (a
+list of assignments) instead of `role`, and events written for a request carry
+`details.assignment`. The family's Splunk add-on (`TA-ens-audit`, scripted input
+`ens_audit_pull.py`) pulls from `/api/audit/events`. See [Security](security.md#audit-trail).
+
+### License
+
+From 0.5.0 (see [Licensing](licensing.md)). Session only.
+
+| Method | Path | Role | Purpose |
+|---|---|---|---|
+| GET | `/api/v1/license` | admin | The license, its state and usage, and the packs |
+| PUT | `/api/v1/license` | admin | Install a license, or replace the one installed: `{"license": "<the file's text>"}`. It must verify with this build's keys, be valid now, and be bound to this installation or to none. The engines get it at once |
+| DELETE | `/api/v1/license` | admin | Remove the installed license. The installation is unlicensed again; its evaluation period, counted from its first start, does not start again |
+| GET | `/api/v1/license/usage` | admin | `?format=json\|csv`: the managed identities per day and the high-water mark, for true-up (CSV columns `day,managed_identities,limit,engines`). Audited (`license.usage-export`) |
+| GET | `/api/v1/license/entitlements` | any | What the license leaves locked, and its state, for the editors and the banner |
+
+Here "admin" is `admin` on everything. Installing, replacing and removing are audited
+(`license.upload`, `license.replace`, `license.remove`), and each change of state as
+`license.state` and the webhook event `license.state-changed`.
 
 ### Webhooks
 

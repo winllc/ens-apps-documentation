@@ -430,7 +430,7 @@ the reasoning, and [Troubleshooting](troubleshooting.md#the-command-line) for th
 | `ha register NAME HOST:PORT` | `--update` | Registers the pair's other engine in this host's console. New in 0.5.0 |
 | `ha status` | | The engine's line on the pair. New in 0.5.0 |
 | `license install FILE` | | Checks a license file with the release's keys, installs it as `/etc/syncd/license.lic`, sets `CONSOLE_LICENSE_FILE` and restarts the console. A renewal is the same command. New in 0.5.0 (see [Licensing](licensing.md)) |
-| `license status` | | The license's state, the managed identities and the installation id. New in 0.5.0 |
+| `license status` | | The license's state, the managed identities and the installation id (`syncd-console admin license` prints the same where there is no `syncdctl`, and `syncd license show` on an engine without a console). New in 0.5.0 |
 | `uninstall` | `--purge`, `--yes` | Removes syncd ([Uninstall](install.md#uninstall)) |
 | `version`, `help` | | |
 
