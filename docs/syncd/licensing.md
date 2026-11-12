@@ -132,7 +132,8 @@ License page (CSV or JSON) or `GET /api/v1/license/usage?format=csv|json`; each 
 ## Packs
 
 Core is in every license; the others are named in it. Which connector or feature belongs to which
-pack is decided by the syncd release, and may move between releases.
+pack is decided by the syncd release, and may move between releases. [Connectors](connectors.md#at-a-glance) shows
+each connector's pack.
 
 | Pack | Connectors | Features |
 |---|---|---|

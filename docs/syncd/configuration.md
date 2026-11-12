@@ -4,7 +4,7 @@ syncd has two programs, and each is configured in its own way:
 
 | Program | Configured by | Where (package install) |
 |---|---|---|
-| `syncd`, the engine | One YAML document: connectors, views, rules and publications, plus the engine's own settings. Secrets are never written in it; it names environment variables or files that hold them. | `/etc/syncd/engine/engine.yaml`, with the secrets in `/etc/syncd/engine.env` |
+| `syncd`, the engine | One YAML document: connectors, views, rules and publications, plus the engine's own settings. Secrets are never written in it; it names environment variables, files or (since 0.5.0) a vault that hold them. | `/etc/syncd/engine/engine.yaml`, with the secrets in `/etc/syncd/engine.env` |
 | `syncd-console`, the web console | Environment variables (or the matching command-line flags). | `/etc/syncd/console.env` |
 
 The container images and the Helm chart configure the same two programs; see
