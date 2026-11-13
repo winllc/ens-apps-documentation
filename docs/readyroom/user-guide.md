@@ -177,8 +177,9 @@ The report page shows the group name, the date range and the number of users, th
 
 The dates you pick are whole days, at most 366 of them by default, and each person's records are
 put on their own days: in their time zone, from their day start. The check-out time is when the
-person left: their last check-out of the day, or, for an automatic check-out, the screen lock
-before it. While the day is still in progress a screen lock is taken as
+person left: their last check-out of the day, or, when that check-out came straight after a screen
+lock with no unlock between (an automatic check-out, or the logoff of a locked PC that was
+restarted, shut down or updated), the lock before it. While the day is still in progress a screen lock is taken as
 a break, and a person who has not checked out shows *No logoff recorded*. Once the day is over, a
 day that ended with a screen lock ended at that lock. The downloads and scheduled reports count
 departures the same way.
@@ -230,7 +231,8 @@ are one of their delegates.
 - **Event Calendar**: their statuses, their online periods, and organization events
   and holidays. A day whose records an administrator corrected is marked (*Records corrected:
   ...*). Each day they checked in has one online entry: *Online: 8 hrs, 51 mins* when the day has a
-  departure (a logoff, an automatic check-out after a lock, or, once the day is over, a final lock);
+  departure (a logoff; an automatic check-out, or a logoff while the screen was locked, ending at the
+  lock; or, once the day is over, a final lock);
   *Online since 08:02* for today while it is in progress, since a lock during the day is a break;
   and *Online from 08:02 (no logoff recorded)* for a past day that ended without a logoff, such as a
   PC shut down after it was unlocked. Reports and attendance count only days with a departure.
