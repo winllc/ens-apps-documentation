@@ -28,7 +28,9 @@ All client files are in the release package's `windows-client/` folder:
 A disconnected remote session is treated like a locked screen: the user is still logged on and may
 reconnect, so the Disconnect task reports a lock and the Reconnect task an unlock. Only the real
 logoff (the Logout task) reports a check-out. A session left disconnected is checked out by the
-automatic check-out, as a locked screen is.
+automatic check-out, as a locked screen is. A logoff reported while the screen is locked or the
+session disconnected (a restart, shutdown or update, or the session signed out by someone else)
+counts the person as gone from the lock, not the logoff.
 
 The five user tasks run as `BUILTIN\Users` (S-1-5-32-545) at *LeastPrivilege*, so they fire for
 whichever user triggered them, in that user's own session, without elevation. All six tasks are

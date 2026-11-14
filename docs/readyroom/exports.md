@@ -7,8 +7,10 @@
   row per person and day, with their status, first check-in, last check-out, minutes in and time
   zone.
 - **Check-out** is when the person left, the same on the page, in the downloads and in scheduled
-  reports: the day's last check-out (unless they came back after it), or, for an automatic
-  check-out, the screen lock before it. While the day is in progress a screen lock is a break, not
+  reports: the day's last check-out (unless they came back after it), or, when that check-out came
+  straight after a screen lock with no unlock between, the lock before it: an automatic check-out,
+  and equally the logoff of a locked PC that was restarted, shut down or updated, since signing out
+  yourself needs an unlock first. While the day is in progress a screen lock is a break, not
   a departure: the page shows *No logoff recorded* and a download leaves the check-out empty. Once
   the day is over, a day that ends with a screen lock ended at that lock (the automatic check-out
   of an evening lock is written after midnight, on the next day).
