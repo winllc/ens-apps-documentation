@@ -142,12 +142,14 @@ flowchart LR
 2. **Staging.** A record is stored by its anchor (the immutable key the object names) in
    the source's staging space. A full read is diffed against what is staged, so records
    that are gone become deletes.
-3. **Correlation.** A staged record that already has a link keeps its entity. Otherwise the
-   view's join rules are tried in order. A record that matches one entity joins it; a source
+3. **Correlation.** A staged record that already has a link in the view keeps its entity there.
+   Otherwise the view's join rules are tried in order. A record that matches one entity joins it; a source
    that projects creates a new entity; a record that matches none (or several) waits
    unjoined, and when it became unjoined is kept (`unjoined/<view>`) so the queue's age can be
    reported. Operators can join or unjoin records by hand, or accept scored suggestions, and
-   those decisions are kept in the store (`pinned_joins`, `exclusions`).
+   those decisions are kept in the store (`pinned_joins/<view>`, `exclusions`). From 0.5.0 each
+   view keeps its own links and joins made by hand, so one connector object can feed several
+   views.
 4. **Merge.** Any change recomputes the entity from all its contributors: inbound attribute
    flows, then per-attribute precedence between sources.
 5. **Computed attributes.** Rules compiled from CEL run in dependency order. Calls to rule
@@ -352,10 +354,12 @@ install), with LZ4 compression and a shared block cache of `engine.cache_mb`.
 | `meta` | `attr/<id>`, `source/<id>`, settings | Attribute and source registries, the store format, the running configuration version, full-sync progress, when the last scheduled backup succeeded; from 0.5.0 also the installation id and the license ledger, each publication's unmanaged-entries result and adopted entries, the password queue's position (for an HA pair's follower), and the data-quality 24-hour trend |
 | `staging/<source id>` | anchor | Staged record |
 | `entities/<view>` | entity id | Merged entity |
-| `links` | source id and anchor | Entity id |
+| `links/<view>` | source id and anchor | The entity of the view the source record belongs to. From 0.5.0 (format 2), one per view |
+| `links` | source id and anchor | The format-1 layout, one link for every view; empty from format 2 on |
 | `exported/<publication>` | entity id | Last exported entry, with the entry's target id (`syncd-target-id`) when known, and the leaver clocks (`syncd-left-at`, `syncd-stripped`, `syncd-disabled`) |
 | `checkpoints` | source name | Opaque source position; for an LDAP object whose containers are checked, also the containers' DNs (`<connector>/<object>#containers`) |
 | `unique/<scope>` | claimed value | Entity id |
+| `unique_values/<view>` | entity id | The values the entity's computed attributes claimed through `unique()`, where they are not the attributes' own values. New in 0.5.1 |
 | `permanent/<view>/<attribute>` | normalized key | The entity that has (or last had) the key of a `permanent` computed attribute, and its values. Kept when the entity is deleted, so an entity that comes back with the key gets them again |
 | `quarantine/<view>` | entity id | The rule with `on_error: quarantine` that failed, its error, and since when |
 | `quality/<view>` | entity id | The data-quality checks the entity fails, their messages (never a value), and since when |
@@ -367,8 +371,8 @@ install), with LZ4 compression and a shared block cache of `engine.cache_mb`.
 | `unjoined/<view>` | source id and anchor | When the record became unjoined, for the age of the unmatched queue |
 | `containers/<target>` | normalized DN | A container the writer created, for `remove_empty_containers` |
 | `dlq/<publication>` | entity id | Last failed export of that entity |
-| `pinned_joins` | source and anchor | Entity an operator joined the record to |
-| `exclusions` | link key and entity id | A record an operator kept from joining that entity |
+| `pinned_joins/<view>` | source and anchor | The entity of the view an operator joined the record to (from 0.5.0; one `pinned_joins` for all views before) |
+| `exclusions` | link key and entity id | A record an operator kept from joining that entity; from 0.5.1 it applies only in the view whose entity it names |
 | `history` | entity id, time, sequence | The entity's change history (`engine.history`) |
 | `password_queue` | received time and a random suffix | A sealed password change waiting for delivery, the publications it was delivered to, and (from 0.5.0) who submitted it |
 | `password_sequences` | source, object type and anchor | The sequence of the last password change delivered for the account |
@@ -379,14 +383,16 @@ names first seen in it. A crash cannot leave a record that refers to an unknown 
 or a checkpoint ahead of the data it covers.
 
 The layout has a version, the **store format**. A newer release that changes it migrates the
-store when it first starts; an older release refuses a store written by a newer one. Neither
-0.4.0, 0.4.1 nor 0.5.0 changes the format (1). 0.4.0 adds the column families above that 0.3.0 did
-not have, on first start. 0.3.0 opens a store that has them, but ignores what they hold (timers, held changes,
-quality results, group lifecycles). 0.5.0 adds no column family, but keeps records 0.4.1 cannot
-use: 0.4.1 cannot read 0.5.0's password agent and queued password records, ignores previous
-password keys and a previous agent CA, drops group-review timers as unknown, and ignores the new
-settings in `meta`. See [Installation](install.md#rolling-back-050-to-041) for upgrades and
-rollbacks.
+store when it first starts, before anything else (each migration is idempotent, so one a crash
+interrupts runs again at the next start); an older release refuses a store written by a newer
+one. Neither 0.4.0 nor 0.4.1 changes the format (1). 0.4.0 adds the column families above that
+0.3.0 did not have, on first start. 0.3.0 opens a store that has them, but ignores what they hold
+(timers, held changes, quality results, group lifecycles). **0.5.0 changes the format to 2**: a
+link and a pin for each view a source record belongs to (`links/<view>`, `pinned_joins/<view>`),
+rebuilt in one pass over every entity from the records each lists (300,000 entities in 1.4 s in
+the release notes' measurement). 0.4.1 refuses a format-2 store. 0.5.1 keeps format 2 and adds
+`unique_values/<view>`, which 0.5.0 opens and ignores. See
+[Installation](install.md#store-format) for upgrades and rollbacks.
 
 History keeps at most `engine.history.keep_per_entity` entries per entity (100 by default) for
 `keep_days` (30 by default). Since 0.4.0 the newest `min_per_entity` entries of each entity (10 by
@@ -425,13 +431,16 @@ sequenceDiagram
 ```
 
 - A streaming source acknowledges a position upstream only after the batch holding it has
-  committed. After a crash the engine resumes from the last committed checkpoint and
+  committed, and a checkpoint is committed only with the changes before it. (0.5.1 fixed a case
+  where a stream's checkpoint could be saved and acknowledged before the changes it covered,
+  which could lose them.) After a crash the engine resumes from the last committed checkpoint and
   replays what followed. Exports are applied before the commit that records them, so a
   replayed batch exports again rather than losing anything.
 - Commits are grouped: a batch is flushed at 5 000 pending writes or 2 000 entity changes,
   and a checkpoint waits at most 50 ms for a group commit while events keep arriving.
 - Exports go out only while the engine may write: the engine of an HA pair checks its lease
-  before every export batch (see [High availability](#high-availability)).
+  before every export batch, and from 0.5.1 again before every 64 exports within it (see
+  [High availability](#high-availability)).
 - A restart does not re-read the sources. The engine rebuilds its in-memory indexes from the
   store (in parallel) and continues from its checkpoints.
 
