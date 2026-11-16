@@ -92,14 +92,16 @@ flag.
    (`syncd-<version>-linux-x86_64-fips.tar.gz`), and from 0.5.0 an aarch64 one too
    (`syncd-<version>-linux-aarch64-fips.tar.gz`); the images have `<version>-fips` variants, from
    0.5.0 for `linux/amd64` and `linux/arm64` (the arm64 ones only while the repository's arm64
-   runners are on). No release has been tagged and published yet, and the arm64 and aarch64 FIPS
-   jobs have never run in CI, so for now build it yourself:
+   runners are on). Releases are tagged from 0.5.0 on (`v0.5.0`, `v0.5.1`). For 0.5.1 the x86_64 and
+   aarch64 FIPS bundles were built and are on the ENS licensing portal's **Downloads** page, and the
+   `0.5.1-fips` images were pushed to GHCR and signed. When the
+   build you need is not there, build it yourself:
 
     ```sh
     scripts/package.sh --fips                      # bundle, .deb and .rpm, with -fips in the name
     deploy/packaging/build.sh --fips --packages    # the same, called directly
     docker build -f deploy/container/Dockerfile --target engine \
-      --build-arg FEATURES=syncd/fips,syncd-console/fips -t syncd:0.5.0-fips .   # the FIPS image
+      --build-arg FEATURES=syncd/fips,syncd-console/fips -t syncd:0.5.1-fips .   # the FIPS image
     ```
 
     The bundle carries a `FIPS` marker file and, from 0.5.0, a FIPS build of the capture agent

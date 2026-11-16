@@ -35,7 +35,7 @@ It has two parts:
     A full review of 0.5.0 found three critical issues, fixed in 0.5.1: a stream's checkpoint could
     be saved before the changes it covered (losing them); the Entra ID source emptied a group when
     its members could not be read; and the console showed the engine's environment secrets in the
-    running configuration to every reader. Upgrade from 0.5.0, and read the
+    running configuration to every reader ([Security](security.md#authorization)). Upgrade from 0.5.0, and read the
     [upgrade notes](install.md#upgrading-from-050-to-051) first: 0.5.1 refuses some configurations
     and access that 0.5.0 allowed.
 

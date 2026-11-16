@@ -451,7 +451,7 @@ While approval is required:
 - versions that [Git sync](#git-sync) publishes, and versions [promoted](config-as-code.md#promotion) to
   another environment's engines, wait for an approval on each engine like any other.
 
-The same rule applies to [modules of custom functions](user-guide.md#custom-functions-engineidfunctions):
+The same rule applies to [modules of custom functions](user-guide.md#custom-functions-enginesidfunctions):
 a module uploaded with an API token is the token creator's, who cannot approve it.
 
 !!! warning

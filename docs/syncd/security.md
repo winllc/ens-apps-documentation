@@ -1068,8 +1068,11 @@ the sign-in limit see client addresses.
   0.5.0, of what WebAssembly modules return are fuzzed in CI.
 - **Releases.** A release is built in CI from a `v*` tag (Rocky Linux 9, and Rocky Linux 8 for
   the RHEL 8 `.rpm`), after the package lifecycle tests and the upgrade test from the previous
-  release pass. Releases are tagged from 0.5.0 on (`v0.5.0`, `v0.5.1`); what their release jobs
-  published was not checked for this page. A release carries the x86_64 and aarch64 bundles, `.deb` and `.rpm`
+  release pass. Releases are tagged from 0.5.0 on (`v0.5.0`, `v0.5.1`). For 0.5.1 the release job
+  uploaded the files to the ENS licensing portal's release bucket (the **Downloads** page), and the
+  images and chart were pushed to GHCR and signed with cosign; the files are **not GPG-signed** (no
+  release key was set), so there is no `SHA256SUMS.asc` and no apt or dnf repository yet, and the
+  GitHub release holds only the images' SBOMs. A release carries the x86_64 and aarch64 bundles, `.deb` and `.rpm`
   (aarch64 only when the repository's arm64 runners are enabled, which from 0.5.0 is the
   default), the RHEL 8 `.rpm`, x86_64 and (from 0.5.0) aarch64 FIPS bundles, and from 0.5.0 the
   `syncd-capture` packages, with:
