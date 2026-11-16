@@ -37,7 +37,8 @@ It has two parts:
     its members could not be read; and the console showed the engine's environment secrets in the
     running configuration to every reader ([Security](security.md#authorization)). Upgrade from 0.5.0, and read the
     [upgrade notes](install.md#upgrading-from-050-to-051) first: 0.5.1 refuses some configurations
-    and access that 0.5.0 allowed.
+    and access that 0.5.0 allowed. Going back is in
+    [Rolling back 0.5.1 to 0.5.0](install.md#rolling-back-051-to-050).
 
 !!! note "New in 0.5.0, and what is still unproven"
     0.5.0 adds a license check ([Licensing](licensing.md)), [SAML 2.0](single-sign-on.md#saml-20) and

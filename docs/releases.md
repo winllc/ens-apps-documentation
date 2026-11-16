@@ -18,7 +18,8 @@ ways to install it:
     for directory servers, CycloneDX SBOMs (`.cdx.json`), and `SHA256SUMS`. With the release key set it
     also signs `SHA256SUMS` (`SHA256SUMS.asc`) and the `.rpm` files and publishes apt and dnf
     repositories; 0.5.0 and 0.5.1 were released without it, so they are **unsigned** and there are no
-    repositories yet. The GitHub release carries only the images' SPDX SBOMs. The container images `ghcr.io/winllc/syncd` and `ghcr.io/winllc/syncd-console` (amd64 and arm64,
+    repositories yet. The GitHub release carries only the images' SPDX SBOMs. Check a download as in
+    [syncd's install guide](syncd/install.md#verifying-a-release). The container images `ghcr.io/winllc/syncd` and `ghcr.io/winllc/syncd-console` (amd64 and arm64,
     with `-fips` tags) and the Helm chart `oci://ghcr.io/winllc/charts/syncd` are signed
     with cosign as below, from the repository `winllc/ldap-sync-merge-view`. See
     [syncd's install guide](syncd/install.md#getting-the-release).

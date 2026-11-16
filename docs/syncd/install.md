@@ -52,7 +52,7 @@ The requirements for the [Helm chart](#install-with-helm) are listed with it.
 | **RHEL, Rocky or Alma 8** | Use the `.el8.rpm` (x86_64 only). It is built on Rocky Linux 8, and its build checks that the binaries need nothing newer than RHEL 8 has. RHEL 8's default PostgreSQL is 10, too old for the console: `sudo dnf module enable postgresql:16` first. |
 | **PostgreSQL 13 or newer** | For the console. On the same host, or elsewhere. |
 | **`openssl`** | Issues the control API's certificates at install time. The packages depend on it. |
-| **PostgreSQL client tools** | `pg_dump`, `pg_restore` and `psql`, for backups. Upgrades refuse to run without them unless you pass `--skip-db-backup`. The `.deb` recommends `postgresql-client`; the `.rpm` recommends `postgresql`. |
+| **PostgreSQL client tools** | `pg_dump`, `pg_restore` and `psql`, for backups. Upgrades refuse to run without them unless you pass `--skip-db-backup`; from 0.5.1 they check, before stopping anything, that `pg_dump` can dump the server (a `pg_dump` older than the server's major version cannot). The `.deb` recommends `postgresql-client`; the `.rpm` recommends `postgresql`. |
 | **`curl`** *(recommended)* | For the health checks. Without it, `syncdctl` falls back to a bash TCP check. |
 | **`git`** *(recommended)* | For the console's Git sync (see [Configuration as code](config-as-code.md)). From 0.4.0 the packages recommend it. Not needed otherwise |
 | **Disk** | Room for the engine store, its history, and backups: see [Sizing](availability-and-sizing.md#sizing). An upgrade checks that `/var/lib/syncd/backups` has room for a backup before it stops anything. |

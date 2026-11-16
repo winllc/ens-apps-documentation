@@ -65,8 +65,8 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
 
 ??? failure "`--fips needs a FIPS build of syncd`"
     The release you ran is not a FIPS build (it has no `FIPS` file, and no `-fips` in its name).
-    Use the FIPS bundle, `syncd-<version>-linux-x86_64-fips.tar.gz` (x86_64 only; there are no
-    FIPS packages). See [FIPS 140-3 and DISA STIG](fips-and-stig.md).
+    Use the FIPS bundle, `syncd-<version>-linux-x86_64-fips.tar.gz` (or, from 0.5.0,
+    `syncd-<version>-linux-aarch64-fips.tar.gz`; there are no FIPS packages). See [FIPS 140-3 and DISA STIG](fips-and-stig.md).
 
 ??? failure "`syncd <version> is installed already; to upgrade: syncdctl upgrade <release>`"
     `/etc/syncd/console.env` exists, so this host already has syncd. Upgrade it, or, to start
@@ -461,7 +461,22 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
     works until then. The new password is refused with `a password needs at least 12 characters`,
     `that password is too easy to guess` (it is the username or `admin`), or `choose a password you
     have not used here` (it is the current one). `the current password is wrong` means the one-time
-    password was mistyped.
+    password was mistyped. From 0.5.1 wrong current passwords count toward the lockout, and an
+    account with a temporary password gets an answer on the password change only.
+
+??? failure "A change is refused: `refused: a change made with the console's session must come from the console's own pages`"
+    New in 0.5.1. A change made with the session cookie (not with an API token) must come from the
+    console's own pages: the browser's `Sec-Fetch-Site`, or else its `Origin`, must name the
+    console. Behind a proxy that rewrites the `Host` header, the console may not recognise its own
+    address: have the proxy pass the original `Host` (or `X-Forwarded-Host`), or set
+    `CONSOLE_PUBLIC_URL` to the address people use, which the check accepts too. Scripts should
+    use API tokens, which this check does not apply to.
+
+??? failure "An API token stops working: `the account that created the token signs in through single sign-on and has not signed in for 35 days; the token works again once it has`"
+    New in 0.5.1. The console cannot ask the identity provider whether such an account is still
+    allowed in, so its tokens expire while it does not sign in for `CONSOLE_API_SSO_CREATOR_MAX_IDLE`
+    (35 days by default; `0` turns this off). Have the account sign in once, or create the
+    token from an account that signs in regularly.
 
 ??? failure "Local accounts cannot sign in after turning on FIPS mode"
     In FIPS mode the console hashes passwords with PBKDF2-HMAC-SHA512 and refuses the Argon2id
@@ -576,7 +591,8 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
     configuration (import it in the console), keep its `engine.data_dir`, `api` and `engine.ha`
     as they are, and change those only in `/etc/syncd/engine/engine.yaml` on the host. From 0.5.0
     so are `engine.require_signed_config` with `engine.config_signing_keys`, and
-    `engine.license_file`. The usual case after the upgrade: `syncdctl api-access strict` added
+    `engine.license_file`, and from 0.5.1 `passwords.key_file` (`passwords.key_file can only be
+    changed on the engine host`). The usual case after the upgrade: `syncdctl api-access strict` added
     `api.access` on the host, and the console's next version still has the old `api` section;
     import the running configuration once.
 
@@ -676,6 +692,11 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
     without the release's key), or the license was signed with it. Production runs release
     builds; `syncd version` names the license keys a build accepts. See
     [Release builds and the development key](licensing.md#release-builds-and-the-development-key).
+
+??? warning "After the upgrade to 0.5.1, an engine managed by a console without a license blocks publishing"
+    0.5.0 let a console that holds no license switch the engines' enforcement off. From 0.5.1 such
+    an engine is judged by its own evaluation period again, and blocks publishing once that
+    ends. Install a license in the console (see [Licensing](licensing.md)).
 
 ??? warning "The license stays expired after the clock was corrected"
     The console and the engines keep the latest time they have seen, so a clock that ran ahead
@@ -1217,8 +1238,10 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
     sync down. Stopping the engine is safe: a full sync resumes where it stopped at the next start.
 
 ??? warning "`target <name> UNREACHABLE`, alert `SyncdTargetDown`"
-    The engine lost its connection to the directory and can't make a new one. The log says
-    `export target is unreachable` and `the directory is still unreachable`. It keeps reading and
+    The engine lost its connection to the directory and can't make a new one, or (from 0.5.1) the
+    directory did not answer when the engine started or reloaded, and the engine started without
+    it (`the directory cannot be reached; starting with it down`). The log says `export target is
+    unreachable` and `the directory is still unreachable`. It keeps reading and
     committing its sources; every export to that target fails at once into the dead-letter queue.
     It tries a new connection after waits from 1 s, doubling to a minute.
 
@@ -1239,11 +1262,19 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
     itself. If the write-back keeps failing, the log says why; it is tried again every minute.
 
 ??? warning "A published configuration rolled back: `the new configuration did not start; restoring the previous one`"
-    The engine saved and reloaded the new configuration but could not start with it: a source or
-    target it could not connect to, a listen address in use, a certificate it could not read, or a
-    secret reference (`env:`, `file:`) that doesn't resolve on this host. It wrote the previous
-    configuration back and runs that one; nothing was exported with the new rules. The console
-    shows the publish as failed and the version stays a draft.
+    The engine saved and reloaded the new configuration but could not start with it: an LDAP
+    target that refused its bind, or whose certificate it does not trust, a listen address in use,
+    a certificate it could not read, or a secret reference (`env:`, `file:`) that doesn't resolve
+    on this host. It wrote the previous configuration back and runs that one; nothing was exported
+    with the new rules. The console shows the publish as failed and the version stays a draft.
+    From 0.5.1 an LDAP or Active Directory directory that is only down does not roll a
+    configuration back: the engine starts with it, shows `target <name> UNREACHABLE`, and
+    connects once it answers (`syncd run --once` still fails at once).
+
+    If the previous configuration does not start either, 0.5.1 logs `the previous configuration
+    did not start either; trying it again` and tries it every 5 seconds, doubling up to a minute,
+    until it starts or is stopped (0.5.0 exited). Fix what stops it (the same causes), and it
+    starts by itself.
 
     Read the reason: `journalctl -u syncd -g "did not start" -A 3`. Fix it (often a variable
     missing from `/etc/syncd/engine.env`, then `systemctl restart syncd`), and publish again.
@@ -1412,7 +1443,8 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
     reads. The installed configuration uses mutual TLS; keep it. Similarly,
     `revealing sensitive values needs mTLS (api.tls), or api.local_reveal: true` for `--reveal`.
     In strict mode the loopback listener, like the control socket, stops at `operate`, on top of
-    these two settings.
+    these two settings. From 0.5.1 backups, HA snapshots and the password queue need both
+    settings on such a listener (see [Backups and restore](#backups-and-restore)).
 
 ??? failure "`the engine has too many commands waiting; try again shortly`, or `the engine is shutting down`"
     The engine's command queue is full, or it is stopping. Retry in a moment; check `systemctl
@@ -1441,14 +1473,18 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
     comes from a ConfigMap or a Secret, not both. See [Single sign-on](install.md#single-sign-on).
 
 ??? failure "The pods do not start: `ImagePullBackOff`, or `exec format error`"
-    No release has been published to `ghcr.io/winllc` yet: build the images and point
-    `image.engine.repository` and `image.console.repository` at your registry (see
-    [Getting the release](install.md#getting-the-release)), with `imagePullSecrets` if it needs
-    them. `exec format error` means an image for another platform: a release has arm64 images
-    only when it was built with the arm64 runners (`docker buildx imagetools inspect` lists a
-    tag's platforms), an image you built is for your build host's platform, and the `-fips`
-    images are amd64 only. Schedule the pods on matching nodes
-    (`nodeSelector: {kubernetes.io/arch: amd64}`), or build for the nodes' platform.
+    `ImagePullBackOff`: the tag is not in the registry the values name. The 0.5.1 images are on
+    `ghcr.io/winllc` (`syncd:0.5.1`, `syncd-console:0.5.1` and their `-fips` tags); there is no
+    `latest`. Check `image.engine.tag` and `image.console.tag` (the chart's `appVersion` by
+    default), and on a cluster that cannot reach ghcr.io, mirror the images (see
+    [Air-gapped clusters](install.md#air-gapped-clusters)) or build them (see
+    [Getting the release](install.md#getting-the-release)), with `imagePullSecrets` if your
+    registry needs them. `exec format error` means an image for another platform: a release has
+    arm64 images only when it was built with the arm64 runners (`docker buildx imagetools
+    inspect` lists a tag's platforms), and an image you built is for your build host's platform.
+    From 0.5.0 the `-fips` images are built for both platforms too (0.4.1's were amd64 only).
+    Schedule the pods on matching nodes (`nodeSelector: {kubernetes.io/arch: amd64}`), or build
+    for the nodes' platform.
 
 ??? failure "The engine fails at startup with the FIPS image: `not a FIPS build`, or `fips off` in its status"
     `SYNCD_FIPS_MODE=true` is refused by the standard images: use the `<version>-fips` tags for
@@ -1470,6 +1506,14 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
     Job registers the engine again by itself (`engine.re-registered`). Before 0.4.0 the Job did not
     get the setting and kept failing. See
     [The master key Secret](operator-guide.md#the-master-key-secret).
+
+??? failure "With Argo CD (or another tool that renders the chart), the console refuses its master key, or the engine restarts at every sync"
+    The chart keeps its generated master key, initial password and certificates by reading its
+    own Secrets with Helm's `lookup`, which `helm template` cannot: every render makes new ones.
+    From 0.5.1 keep them in Secrets of your own and name them (`console.masterKey.existingSecret`,
+    `console.adminPasswordExistingSecret`, `pki.existingSecret`); for a release that runs already,
+    copy what the chart made first, so nothing changes. See [GitOps](install.md#gitops). A key
+    already replaced: see the master key entry above.
 
 ??? failure "The registration Job fails"
     `syncd-register` runs after each install and upgrade, and retries (12 times, for up to 15
