@@ -3,8 +3,8 @@
 This guide covers running syncd day to day: the services, starting and stopping them, checking
 health, reading logs, the `syncd` and `syncdctl` commands, who may use the control API, held
 changes, unmanaged entries, backups, the support bundle, an active/passive pair, monitoring,
-certificates, the master key and the password keys. It describes syncd 0.5.0 (`main` at commit
-`a9d17c6`). [Running on Kubernetes](#running-on-kubernetes) covers the same for the Helm chart.
+certificates, the master key and the password keys. It describes syncd 0.5.1 (tag `v0.5.1`,
+commit `7da4d9e`). [Running on Kubernetes](#running-on-kubernetes) covers the same for the Helm chart.
 Installing and upgrading are in [Installation](install.md); the license is in
 [Licensing](licensing.md); what to do when something goes wrong is in
 [Troubleshooting](troubleshooting.md).
@@ -36,8 +36,24 @@ licensing service: a license is a file checked offline (see [Licensing](licensin
 Both units run with systemd's sandboxing: `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`,
 `NoNewPrivileges`, no capabilities, a system-call filter, and write access only to their own
 directories (`/var/lib/syncd/engine` and `/etc/syncd/engine` for the engine, and `/run/syncd`,
-which its unit creates and removes when it stops; `/var/lib/syncd/console` for the console). The
-engine may use 80% of the host's memory (`MemoryMax=80%`) and 65 536 open files.
+which its unit creates and removes when it stops; `/var/lib/syncd/console` for the console, and
+from 0.5.1 `/var/log/syncd`, which its unit creates for an `ENS_AUDIT_FILE`, owned by
+`syncd-console`, mode 0750). The engine may use 80% of the host's memory (`MemoryMax=80%`) and
+65 536 open files.
+
+Any other directory a service must write needs a drop-in that names it: a directory for scheduled
+backups (`engine.backup.to`), an audit file outside `/var/log/syncd`, or
+`CONSOLE_REPORTS_SHARE_DIR`. `sudo systemctl edit syncd` (or `syncd-console`) opens one; put in it
+
+```ini
+[Service]
+ReadWritePaths=/srv/syncd-reports
+# for a network file system, also: [Unit] RequiresMountsFor=/srv/syncd-reports
+```
+
+then restart the service. The directory must exist, or the service does not start. From 0.5.1
+`syncdctl ha init --lease-path` and `ha join` write the one a lease file needs
+(`/etc/systemd/system/syncd.service.d/ha-lease.conf`).
 
 ## Start, stop and status
 
@@ -67,15 +83,15 @@ sudo syncd status                          # what the engine is doing
 `syncdctl status` prints:
 
 ```text
-release:   0.5.0
-previous:  0.4.1
+release:   0.5.1
+previous:  0.5.0
 engine:    active, control API answers
-store:     format 1 (syncd 0.5.0 reads up to 1)
+store:     format 2 (syncd 0.5.1 reads up to 2)
 console:   active, http://127.0.0.1:8080 answers
 certificates: valid until Nov  4 10:15:00 2036 GMT (ca.crt expires first)
 users:     https://syncd.example.com
 backups:
-  /var/lib/syncd/backups/20261110T101500Z-upgrade-0.4.1-to-0.5.0
+  /var/lib/syncd/backups/20261116T101500Z-upgrade-0.5.0-to-0.5.1
 ```
 
 The `backups:` it lists are the host-local ones. Off-host and scheduled backups show in
@@ -87,7 +103,7 @@ control API access: `sudo syncdctl license status` and `sudo syncdctl api-access
 
 | Check | Answers |
 |---|---|
-| `curl -s http://127.0.0.1:8080/healthz` | `ok` while the console runs. No sign-in needed. It does not check the database or the engine |
+| `curl -s http://127.0.0.1:8080/healthz` | `ok` while the console runs. No sign-in needed. It does not check the database or the engine. With the console's own HTTPS, `curl -sk https://127.0.0.1:8443/healthz` (its address), as `syncdctl` does from 0.5.1 |
 | `sudo syncd status` | The engine answers on its control API, with the state of each source and publication. It always answers, even while the engine is busy (in strict mode, to the control socket and to a certificate listed under any tier of `api.access`) |
 | `sudo syncdctl status` | Both of the above, as `syncdctl` checks them during installs and upgrades |
 | `GET /metrics` | The engine answers scrapes, when `api.metrics_listen` is set. `up{job="syncd"}` in Prometheus |
@@ -106,7 +122,7 @@ running totals. It also shows:
 
 | Line | What it says |
 |---|---|
-| `engine 0.5.0  up 3d2h  fips off`, `configuration version ...` | The version, uptime, FIPS mode and the configuration running |
+| `engine 0.5.1  up 3d2h  fips off`, `configuration version ...` | The version, uptime, FIPS mode and the configuration running |
 | `configuration applied by CN=syncd console at 10.0.0.5:41234, 2h ago (signed by key ..., sha256 ...)`, or `configuration from the file on this host, not applied through the control API (...)` | Who applied the running configuration, when, and whether the console signed it (new in 0.5.0; see [Control API access](#control-api-access)) |
 | `control API access: strict (...)`, or `control API access: COMPATIBLE: every client certificate from the CA may apply configurations and approve changes; ...` | Who may use the control API (new in 0.5.0). `configurations: applied only when the console signed them` follows with `engine.require_signed_config` |
 | `license: GRACE (L-0001 for ..., 5000 managed identities, expires ...; packs ...)`, `license: N managed identities on this engine ...`, `license: installation ...` | The license's state, the managed identities counted and the installation id, then any message (new in 0.5.0; see [Licensing](licensing.md)). Absent on the passive engine of a pair |
@@ -160,21 +176,25 @@ Useful engine log messages:
 | `migrating the store`, `store migrated` | An upgrade migrates the store to a newer format |
 | `metrics listening` | The metrics listener is up |
 | `control request` (with `rpc` and `caller`) | A command through the control API, and who sent it |
-| `refused a control request` (with `rpc`, `caller`, `needed`, `granted`), `refused a client certificate that api.access does not list`, `refused a password request: the caller is not listed under api.access.passwords` | Strict control API access refused a call (new in 0.5.0; see [Control API access](#control-api-access)) |
+| `refused a control request` (with `rpc`, `caller`, `needed`, `granted`), `refused a client certificate that api.access does not list`, `refused a password request: the caller is not listed under api.access.passwords` | Strict control API access refused a call (new in 0.5.0; see [Control API access](#control-api-access)). From 0.5.1 the last one also covers backups, snapshots and the password queue of an engine that holds password keys |
 | `revealing sensitive values` / `refused a request to reveal sensitive values` | A caller asked for sensitive attribute values |
 | `source failed; restarting it from its checkpoint` | A source failed and will be retried |
 | `export target is unreachable; failed exports wait in the dead-letter queue` | A target directory went away |
+| `the directory cannot be reached; starting with it down` | An LDAP or Active Directory target did not answer when the engine started or reloaded; it starts anyway and connects later (new in 0.5.1) |
 | `connected to the directory again` | It came back |
 | `exceeds the deletion threshold` | A deletion threshold holds deletes back |
 | `a canary went first; the rest of the change waits for it to soak`, `the canary passed; releasing the rest of the change`, `the canary failed: ...` | Canary publishing (see [Held changes](#held-changes)) |
 | `in report mode: changes are planned and recorded, nothing is written to ...` | A publication in report mode |
 | `approved: held changes are released, ...` | `syncd approve` released a publication's held changes |
 | `the new configuration did not start; restoring the previous one` | A published configuration rolled back |
+| `the previous configuration did not start either; trying it again` | The restored configuration did not start either; the engine tries it every 5 seconds, doubling up to a minute, until it starts or is stopped (new in 0.5.1; 0.5.0 exited) |
 | `engine.cache_mb takes effect when syncd restarts` | A published configuration changed `cache_mb` |
 | `pruned entity history` | The hourly history prune ran |
 | `backup written`, `backup failed` | A scheduled backup |
 | `this engine took the lease; taking over`, `reconciling the targets after taking the pair over` | This engine of a pair became the active one |
 | `the pair's lease is lost: stopping the sources and the exports; this engine is now the passive one` | This engine could not renew the lease and stepped down |
+| `the lease is held under this engine's name (...) by another process: ...; waiting for it to expire` | Another engine of the pair has the same member name, or this engine restarted after a crash while it held the lease (new in 0.5.1) |
+| `the store is still in use by calls the passive engine was answering: stopping, so that a restart takes the pair over with the received snapshot ...` | A promotion could not release the store within 30 seconds; the engine exits, and its restart swaps the received snapshot in (new in 0.5.1) |
 | `not writing: this engine no longer holds the pair's lease` | The fence stopped an export batch |
 | `store snapshot received from the active engine`, `pulling a store snapshot failed`, `taking a store snapshot failed` | Snapshots of a pair |
 | `password delivered`, `password change not delivered` | Password deliveries, by account and DN, never the password |
@@ -256,8 +276,8 @@ Running the engine:
 | `syncd group review PUBLICATION GROUP` | Reviews a computed group: its expiry and review clocks start again now, and an expired group comes back. New in 0.4.0. See [Group lifecycle](change-safety.md#group-lifecycle) | Yes |
 | `syncd correlation suggest --view V [--source S] [--above X] [--limit N] [--json]` | Scored suggestions for a view's records that joined no entity. New in 0.4.0. See [Correlation assistance](reports-and-data-quality.md#correlation-assistance) | Yes |
 | `syncd correlation accept --view V [--source S] [--above X \| --from FILE] [--limit N] [--yes]` | Joins the records whose best suggestion scores at least `--above` (the view's `correlation.accept_at` by default), or the decisions in a file `suggest --json` wrote. A dry run unless `--yes` | Yes |
-| `syncd backup --to DIR\|s3://... [--keep N] [...]` | An [off-host backup](#off-host-backups) of the running engine, without stopping it, with the password keys as they are on disk (sealed or not). New in 0.4.0 | Yes |
-| `syncd restore --from DIR\|s3://... [--name NAME] [--replace]` | Restores a backup into the data directory, with the engine stopped (see [Restore](#restoring-an-off-host-backup)). New in 0.4.0 | No: refused while it runs |
+| `syncd backup --to DIR\|s3://... [--keep N] [...]` | An [off-host backup](#off-host-backups) of the running engine, without stopping it, with the password keys as they are on disk (sealed or not). From 0.5.1, in strict access on an engine that holds password keys, only through the control socket or a certificate listed under `api.access.passwords`. New in 0.4.0 | Yes |
+| `syncd restore --from DIR\|s3://... [--name NAME] [--replace]` | Restores a backup into the data directory, with the engine stopped (see [Restore](#restoring-an-off-host-backup)). Run it as the engine's user (`sudo -u syncd`): from 0.5.1 the files it puts in place are mode 0600. New in 0.4.0 | No: refused while it runs |
 | `syncd support-bundle [--out FILE\|-]` | Writes the engine's [support bundle](#support-bundle); `--out -` streams it to standard output (from 0.4.1). New in 0.4.0 | Yes (collects less without it) |
 | `syncd password set`, `password change`, `password queue [--limit N]`, `password agent add NAME --source C\|bind NAME --source C\|list\|revoke\|enroll\|renew` | Submit a password change, change a person's own password, list the changes waiting (who submitted each, never a password; new in 0.5.0), and manage the capture agents. From 0.5.0 a new agent needs `--source`, and `bind` binds an agent enrolled before 0.5.0. See [Password synchronisation](password-sync.md) | Yes (`agent enroll` and `agent renew --dir DIR` run on the agent's host) |
 | `syncd password rekey --passphrase-file FILE`, `rekey --forget-previous`; `password rotate-key [--retire [--key ID] [--force]]`; `password rotate-agent-ca [--retire]` | Change the password keys' passphrase, rotate the password key, rotate the agents' CA. New in 0.5.0. See [The password keys](#the-password-keys) | `rekey`: no (it works with the engine running or stopped); the rotations: yes |
@@ -349,7 +369,9 @@ keeps its `engine.yaml`, without the commented line: add it. The container image
 
 In strict [control API access](#control-api-access) the socket reads and operates and applies no
 configuration; it may still set passwords and rotate the password keys, since it is the engine's
-own user.
+own user, and, from 0.5.1, take the backups of an engine that holds password keys. On such an
+engine, `syncd backup` and `syncdctl backup --to` need the socket: the command line's certificate
+is refused them.
 
 ### Control API access
 
@@ -358,8 +380,8 @@ New in 0.5.0. Every call of the control API has a tier, each including the one b
 | Tier | What it allows |
 |---|---|
 | `read` | The status, the lists (dead letters, held changes, quarantine, data quality, unjoined records, queued passwords, agents), the running configuration, simulations, the reconciliation report |
-| `operate` | Runs (`reconcile`, `full-sync`, `check-drift`, `unmanaged`), `approve`, `retry`, `discard`, joins, `adopt`, group reviews, a person's own password change, revoking an agent, backups and HA snapshots, connector checks and discovery, previews, and `--reveal` |
-| `operate` and `passwords` | Setting passwords and deciding who else can: `syncd password set`, `password agent add` and `bind`, `password rotate-key` and `rotate-agent-ca`, and the passive engine of a pair forwarding what agents sent it |
+| `operate` | Runs (`reconcile`, `full-sync`, `check-drift`, `unmanaged`), `approve`, `retry`, `discard`, joins, `adopt`, group reviews, a person's own password change, revoking an agent, backups and HA snapshots of an engine that holds no password keys, connector checks and discovery, previews, and `--reveal` |
+| `operate` and `passwords` | Setting passwords and deciding who else can: `syncd password set`, `password agent add` and `bind`, `password rotate-key` and `rotate-agent-ca`, and the passive engine of a pair forwarding what agents sent it. From 0.5.1, on an engine that holds password keys (a password key or the agents' CA on disk), also what hands them out: backups, HA snapshots and following the password queue (`Backup`, `PullSnapshot`, `PullSnapshotFiles`, `FollowPasswordQueue`; `SnapshotManifest`, a list of files, stays at `operate`) |
 | `configure` | Applying a configuration (`ApplyConfig`: the console's publish, `syncd apply-config`) and installing a license on an engine |
 
 `api.access` in the host's `engine.yaml` says which client certificate (by common name, or
@@ -375,7 +397,7 @@ api:
     passwords: []                      # who may set passwords, besides the control socket
 ```
 
-- **A host installed with 0.5.0 is strict**, and so is the container image's initial
+- **A host installed with 0.5.0 or later is strict**, and so is the container image's initial
   configuration (with `syncd engine`, the chart's engine certificate, under `operate` and
   `passwords`). `sudo syncd apply-config` is refused there: configurations go through the console,
   with its approvals, tests, ticket and pre-publish hook.
@@ -398,11 +420,18 @@ api:
   file edited on the host) is shown in `syncd status`, and the console records
   `config.unpublished-running` in its audit trail, raises the webhook event of that name, and
   warns on the engine's page.
+- **An engine that holds password keys** (from 0.5.1). Its backups, HA snapshots and password
+  queue carry the keys or are sealed to them, so in strict mode only the control socket and a
+  certificate listed under `api.access.passwords` get them. On a host, uncomment
+  `api.control_socket` for `syncd backup` and `syncdctl backup --to`; in a pair that delivers
+  passwords, list the certificate the passive engine pulls snapshots with under `passwords` on
+  both hosts (`syncdctl ha` and `api-access` say so). The plain-text loopback listener serves
+  them only with both `api.local_control` and `api.local_reveal`.
 - `sudo syncdctl api-access status` prints the engine's lines on access and on who applied the
   running configuration. Refusals are logged as `refused a control request`.
 
-The engine refuses a published configuration that changes `api`, `engine.require_signed_config`
-or `engine.config_signing_keys`: those are changed on the host. See [Security](security.md) for
+The engine refuses a published configuration that changes `api`, `engine.require_signed_config`,
+`engine.config_signing_keys` or, from 0.5.1, `passwords.key_file`: those are changed on the host. See [Security](security.md) for
 the reasoning, and [Troubleshooting](troubleshooting.md#the-command-line) for the refusals.
 
 ## syncdctl commands
@@ -412,11 +441,11 @@ the reasoning, and [Troubleshooting](troubleshooting.md#the-command-line) for th
 | Command | Options | What it does |
 |---|---|---|
 | `install` | `--local-database` or `--database-url URL`; `--listen ADDR`, `--fips`, `--no-start` | First installation ([Installation](install.md#syncdctl-install-options)) |
-| `upgrade RELEASE` | `--yes`, `--no-rollback`, `--skip-db-backup`, `--reinstall` | Upgrades a bundle install to a `.tar.gz` or unpacked release ([Upgrade](install.md#upgrade)) |
-| `rollback` | `--keep-data`, `--yes` | Back to the previous release, restoring the backup taken before the upgrade ([Rollback](install.md#rollback)) |
-| `backup` | `--skip-db-backup`, `--leave-stopped` | A [host-local backup](#host-local-backups): stops syncd briefly to take a consistent copy; prints its directory. `--leave-stopped` leaves the services stopped afterwards |
+| `upgrade RELEASE` | `--yes`, `--no-rollback`, `--skip-db-backup`, `--reinstall` | Upgrades a bundle install to a `.tar.gz` or unpacked release ([Upgrade](install.md#upgrade)). From 0.5.1 it checks that `pg_dump` can dump the console's database before it stops anything, and `--skip-db-backup` always leaves the database out |
+| `rollback` | `--keep-data`, `--yes` | Back to the previous release, restoring the backup taken before the upgrade ([Rollback](install.md#rollback)). From 0.5.1 `--keep-data` is also refused when the console's schema changed, and a full rollback checks first that there is room to restore |
+| `backup` | `--skip-db-backup`, `--leave-stopped` | A [host-local backup](#host-local-backups): stops syncd briefly to take a consistent copy; prints its directory. `--leave-stopped` leaves the services stopped afterwards. From 0.5.1 it checks the room and `pg_dump` before it stops anything |
 | `backup --to DIR\|s3://bucket/prefix` | `--keep N`, `--skip-db-backup`; from 0.4.1 `--sse`, `--endpoint`, `--region`, `--s3-ca` | An [off-host backup](#off-host-backups) of the running engine, with the console's database, `/etc/syncd` and (from 0.4.1) the console's master key beside it. Nothing is stopped. From 0.5.0 a password-key passphrase file inside `/etc/syncd` is left out, with a warning. New in 0.4.0 |
-| `restore DIR` | `--yes` | Restores a host-local backup: engine store, console files and database, `/etc/syncd` |
+| `restore DIR` | `--yes` | Restores a host-local backup: engine store, console files and database, `/etc/syncd`. From 0.5.1 it checks first that `/var/lib/syncd` has room for the copy it makes beside the live data, and changes nothing when it has not |
 | `restore --from DIR\|s3://...` | `--name syncd-<host>-<time>`, `--yes`; from 0.4.1 `--sse`, `--endpoint`, `--region`, `--s3-ca` | Restores an off-host backup, the newest or the named one ([Restoring an off-host backup](#restoring-an-off-host-backup)). New in 0.4.0 |
 | `support-bundle [FILE]` | | Writes a [support bundle](#support-bundle). New in 0.4.0 |
 | `status` | | Releases, services, health, store format, when the control API's certificates expire, public URL, host-local backups |
@@ -425,7 +454,7 @@ the reasoning, and [Troubleshooting](troubleshooting.md#the-command-line) for th
 | `api-access strict` | `--dry-run`, `--yes` | Opts a host upgraded from 0.4.x in to strict [control API access](#control-api-access). New in 0.5.0 |
 | `api-access signing-key FILE\|--from-console` | `--add`, `--require`, `--dry-run`, `--yes` | Installs the console's configuration signing key; `--require` makes the engine apply only signed configurations; `--add` keeps the keys already there (a rotation). New in 0.5.0 |
 | `api-access status` | | The engine's lines on access and on who applied the running configuration. New in 0.5.0 |
-| `ha init` | `--name PAIR`, `--lease-url URL` or `--lease-path FILE`, `--advertise HOST[:PORT]`, `--member NAME`, `--ttl SECS`, `--snapshot-every SECS`, `--join-file FILE`, `--dry-run`, `--yes` | Makes this host the first engine of an [active/passive pair](#high-availability) and writes a join file for the second. New in 0.5.0 |
+| `ha init` | `--name PAIR`, `--lease-url URL` or `--lease-path FILE`, `--advertise HOST[:PORT]`, `--member NAME`, `--ttl SECS`, `--snapshot-every SECS`, `--join-file FILE`, `--dry-run`, `--yes` | Makes this host the first engine of an [active/passive pair](#high-availability) and writes a join file for the second. New in 0.5.0. From 0.5.1, with `--lease-path`, it (and `ha join`) writes the engine's drop-in for the lease file's directory, and on a first host whose engine does not see the lease it puts the previous settings back |
 | `ha join FILE` | `--advertise`, `--member`, `--dry-run`, `--yes` | On the second host, with that file. New in 0.5.0 |
 | `ha register NAME HOST:PORT` | `--update` | Registers the pair's other engine in this host's console. New in 0.5.0 |
 | `ha status` | | The engine's line on the pair. New in 0.5.0 |
@@ -438,8 +467,9 @@ Environment variables it reads:
 
 | Variable | Default | |
 |---|---|---|
-| `SYNCD_HEALTH_TIMEOUT` | 120 | Seconds to wait for both services to be healthy |
+| `SYNCD_HEALTH_TIMEOUT` | 120 | Seconds to wait for both services to be healthy. Raise it for an upgrade that migrates a very large store |
 | `SYNCD_KEEP_BACKUPS` | 3 | Host-local backups kept after an upgrade |
+| `SYNCD_SKIP_DB_BACKUP` | | `1` in the package manager's environment (`sudo SYNCD_SKIP_DB_BACKUP=1 apt install ...`) leaves the console's database out of the backup a package upgrade takes. New in 0.5.1 |
 | `SYNCD_PG_SOCKET`, `SYNCD_PG_PORT` | `/var/run/postgresql`, 5432 | Where `--local-database` reaches PostgreSQL |
 
 `upgrade`, `rollback` and `uninstall` refuse to run on a host installed from a package; use the
@@ -582,7 +612,8 @@ backup` as the engine's user, and adds beside it, named after it:
   `CONSOLE_MASTER_KEY` is set in `console.env` instead, the key is in `/etc/syncd`'s archive, and
   `syncdctl` says so.
 
-It ends by listing what the backup holds. `--keep N` removes the oldest backups there beyond `N`.
+It ends by listing what the backup holds. `--keep N` removes the oldest backups there beyond `N`,
+ordered from 0.5.1 by when they were taken (0.5.0 ordered them by name, so by host first).
 `--skip-db-backup` leaves the database out. `--sse`, `--endpoint`, `--region` and `--s3-ca`, as for
 `syncd backup` below, are passed on to every command that writes a part of the backup (new in
 0.4.1; 0.4.0 refused them). Other options are refused.
@@ -590,6 +621,15 @@ It ends by listing what the backup holds. `--keep N` removes the oldest backups 
 - **A directory destination** must be writable by the `syncd` user, which writes the archive:
   `sudo install -d -o syncd -g syncd -m 0700 /mnt/backups/syncd`. `syncdctl` writes the other
   files there as root, mode 0600.
+- **An engine that holds password keys**, in strict access: `syncdctl backup --to` runs `syncd
+  backup` as the engine's user, which from 0.5.1 is served only through the control socket.
+  Uncomment `api.control_socket` in `/etc/syncd/engine/engine.yaml` and restart the engine first;
+  without it the backup fails, and `syncdctl` says so (see
+  [Control API access](#control-api-access)).
+- **A failed backup leaves nothing** from 0.5.1: no archive without its manifest. Such an archive,
+  left by a failed backup of an earlier release, is not a backup: listings, restores and `--keep`
+  pass over it, so delete `syncd-<host>-<time>.tar.zst` by hand where it has no
+  `.manifest.json` beside it.
 - **Fixed in 0.4.1.** With 0.4.0, the upload of `/etc/syncd` to S3 failed on file permissions, and
   so did the console database's dump with `--local-database`; 0.4.0's backups also lack the master
   key. Take a new off-host backup after upgrading.
@@ -617,8 +657,10 @@ pair):
 | `--sse MODE` | Server-side encryption: `AES256`, `aws:kms` or `aws:kms:<key id>` |
 | `--s3-ca FILE` | PEM CA certificates for an endpoint with a private certificate |
 
-`syncd backup` needs what revealing values needs: the control socket, mutual TLS, or
-`api.local_reveal: true`, since the whole store leaves the engine. Without the options,
+`syncd backup` needs the control socket or mutual TLS, since the whole store leaves the engine;
+on a plain-text loopback listener, both `api.local_control` and `api.local_reveal` (from 0.5.1;
+0.5.0 took `local_reveal` alone). In strict access on an engine that holds password keys, the
+certificate must also be listed under `api.access.passwords`, or the call go through the socket. Without the options,
 `AWS_ENDPOINT_URL_S3` (else `AWS_ENDPOINT_URL`) and `AWS_REGION` (else `AWS_DEFAULT_REGION`) in
 `/etc/syncd/engine.env` give the endpoint and the region. `syncdctl backup --to` passes the four
 S3 options on (it makes a relative `--s3-ca` absolute; the file must be readable by `syncd`).
@@ -644,7 +686,7 @@ multipart upload.
 ```yaml
 engine:
   backup:
-    to: s3://backups/syncd/prod   # or a directory
+    to: s3://backups/syncd/prod   # or a directory, which needs a drop-in (What runs where)
     every_secs: 86400             # a day (the default); at least 60
     keep: 14                      # the default; older ones are removed after each success
     # endpoint: https://minio.example.gov:9000
@@ -694,7 +736,9 @@ not needed to read). A part it cannot fetch is named (`<name>.<part> was not fet
 the restore goes on without it. In 0.4.0 every fetch of the dump and of `/etc/syncd`'s archive
 failed on file permissions, silently.
 
-For the engine alone, run `syncd restore` as the engine's user with the engine stopped:
+For the engine alone, run `syncd restore` as the engine's user with the engine stopped, as
+`syncdctl restore --from` does. From 0.5.1 every file it puts in place, the store's included, is
+mode 0600, so a restore run as root leaves files the engine cannot read:
 
 ```bash
 sudo systemctl stop syncd
@@ -711,7 +755,8 @@ sudo -u syncd syncd restore --from s3://backups/syncd/prod --replace
 
 - **Checked.** It refuses while the engine's control API answers, refuses a backup whose store
   format the installed release cannot read (install that release first), and checks every file
-  against the manifest before it puts anything in place.
+  against the manifest before it puts anything in place. An archive without a manifest is not
+  listed or restored (from 0.5.1).
 - **Sealed keys.** The password keys come back as they were backed up. When they are sealed, the
   engine needs the passphrase of the engine they came from; `syncd restore` says so when the
   passphrase it has is missing or does not open them (`the restored password key is sealed:
@@ -731,7 +776,7 @@ On Kubernetes, see [Backups on Kubernetes](availability-and-sizing.md#backups-on
 
 ```bash
 sudo syncdctl backup                  # stops syncd briefly; prints the backup's directory
-sudo syncdctl restore /var/lib/syncd/backups/20261108T101500Z-manual-0.4.1
+sudo syncdctl restore /var/lib/syncd/backups/20261116T101500Z-manual-0.5.1
 ```
 
 A backup is a directory under `/var/lib/syncd/backups`, readable by root only, named
@@ -747,7 +792,9 @@ A backup is a directory under `/var/lib/syncd/backups`, readable by root only, n
 
 - **Consistency.** Both services are stopped while the store is copied, so the copy is consistent.
   They start again afterwards if they were running. Plan for a short outage: the time to copy the
-  store.
+  store. From 0.5.1 room and a working `pg_dump` are checked before anything is stopped, every
+  step is checked, a backup that fails part way is removed, and two backups in one second no
+  longer go into the same directory.
 - **Certificates kept by a rollback.** `syncdctl rollback` restores the console's database only
   when the schema changed. When it keeps the database, it keeps `/etc/syncd/pki` too, since the
   console's stored credentials for the engine match the current certificates (after a
@@ -756,6 +803,9 @@ A backup is a directory under `/var/lib/syncd/backups`, readable by root only, n
   (dropping first the tables the dump does not have, then `pg_restore --clean
   --single-transaction`), and starts and checks the services. It warns when the backup was taken
   with another version, and refuses a backup whose store format the installed release cannot read.
+  From 0.5.1 it copies the engine store and the console's files in beside the live ones and
+  replaces them only once the copy is complete, after checking that `/var/lib/syncd` has room for
+  it.
 - **Protect copies.** A backup holds the console's master key and the secrets in `/etc/syncd`.
 - **Retention.** Upgrades keep the newest three backups (`SYNCD_KEEP_BACKUPS`), manual ones
   included. They stay on the host: use off-host backups for disaster recovery.
@@ -806,7 +856,9 @@ ha: the passive engine follows the password queue
 On the passive engine: `ha: pair idm, this engine idm2 is passive; idm1 at idm1.example.gov:7443
 is active (lease postgres, expires in 9s)` and `ha: last snapshot received ...`. `NO ENGINE HOLDS
 THE LEASE` means neither does, and `LEASE ERROR: ...` follows when the lease cannot be read or
-renewed. On the active engine, `ha: THE PASSIVE ENGINE IS NOT FOLLOWING THE PASSWORD QUEUE; N
+renewed, or (from 0.5.1) when it is held under this engine's own name by another process: another
+engine of the pair with the same member name, or this engine before a crash, whose lease it waits
+out. Give each engine its own name (`SYNCD_HA_MEMBER` or `engine.ha.member`). On the active engine, `ha: THE PASSIVE ENGINE IS NOT FOLLOWING THE PASSWORD QUEUE; N
 password changes were accepted without its acknowledgement ...` means a queued password change
 would be lost with this engine until the next snapshot (new in 0.5.0).
 
@@ -821,7 +873,8 @@ would be lost with this engine until the next snapshot (new in 0.5.0).
 The passive engine serves its control API and its metrics, runs no source and writes nothing.
 From 0.5.0 it also listens on the password agents' ingest port and forwards what agents send to
 the active engine (in strict [control API access](#control-api-access) the certificate it uses
-must be listed under `api.access.passwords` on both hosts), and it follows the active engine's
+must be listed under `api.access.passwords` on both hosts, and from 0.5.1 whenever the pair
+delivers passwords: its snapshot pulls and its following of the queue need it too), and it follows the active engine's
 queue of password changes between snapshots (`<data_dir>/ha/password-queue.replica`). A submitted
 change waits up to `engine.ha.password_replication_wait_ms` (2000) for the passive engine to have
 it; with the passive engine down it is accepted at once and counted in
@@ -841,20 +894,28 @@ one.
   console's database works (its migrations create the table); in any other, the engine creates
   the table if its role may. Each lease call times out after five seconds.
 - **`file`**: the lease in a file on a file system both hosts share, judged by the hosts' clocks:
-  keep them in NTP sync. It suits tests and simple setups.
+  keep them in NTP sync. It suits tests and simple setups. The engine writes the lease file's
+  directory, which its unit allows only with a drop-in: `syncdctl ha` writes it from 0.5.1 (see
+  [What runs where](#what-runs-where)).
 - **`kubernetes`** (new in 0.5.0): a `coordination.k8s.io/v1` Lease object (`lease.name`, the
   pair's name by default; `lease.namespace`, the pod's own), reached with the pod's service
   account, which needs get, create and update on leases. The chart sets it with
   `engine.ha.lease.kind: kubernetes`; changing a pair's lease kind needs both engine pods stopped
   first. A pod that has just started waits one lease duration before it takes over a lease whose
-  holder is gone. It was tested against a fake API server only, never a real cluster.
+  holder is gone; from 0.5.1 it measures that on a clock NTP cannot step. It was tested in kind
+  (the release's CI), not on a cloud cluster.
 - **Renewal.** The holder renews every third of `ttl_secs` (15 by default). An engine with
-  `role: passive` never takes it.
+  `role: passive` never takes it. An engine that starts to a free lease waits a third of the TTL
+  before it takes it (from 0.5.0), so that after a clean handover the other engine takes it first;
+  an engine on its own becomes active that much after it starts. From 0.5.1 a crash-restarted
+  engine waits for its own earlier lease to expire, and two engines with the same member name no
+  longer both hold it.
 
 ### Fencing
 
 Every export batch, of every target kind, and every password delivery checks first that this
-engine holds the lease and that it is not within a second of expiring. An engine that cannot renew
+engine holds the lease and that it is not within a second of expiring; from 0.5.1 a batch asks
+again before every 64 exports, and the fence measures time on a clock NTP cannot step. An engine that cannot renew
 (cut off from the lease's database) stops writing before the other may take over, logs `the
 pair's lease is lost`, and steps down to passive. A batch it refused is neither written nor
 recorded as written, so the engine that takes over plans it again.
@@ -880,7 +941,11 @@ snapshots).
 When the active engine stops renewing the lease (it died, its host or network went away), the
 lease expires after `ttl_secs` and the passive engine takes it: it swaps the newest snapshot in,
 reconciles every publication with its target, and starts the sources from the snapshot's
-checkpoints. A clean stop gives the lease up at once. After a failover:
+checkpoints. A clean stop gives the lease up at once. From 0.5.1 the takeover's reconciliation,
+and the full read of PostgreSQL streams that goes with it, happen after a promotion or a restart
+only, not again at every reload of the active engine. If a promotion cannot release the store within 30 seconds while a received snapshot
+waits, the engine exits (`the store is still in use by calls the passive engine was answering`):
+its restart, by systemd or Kubernetes, swaps the snapshot in. After a failover:
 
 1. Find out why the old active engine stopped: its host, its log, or `the pair's lease is lost`
    (it was cut off from the lease for longer than the TTL).
@@ -893,7 +958,8 @@ checkpoints. A clean stop gives the lease up at once. After a failover:
    again.
 
 **Moving the active role on purpose** (maintenance on its host): stop the active engine cleanly,
-`sudo systemctl stop syncd` (or delete its pod). The passive one takes over at once.
+`sudo systemctl stop syncd` (or delete its pod). The passive one takes over at its next try, within
+a third of the TTL; the stopped engine, started again, finds the lease held and starts passive.
 
 **Configurations.** The engine that takes over adopts the configuration file in the snapshot when
 its host settings (`engine.data_dir`, `api`, `engine.ha`) are the same as its own, so publishing to
@@ -1217,9 +1283,10 @@ aws-lc). The 0.4.0 documentation said these files were already encrypted; they w
   command to unseal the files.
 - **Rolling back to 0.4.0**, which cannot open sealed keys, needs the plain files from before they
   were sealed: see [Rolling back 0.4.1 to 0.4.0](install.md#rolling-back-041-to-040). A 0.4.1
-  engine ignores the previous keys and the previous agent CA that 0.5.0 keeps, and cannot read
-  0.5.0's agent and queued-password records: rotate nothing, and enroll no agent, until you are
-  sure of the upgrade.
+  engine refuses the store 0.5.0 migrated (format 2), so a rollback to 0.4.1 restores the store
+  backed up before the upgrade, with the keys and agents it held then: agents enrolled and keys
+  rotated since are lost with it (see
+  [Rolling back 0.5.0 to 0.4.1](install.md#rolling-back-050-to-041)).
 
 ### Changing the passphrase and rotating the keys
 
@@ -1278,8 +1345,11 @@ kubectl -n syncd exec syncd-engine-0 -- syncd backup --to s3://backups/syncd/pro
 
 Every command in [The syncd command line](#the-syncd-command-line) works this way, with the
 secrets from `engine.envFromSecret` in the pod's environment, except `syncd apply-config` on a
-release installed with 0.5.0, whose strict [control API access](#control-api-access) lets the
-socket read and operate but not apply a configuration. A release first installed before 0.5.0
+release installed with 0.5.0 or later, whose strict [control API access](#control-api-access) lets
+the socket read and operate but not apply a configuration. Through the socket `syncd backup` keeps
+working on an engine that holds password keys. To restore into the volume, run `syncd restore` as
+the image's user (65532), as the pods do: the files it puts in place are mode 0600 (see
+[Backups on Kubernetes](availability-and-sizing.md#backups-on-kubernetes)). A release first installed before 0.5.0
 keeps its engine file, without `api.access`, and stays compatible until you add the section to
 `/var/lib/syncd/engine.yaml` on the data volume: the chart cannot set it. With a pair, run
 commands on the active pod (`syncd status` says which). The console's own commands run in
@@ -1386,7 +1456,10 @@ here.
 The `syncd-console` Secret holds the console's master key (`master-key`), which seals the
 engine's client key and the console's other stored secrets, with the initial admin password. It
 is generated at install, kept by upgrades, and kept by `helm uninstall`
-(`helm.sh/resource-policy: keep`).
+(`helm.sh/resource-policy: keep`). From 0.5.1 the key can come from a Secret of your own instead
+(`console.masterKey.existingSecret`), as it must with Argo CD and other tools that render the
+chart without Helm's `lookup` (see [GitOps](install.md#gitops)); back that Secret up the same
+way. `console.newMasterKey` below is for the chart's own Secret.
 
 - **Back it up** with the database: `kubectl -n syncd get secret syncd-console -o yaml`, stored as
   a secret.
@@ -1437,11 +1510,13 @@ is generated at install, kept by upgrades, and kept by `helm uninstall`
 | `/opt/syncd/current/share/monitoring/syncd-alerts.yaml` | Prometheus alerting rules |
 | `/opt/syncd/current/share/doc/INSTALL.md` | The installation notes shipped with the release |
 | `/etc/systemd/system/syncd*.service` (bundle), `/usr/lib/systemd/system/syncd*.service` (package) | The units. Change them with `systemctl edit`, not in place |
+| `/etc/systemd/system/syncd.service.d/ha-lease.conf` | The drop-in that lets the engine write a pair's lease file's directory, written by `syncdctl ha init --lease-path` and `ha join`. New in 0.5.1 |
+| `/var/log/syncd/` | The console's log directory, for an audit file (`ENS_AUDIT_FILE=/var/log/syncd/audit.jsonl`): created by its unit, owner `syncd-console`, mode 0750. New in 0.5.1 |
 | `/usr/local/bin/` (bundle), `/usr/bin/` (package) | Links to `syncd`, `syncd-console` and `syncdctl` |
 
-`engine.data_dir`, the `api` section, `engine.ha` and, from 0.5.0, `engine.require_signed_config`,
-`engine.config_signing_keys` and `engine.license_file` of `engine.yaml` can only be changed on the
-host: the engine refuses a configuration published from the console that changes them. Start a
+`engine.data_dir`, the `api` section, `engine.ha`, from 0.5.0 `engine.require_signed_config`,
+`engine.config_signing_keys` and `engine.license_file`, and from 0.5.1 `passwords.key_file` of
+`engine.yaml` can only be changed on the host: the engine refuses a configuration published from the console that changes them. Start a
 configuration in the console by importing the running one, which copies them.
 
 ## Routine checklist
@@ -1467,8 +1542,12 @@ configuration in the console by importing the running one, which copies them.
 - **Once, after upgrading from 0.4.x:** install a license within the 60 days (see
   [Licensing](licensing.md)), opt in to strict control API access (`sudo syncdctl api-access
   strict`), and bind every capture agent to its source (`syncd password agent bind`).
-- **Before an upgrade:** read the release notes (store format changes, `SYNCD_HEALTH_TIMEOUT`),
-  and take an off-host backup.
+- **Once, after upgrading from 0.5.0:** with password synchronisation in strict mode, enable the
+  control socket for off-host backups, and list the passive engine's certificate under
+  `api.access.passwords` on both hosts of a pair; delete archives without a manifest left in the
+  backup destination by failed backups.
+- **Before an upgrade:** read the release notes (store format changes, `SYNCD_HEALTH_TIMEOUT`,
+  what the new release refuses), and take an off-host backup.
 - **Regularly:** keep the master key and the password-key passphrase off the host, apart from the
   backups; practise a restore (`syncdctl restore --from`) on a test host. Rotate the password key
   before `SyncdPasswordKeyOld` asks (`syncd password rotate-key`): nothing rotates it on a

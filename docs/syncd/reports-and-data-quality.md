@@ -1,9 +1,10 @@
 # Reports, lineage and data quality
 
 This page covers the evidence syncd gives operators and auditors, and the tools that keep bad
-data out of the targets. All of it is new in syncd 0.4.0; this page describes syncd 0.5.0
-(`main` at commit `a9d17c6`), which adds unmanaged entries, Excel exports, PDFs with an embedded
-font and tagging, an hourly quality trend and a wider correlation search.
+data out of the targets. All of it is new in syncd 0.4.0; this page describes syncd 0.5.1 (tag
+`v0.5.1`, commit `7da4d9e`). 0.5.0 added unmanaged entries, Excel exports, PDFs with an embedded
+font and tagging, an hourly quality trend and a wider correlation search; 0.5.1 changes little
+here (see [Correlation assistance](#correlation-assistance) and the console's pages below).
 
 - **Reconciliation reports**: what each publication holds, what the last drift check found, what
   is held or dead-lettered, and (from 0.5.0) the target's unmanaged entries, as text, CSV, JSON,
@@ -405,6 +406,10 @@ views:
 | `unmatched_alert_after` | none | Records waiting longer than this are counted as ageing |
 | `other_views` | none | New in 0.5.0. Views whose entities a waiting record is also looked for in, by the same conditions on attributes of the same name. What is found there is shown beside the suggestions, with its view; it cannot be accepted as a join, since the record's source is not a source of that view |
 
+Since 0.5.1 a `suggest` entry whose `entity` attribute no flow or computed attribute sets, in the
+view or in its `other_views`, gets a warning when the configuration is checked ("… e.&lt;attr&gt; is
+not set by any flow or computed attribute …; it scores nothing"), as join rules do.
+
 ### Scoring
 
 The conditions scored are the source's join conditions (weight 1.0, similarity on) and the
@@ -478,6 +483,9 @@ and a checkbox per suggestion. Operators and administrators can:
 
 Reading suggestions needs `engines:read` and is audited as `explore.suggestions`. Accepting needs
 `runs:run` and is audited as `correlation.accepted` with the count and how many were refused.
+
+Since 0.5.1 the ticks belong to the view they were made in: switching to another view starts with
+none, and what is accepted is for the view it was ticked in, with its outcome shown on that view.
 
 With `other_views`, `syncd correlation suggest` adds an `in view <name>` line per look-alike, and
 the Correlation page a second table: a place to look (the person may already be known as a

@@ -1,6 +1,7 @@
 # API reference
 
-syncd has these programmable interfaces. This page describes syncd 0.5.0 (commit `a9d17c6`).
+syncd has these programmable interfaces. This page describes syncd 0.5.1 (tag `v0.5.1`, commit
+`7da4d9e`).
 
 | Interface | Served by | Used by | Authentication |
 |---|---|---|---|
@@ -34,7 +35,12 @@ From 0.4.0 the API takes either of:
 - **The `syncd_session` cookie** that signing in sets, for the browser.
 
 A request with `Authorization: Bearer` is checked as a token request only: it never reads or sets
-the session cookie. Some endpoints stay with people (accounts, settings, tokens, webhooks,
+the session cookie. From 0.5.1 a request made with the session cookie that changes something
+(`POST`, `PUT`, `PATCH`, `DELETE`) is refused (`403 forbidden`) when the browser says it comes from
+another site: a `Sec-Fetch-Site` other than `same-origin` or `none`, or, without that header, an
+`Origin` that is not the console's (`Host`, `X-Forwarded-Host` or `CONSOLE_PUBLIC_URL`). A script
+that sends neither header is not affected (see
+[Security](security.md#csrf-and-browser-security-headers)). Some endpoints stay with people (accounts, settings, tokens, webhooks,
 changes to environments, approvals of versions and of WebAssembly modules, simulations, previews,
 connector checks, the object explorer, scheduled reports, the license, the support bundle): a
 valid token there gets `403 insufficient_scope`.
@@ -108,15 +114,21 @@ makes the last call from the command line (see [Configuration as code](config-as
 - **A year at most.** `CONSOLE_API_MAX_TOKEN_LIFETIME` (`365d`) is the expiry of a token created
   without one, the most that may be asked for, and the age at which any token stops working; `0`
   removes the limit.
+- **A creator who signs in through single sign-on must keep doing so** (from 0.5.1). Such a
+  creator's token stops working (`401`) once they have not signed in for
+  `CONSOLE_API_SSO_CREATOR_MAX_IDLE` (`35d`, counted from the token's creation at the earliest),
+  and works again after their next sign-in. The identity provider decides who may use the console,
+  and the console hears it only at a sign-in.
 - **Refused** (`401`, `WWW-Authenticate: Bearer error="invalid_token"`) when unknown, revoked,
-  past its expiry, when its creator is gone or disabled, or when `CONSOLE_API_TOKENS_ENABLED` is
-  `false`.
+  past its expiry, when its creator is gone or disabled, from 0.5.1 when its single sign-on creator
+  has not signed in for too long, or when `CONSOLE_API_TOKENS_ENABLED` is `false`.
 - **Out of scope** (`403`, `WWW-Authenticate: Bearer error="insufficient_scope"`) for an endpoint
   its scopes do not cover, one its creator's role no longer allows, or one that stays with people.
   No token, whatever its scopes, can create or revoke tokens, manage accounts, settings, webhooks,
   environments, the license or scheduled reports, sign in by any method, approve a configuration or
   a WebAssembly module, simulate or preview a configuration, test connectors, use the object
-  explorer, or download the support bundle.
+  explorer, or download the support bundle. What a token saves or uploads is its creator's for
+  four eyes (`accountable`): from 0.5.1 the creator cannot approve it.
 - **Rate-limited** per token: `CONSOLE_API_REQUESTS_PER_MINUTE` (300). Beyond it, `429
   rate_limited` with `Retry-After` (seconds). The count is kept in each console process, so with
   several console replicas each allows that many.
@@ -146,6 +158,7 @@ The tables below give each endpoint's scope in the **Token** column; `—` means
 |---|---|---|
 | `CONSOLE_API_TOKENS_ENABLED` | `true` | `false` refuses every token (`401`) without deleting any |
 | `CONSOLE_API_MAX_TOKEN_LIFETIME` | `365d` | The longest a token lives (`<n>d`, `<n>h`); `0` removes the limit |
+| `CONSOLE_API_SSO_CREATOR_MAX_IDLE` | `35d` | From 0.5.1: how long a token of an account that signs in through single sign-on works after the account's last sign-in (`<n>d`, `<n>h`); `0` for as long as the token lives |
 | `CONSOLE_API_REQUESTS_PER_MINUTE` | `300` | Per token; `0` turns the limit off |
 
 ### Token administration
@@ -177,7 +190,11 @@ curl -sS -b cookies.txt -X POST https://syncd.example.com/api/v1/auth/logout
 - Sessions end after 30 idle minutes and 12 hours (`CONSOLE_SESSION_IDLE_MINUTES`,
   `CONSOLE_SESSION_MAX_HOURS`). From 0.5.0 `ENS_SESSION_MAX_PER_USER` can limit an account's
   sessions, so a script's sign-in may end a person's oldest session. The per-address limit (20
-  sign-ins in 5 minutes) and the account lockout (`ENS_LOCKOUT_*`) apply to scripts too.
+  sign-ins in 5 minutes; from 0.5.1 an IPv6 client counts by its /64) and the account lockout
+  (`ENS_LOCKOUT_*`) apply to scripts too.
+- From 0.5.1 a request with `X-Syncd-Background: 1` (or `?background=1` on the status stream) is
+  answered but does not count as activity: the web UI marks its own polls this way. A script that
+  sends it lets its session reach the idle limit.
 - A new account must change its one-time password before anything else works: sign in once and
   call `POST /api/v1/auth/password`.
 - Prefer an API token for automation. With local sign-in limited to break-glass accounts, only
@@ -197,15 +214,15 @@ curl -sS -b cookies.txt -X POST https://syncd.example.com/api/v1/auth/logout
 | 401 | `sign_in_failed` | Any failed sign-in, whatever the reason |
 | 401 | `invalid_token` | An API token that is unknown, revoked, expired, turned off, or whose creator is gone or disabled. With `WWW-Authenticate: Bearer error="invalid_token"` |
 | 401 | `wrong_credentials` | A self-service password change with a wrong user name or current password (the same answer for both) |
-| 403 | `forbidden` | The caller's roles cannot do this on any engine, the engine refused the call (its listener, or from 0.5.0 its [access tier](#access-tiers)), or with the consent banner on, a sign-in without an acknowledgement |
+| 403 | `forbidden` | The caller's roles cannot do this on any engine (from 0.5.1 recorded as `access.denied` for a signed-in account, at most once a minute per session), the engine refused the call (its listener, or from 0.5.0 its [access tier](#access-tiers)), with the consent banner on a sign-in without an acknowledgement, a password change with a wrong current password (from 0.5.1 also any on a locked account), or from 0.5.1 a change made with the session cookie from another site |
 | 403 | `insufficient_scope` | An API token outside its scopes, beyond its creator's role now, or on an endpoint for people. With `WWW-Authenticate: Bearer error="insufficient_scope"` |
 | 403 | `password_change_required` | The account must set a new password first |
 | 404 | `not_found` | No such engine, version, entity, webhook, report or endpoint; from 0.5.0 also an engine outside every assignment of the caller, or outside a token's limit |
-| 409 | `conflict` | A name in use, a newer version saved meanwhile, the last admin or break-glass account, a simulation already running, a publish the pre-publish hook or the golden tests refused (with the reason), a promotion of a version never published, and from 0.5.0 a publish the license does not allow (publishing blocked, or a pack the license lacks) |
-| 429 | `too_many_requests` | Over the sign-in or self-service limit |
+| 409 | `conflict` | A name in use, a newer version saved meanwhile, the last admin or break-glass account, a simulation already running, a publish the pre-publish hook or the golden tests refused (with the reason), a promotion of a version never published, from 0.5.0 a publish the license does not allow (publishing blocked, or a pack the license lacks), and from 0.5.1 a publish that waited 150 seconds for another publish to the same engine, or an import of a running configuration that holds a secret value and does not parse |
+| 429 | `too_many_requests` | Over the sign-in or self-service limit (from 0.5.1 also the password change, which is held to the sign-in limit) |
 | 429 | `rate_limited` | An API token over its requests per minute, with `Retry-After` |
 | 503 | `engine_unavailable` | The engine cannot be reached, failed, or is busy with a long operation |
-| 503 | `hook_unavailable` | The pre-publish hook did not answer, and `CONSOLE_PUBLISH_HOOK_ON_ERROR` is `refuse` |
+| 503 | `hook_unavailable` | The pre-publish hook did not answer, or from 0.5.1 answered with neither an allow nor a deny, and `CONSOLE_PUBLISH_HOOK_ON_ERROR` is `refuse` |
 | 500 | `internal` | Anything else; details go to the console's log only |
 
 - Lists are paged with a cursor: `before` / `next_before` (audit log, entity history), `after` /
@@ -242,7 +259,9 @@ Session only.
 | POST | `/api/v1/auth/login` | none | Sign in with a local account (`username`, `password`); sets the cookie, returns the account |
 | POST | `/api/v1/auth/logout` | signed in | End the session |
 | GET | `/api/v1/auth/me` | signed in | The account: from 0.5.0 its `assignments`, what it may do on the whole console (`global`) and somewhere (`anywhere`), pending password change, whether it may reveal somewhere |
-| POST | `/api/v1/auth/password` | signed in | Change the password (`current_password`, `new_password`); the one call open during a forced change. Signs out the account's other sessions |
+| GET | `/api/v1/auth/session` | signed in | From 0.5.0: the current session (`started_at`, `method`: `password`, `oidc`, `saml` or `x509`), the account's sign-in before it (`previous_sign_in`: `at`, `method`, `ip`; absent on the first) and `failed_attempts`, the password sign-in attempts refused in between. From 0.5.1 refused (`password_change_required`) until a forced password change is done |
+| GET | `/api/v1/auth/message-of-the-day` | signed in | From 0.5.0: `{"message": {"text", "set_by", "set_at"}}`, or `{"message": null}`. From 0.5.1 refused until a forced password change is done |
+| POST | `/api/v1/auth/password` | signed in | Change the password (`current_password`, `new_password`); the one call open during a forced change. Signs out the account's other sessions. From 0.5.1 held to the sign-in limit per address (`429`), and a wrong current password counts toward the lockout (`403`, the account locked once it reaches it) |
 | POST | `/api/v1/auth/password/skip` | signed in | Development mode only: keep the current password |
 | GET | `/api/v1/auth/oidc/login` | none | Start single sign-on (`next`: where to go after); 404 when it is not configured |
 | GET | `/api/v1/auth/oidc/callback` | none | Where the identity provider sends the browser back. See [Single sign-on](single-sign-on.md) |
@@ -250,9 +269,9 @@ Session only.
 | GET | `/api/v1/auth/saml/login` | none | From 0.5.0: start a SAML sign-in (a redirect to the provider); 404 when it is not configured |
 | POST | `/api/v1/auth/saml/acs` | none | From 0.5.0: the assertion consumer service the provider posts back to; sets the cookie |
 | POST | `/api/v1/auth/x509/login` | none | From 0.5.0: sign in with this connection's client certificate, or the one a trusted proxy passes on; 404 when certificate sign-in is not configured, 403 with the reason when the certificate is missing or refused |
-| GET | `/api/v1/users` | admin | List accounts, each with its `assignments`, and whether it is locked |
+| GET | `/api/v1/users` | admin | List accounts, each with its `assignments`, whether it is locked, and from 0.5.0 its last sign-in (`last_sign_in_at`, `last_sign_in_method`) |
 | POST | `/api/v1/users` | admin | Create a local account (`username`, `display_name`, and `assignments` (from 0.5.0: `[{"role": "operator", "scope": "environment", "name": "prod"}, ...]`) or `role`, short for one role on everything); returns its one-time password, shown once |
-| PATCH | `/api/v1/users/{id}` | admin | Change the display name, assignments (or `role`), disabled flag or break-glass flag, or from 0.5.0 `"unlock": true` to lift a lock from failed sign-ins. For an account that signs in through single sign-on or a certificate, assignments set here last until its next sign-in |
+| PATCH | `/api/v1/users/{id}` | admin | Change the display name, assignments (or `role`), disabled flag or break-glass flag, or from 0.5.0 `"unlock": true` to lift a lock from failed sign-ins. For an account that signs in through single sign-on or a certificate, assignments set here last until its next sign-in. From 0.5.1 taking break-glass off a local account while local sign-in is limited ends its sessions |
 | POST | `/api/v1/users/{id}/reset-password` | admin | Issue a new one-time password (local accounts only) |
 
 ### Settings
@@ -265,6 +284,7 @@ Session only.
 | PUT | `/api/v1/settings/sign-in` | admin | `local_sign_in`: `everyone` or `break_glass` |
 | PUT | `/api/v1/settings/config-approval` | admin | Configuration approval: `off` or `required` |
 | PUT | `/api/v1/settings/banners` | admin | The top and bottom banners: text (up to 200 characters), background and text colours (at least 4.5:1 contrast) |
+| PUT | `/api/v1/settings/message-of-the-day` | admin | From 0.5.0: `{"text": "…"}` sets the message of the day shown on the dashboard (plain text, up to 2,000 characters, no control characters but line breaks and tabs); no text, or only spaces, removes it. Audited as `settings.message_of_the_day`, with the text before and after |
 | GET | `/api/v1/settings/config-signing-keys` | admin | From 0.5.0: the public halves of the console's configuration signing keys, for `engine.config_signing_keys` (see [Security](security.md#signed-configurations)). Rotation is done on the console's host |
 | GET | `/api/v1/admin/notices` | admin | From 0.5.0: settings that name an engine that is not registered (`CONSOLE_SELF_SERVICE_ENGINE`, `CONSOLE_CONFIG_GIT_ENGINES`) |
 
@@ -277,7 +297,7 @@ Session only.
 | PATCH | `/api/v1/engines/{id}` | admin | — | Move an engine to another environment (`{"environment": "prod"}`). What it runs is not touched: the next publish renders for the new environment |
 | DELETE | `/api/v1/engines/{id}` | admin | — | Remove the registration (the engine keeps running) |
 | GET | `/api/v1/engines/{id}/status` | any | `engines:read` | The engine's status: sources, publications (with held changes, report mode, leavers by stage, groups), targets, counters, timers, history, backups, HA role, password delivery (from 0.4.1 also per publication, and `keys_sealed`), quarantined entities, unmatched records per view, rule packages, the environment, the process's CPU and memory (Linux only), and from 0.4.1 `runs` (runs ended since the engine started, and the last one) and `self_service` (the self-service password policy). From 0.5.0 also who applied the running configuration and whether it was signed (`config_applied`), the control API's access mode (`access`), the license, each publication's unmanaged entries, the password keys and agents, and the HA pair's snapshot and password-queue figures |
-| GET | `/api/v1/engines/{id}/status/stream` | any | — | Server-sent events: a `status` event every second, an `error` event if the engine goes away. Ends when the session does |
+| GET | `/api/v1/engines/{id}/status/stream` | any | — | Server-sent events: a `status` event every second, an `error` event if the engine goes away. Ends when the session does. From 0.5.1 `background=1` (what the web UI sends) keeps opening it from counting as activity |
 | GET | `/api/v1/engines/{id}/dead-letters` | any | `engines:read` | Failed exports waiting (`publication`, `limit`) |
 | GET | `/api/v1/engines/{id}/quarantine` | any | `engines:read` | Entities whose exports a failing rule (`on_error: quarantine`) holds back (`view`, `limit` up to 500) |
 | GET | `/api/v1/engines/{id}/held` | any | `engines:read` | A publication's held changes: what a change window, a threshold or a canary holds, or what report mode would write (`publication`, `kind`, `reason`, `after`, `limit`). See [Change safety and lifecycle](change-safety.md) |
@@ -317,22 +337,22 @@ See [Reports, lineage and data quality](reports-and-data-quality.md) for the sug
 | Method | Path | Role | Token | Purpose |
 |---|---|---|---|---|
 | POST | `/api/v1/configs/validate` | designer | `configs:write` | Compile a configuration (`yaml`, optional `environment` to render it for) with the engine's compiler and run its test cases, without saving |
-| GET | `/api/v1/engines/{id}/configs` | any | `configs:read` | The engine's versions, newest first, with their status (`draft`, `publishing`, `published`, `superseded`), source (`console`, `git`, `promotion`), ticket, note and hook decision, and the environments that run the same text |
+| GET | `/api/v1/engines/{id}/configs` | any | `configs:read` | The engine's versions, newest first, with their status (`draft`, `publishing`, `published`, `superseded`), source (`console`, `git`, `promotion`), ticket, note and hook decision, the environments that run the same text, and from 0.5.1 `accountable`: the person four eyes compares the approver with (who saved it, the creator of the API token that saved it, or the account of the Git commit's author; absent when no account has the commit's address) |
 | POST | `/api/v1/engines/{id}/configs` | designer | `configs:write` | Save a new version (`yaml`, `comment`, `latest_seen`). It must compile; 409 if a newer version was saved since `latest_seen` |
-| GET | `/api/v1/engines/{id}/configs/running` | any | `configs:read` | What the engine runs now |
-| POST | `/api/v1/engines/{id}/configs/import` | designer | `configs:write` | Save what the engine runs as a new version |
+| GET | `/api/v1/engines/{id}/configs/running` | any | `configs:read` | What the engine runs now, from 0.5.1 with its environment's secret values masked (`<secret name>`): those it has now, and those sent with the engine's publishes. **0.5.0 returned them in clear** |
+| POST | `/api/v1/engines/{id}/configs/import` | designer | `configs:write` | Save what the engine runs as a new version. From 0.5.1 its secret values go back to being placeholders (`{{ env.name }}`) and modules' bytes are left out (their pins stay); `409` when it holds a secret value but does not parse |
 | GET | `/api/v1/engines/{id}/configs/{version}` | any | `configs:read` | One version, with its YAML |
-| GET | `/api/v1/engines/{id}/configs/{version}/diff` | any | `configs:read` | Against `against` (a version number, or `running`; default the previous version): the unified diff and the semantic diff (`semantic`, `summary`), rendered for the engine's environment, or `environment=<name>`, or `environment=` for the texts as saved. Secret values are masked |
+| GET | `/api/v1/engines/{id}/configs/{version}/diff` | any | `configs:read` | Against `against` (a version number, or `running`; default the previous version): the unified diff and the semantic diff (`semantic`, `summary`), rendered for the engine's environment, or `environment=<name>`, or `environment=` for the texts as saved. Secret values are masked; from 0.5.1 against `running` too, whatever the environment asked for |
 | GET | `/api/v1/engines/{id}/configs/{version}/packages` | any | `configs:read` | The version's rule packages, with their functions |
 | POST | `/api/v1/engines/{id}/configs/{version}/packages/check` | any | `configs:read` | Compare each package read from a file with the file at the Git branch head now |
 | POST | `/api/v1/engines/{id}/configs/{version}/simulate` | designer | — | Dry-run the version on the engine: what each target would receive (`samples`, `reveal`). Nothing is applied |
-| POST | `/api/v1/engines/{id}/configs/{version}/approve` | designer | — | Approve a version for publishing, as someone other than its author |
-| POST | `/api/v1/engines/{id}/configs/{version}/publish` | designer | `configs:publish` | Publish, with an optional body `{"ticket", "note"}`: rendered for the engine's environment, checked against the ticket pattern, approval, test cases, the license (from 0.5.0) and the pre-publish hook, then signed by the console (from 0.5.0) and sent; the engine validates, saves, reloads and runs a full sync. Returns once the engine runs it (up to 60 seconds). With Git sync, the golden-file tests in the repository (`tests/golden` beside the configuration) run too, and a failure refuses the publish (409). From 0.5.0 they are read at the **version's own Git commit**, not the branch head; a version saved before 0.5.0 is checked at the branch head, with a note. This covers Git auto-publish and promotion as well |
-| POST | `/api/v1/configs/promote` | designer | `configs:publish` | `{"engine", "version", "to", "ticket", "note", "dry_run"}`: publish a version published on one engine to every engine of another environment, each through its own gates. The caller's roles must let it read the source engine and publish to every engine of the target environment: a promotion is not carried out in part. From 0.5.0 `"dry_run": true` only shows what would happen (the same checks of the caller's roles, each target engine's diff summary), saving, publishing and recording nothing: the console's **Promote** button shows it before the caller confirms. The answer lists each engine's outcome; 409 when the version was never published or no engine runs in that environment |
-| GET | `/api/v1/engines/{id}/configs/{version}/export` | any | `configs:read` | An export file of the version (without the `engine` and `api` sections), with a SHA-256 of the configuration |
-| POST | `/api/v1/engines/{id}/configs/import-file` | designer | `configs:write` | Import an export file as a new draft, keeping this engine's `engine` and `api` sections; returns what the host must provide |
+| POST | `/api/v1/engines/{id}/configs/{version}/approve` | designer | — | Approve a version for publishing, as someone other than its author: from 0.5.1 not its `accountable` person either (`403`) |
+| POST | `/api/v1/engines/{id}/configs/{version}/publish` | designer | `configs:publish` | Publish, with an optional body `{"ticket", "note"}`: rendered for the engine's environment, checked against the ticket pattern, approval, test cases, the license (from 0.5.0) and the pre-publish hook, then signed by the console (from 0.5.0) and sent; the engine validates, saves, reloads and runs a full sync. Returns once the engine runs it (up to 60 seconds). With Git sync, the golden-file tests in the repository (`tests/golden` beside the configuration) run too, and a failure refuses the publish (409). From 0.5.0 they are read at the **version's own Git commit**, not the branch head; a version saved before 0.5.0 is checked at the branch head, with a note. From 0.5.1 tests that cannot be read from Git count as failing. This covers Git auto-publish and promotion as well. From 0.5.1 one publish to an engine runs at a time, across consoles sharing the database; one that waits more than 150 seconds for another is refused (409) |
+| POST | `/api/v1/configs/promote` | designer | `configs:publish` | `{"engine", "version", "to", "ticket", "note", "dry_run"}`: publish a version published on one engine to every engine of another environment, each through its own gates. The caller's roles must let it read the source engine and publish to every engine of the target environment: a promotion is not carried out in part (from 0.5.1 the refusal counts the engines the caller cannot see, rather than naming them). From 0.5.0 `"dry_run": true` only shows what would happen (the same checks of the caller's roles, each target engine's diff summary), saving, publishing and recording nothing: the console's **Promote** button shows it before the caller confirms. The answer lists each engine's outcome; 409 when the version was never published or no engine runs in that environment |
+| GET | `/api/v1/engines/{id}/configs/{version}/export` | any | `configs:read` | An export file of the version (without the `engine` and `api` sections), with a SHA-256 of the configuration. From 0.5.1 a version with `{{ env.* }}` placeholders can be exported, the placeholders kept |
+| POST | `/api/v1/engines/{id}/configs/import-file` | designer | `configs:write` | Import an export file as a new draft, keeping this engine's `engine` and `api` sections (from 0.5.1 with their secret values put back as placeholders); returns what the host must provide. From 0.5.1 checked as a save is: rendered for the engine's environment, packages and modules read (a module written into the file is refused), the license and the size limit |
 | POST | `/api/v1/engines/{id}/connectors/test` | designer | — | Connect with one connector of a candidate configuration (`yaml`, `connector`) |
-| POST | `/api/v1/engines/{id}/connectors/discover` | designer | — | List what a connector holds, a container's fields, or sample records (`reveal` for sensitive values) |
+| POST | `/api/v1/engines/{id}/connectors/discover` | designer | — | List what a connector holds, a container's fields, or sample records (`reveal` for sensitive values; from 0.5.1 refused when its audit record cannot be written) |
 | POST | `/api/v1/engines/{id}/preview` | designer | — | Run a candidate configuration over a sample of source records: the entities it makes and what each publication would write |
 
 Saves, imports, exports, approvals, simulations, previews, connector checks, publishes and
@@ -349,11 +369,11 @@ and publishes the configuration.
 
 | Method | Path | Role | Token | Purpose |
 |---|---|---|---|---|
-| GET | `/api/v1/engines/{id}/wasm-modules` | any | `configs:read` | The modules uploaded for the engine, newest first |
+| GET | `/api/v1/engines/{id}/wasm-modules` | any | `configs:read` | The modules uploaded for the engine, newest first; from 0.5.1 each with `accountable` (the uploader, or the creator of the API token that uploaded it) |
 | POST | `/api/v1/engines/{id}/wasm-modules` | designer | `configs:write` | Upload a module (`{"name", "module"` (the bytes, base64, at most 1 MiB)`, "comment"}`): checked as the engine checks it (no imports, the ABI's exports, a manifest of its functions, the FIPS policy), kept by its SHA-256, audited as `wasm_module.upload`. Used only once someone else approves it |
 | GET | `/api/v1/engines/{id}/wasm-modules/{sha256}` | any | `configs:read` | The review: name, size, hash, the functions and their signatures, and how it differs from the previous upload of the same name |
 | GET | `/api/v1/engines/{id}/wasm-modules/{sha256}/download` | any | `configs:read` | The module itself, for review |
-| POST | `/api/v1/engines/{id}/wasm-modules/{sha256}/approve` | designer | — | Approve a module, as someone other than its uploader (the database refuses an approval by the uploader, and an approval cannot be changed). Audited as `wasm_module.approve` |
+| POST | `/api/v1/engines/{id}/wasm-modules/{sha256}/approve` | designer | — | Approve a module, as someone other than its uploader, and from 0.5.1 than the creator of the API token that uploaded it (the database refuses an approval by either, and an approval cannot be changed). Audited as `wasm_module.approve` |
 
 In FIPS mode the console refuses modules unless `SYNCD_FIPS_ALLOW_WASM_FUNCTIONS=true` (see
 [FIPS 140-3 and DISA STIG](fips-and-stig.md#what-changes-in-fips-mode)).
@@ -434,7 +454,10 @@ The verification, the pull API, the NDJSON export and the outputs' status need t
 admin) role on everything, and a token without a limit. Events from before 0.4.0 are in
 `/api/v1/audit` but not in the pull API or the export. From 0.5.0 sign-in events carry `roles` (a
 list of assignments) instead of `role`, and events written for a request carry
-`details.assignment`. The family's Splunk add-on (`TA-ens-audit`, scripted input
+`details.assignment`. From 0.5.1 a request refused to a signed-in account is recorded as
+`access.denied`, retention records `audit.pruned` in the same transaction as the delete, and
+`verify` reports a chain whose start is missing without an `audit.pruned` accounting for it as
+broken. The family's Splunk add-on (`TA-ens-audit`, scripted input
 `ens_audit_pull.py`) pulls from `/api/audit/events`. See [Security](security.md#audit-trail).
 
 ### License
@@ -474,7 +497,7 @@ account. `POST /api/v1/self-service/password` takes `{"login", "current_password
 | Answer | When |
 |---|---|
 | 200 | Changed in the directory people sign in to, and queued for delivery to the others |
-| 400 | The new password does not meet the engine's policy (the reason, in words) or the directory refused it |
+| 400 | The new password does not meet the engine's policy (the reason, in words) or the directory refused it; from 0.5.1 also a user name holding control characters, refused before anything is asked |
 | 401 `wrong_credentials` | A wrong user name or current password: the same answer for both |
 | 404 | Self-service is off |
 | 429 | Over the per-address limit, or the user name is held off after 5 failures in 15 minutes |
@@ -503,7 +526,7 @@ compatible mode; see [Security](security.md#access-tiers).
 |---|---|
 | `read` | `GetStatus`, `WatchStatus`, `ListDeadLetters`, `ListQuarantined`, `ListQuality`, `ListHeld`, `GetConfig`, `SimulateConfig`, `SearchEntities`, `GetEntity`, `GetEntityHistory`, `GetLineage`, `ListUnjoined`, `SuggestJoins`, `ReconciliationReport`, `GetPasswordKey`, `ListPasswordAgents`, `ListQueuedPasswords` |
 | `operate` | `StartRun`, `ApproveDeletions`, `CheckDrift`, `CheckUnmanaged`, `AdoptEntry`, `RetryDeadLetters`, `DiscardDeadLetter`, `JoinRecord`, `UnjoinRecord`, `AcceptJoins`, `ReviewGroup`, `PruneHistory`, `ChangeOwnPassword`, `RevokePasswordAgent`, `Backup`, `PullSnapshot`, `SnapshotManifest`, `PullSnapshotFiles`, `FollowPasswordQueue`, `TestConnector`, `DiscoverSchema`, `PreviewConfig`; and `reveal` on any call that takes it |
-| `operate`, and in strict mode `api.access.passwords` (or the control socket) | `SubmitPasswords`, `AddPasswordAgent`, `BindPasswordAgent`, `RotatePasswordKey`, `RotatePasswordAgentCa`, `ForwardPasswordIngest` |
+| `operate`, and in strict mode `api.access.passwords` (or the control socket) | `SubmitPasswords`, `AddPasswordAgent`, `BindPasswordAgent`, `RotatePasswordKey`, `RotatePasswordAgentCa`, `ForwardPasswordIngest`; from 0.5.1, on an engine that holds password key material, also `Backup`, `PullSnapshot`, `PullSnapshotFiles` and `FollowPasswordQueue` (`KEY_RPCS`), which hand the keys out |
 | `configure` | `ApplyConfig`, `SetLicense` |
 
 On top of the tier, each listener keeps its own limits:
@@ -515,7 +538,9 @@ On top of the tier, each listener keeps its own limits:
   mode; it may set passwords.
 - **Sensitive values** (`reveal`) need mTLS, the control socket or `api.local_reveal: true`, and
   the `operate` tier. **The whole store** (`Backup`, `PullSnapshot`, `SnapshotManifest`,
-  `PullSnapshotFiles`, `FollowPasswordQueue`) needs what a reveal needs.
+  `PullSnapshotFiles`, `FollowPasswordQueue`) needs a listener that both reveals and takes
+  commands: from 0.5.1, on the loopback listener, `api.local_control` **and** `api.local_reveal`
+  (0.5.0 took `api.local_reveal` alone).
 - In compatible mode (an install upgraded from 0.4.1 that has not opted in) every certificate the
   client CA signed has every tier, as before 0.5.0.
 
@@ -531,9 +556,9 @@ On top of the tier, each listener keeps its own limits:
 | `ApproveDeletions` | For a scope as the status lists it: let deletes held by a deletion threshold through once, and for `publication <name>` release its held changes that need approval |
 | `CheckDrift` | Read a publication's entries (or every checked publication's) back from the target and act by policy |
 | `RetryDeadLetters`, `DiscardDeadLetter` | Export dead letters again now; remove one without retrying |
-| `GetConfig` | The running configuration (YAML; secrets appear only as references) and its version label |
-| `ApplyConfig` | Validate, save and reload with a new configuration, then run a full sync. The answer comes before the reload. From 0.5.0 it carries the console's `signature`, which an engine with `engine.require_signed_config` requires (see [Security](security.md#signed-configurations)), and the engine records who applied it |
-| `SetLicense` | From 0.5.0: the console gives the engine its license; the engine verifies and keeps it, and leaves enforcement to the console from then on |
+| `GetConfig` | The running configuration (YAML) and its version label. Secrets the configuration reads from the host appear only as references, but values the console rendered into it from its environments (`{{ env.* }}`) are there as sent, secret ones included: give `read` only to whom may see them. The console masks them (from 0.5.1) |
+| `ApplyConfig` | Validate, save and reload with a new configuration, then run a full sync. The answer comes before the reload. From 0.5.0 it carries the console's `signature`, which an engine with `engine.require_signed_config` requires (see [Security](security.md#signed-configurations)), and the engine records who applied it. From 0.5.1 a configuration that changes `passwords.key_file` is refused ("can only be changed on the engine host") |
+| `SetLicense` | From 0.5.0: the console gives the engine its license; the engine verifies and keeps it, and leaves enforcement to the console from then on. From 0.5.1 only while the console gave a usable license: told there is none, the engine judges a publish by its own evaluation period (see [Licensing](licensing.md#with-a-console-the-usual-case)) |
 | `SimulateConfig` | Dry-run a configuration on a copy of the store: what each target would receive. One at a time |
 | `TestConnector`, `DiscoverSchema` | Connect with one connector of a candidate configuration; list what it holds. Write nothing |
 | `PreviewConfig` | Run a candidate over a sample of records in a scratch store |
@@ -559,7 +584,8 @@ On top of the tier, each listener keeps its own limits:
 | `FollowPasswordQueue` | From 0.5.0: the active engine's password queue, write by write, for the passive engine to keep between snapshots; a submission is answered once the passive engine has it |
 
 Errors are gRPC statuses: `PERMISSION_DENIED` for a call above the caller's tier, a password call
-without `api.access.passwords`, or a command or reveal on a listener that does not allow it, `UNAVAILABLE` when the engine is busy with a long operation (a command waits up to 10
+(or, from 0.5.1, a key-carrying call on an engine with password keys) without
+`api.access.passwords`, or a command or reveal on a listener that does not allow it, `UNAVAILABLE` when the engine is busy with a long operation (a command waits up to 10
 seconds first), has too many commands waiting, is stopping, or is the passive engine of a pair,
 `FAILED_PRECONDITION` for password calls when no publication delivers passwords, `INVALID_ARGUMENT`,
 `NOT_FOUND`, and `INTERNAL` for a command that failed.

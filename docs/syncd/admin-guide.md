@@ -10,10 +10,15 @@ Installing, upgrading and backing up are in the [Install guide](install.md) and 
 [Operator guide](operator-guide.md); the screens designers and operators use every day are in the
 [User guide](user-guide.md).
 
-This page describes syncd 0.5.0 (`main` at commit `a9d17c6`). The biggest change for administrators
+This page describes syncd 0.5.1 (tag `v0.5.1`, commit `7da4d9e`). The biggest change for administrators
 since 0.4.1: roles are held as **assignments** that can be limited to an environment or an engine,
 and role maps add up (see [Roles](#roles)); sign-in gains a policy of its own
-([Sign-in policy](#sign-in-policy)) and the product a [license](#the-license).
+([Sign-in policy](#sign-in-policy)) and the product a [license](#the-license). 0.5.0 also brought a
+[message of the day](#message-of-the-day) and each account's last sign-in. 0.5.1 refuses some
+things 0.5.0 allowed: changes made with a session from another site, the API tokens of single
+sign-on accounts that stopped signing in ([API tokens](#api-tokens)), and a version approved by the
+person who saved it through a token or wrote its Git commit
+([Configuration approval](#configuration-approval-four-eyes)). See [Security](security.md).
 
 ## Becoming an administrator
 
@@ -163,9 +168,10 @@ environment) the role's assignment reaches; rows marked *everything* need the ro
 | Download the console's support bundle (**Users** page, API) (*everything*) | ✓ | | | | |
 | Reveal sensitive attributes | Roles listed in `CONSOLE_REVEAL_ROLES` (default: `admin` only), on the engines their assignment reaches; see below | | | | |
 
-Anyone signed in may read their own account, sign out and change their own password, and read the
-license's state and what it locks (`GET /api/v1/license/entitlements`, which the banner and the
-editors use). The sign-in page, the version, the banners, the consent notice and the publish settings
+Anyone signed in may read their own account, sign out and change their own password, read the
+[message of the day](#message-of-the-day) and their previous sign-in (`GET /api/v1/auth/session`),
+and read the license's state and what it locks (`GET /api/v1/license/entitlements`, which the
+banner and the editors use). The sign-in page, the version, the banners, the consent notice and the publish settings
 (`GET /api/v1/system`) need no sign-in, nor does the
 [self-service password page](#the-self-service-password-page).
 
@@ -178,10 +184,12 @@ the secret ones.
 
 A refused request answers `403` with a message such as "the operator role cannot do this", "none of
 your roles (operator@test, viewer@prod) allows this on …", or "this needs a role that covers
-everything; yours (…) are limited to an environment or to engines". Refusals of this kind are not
-written to the audit trail when they come from a signed-in session; refused sign-ins, refused
-reveals and refused API tokens (`api.token-refused`) are. Every action that is recorded carries the
-assignment that allowed it (`details.assignment`, such as `operator@prod`).
+everything; yours (…) are limited to an environment or to engines". From 0.5.1 such a refusal of a
+signed-in account is written to the audit trail as `access.denied` (the method, the path and the
+reason), at most once a minute per session, so a page that keeps asking does not flood the trail;
+0.5.0 recorded none. Refused sign-ins, refused reveals and refused API tokens (`api.token-refused`)
+are recorded too. Every action that is recorded carries the assignment that allowed it
+(`details.assignment`, such as `operator@prod`).
 
 ### Revealing sensitive attributes
 
@@ -205,7 +213,8 @@ export made while an entity's values are revealed includes them.
 - Every reveal is recorded (`explore.reveal`, `config.simulate`) with the names of the attributes
   it showed, and the record is written before the values are returned: if the audit trail cannot
   be written, nothing is revealed. A search that reveals stores a SHA-256 of the search text instead
-  of the text.
+  of the text. From 0.5.1 that text also stays out of the console's debug log (requests are traced
+  without their query string) and out of the browser's address bar and history.
 - An attempt by a role that may not reveal is refused and recorded with the outcome `denied`.
 - Revealing in a simulation also needs the designer role. Attributes the engine's running
   configuration treats as sensitive stay hidden even when the simulated version no longer lists
@@ -216,9 +225,10 @@ export made while an entity's values are revealed includes them.
 
 ## The Users page (`/users`)
 
-For administrators of everything. At the top are four cards: **Local sign-in** (with the sign-in
-policy in effect), **Configuration approval** and **Banners**, described in the sections below, and
-**Support bundle** (see [Settings that are not in the console](#settings-that-are-not-in-the-console)).
+For administrators of everything. At the top are five cards: **Local sign-in** (with the sign-in
+policy in effect), **Configuration approval**, **Banners** and **Message of the day**, described in
+the sections below, and **Support bundle** (see
+[Settings that are not in the console](#settings-that-are-not-in-the-console)).
 Under them is the table of accounts:
 
 | Column | Shows |
@@ -228,7 +238,8 @@ Under them is the table of accounts:
 | **State** | **active** or **disabled**, plus **locked** (too many failed sign-ins, with an **unlock** link), **one-time password** (must change it at the next sign-in) and **SSO** (signs in through an identity provider or a certificate) |
 | **Break-glass** | A checkbox, for accounts with a local password (see [Local sign-in and break-glass accounts](#local-sign-in-and-break-glass-accounts)) |
 | **Created** | When the account was made |
-| Actions | A key button that resets the password (local accounts only), and **Disable** / **Enable** (not on your own row) |
+| **Last sign-in** | When the account last signed in, by any method, and how (with a password, through single sign-on, with a certificate); **never** if it has not. Recorded from 0.5.0; at that upgrade an account's newest open session stood for its last sign-in |
+| Actions | A key button that resets the password (local accounts only), and **Disable** / **Enable** (not on your own row). From 0.5.1 a reset and a disable ask first; enabling does not |
 
 ### Creating an account
 
@@ -252,8 +263,9 @@ record.
   Recorded as `user.update` with the roles before and after. For an account that signs in through
   an identity provider or a certificate, the dialog says that the roles are set from the role map at
   each sign-in, so a change lasts until the next one.
-- **Disable**: the account can no longer sign in, by password, single sign-on or certificate, and its
-  sessions end at once (a live status stream it has open stops too). **Enable** lets it back in.
+- **Disable**: after **Disable &lt;user&gt;?** is confirmed, the account can no longer sign in, by
+  password, single sign-on or certificate, and its sessions end at once (a live status stream it has
+  open stops too). **Enable** lets it back in.
 
 Both also apply to the account's [API tokens](#api-tokens) at once: a disabled creator's tokens are
 refused, and a demoted creator's tokens keep only what the new roles allow.
@@ -273,8 +285,10 @@ Accounts are never deleted; disable those that should no longer sign in.
 
 ### Password resets and lockouts
 
-The key button issues a new one-time password for a local account. It also clears the failed
-sign-in count, unlocks the account, and ends its sessions. Recorded as `user.password_reset`. An
+The key button asks first (**Reset the password of &lt;user&gt;?**), then issues a new one-time
+password for a local account. It also clears the failed sign-in count, unlocks the account, and ends
+its sessions. Recorded as `user.password_reset`. On your own row the dialog offers **Change your
+password** instead: a reset would end this session too, with the one-time password on the screen. An
 account that signs in through single sign-on or a certificate has no console password and cannot be
 reset here (nor from the command line, unless told to; see
 [`syncd-console admin reset-password`](#syncd-console-admin-reset-password)).
@@ -287,7 +301,13 @@ Every failed sign-in gets the same answer, so it reveals nothing about the accou
 account gets the same answer as a wrong password. The audit trail records the reason (`unknown
 account`, `wrong password`, `locked`, `disabled`, `no local password`, `local sign-in is limited to
 break-glass accounts`, `rate limited`). Besides the lockout below, a client address may make at most
-20 sign-in attempts in 5 minutes; that limit is fixed in the code.
+20 sign-in attempts in 5 minutes (from 0.5.1 an IPv6 client counts by its /64); that limit is fixed
+in the code.
+
+From 0.5.1 an account's password checks take turns, and with a lockout each takes one of the
+account's attempts before the password is checked, so attempts made at the same moment, through
+several consoles too, check no more passwords than the lockout allows; and a right password no
+longer lifts a lock set meanwhile.
 
 Passwords are hashed with Argon2id, or with PBKDF2-HMAC-SHA512 when the console runs in FIPS mode.
 FIPS mode does not accept Argon2id hashes, so accounts created before FIPS mode was turned on need
@@ -304,7 +324,7 @@ setting keeps what 0.4.1 did, so an upgrade changes nothing until they are set. 
 |---|---|---|
 | `ENS_CONSENT_BANNER_ENABLED` | `false` | Show a notice that must be acknowledged (**I acknowledge and consent**) before any sign-in, by password, single sign-on or certificate |
 | `ENS_CONSENT_BANNER_TEXT`, `ENS_CONSENT_BANNER_TEXT_FILE` | the DoD notice | The notice's text, or a file holding it (for several paragraphs) |
-| `CONSOLE_SESSION_IDLE_MINUTES`, `CONSOLE_SESSION_MAX_HOURS` | `30`, `12` | Idle and absolute session limits |
+| `CONSOLE_SESSION_IDLE_MINUTES`, `CONSOLE_SESSION_MAX_HOURS` | `30`, `12` | Idle and absolute session limits. From 0.5.1 what the UI asks on its own (polls, refreshes, its status stream) is no activity, so a tab left open reaches the idle limit |
 | `ENS_SESSION_ADMIN_IDLE_TIMEOUT` | unset | A shorter idle limit for administrators of everything (`10`, `10m`, `600s`) |
 | `ENS_SESSION_MAX_PER_USER` | `0` (no limit) | Sessions one account may have; one more ends its oldest (`auth.session.ended`) |
 | `ENS_LOCKOUT_ATTEMPTS` | `5` | Failed sign-ins after which a local account locks; `0` never locks |
@@ -347,7 +367,9 @@ password, the new one twice; the hint under the new password states the [sign-in
 rules. A forced change after a one-time password, or after the password reached
 `ENS_PASSWORD_MAX_AGE_DAYS`, uses the same page. Changing
 it signs out the account's other sessions and is recorded as `user.password_change` (a wrong current
-password is recorded as a failure).
+password is recorded as a failure). From 0.5.1 the current password is guessed here no more freely
+than at sign-in: the page is held to the same limit per client address, a wrong current password
+counts toward the [lockout](#sign-in-policy), and a locked account is told so.
 
 !!! note
     The console has no link to this page other than the forced change after a one-time password:
@@ -391,7 +413,8 @@ The console refuses the change without single sign-on, or without an enabled bre
 that has a password. When it is made:
 
 - local accounts that are not break-glass are signed out, and their later attempts get the usual
-  refusal (the audit trail records why);
+  refusal (the audit trail records why). From 0.5.1, unticking **Break-glass** on an account while
+  the limit is on signs that account out too;
 - the sign-in page shows only the **Sign in with &lt;provider&gt;** buttons (one per provider set up,
   and one for a certificate), with a small **Break-glass sign-in** link that opens the password form
   and warns that every attempt is audited.
@@ -413,6 +436,13 @@ While approval is required:
   **Publish** button stays disabled until then;
 - an approval is recorded (`config.approve`) and final: the database refuses to change it, and
   refuses an approval by the version's author, whatever the API is asked;
+- the author is the person accountable for the version (`accountable` in the versions list): who
+  saved it, the creator of the API token that saved it, or, for a version from Git, the account
+  whose username is the commit author's e-mail address or the part before the `@`. 0.5.0 compared
+  only the name a version was saved under (`api-token:<id>`, `git`), so the person behind a token or
+  a commit could approve it; 0.5.1 refuses that, and leaves approvals given before as they are. A
+  commit's author is whatever the commit says, and a version whose commit author matches no account
+  has no one accountable, so protect the branch (reviews, signed commits) where that matters;
 - a version that was published before can be published again without approval, so rolling back is
   never held up;
 - approving needs the designer or admin role on the version's engine (on everything, its
@@ -420,6 +450,9 @@ While approval is required:
   token can approve;
 - versions that [Git sync](#git-sync) publishes, and versions [promoted](config-as-code.md#promotion) to
   another environment's engines, wait for an approval on each engine like any other.
+
+The same rule applies to [modules of custom functions](user-guide.md#custom-functions-engineidfunctions):
+a module uploaded with an API token is the token creator's, who cannot approve it.
 
 !!! warning
     The rule lives in the console. It holds only if configurations reach the engine through the
@@ -445,7 +478,7 @@ auto-publish and promotion (the **Promote** button and `syncd config promote`).
 | `CONSOLE_PUBLISH_HOOK_URL` | unset | An `https://` address asked before each publish |
 | `CONSOLE_PUBLISH_HOOK_SECRET_FILE` | unset | A file holding the HMAC secret the request is signed with. Needed with the URL; read at each use, so it can be rotated |
 | `CONSOLE_PUBLISH_HOOK_TIMEOUT` | `10s` | How long the hook may take |
-| `CONSOLE_PUBLISH_HOOK_ON_ERROR` | `refuse` | What a hook that does not answer (a timeout, a `5xx`, no connection) means: `refuse` (`503`) or `allow` |
+| `CONSOLE_PUBLISH_HOOK_ON_ERROR` | `refuse` | What a hook that fails means (a timeout, a `5xx`, no connection, and from 0.5.1 any answer that is neither an allow nor a deny): `refuse` (`503`) or `allow` |
 
 The console refuses to start with a hook URL that is not `https://`, or without a readable secret
 file.
@@ -456,12 +489,16 @@ file.
 - **The hook** gets a signed `POST` (`X-Syncd-Event: config.publish-requested`, signed like a
   webhook) after the four-eyes, test and [license](licensing.md) checks, and before anything is
   recorded or sent to the engine. Its body names the ticket, the note, the version, the engine, who asked, and how many
-  lines changed against the version published before. A `2xx` with `{"decision":"allow"}` (or no
-  decision) lets the publish go. `{"decision":"deny","reason":"…"}` or any `4xx` refuses it with
-  `409` and the reason, and raises the `config.rejected` webhook event.
+  lines changed against the version published before. Only a `2xx` with `{"decision":"allow"}` or
+  an empty body lets the publish go. `{"decision":"deny","reason":"…"}` or any `4xx` refuses it with
+  `409` and the reason, and raises the `config.rejected` webhook event. From 0.5.1 anything else
+  is the hook failing and follows `CONSOLE_PUBLISH_HOOK_ON_ERROR`: a `2xx` with another decision
+  (`Deny`, `rejected`) or none, a body that is not that JSON (an HTML page), or one that could not
+  be read whole (over 64 KiB, cut off, stalled). 0.5.0 let such answers through as an allow.
 - **The hook's address** follows the same rules as a webhook's: `https://` only, never loopback,
   link-local or a metadata address, and private addresses only as `CONSOLE_WEBHOOKS_ALLOWED_HOSTS`
-  and `CONSOLE_WEBHOOKS_BLOCK_PRIVATE_NETWORKS` allow (see [Webhooks](webhooks.md)).
+  and `CONSOLE_WEBHOOKS_BLOCK_PRIVATE_NETWORKS` allow (see [Webhooks](webhooks.md)). From 0.5.1 the
+  console goes to it directly, never through a proxy from its environment (`HTTPS_PROXY`).
 - **What is kept**: the ticket, the note and the hook's decision are stored with the version (the
   **Ticket** column of the versions list, with a `hook: allow`, `hook: deny` or
   `hook: error-allowed` badge) and in the `config.publish.start` and `config.publish` audit events.
@@ -489,6 +526,28 @@ are recorded as `settings.banners`, with the banners before and after.
 
 Banners are console settings, kept in the database; they are not environment variables.
 
+## Message of the day
+
+The **Message of the day** card on the **Users** page sets a message shown on the dashboard to
+everyone signed in, with who set it and when: a maintenance window, a change, who to call. It is new
+in 0.5.0.
+
+- Plain text, never HTML; line breaks are kept. Up to 2,000 characters, with no control characters
+  but line breaks and tabs.
+- **Save message** sets it, **Remove message** removes it (as does saving it empty). The card's
+  badge says whether one is **shown**.
+- It is not shown before sign-in: that is what the [banners](#banners) and the consent notice are
+  for. An account that must change its password first sees it after the change.
+- Changes are recorded as `settings.message_of_the_day`, with the text before and after.
+- The API: `GET /api/v1/auth/message-of-the-day` (anyone signed in) and
+  `PUT /api/v1/settings/message-of-the-day` with `{"text": "…"}` (administrators of everything;
+  no text removes it).
+
+Next to it, the dashboard tells each account about its **previous sign-in** (when, how and from
+which address) and warns with the number of password sign-in attempts on the account that were
+refused since then (a wrong password, or the account locked or disabled), so that someone else's
+attempts do not go unnoticed. The **Users** table shows each account's last sign-in.
+
 ## The license
 
 The **License** page (`/license`, in the navigation for administrators of everything) shows the
@@ -503,8 +562,11 @@ An installation upgraded from 0.4.1 has no license: it evaluates for 30 days fro
 published to that engine before (a rollback) is always allowed. While the license needs attention,
 every page shows a banner (red once publishing is blocked), and the **Engines** page a line with the
 usage against the tier. What the license does not include is locked in the editor and the Studio,
-and refused when a configuration is validated, saved or published. States, packs, managed
-identities and installing a license are in [Licensing](licensing.md).
+and refused when a configuration is validated, saved or published. From 0.5.1, while the console
+holds no license, each engine it manages judges a publish by its own evaluation period, as an
+engine without a console does, and blocks publishing changes once that and its grace period are
+over (0.5.0 let such a console switch the engines' check off). States, packs, managed identities and installing a license are in
+[Licensing](licensing.md#with-a-console-the-usual-case).
 
 ## Engines
 
@@ -670,6 +732,12 @@ A token never does more than its creator **now**, within its limit:
 - no token, whatever its scopes, can manage tokens, webhooks, accounts, settings or scheduled
   reports, sign in through single sign-on, approve a version or a module, simulate or preview a
   version, test connectors, use the object explorer or export lineage: those stay with people.
+  What a token saves or uploads is its creator's for four eyes: the creator cannot approve it;
+- from 0.5.1, a token whose creator signs in through single sign-on stops working (`401`) once the
+  creator has not signed in for `CONSOLE_API_SSO_CREATOR_MAX_IDLE` (35 days by default, counted
+  from the token's creation at the earliest; `0` turns it off), and works again after their next
+  sign-in. The console hears from the identity provider only at a sign-in, so someone the provider
+  removed would otherwise keep their tokens. Disabling the account still stops them at once.
 
 Tokens are rate-limited per token (`CONSOLE_API_REQUESTS_PER_MINUTE`, 300 by default; beyond it
 `429` with `Retry-After`). `CONSOLE_API_TOKENS_ENABLED=false` refuses every token without deleting
@@ -694,8 +762,8 @@ or of that environment chooses **Edit**:
 | Field | Rules |
 |---|---|
 | **Name** | 1–64 lower-case letters, digits, `-` and `_`, starting with a letter or digit. New environments only |
-| **Key** / **Value** | One row per value; **Add a value** adds a row. A whole number or `true` / `false` keeps its type, so a whole-value placeholder such as `port: "{{ env.hr_port }}"` renders as a number |
-| **Secret** | Sealed with the console's master key when saved and never shown again, not even to administrators. On **Edit**, a secret left blank keeps its stored value; typing replaces it |
+| **Key** / **Value** | One row per value; **Add a value** adds a row. A whole number or `true` / `false` keeps its type, so a whole-value placeholder such as `port: "{{ env.hr_port }}"` renders as a number. From 0.5.1 only a number that reads back the same is one: `02134` (a postal code) stays text, and a stored value left unchanged is saved as it was |
+| **Secret** | Sealed with the console's master key when saved and never shown again, not even to administrators. On **Edit**, a secret left blank keeps its stored value; typing replaces it. From 0.5.1 the stored secret survives unticking and ticking **Secret** again; unticking it with the value left blank is refused, since the sealed value cannot be shown |
 
 **Save** records `environment.changed`, with the keys added, removed and changed, never a value.
 An environment no engine runs in can be removed with the bin button, after a confirmation
@@ -705,8 +773,11 @@ Engines that are given no environment run in `default`, which needs no entry her
 - A publish to an engine whose environment lacks a value the version needs is refused, naming the
   value.
 - Secret values are rendered into the configuration sent to the engine; the console shows them as
-  `<secret name>` everywhere else (the **Compare** tab, the check panel). Plain values show as they
-  are there, to every role that reads configuration.
+  `<secret name>` everywhere else (the **Compare** tab, the check panel and, from 0.5.1, what the
+  engine runs). Plain values show as they are there, to every role that reads configuration.
+  **0.5.0 showed the secret values in what an engine runs to every reader**; 0.5.1 masks them
+  there, also values changed since the engine's last publish, and an import of what the engine
+  runs puts them back as placeholders. See [Security](security.md#authorization).
 - With [Git sync](#git-sync), environment files in the repository can set plain values, but a
   file that carries a secret is refused.
 
@@ -762,16 +833,25 @@ settings are:
 | `CONSOLE_CONFIG_GIT_TOKEN_FILE` | unset | A file holding a token, for `https://` |
 | `CONSOLE_CONFIG_GIT_POLL` | `60s` | How often the branch is fetched |
 | `CONSOLE_CONFIG_GIT_AUTO_PUBLISH` | `off` | What a new commit becomes: `off`, a draft version; `validate`, a version whose tests are run; `publish`, a version published when it passes, through approval, the ticket pattern and the hook |
-| `CONSOLE_CONFIG_GIT_PUSH_BACK` | `false` | Commit versions saved or published in the console to the branch, and push. A rejected push is reported, never forced |
+| `CONSOLE_CONFIG_GIT_PUSH_BACK` | `false` | Commit versions saved or published in the console to the branch, and push. A rejected push is reported, never forced. From 0.5.1 a commit the console pushed is never auto-published: it is a version of the engine it was saved for already, and the repository's other engines get it as a version to publish by hand |
 | `CONSOLE_CONFIG_GIT_ENGINES` | empty (all) | The engines the repository is for, comma-separated |
 
+- From 0.5.1 only the branch's first-parent line is walked (`git log --first-parent`): a merge
+  becomes one version, with the files as the merge left them, and the commits it brought in are
+  not replayed one by one.
 - With a ticket pattern set and `publish`, the ticket must appear in the commit message; a commit
   without one stays a draft (`config.git-failed`).
+- With [configuration approval](#configuration-approval-four-eyes) required, the commit's author
+  (matched to an account by e-mail address, or the part before the `@`) cannot approve the version
+  it made, from 0.5.1. A commit's author is what the commit says: protect the branch.
 - While Git sync is on, every publish runs the repository's golden tests (`tests/golden`) as the
   editor's check does, and is refused when one fails: the **Publish** button, the API,
   auto-publish and promotion. Since 0.5.0 they are read at **the version's own Git commit** (the
   commit Git sync took it from, or the branch head when it was saved), not at the branch head; a
-  version saved before 0.5.0 has no commit and is checked at the branch head, with a note.
+  version saved before 0.5.0 has no commit and is checked at the branch head, with a note. From
+  0.5.1, tests that cannot be read (the commit is no longer in the console's clone after history
+  was rewritten, Git does not answer) count as failing, so the publish is refused, saying why; 0.5.0
+  took them as no tests.
 - The **Configuration** page of each engine then has a **Git** card: the repository, what a new
   commit becomes, the last commit seen, the last sync, the last error, and **Sync now**. The
   repository holds every engine's configuration, so the card is shown to roles on everything, and
@@ -938,7 +1018,7 @@ minutes of failures the console records an `audit.delivery-failed` alert, and
 | `ENS_AUDIT_FILE_KEEP` | `30` | Days of rotated files kept |
 | `ENS_AUDIT_SPLUNK_URL`, `ENS_AUDIT_SPLUNK_TOKEN` (or `_TOKEN_FILE`), `ENS_AUDIT_SPLUNK_INDEX`, `ENS_AUDIT_SPLUNK_SOURCETYPE` | unset; sourcetype `ens:audit` | Splunk's HTTP Event Collector |
 | `ENS_AUDIT_SYSLOG_HOST`, `ENS_AUDIT_SYSLOG_PORT`, `ENS_AUDIT_SYSLOG_PROTOCOL`, `ENS_AUDIT_SYSLOG_FACILITY` | unset; `514` (`6514` for TLS), `tcp`, `local0` | Syslog, RFC 5424, over `udp`, `tcp` or `tls` |
-| `ENS_AUDIT_RETENTION_DAYS` | `0` (keep for good) | Remove events older than this, once a day: only events every enabled output has delivered, never the newest. Each run is recorded as `audit.pruned` |
+| `ENS_AUDIT_RETENTION_DAYS` | `0` (keep for good) | Remove events older than this, once a day: only events every enabled output has delivered, never the newest. Each run is recorded as `audit.pruned`, from 0.5.1 in the same transaction as the delete |
 
 The Splunk and syslog TLS connections trust the public roots. A SIEM can also pull events:
 `GET /api/audit/events?after=<seq>` (or `/api/v1/audit/events`), with an
@@ -953,7 +1033,8 @@ The Splunk and syslog TLS connections trust the public roots. A SIEM can also pu
 | `auth.consent`, `auth.session.ended`, `user.password_expired` | The consent notice acknowledged (the sign-in it leads to carries the same consent id), a session ended because the account had too many, a sign-in with an expired password sent to the change-password page |
 | `user.bootstrap`, `bootstrap.password_file_removed` | The first `admin` account, and the initial password file being deleted |
 | `user.create`, `user.update`, `user.password_reset`, `user.password_change`, `user.password_change_skipped` | Account changes (roles, disabled and break-glass before and after, and an unlock). A reset from the command line has the actor `system`, and says whether the account signs in through single sign-on |
-| `settings.local_sign_in`, `settings.config_approval`, `settings.banners` | Console settings, before and after |
+| `settings.local_sign_in`, `settings.config_approval`, `settings.banners`, `settings.message_of_the_day` | Console settings, before and after |
+| `access.denied` | From 0.5.1: a request the access rules refused a signed-in account (`403`), with the method, path and reason; at most once a minute per session |
 | `license.upload`, `license.replace`, `license.remove`, `license.state`, `license.usage-export` | The license installed, replaced or removed, its state changing (actor `system`), and usage exports. See [Licensing](licensing.md) |
 | `engine.register`, `engine.update`, `engine.re-registered`, `engine.renamed`, `engine.remove` | Engines added, registered again with new credentials or moved to another environment, registered again over a client key the master key no longer opens, renamed, and removed (`system` when the installer, `syncdctl renew-certs`, `syncd-console admin` or the Helm Job does it) |
 | `engine.run`, `engine.approve_deletions`, `engine.check_drift`, `engine.check_unmanaged`, `engine.adopt_entry`, `engine.dead_letters.retry`, `engine.dead_letters.discard`, `group.reviewed` | Operator commands, with the request and the engine's answer or error. **Approve and apply** on held changes is an `engine.approve_deletions` with the publication's scope |
@@ -962,25 +1043,25 @@ The Splunk and syslog TLS connections trust the public roots. A SIEM can also pu
 | `config.approve` | Approvals, and refused approvals |
 | `config.publish.start`, `config.publish` | A publish is recorded before it is sent and again with its outcome, with the ticket, the hook's decision and, for a rollback the license would otherwise block, a `license` note; a publish the engine confirms late is settled with `config.publish` |
 | `config.unpublished-running` | An engine runs a configuration the console did not publish |
-| `wasm_module.upload`, `wasm_module.approve`, `wasm_module.download` | Modules of custom functions, with the module's SHA-256 |
+| `wasm_module.upload`, `wasm_module.approve`, `wasm_module.download` | Modules of custom functions, with the module's SHA-256 (in the ENS table of categories from 0.5.1: configuration for uploads and approvals, data for downloads) |
 | `config.promoted` | A version promoted to an engine of another environment |
 | `config.git-synced`, `config.git-failed`, `config.git-refused` | Git sync |
 | `environment.changed`, `environment.removed` | Environments (keys, never values) |
-| `config.simulate`, `config.preview`, `connector.test`, `connector.discover` | The designer checks that make the engine read data |
+| `config.simulate`, `config.preview`, `connector.test`, `connector.discover` | The designer checks that make the engine read data. From 0.5.1 a discovery that reveals values is refused when its record cannot be written |
 | `explore.search`, `explore.entity`, `explore.history`, `explore.unjoined`, `explore.suggestions`, `explore.reveal` | Every object-explorer search (with its text), entity viewed, history read, correlation listing; reveals |
 | `data.exported` | Report, lineage and audit-trail downloads (format, scope, row count) |
 | `report.created`, `report.changed`, `report.deleted`, `report.sent` | Scheduled reports |
 | `api.token-created`, `api.token-revoked`, `api.token-refused`, `api.token-used`, `api.request` | API tokens and what they do |
 | `webhook.created`, `webhook.changed`, `webhook.deleted`, `webhook.secret-rotated`, `webhook.test-sent` | Webhooks (URLs as scheme and host only) |
-| `password.self_service` | Self-service password changes and their refusals |
+| `password.self_service` | Self-service password changes and their refusals (from 0.5.1 a user name holding control characters is refused and recorded escaped) |
 | `support.bundle-exported` | The console's support bundle downloaded |
 | `audit.format-upgraded`, `audit.verified`, `audit.pruned`, `audit.delivery-failed`, `audit.delivery-recovered` | The trail itself: the switch to `ens-audit/1`, a broken chain found by **Verify chain**, retention, outputs failing and recovering |
 
 Some changes and their records are written in one transaction, so if the audit trail cannot be
 written the change is refused ("the audit log cannot be written, so this was not done"): account
 creation, changes and resets, settings, approvals, environments, the start of a publish, exports
-and reveals. Other records are written after the action; if that write fails, the console logs an
-error instead.
+and reveals (a connector discovery with values included, from 0.5.1). Other records are written
+after the action; if that write fails, the console logs an error instead.
 
 ### Verifying the chain
 
@@ -999,7 +1080,9 @@ checks an export or an audit file.
   the old chain ends where the new one begins. **Verify chain** checks both and says how many old
   entries there are. The page lists them; exports and the pull API do not (they are not
   `ens-audit/1` events).
-- **After retention**, the result says from which `seq` the chain was checked.
+- **After retention**, the result says from which `seq` the chain was checked. From 0.5.1 events
+  missing from the start that no `audit.pruned` record accounts for break the chain: they were
+  deleted around retention, not by it.
 
 The chain shows edits and removals of entries that have later entries after them. Removing the
 newest entries leaves a shorter chain that still verifies on its own. To catch that, the console
@@ -1161,16 +1244,16 @@ by a line naming the setting: "a comment at the end of the line becomes part of 
 | Setting | What it controls |
 |---|---|
 | `CONSOLE_REVEAL_ROLES` | Which roles may reveal sensitive attributes, optionally with a scope (default `admin`); see [Revealing sensitive attributes](#revealing-sensitive-attributes) |
-| `CONSOLE_OIDC_*`, `CONSOLE_SAML_*`, `ENS_X509_*`, `CONSOLE_PUBLIC_URL` | Single sign-on (OpenID Connect, SAML) and certificate sign-in, their role maps (with scopes) and default roles; see [Single sign-on](single-sign-on.md) |
+| `CONSOLE_OIDC_*`, `CONSOLE_SAML_*`, `ENS_X509_*`, `CONSOLE_PUBLIC_URL` | Single sign-on (OpenID Connect, SAML) and certificate sign-in, their role maps (with scopes) and default roles; see [Single sign-on](single-sign-on.md). From 0.5.1 `CONSOLE_PUBLIC_URL` is also an origin the console takes as its own when it checks where a change made with a session comes from ([Security](security.md#csrf-and-browser-security-headers)) |
 | `CONSOLE_SESSION_IDLE_MINUTES`, `CONSOLE_SESSION_MAX_HOURS` | Session idle timeout (default 30 minutes) and maximum length (default 12 hours) |
 | `ENS_CONSENT_BANNER_*`, `ENS_SESSION_*`, `ENS_LOCKOUT_*`, `ENS_PASSWORD_*`, `ENS_HSTS_*` | The [sign-in policy](#sign-in-policy) |
 | `CONSOLE_LICENSE_FILE` | A license file to use instead of one installed on the **License** page (air-gapped hosts, Kubernetes Secrets); see [Licensing](licensing.md) |
 | `CONSOLE_TRUSTED_PROXIES` | Reverse proxies whose `X-Forwarded-For` names the client |
 | `CONSOLE_ADMIN_PASSWORD`, `CONSOLE_ADMIN_PASSWORD_FILE` | The first `admin` password, on an empty database only |
 | `CONSOLE_TLS_CERT`, `CONSOLE_TLS_KEY` | A certificate (PEM, with its chain) and key for the console to serve HTTPS itself, without a TLS reverse proxy. Both or neither. The files are read again within a minute when they change, so a renewal needs no restart |
-| `CONSOLE_MASTER_KEY`, `CONSOLE_MASTER_KEY_KMS`, `CONSOLE_NEW_MASTER_KEY` | The master key that seals the engines' client keys, webhook URLs and secrets, secret environment values and the configuration signing key (otherwise `$CONSOLE_DATA_DIR/master.key`), a KMS key that wraps it, and whether to start without the right one; see [The master key](#the-master-key) |
+| `CONSOLE_MASTER_KEY`, `CONSOLE_MASTER_KEY_KMS`, `CONSOLE_NEW_MASTER_KEY` | The master key that seals the engines' client keys, webhook URLs and secrets, secret environment values, the secret values sent to each engine and the configuration signing key (otherwise `$CONSOLE_DATA_DIR/master.key`), a KMS key that wraps it, and whether to start without the right one; see [The master key](#the-master-key) |
 | `ENS_AUDIT_*` | The audit trail's outputs and retention; see [Outputs, retention and the pull API](#outputs-retention-and-the-pull-api) |
-| `CONSOLE_API_TOKENS_ENABLED`, `CONSOLE_API_MAX_TOKEN_LIFETIME`, `CONSOLE_API_REQUESTS_PER_MINUTE` | [API tokens](#api-tokens): on or off (default on), the longest lifetime (default `365d`; `0` removes the limit) and the rate limit per token (default 300 a minute; `0` turns it off) |
+| `CONSOLE_API_TOKENS_ENABLED`, `CONSOLE_API_MAX_TOKEN_LIFETIME`, `CONSOLE_API_SSO_CREATOR_MAX_IDLE`, `CONSOLE_API_REQUESTS_PER_MINUTE` | [API tokens](#api-tokens): on or off (default on), the longest lifetime (default `365d`; `0` removes the limit), from 0.5.1 how long the tokens of a single sign-on account work after its last sign-in (default `35d`; `0` for as long as the token lives) and the rate limit per token (default 300 a minute; `0` turns it off) |
 | `CONSOLE_WEBHOOKS_*` | [Webhooks](webhooks.md): on or off, allowed hosts, private networks, extra CAs, timings |
 | `CONSOLE_PUBLISH_*` | [The pre-publish hook and change tickets](#the-pre-publish-hook-and-change-tickets) |
 | `CONSOLE_CONFIG_GIT_*` | [Git sync](#git-sync) |
@@ -1193,8 +1276,9 @@ same from the host beside the engine's own bundle; see the [Operator guide](oper
 ### The master key
 
 The console seals the client keys of engines registered with mutual TLS, the URLs and signing
-secrets of webhooks, secret environment values and its configuration signing key with its master
-key: `CONSOLE_MASTER_KEY`, or the file `$CONSOLE_DATA_DIR/master.key`
+secrets of webhooks, secret environment values, its configuration signing key and, from 0.5.1, the
+secret values it sent to each engine with its publishes (the last five of each key, so that what the
+engine runs can be masked) with its master key: `CONSOLE_MASTER_KEY`, or the file `$CONSOLE_DATA_DIR/master.key`
 (`/var/lib/syncd/console/master.key` on a host; the `syncd-console` Secret under Helm). The console
 creates the file on its first start. Back it up with the database: the sealed values cannot be
 recovered without it.
@@ -1209,7 +1293,8 @@ notes say this was tested against stand-ins of the KMS services only.
 
 At each start the console checks the key against **one sealed secret of each kind** it holds (an
 engine's client key, a webhook's URL, a webhook's signing secret, a secret environment value, the
-configuration signing key), not only the first one found as in 0.4.1. It refuses to start when:
+secret values sent to an engine, the configuration signing key), not only the first one found as in
+0.4.1. It refuses to start when:
 
 - `master.key` is missing while the database holds sealed secrets (a restore that missed it, a new
   data directory). It does not create a new key over them;
@@ -1231,7 +1316,9 @@ with a new key if it has none, and everything sealed with the old key is lost:
 - secret environment values must be typed again on the **Integrations** page;
 - the configuration signing key must be replaced
   ([`config-signing-key --replace`](#syncd-console-admin-config-signing-key)), and engines that
-  require signed configurations given the new public key.
+  require signed configurations given the new public key;
+- the secret values sent to engines are written again at each engine's next publish; until then
+  only the environments' current secret values are masked in what those engines run.
 
 Keep the setting until those secrets are set again: until then the old sealed ones are still in
 the database, and the console, and the `syncd-console admin` commands run with its environment,

@@ -6,8 +6,8 @@ PagerDuty. Webhooks are managed on **Integrations** (`/integrations`): administr
 test and delete them; auditors can look. Webhooks belong to the whole console: from 0.5.0, when
 roles can be limited to an environment or an engine, managing them takes `admin` on everything
 and seeing them `auditor` (or `admin`) on everything. They are for people with a session only: no
-[API token](api-reference.md#api-tokens) can see or change them. This page describes syncd 0.5.0
-(commit `a9d17c6`).
+[API token](api-reference.md#api-tokens) can see or change them. This page describes syncd 0.5.1
+(tag `v0.5.1`, commit `7da4d9e`).
 
 Nothing is sent until an administrator adds a webhook. The engine sends nothing itself: the
 console watches each registered engine and posts on its behalf.
@@ -290,11 +290,17 @@ The console must not become a way into its own network, so a webhook's address i
   addresses stay refused whatever is listed.
 - **Narrow it further** with `CONSOLE_WEBHOOKS_ALLOWED_HOSTS` (names, `*.suffix`, CIDR ranges,
   comma-separated): once set, a webhook may go only to the hosts it lists.
-- **Webhooks connect directly.** `HTTPS_PROXY` is not used, and there is no egress proxy setting.
-  With the Helm chart's NetworkPolicy egress closed (`networkPolicy.egress.enabled`), add a rule
-  in `networkPolicy.egress.extra` that lets the console reach the receivers on 443.
+- **Webhooks connect directly.** A proxy from the console's environment (`HTTPS_PROXY`,
+  `HTTP_PROXY`) is not used, since it would resolve the name again past these rules, and there is
+  no egress proxy setting. 0.5.0 did send through such a proxy when one was set; from 0.5.1 a
+  console that relied on it must be let reach the receivers directly. With the Helm chart's
+  NetworkPolicy egress closed (`networkPolicy.egress.enabled`), add a rule in
+  `networkPolicy.egress.extra` that lets the console reach the receivers on 443.
 
-The [pre-publish hook](security.md#the-pre-publish-hook) is held to the same rules.
+The [pre-publish hook](security.md#the-pre-publish-hook) is held to the same rules, proxy
+included. From 0.5.1 its answer is read whole (up to 64 KiB) before it is judged, and only an
+explicit `allow` or an empty 2xx lets a publish go: see
+[Admin guide](admin-guide.md#the-pre-publish-hook-and-change-tickets).
 
 ## Secrets at rest
 
@@ -374,7 +380,8 @@ alerting, prefer `source.down`, `target.down` and `dead_letters.rising`, or the 
 
 ### Other limitations
 
-- Webhooks cannot go through an HTTP proxy.
+- Webhooks and the pre-publish hook cannot go through an HTTP proxy (from 0.5.1 they ignore
+  `HTTPS_PROXY`).
 - Webhooks are global: there is no webhook limited to an environment or an engine, and every
   webhook may subscribe to every engine's events.
 - Webhooks are a console feature: an engine run without a console sends none.

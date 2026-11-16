@@ -17,8 +17,11 @@ picture, see [Sizing, availability and recovery](../availability-and-sizing.md).
     re-measured: their costs below come from how the code keeps them. The 0.5.0 figures (source
     lag during long operations, held changes, incremental snapshots) were measured with **debug
     builds** on a shared 4 vCPU VM, at 100,000 people or fewer; nothing of 0.5.0 was measured on
-    the reference node, at a million people or in a release build. Start with these figures,
-    watch the signals named here, and adjust.
+    the reference node, at a million people or in a release build. The store's migration to
+    format 2, which 0.5.0 runs at its first start, took 1.4 s for 300,000 entities with one record
+    each (release build, 4 vCPU); entities with many attributes take longer. 0.5.1 measured
+    nothing new; the extra work of its first full sync (claiming `unique()` values) was not
+    measured. Start with these figures, watch the signals named here, and adjust.
 
 ### What drives the size
 
@@ -196,10 +199,12 @@ engine: it runs the sources and the exports. The other is passive:
 |---|---|---|---|
 | `postgres` | A row per pair in the table `syncd_lease`, taken and renewed in one statement that succeeds only for its holder or over an expired row. The console's database works (its migrations create the table); in another, the engine creates it if its role may | The database's clock | Production, on hosts and on Kubernetes |
 | `file` | A file on a file system both hosts share, locked while it is read and written | The hosts' clocks: keep them in NTP sync | Tests and simple setups |
-| `kubernetes` (new in 0.5.0) | A `coordination.k8s.io/v1` Lease object, written with the `resourceVersion` it read, so the API server refuses the second of two writes | Each engine's own clock: an engine takes the lease once the object has stood unchanged for its whole duration as it saw it, so the nodes' clocks need not agree | Pairs on Kubernetes, so that they depend on nothing but the cluster's API. Tested against a fake API server only |
+| `kubernetes` (new in 0.5.0) | A `coordination.k8s.io/v1` Lease object, written with the `resourceVersion` it read, so the API server refuses the second of two writes | Each engine's own clock: an engine takes the lease once the object has stood unchanged for its whole duration as it saw it, so the nodes' clocks need not agree. From 0.5.1 a clock NTP cannot step | Pairs on Kubernetes, so that they depend on nothing but the cluster's API. Tested in kind (the release's CI), not on a cloud cluster |
 
 - **TTL.** `engine.ha.lease.ttl_secs`, 15 by default, at least 3. The holder renews every third
-  of it. A failover takes at most the TTL, plus the new engine's reconciliation. A shorter TTL
+  of it. A failover takes at most the TTL, plus the new engine's reconciliation. An engine that
+  starts to a free lease waits a third of the TTL before taking it, so a lone engine becomes
+  active 5 seconds after it starts with the default. A shorter TTL
   fails over sooner but makes a short database or network blip enough to step the active engine
   down.
 - **Snapshots.** `engine.ha.snapshot_every_secs`, 60 by default from 0.5.0 (300 before; a value
@@ -212,10 +217,14 @@ engine: it runs the sources and the exports. The other is passive:
   when it does not answer; the change is accepted either way, counted in
   `syncd_ha_password_changes_unreplicated_total` when it has no second copy.
 - **A standby.** `role: passive` makes an engine that never takes the lease and only follows.
-- **Fencing.** Every export batch and every password delivery checks first that this engine
-  holds the lease and that it is not within a second of expiring. An engine cut off from the lease
+- **Fencing.** Every export batch (from 0.5.1, again before every 64 exports) and every password
+  delivery checks first that this engine holds the lease and that it is not within a second of
+  expiring, measured from 0.5.1 on a clock NTP cannot step. An engine cut off from the lease
   stops writing before the other may take over, and steps down to passive when it finds the lease
   gone.
+- **Member names.** Each engine needs its own (`engine.ha.member` or `SYNCD_HA_MEMBER`, the host
+  name by default). From 0.5.1 two engines with the same name no longer both hold the lease: the
+  second waits, with `LEASE ERROR` in its status.
 
 Setup: on hosts, [An active/passive pair on hosts](install.md#an-activepassive-pair-on-hosts);
 on Kubernetes, [An active/passive pair](install.md#an-active-passive-pair). Day-to-day running:
@@ -225,7 +234,9 @@ on Kubernetes, [An active/passive pair](install.md#an-active-passive-pair). Day-
 
 1. The active engine stops renewing: it died, its host or its network went away, or it was cut off
    from the lease's database. A clean stop (`systemctl stop`, a pod deleted by a rollout or a
-   drain) gives the lease up at once instead.
+   drain) gives the lease up at once instead, and the passive engine takes it at its next try,
+   within a third of the TTL; the stopped engine, restarted, waits that long before it would take
+   a free lease, so it does not take it back.
 2. The lease expires after `ttl_secs`, and the passive engine takes it (`this engine took the
    lease; taking over`). The console sends `ha.failover`.
 3. It swaps the newest snapshot it received in for its own store, in steps a crash can interrupt
@@ -233,8 +244,12 @@ on Kubernetes, [An active/passive pair](install.md#an-active-passive-pair). Day-
    followed since that snapshot, before it delivers anything.
 4. It reconciles every publication with its target, then starts the sources from the checkpoints
    in the snapshot (for a source whose first read is a full one, the reconciliation follows that
-   read).
-5. The old engine, when it comes back, finds the lease held and starts passive.
+   read). From 0.5.1 this happens after a promotion or a restart only, not again at a reload. If
+   the store cannot be released for the swap within 30 seconds, the engine exits, and its restart
+   swaps the snapshot in.
+5. The old engine, when it comes back, finds the lease held and starts passive. From 0.5.1 an
+   engine that crashed while active and restarts at once waits for its own lease to expire before
+   it competes again.
 
 **The failover window.** Changes the old active engine exported after its last snapshot are found
 again:
@@ -278,10 +293,10 @@ to the active engine is enough. When they differ, it runs its own: publish to bo
   upgrade) is designed to fall back to whole snapshots, but was not run.
 - **`syncdctl ha` opens no firewall port**: open 7443 between the hosts yourself (see
   [Installation](install.md#an-activepassive-pair-on-hosts)).
-- **Barely tested on Kubernetes.** From 0.5.0 a `kind-ha` CI job installs a pair, fails it over
-  and hands it over, with a PostgreSQL lease; it had not run in GitHub Actions before the pull
-  request that brought 0.5.0. Its Kubernetes-lease variant has never run, and the Kubernetes
-  Lease backend has met only a fake API server. The pair is tested end to end on hosts.
+- **Tested on Kubernetes in kind only.** From 0.5.0 a `kind-ha` CI job installs a pair, fails it
+  over and hands it over, once with a PostgreSQL lease and once with a Kubernetes Lease; it passed
+  in the run that published the 0.5.1 images and chart. No cloud cluster was used. The pair is
+  tested end to end on hosts.
 - **The lease's store is a dependency.** Without the lease's database (or, with a Kubernetes
   lease, the API server) neither engine can hold the lease, and nothing is exported
   (`SyncdHaNoActive`). Run the database with your own replication or failover. A freshly
@@ -313,7 +328,11 @@ Deployment can be rescheduled anywhere, as it keeps nothing in its pod.
 - **Target outages.** When a target directory goes away, the engine keeps reading and committing
   its sources; exports to that target go to the dead-letter queue and are sent again by
   `syncd retry` or the next reconciliation once it answers. With `writeback` on a publication,
-  changes made in the target during the outage are written back first.
+  changes made in the target during the outage are written back first. From 0.5.1 an LDAP or
+  Active Directory target that is down when the engine starts or reloads is reported down and
+  connected later, instead of failing the start (or rolling a published configuration back); a
+  restored previous configuration that does not start either is tried again every 5 seconds,
+  doubling up to a minute, instead of the engine exiting.
 - **Timers survive restarts.** Effective dates, leaver stages, change windows, canaries and group
   expiry are kept in the store, and acted on at their time whether the engine ran throughout or
   was restarted (or, in a pair, failed over).
@@ -344,7 +363,7 @@ still be running, or both engines export.
 | The password-key passphrase (the file `SYNCD_PASSWORD_KEY_PASSPHRASE_FILE` names), when the password keys are sealed | Opens the sealed password keys and agents' CA key, in the store and in every backup and snapshot. With `SYNCD_PASSWORD_KEY_PASSPHRASE_KMS` (new in 0.5.0) the file holds it wrapped, and the KMS key is needed to open it | A copy kept apart from the backups: a restore needs it. Keep the file outside `/etc/syncd`, for example in `/etc/syncd-keys/`: from 0.5.0 `syncdctl backup --to` leaves a passphrase file inside `/etc/syncd` out of its archive, with a warning |
 | `/etc/syncd` | `console.env`, `engine.env` (secrets, S3 keys, how to reach a vault), `engine/engine.yaml`, and the control API's CA and certificates; from 0.5.0, a license installed with `syncdctl license install` (`license.lic`) and the console's signing key for signed configurations (`pki/console-signing.pub`) | `syncdctl backup --to` (`<name>.etc.tar.gz`), `syncdctl backup`, or your configuration management. It holds secrets |
 | nginx's configuration and certificate, or the console's own (`CONSOLE_TLS_CERT`) | HTTPS for the console | Your configuration management |
-| The release | The bundle or package you installed | Keep the download, with `SHA256SUMS` and its signature |
+| The release | The bundle or package you installed | Keep the download, with `SHA256SUMS` (and `SHA256SUMS.asc` for a signed release; 0.5.0 and 0.5.1 are unsigned). The portal's **Downloads** page keeps earlier versions too |
 | People, accounts, groups | The source systems and the target directories | Their own backups. The engine reads the sources again |
 | The audit trail | Also in your SIEM, when the console sends it there (the journal, `ENS_AUDIT_*`) | The SIEM's own retention |
 | A WebAssembly module next to a configuration written by hand on the engine's host (from 0.5.0) | A rule package's custom functions | Your configuration management: such a module is in neither backups nor HA snapshots. Modules uploaded in the console are in its database |
@@ -473,7 +492,7 @@ The chart takes no backups, and `syncdctl` does not run there. Back up these:
 |---|---|
 | The engine's store | `engine.backup` on a schedule, or `kubectl -n syncd exec syncd-engine-0 -- syncd backup --to s3://backups/syncd/prod --keep 14`, without stopping it. Or a VolumeSnapshot of `data-syncd-engine-0`, with the engine stopped so that the copy is consistent: `kubectl -n syncd scale statefulset syncd-engine --replicas=0`, take the snapshot, then scale it back (the next `helm upgrade` sets it back too) |
 | The console's database | `pg_dump --format=custom`, or your database's own backups |
-| The `syncd-console` Secret | `kubectl -n syncd get secret syncd-console -o yaml`, kept as a secret. It holds the master key |
+| The `syncd-console` Secret | `kubectl -n syncd get secret syncd-console -o yaml`, kept as a secret. It holds the master key, unless it comes from a Secret of your own (`console.masterKey.existingSecret`, new in 0.5.1; see [GitOps](install.md#gitops)): then keep that one |
 | The password-key passphrase Secret (`engine.passwordKeyPassphrase`), when you use one | Your own copy of the passphrase, kept apart from the backups: the chart neither creates nor keeps it |
 | The license Secret (`console.license.existingSecret`, new in 0.5.0), when you use one | Your copy of the license file; the portal can issue it again |
 
@@ -507,8 +526,11 @@ is kept by `helm uninstall`.
     - **From an off-host backup:** scale the engine to 0, then run `syncd restore --from
       s3://backups/syncd/prod --replace` in a pod with the engine's image and the
       `data-syncd-engine-0` claim mounted at `/var/lib/syncd` (a Job, or `kubectl debug`), with
-      the same S3 credentials and `SYNCD_CONFIG=/var/lib/syncd/engine.yaml`. Then scale the
-      engine back to 1 (2 for a pair).
+      the same S3 credentials and `SYNCD_CONFIG=/var/lib/syncd/engine.yaml`, as the image's user
+      (65532): from 0.5.1 the files it puts in place are mode 0600, so they must be the engine's.
+      Then scale the engine back to 1 (2 for a pair). An archive without its manifest beside it,
+      left by a failed backup of an earlier release, is not a backup: it is passed over, so
+      delete it.
     - **From a volume snapshot:** create the PersistentVolumeClaim `data-syncd-engine-0` from the
       snapshot (its `dataSource`) before installing, so the StatefulSet uses it. With the release
       installed, scale the engine to 0 and delete the claim first.
@@ -568,18 +590,28 @@ sudo syncdctl rollback
   contents are kept: configuration versions, accounts and audit events written since the upgrade,
   and so are the control API's certificates, which the console's stored credentials match.
 - `--keep-data` switches the programs back and restores nothing. It is refused when the newer
-  release migrated the store to a format the previous one cannot read.
+  release migrated the store to a format the previous one cannot read, and from 0.5.1 when the
+  console's schema is not the one the previous release's console had.
+- From 0.5.1 `rollback` checks first that `/var/lib/syncd` has room to copy the backup's store and
+  console files in beside the live ones, and restores the data before it switches the programs
+  back, so a rollback whose restore fails can be run again. The automatic rollback of a failed
+  upgrade removes the failed release's store first, and needs no more room than the backup took.
 
-**From 0.5.0 to 0.4.1**, the console's schema changed (17 to 28, migrations 0018 to 0028), so the
+**From 0.5.1 to 0.5.0**, the console's schema changed (29 to 30, migration 0030), so the rollback
+restores the console's database from the backup taken before the upgrade, and loses everything
+recorded in the console since; `--keep-data` is refused, as 0.5.0's console would not start on
+the newer database. The store's format is the same (2), and the store comes back from the same
+backup. What 0.5.1 fixed comes back with 0.5.0, the critical fixes included: prefer fixing
+forward. See [Rolling back 0.5.1 to 0.5.0](install.md#rolling-back-051-to-050).
+
+**From 0.5.0 to 0.4.1**, the console's schema changed (17 to 29, migrations 0018 to 0029), so the
 rollback restores the console's database from the backup taken before the upgrade, and loses
 everything recorded in the console since: configuration versions, role assignments, licenses and
-audit entries. The store's format did not change (1), so `--keep-data` is allowed, but 0.4.1
-cannot read 0.5.0's password agent and queued password records: don't keep the store with agents
-enrolled or password changes queued since the upgrade, and rotate no password key or agent CA
-before you are sure of the upgrade (0.4.1 ignores previous ones). 0.4.1 also drops group-review
-timers and refuses a configuration with 0.5.0's settings, so publish one without them first. The
-details are in
-[Rolling back 0.5.0 to 0.4.1](install.md#rolling-back-050-to-041).
+audit entries. The store's format changed too (1 to 2), and 0.4.1 refuses a format-2 store, so
+the rollback restores the store taken before the upgrade, and `--keep-data` is refused: what 0.5.0
+kept in the store (agents enrolled, keys rotated, password changes queued since) is lost with it.
+0.4.1 also refuses a configuration with 0.5.0's settings where the configuration file is kept.
+The details are in [Rolling back 0.5.0 to 0.4.1](install.md#rolling-back-050-to-041).
 
 **From 0.4.1 to 0.4.0**, neither the store's format nor the console's schema changed, so the
 console's database is kept. 0.4.0 cannot open sealed password keys: a full rollback restores the
@@ -604,9 +636,11 @@ the engine's volume nor the console's database, nor any Secret. A rollback to a 
 cannot read the store's format leaves the engine refusing to start (`the store has format N,
 written by a newer syncd`), and a console older than its database's schema may not start either:
 restore the backups taken before the upgrade (see [Backups on Kubernetes](#backups-on-kubernetes)),
-then roll back. From chart 0.5.0 to 0.4.1, restore the console's database into an empty database
-and publish a configuration without 0.5.0's settings first; a pair on the Kubernetes lease needs
-both engine pods stopped, as for any change of lease kind. From chart 0.4.0 to 0.3.0, restore the
+then roll back. From chart 0.5.1 to 0.5.0, restore the console's database into an empty
+database, and the engine's store from the same time. From chart 0.5.0 to 0.4.1, restore both the
+console's database into an empty database and the engine's store (0.4.1 refuses the format-2
+store), and publish a configuration without 0.5.0's settings first; a pair on the Kubernetes lease
+needs both engine pods stopped, as for any change of lease kind. From chart 0.4.0 to 0.3.0, restore the
 console's database into an empty database,
 turn `engine.ha.enabled` off first if it is on, and publish a configuration without 0.4.0's
 settings.

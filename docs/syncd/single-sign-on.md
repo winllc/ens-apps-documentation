@@ -9,7 +9,7 @@ be used together, and local accounts keep working alongside them; an admin can t
 sign-in to [break-glass accounts](#break-glass-accounts). The sign-in page shows a "Sign in with
 &lt;label&gt;" button for each method that is configured.
 
-This page describes the code at syncd 0.5.0 (commit `a9d17c6`). Single sign-on is for people in a
+This page describes the code at syncd 0.5.1 (tag `v0.5.1`, commit `7da4d9e`). Single sign-on is for people in a
 browser: other systems call the API with [API tokens](#api-tokens-and-single-sign-on).
 
 !!! warning "What SAML and certificate sign-in were tested with"
@@ -128,7 +128,9 @@ A change at the provider (a user removed from a group) takes effect at the user'
 A session that is already open keeps its role assignments until it ends
 (`CONSOLE_SESSION_IDLE_MINUTES`, default 30, or `CONSOLE_SESSION_MAX_HOURS`, default 12;
 `ENS_SESSION_ADMIN_IDLE_TIMEOUT` can shorten the first for console administrators). To cut
-someone off at once, disable the account in the console (**Users**).
+someone off at once, disable the account in the console (**Users**). Since 0.5.1 what the web UI
+asks on its own (status polls, its status stream) does not count as activity, so a tab left open
+no longer keeps the session, and the role assignments it was given, alive past the idle limit.
 
 ## Endpoints to register with the provider
 
@@ -287,7 +289,8 @@ local form behind "Break-glass sign-in".
   (`admin` on everything) with a local password marked break-glass. While it is limited, the last
   such admin cannot be unmarked, demoted, limited to a scope or disabled.
 - Switching signs out the local accounts that can no longer sign in. Their attempts get the usual
-  refusal; the audit log records why.
+  refusal; the audit log records why. Since 0.5.1, unmarking one account while the limit is on
+  signs it out too.
 - Keep the break-glass password somewhere safe: it is the way in when the provider is down.
   `syncd-console admin reset-password --user NAME` on the host recovers it.
 
@@ -509,6 +512,13 @@ through the identity provider.
   change at the provider (a user removed from the admins' group) therefore reaches a token only
   when its creator next signs in. To stop a person's tokens at once, disable the account in the
   console (they stop within a minute) or revoke the tokens.
+- **The creator must keep signing in** (since 0.5.1). Someone the provider removed never signs in
+  again, so their tokens would otherwise keep working. A token whose creator signs in through
+  OpenID Connect, SAML or a certificate stops working (`401`) once the creator has not signed in
+  for `CONSOLE_API_SSO_CREATOR_MAX_IDLE` (`35d` by default, the inactivity after which NIST SP
+  800-53 AC-2(3) disables an account; counted from the token's creation at the earliest), and
+  works again after the creator's next sign-in. `0` turns this off. Tokens created by a local
+  account are not affected.
 - No API token can sign in through any of these methods or call the sign-in endpoints, and a token
   carries no session. The consent banner does not apply to tokens.
 - **Prefer tokens to local accounts for automation.** With local sign-in limited to break-glass
@@ -534,7 +544,9 @@ parsers), or `denied` with the reason (the provider refused, the state or reques
 this browser, the token or response was not valid, no role matched, the account is disabled, a
 local account has that name, the certificate was expired, revoked or of an issuer not allowed).
 A certificate sign-in also records the certificate's subject, issuer, serial number and SHA-256
-fingerprint, and how revocation was checked. With the consent banner on, `auth.consent` is
-recorded, and the sign-in it leads to carries the same `consent` id and the session's id. Changes
+fingerprint, and how revocation was checked. Each sign-in, by any method, also becomes the
+account's last sign-in, which the dashboard shows at the next one ("Your previous sign-in", with the
+method and address) and the **Users** list shows (from 0.5.0). With the consent banner on,
+`auth.consent` is recorded, and the sign-in it leads to carries the same `consent` id and the session's id. Changes
 to who may sign in locally are recorded as `settings.local_sign_in`. See [Security](security.md#audit-trail) and
 [Audit logging](../audit-logging.md).
