@@ -8,10 +8,15 @@ It is never written to disk, logs, history, the console or a support bundle in t
 Password synchronisation is new in syncd 0.4.0, which built the engine's side: the sealed queue,
 delivery to every kind of target, initial passwords on new accounts, a self-service page on the
 console, and enrolment for capture agents. 0.4.1 added sealing of the engine's keys at rest,
-metrics and alerts. **syncd 0.5.0** (commit `a9d17c6`, the version this page describes) adds the
-**capture points** inside the directories, with a packaged capture agent (`syncd-capture`); agents
-bound to the sources they speak for; rotation of the keys and a change of passphrase; queued
-changes that survive an HA failover; and a refusal to send passwords to a directory in clear text.
+metrics and alerts. **syncd 0.5.0** added the **capture points** inside the directories, with a
+packaged capture agent (`syncd-capture`); agents bound to the sources they speak for; rotation of
+the keys and a change of passphrase; queued changes that survive an HA failover; and a refusal to
+send passwords to a directory in clear text. This page describes **syncd 0.5.1** (tag `v0.5.1`,
+commit `7da4d9e`), which fixes delivery and access: delivery looks past changes it cannot deliver
+yet, a refusal is shown by its result code only, the HA fence is checked before every password
+written, `passwords.key_file` is a host setting, backups and snapshots of an engine with password
+keys need the passwords permission in strict mode, and the Windows filter checks who serves its
+pipe. Each is marked where it is described.
 
 !!! warning "Not yet for production capture from Active Directory"
     The OpenLDAP overlay and the 389 Directory Server plugin were built and run end to end. The
@@ -27,7 +32,7 @@ running.
 
 ## What is built
 
-| Piece | In 0.5.0 |
+| Piece | In 0.5.1 |
 |---|---|
 | Delivery of captured changes to targets (the sealed queue, routing, retries, ordering, echo suppression) | Built |
 | Initial passwords: a password set as the account is created, read from the entity or generated | Built; from 0.5.0 a refused one is tried again, then held as a dead letter |
@@ -46,7 +51,7 @@ running.
 | A console page for agents | **Not built**: agents are managed with the command line |
 | The threat model sign-off and the third-party penetration test that the plan sets as release gates | **Not done**: the threat model is a draft |
 
-So in 0.5.0 a password reaches syncd in one of four ways: a person changes it in OpenLDAP or 389
+So in 0.5.1 a password reaches syncd in one of four ways: a person changes it in OpenLDAP or 389
 DS where a capture point is installed, a person changes it on the console's self-service page, a
 publication creates an account with an initial password, or a script submits it with `syncd
 password set`. A password changed directly in Active Directory is not captured in production
@@ -113,8 +118,13 @@ flowchart LR
    0.5.0, a failover of an HA pair.
 4. **Routed.** The delivery loop runs at once and then every 30 seconds while anything waits. It
    opens each change in memory and finds the account: the source record by its anchor, the
-   record's entity, each publication whose `passwords.from` names that source, and the DN the
-   entity has in that publication's target.
+   record's entity in each publication's view (a source read by several views has one in each),
+   each publication whose `passwords.from` names that source, and the DN the entity has in that
+   publication's target. Since 0.5.1 a pass reads the queue 500 changes at a time and moves those
+   that still wait to the back of the queue, so a head of changes for accounts not provisioned
+   yet no longer holds back the changes behind it until it expires. A pass looks at 2,000 changes
+   at most; the next passes take the rest. A change moved back keeps its time to live from when
+   it was received, and the status counts every change that waits.
 5. **Ordered.** Per account, only the newest change is delivered. Older ones still queued, and
    any no newer than the last one delivered, are dropped.
 6. **Delivered.** The password is written to each target, and the plaintext is zeroised.
@@ -157,7 +167,7 @@ passwords:                              # optional; these are the defaults
 
 | Key | Default | Meaning |
 |---|---|---|
-| `key_file` | `password.key` in the data directory | The engine's password key. Created on first start, mode 0600. Sealed with a passphrase when `SYNCD_PASSWORD_KEY_PASSPHRASE_FILE` is set (see [Sealing the keys](#sealing-the-keys)) |
+| `key_file` | `password.key` in the data directory | The engine's password key. Created on first start, mode 0600. Sealed with a passphrase when `SYNCD_PASSWORD_KEY_PASSPHRASE_FILE` is set (see [Sealing the keys](#sealing-the-keys)). Since 0.5.1 a host setting: a configuration sent through the control API (a publish from the console, `syncd apply-config`) that changes it is refused, so change it in the file on the engine's host. An HA swap installs the key material a snapshot carries where it says |
 | `ttl_secs` | `86400` | How long a change may wait, sealed, for its account or its target. At least 1 |
 | `rotation_overlap_days` | `7` | From 0.5.0: how long a rotated password key keeps opening what was sealed to it, and a rotated agent CA stays trusted, before the engine retires it (see [Key lifecycle](#key-lifecycle)) |
 | `allow_cleartext` | `false` | From 0.5.0: accept LDAP directories on other hosts reached without TLS as password targets and as the self-service source, for the whole engine, with a warning (see [Clear text is refused](#clear-text-is-refused)) |
@@ -206,7 +216,9 @@ Validation refuses:
 - `passwords` on an Active Directory target reached over `ldap://` without `starttls`. Before
   0.4.0 this failed only when a password was written;
 - from 0.5.0, `passwords` or `initial` on any LDAP target, or a self-service source, on another
-  host reached over `ldap://` without `starttls`, unless `passwords.allow_cleartext` is set.
+  host reached over `ldap://` without `starttls`, unless `passwords.allow_cleartext` is set;
+- from 0.5.1, `unique()` in `initial.from`: it claims values only in a computed attribute;
+- from 0.5.1, a configuration sent through the control API that changes `passwords.key_file`.
 
 ### Clear text is refused
 
@@ -243,8 +255,8 @@ either read from the entity or generated:
   a shell or an LDIF file. Generated passwords never contain quotes, backslashes or spaces.
 
 The password is planned with the add, held in memory only, and set right after a **fresh** add.
-An entry that was already there (adopted, converged, replayed after a crash) keeps the password
-it has. On each kind of target:
+An entry that was already there (adopted, converged) keeps the password it has. On each kind of
+target:
 
 - **Active Directory.** AD refuses an enabled account without a password, so the entry is added
   disabled: the exported `userAccountControl` with `ACCOUNTDISABLE` set, or 514 when none is
@@ -273,8 +285,12 @@ dead-letter metric and the `SyncdDeadLetters` alert show it; `syncd retry` (or t
 **Retry**) makes one more attempt. In 0.4.1 a refusal was only logged. Entries refused before the
 upgrade are not retried. The number of attempts and the delay are fixed. On SCIM and Entra ID the
 password goes with the create, so a refused one fails the create as a dead letter, as before. A
-lost connection fails the export like any other operation; its retry finds the entry there and
-converges it without a password, and the log says so.
+lost connection fails the export like any other operation. Since 0.5.1 its retry, on an LDAP or
+Active Directory target, recognises the entry it finds at the DN as its own earlier attempt when
+everything says so (made within the last day and not modified since, without a password, on Active
+Directory disabled with `pwdLastSet` 0, and with exactly the values the add writes), and finishes
+the password and the enabling steps; any other entry there is converged without a password, as
+0.5.0 did with every such retry, and the log says so.
 
 **An entry a drift check adds back** (`revert`) gets an initial password from 0.5.0, as a new
 entry does; in 0.4.1 it was re-added without one. An entry found elsewhere by its id and put
@@ -389,6 +405,13 @@ inside the directory server, and the `syncd-capture` agent beside it on the same
   with the same packages. The OpenLDAP overlay depends on slapd's internal structure layout: its
   version check catches another version, not another build of the same version.
 - **Missed captures** show only in the directory server's log: the engine never hears of them.
+- **Since 0.5.1:** the Windows filter writes nothing to its named pipe unless the process serving
+  it runs as LocalSystem, as the `syncd-capture` service does: while the service is stopped, any
+  local user could create a pipe of that name and wait for the clear text. A change it refuses to
+  hand over is an error in the Application event log, without the password. The OpenLDAP overlay
+  recognises a Password Modify only by the operation's own request, so another module's internal
+  modify is never taken for one. Both changes compile, but neither has run: the filter not on
+  Windows, the overlay not against a live slapd.
 
 ### Setting one up
 
@@ -609,10 +632,11 @@ certificate ones.
 
 ## High availability
 
-On an active/passive pair, only the active engine delivers passwords. Every delivery checks the
-lease first, like every export batch, so an engine that can't renew stops writing before the other
-may take over. The passive engine doesn't answer self-service changes or password submissions
-over the control API.
+On an active/passive pair, only the active engine delivers passwords. Since 0.5.1 the HA fence
+(the check that this engine still holds the lease) comes before every password written, and before
+every 64 exports to a target, so an engine that can't renew stops writing within a few writes,
+before the other may take over; 0.5.0 checked once per delivery pass and per export batch. The
+passive engine doesn't answer self-service changes or password submissions over the control API.
 
 From 0.5.0:
 
@@ -629,6 +653,15 @@ From 0.5.0:
   is `cli.crt`, which the `syncd` group can read; a certificate of the pair's own
   (`engine.ha.peer.cert_file`) keeps that power away from the group. Whoever may call
   `ForwardPasswordIngest` can act as any enrolled agent.
+- **Since 0.5.1, backups and snapshots of an engine that holds password keys** (a password key or
+  an agent CA) need `api.access.passwords` in strict mode as well: `Backup`, `PullSnapshot`,
+  `PullSnapshotFiles` and `FollowPasswordQueue` hand out the keys, which open every change
+  captured or queued. List the certificate the passive engine pulls snapshots with under
+  `passwords` in a pair that delivers passwords, with or without capture agents, and run
+  `syncd backup` (and `syncdctl backup --to`) through the control socket
+  (`api.control_socket`), which needs no entry. An engine without password keys keeps them at
+  `operate`. On the plain-text loopback listener these calls now need `api.local_control` as
+  well as `api.local_reveal`.
 - **Queued changes survive a failover.** Between snapshots the passive engine follows the active
   engine's password queue write by write (`<data_dir>/ha/password-queue.replica`, sealed as the
   store keeps it). A submission is answered once the passive engine has the change, or after
@@ -670,16 +703,17 @@ networkPolicy:
     - ipBlock: { cidr: 10.20.0.0/24 }
 ```
 
-The engine's pods get an `ingest` port, and `<release>-syncd-engine-ingest` (`syncd-engine-ingest`
-for a release named `syncd`) is a Service for it alone, so a load balancer for the agents exposes
-neither the control API nor the metrics. The configuration the console publishes must listen on
+The engine's pods get an `ingest` port, and `<release>-syncd-engine-ingest`
+(`<release>-engine-ingest` for a release whose name contains `syncd`) is a Service for it alone,
+so a load balancer for the agents exposes neither the control API nor the metrics. The configuration the console publishes must listen on
 the same port (`passwords.ingest.listen`) and name the address agents reach it by in
 `ingest.names`. With `engine.ha.enabled`, the Service routes to both pods, and from 0.5.0 both
 answer: the passive one hands each call to the active one, so agents need not know which pod
 holds the lease. The image's initial configuration lists the engines' own certificate (`syncd
-engine`) under `api.access.passwords` for that; a release that opted in to strict mode by hand
-adds `passwords: [syncd engine]` beside `operate`. This path is tested with two engine processes
-on one host, not on a cluster.
+engine`) under `api.access.passwords` for that, and, since 0.5.1, for the passive engine's
+snapshot pulls and queue following, which carry the password keys; a release that opted in to
+strict mode by hand adds `passwords: [syncd engine]` beside `operate`. This path is tested with
+two engine processes on one host, not on a cluster.
 
 `engine.passwordKeyPassphrase.existingSecret` names a Secret holding the passphrase (under `key`,
 default `passphrase`); the chart mounts it read-only and sets `SYNCD_PASSWORD_KEY_PASSPHRASE_FILE`.
@@ -700,7 +734,9 @@ API.
   [FIPS and STIG](fips-and-stig.md).
 - **Capture points can't decrypt.** They hold only the public key. The engine's private keys are
   in `key_file` (and, after a rotation, `password.key.<id>` beside it), mode 0600, readable by the
-  engine's user only, and sealed with a passphrase when one is set. HPKE is used in base mode with
+  engine's user only, and sealed with a passphrase when one is set. Since 0.5.1 they are mode
+  0600 however they are written (a restore, an HA snapshot received or swapped in), and a key
+  file found readable by others when it is read is made 0600. HPKE is used in base mode with
   a static key: there is no forward secrecy per change, so a stolen key opens every copied change
   sealed to it until it is retired.
 - **The hooks hand over clear text on the host only**, over a Unix socket whose peers the agent
@@ -709,9 +745,12 @@ API.
 - **The queue holds only sealed changes.** A change is opened in memory for delivery and the
   plaintext is zeroised afterwards. Plans holding an initial password show it as `<redacted>`.
 - **No password material** in logs, the status, history, lineage, dead letters, webhooks, the
-  audit trail or support bundles. A target's refusal message is logged and shown as the last
-  failure; the history records only the outcome, because a policy message may echo part of the
-  password. The end-to-end tests check that no password appears in the engine's log or store
+  audit trail or support bundles. Since 0.5.1 a target's refusal is logged and shown as the last
+  failure by its result code only (an LDAP `rc=`, an HTTP status with its error code), or by a
+  reason syncd words itself, never by the text the target sends with it, because a password
+  policy's message may echo part of the password; 0.5.0 logged and showed that text. The history
+  records only the outcome. The end-to-end tests check that no password appears in the
+  engine's log or store
   files, or the console's log and audit trail.
 - **Ordering** by a sequence per account, so an older change never overwrites a newer one.
 - **Ordering depends on the capture hosts' clocks**: a change's sequence is the agent host's time
@@ -815,7 +854,10 @@ What to know:
 - **Windows:** the password filter, the service and the installer are **compile-checked only**:
   never loaded by LSASS, never run on a domain controller, no MSVC or WiX build, no Authenticode
   signature, nothing in the release. Passwords changed directly in Active Directory are not
-  captured in production.
+  captured in production. 0.5.1's check of the pipe's server has not run on Windows; it trusts
+  any process running as LocalSystem.
+- **The OpenLDAP overlay's 0.5.1 change** (Password Modify recognised by the operation's own
+  request) compiles but has not run against a live slapd, as the release notes say.
 - **OpenLDAP and 389 DS** were built and run on Ubuntu 24.04 only (slapd 2.6.10, 389-ds-base 2.4.5).
   The hooks ship as source and are not rebuilt when the directory server is upgraded. There is
   no SELinux or AppArmor policy for the agent's socket, and the packaged agent was never started

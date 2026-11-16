@@ -57,7 +57,9 @@ Every object has a `mode`:
 - **`stream`** follows changes as they happen. On first start it reads everything, then
   follows the change feed from a position taken before the read, so nothing is missed in
   between. Each checkpoint is committed in the same write as the changes before it, so a
-  restart resumes where it left off, and a change delivered twice is harmless.
+  restart resumes where it left off, and a change delivered twice is harmless. (0.5.0 could
+  commit and acknowledge a checkpoint before changes of the source still held in its buffer,
+  which were then lost if the source failed or the engine stopped; fixed in 0.5.1.)
 
 A `csv` object is always `scrape`, an `entra` object always `stream`, and an object of a
 REST connector (`rest`, `workday`, `successfactors`, `ukg`) `scrape` or `delta`, never
@@ -180,8 +182,13 @@ through the query when the source transaction commits.
         anchors: "SELECT employee_id FROM people WHERE department = $1"
 ```
 
-`$1` is the changed row's `key` column, as text; cast it if needed (`$1::int`). Deletes
-need `key` in the old row: the primary key, or `REPLICA IDENTITY FULL`.
+`$1` is the changed row's `key` column, as text; cast it if needed (`$1::int`). An update
+that changes a watched column, and a delete, carry the value the row had only when the table's
+replica identity holds that column (its primary key, or `REPLICA IDENTITY FULL`); otherwise the
+query rows of the old value are only read again at the next full read. Since 0.5.1 the stream
+checks each watched table when it starts and warns, naming the table and the column, when its
+replica identity leaves the column out, with the statement to run
+(`ALTER TABLE ... REPLICA IDENTITY FULL`). syncd does not change the setting itself.
 
 ## MySQL and MariaDB
 
@@ -235,6 +242,12 @@ On the source side:
 - `cdc.server_id` must be unique among the server's replicas and other binary log
   readers.
 - A position the server has already purged starts over with a full read.
+- Since 0.5.1 a `TRUNCATE`, `DROP TABLE` or `RENAME TABLE` (or `ALTER TABLE ... RENAME`) of a
+  table the stream follows makes it read the object in full: the binary log carries no rows for
+  such a statement, so rows no longer there are found by the read and deleted, subject to the
+  deletion thresholds (see [Change safety](change-safety.md#modification-and-add-thresholds)).
+  A dropped table fails the read, and the stream with it, until the table is back. 0.5.0 missed
+  these statements.
 - A binary anchor that is not valid UTF-8 goes through a lossy conversion; select a text
   form of the key instead (`HEX(id)`).
 
@@ -327,7 +340,9 @@ GRANT VIEW CHANGE TRACKING ON dbo.people TO syncd;
 On the source side, change streams need a replica set or a sharded cluster (MongoDB Atlas
 is one). The account needs the `read` role on the database. Credentials go in `user` and
 `password`, never in the URL; `mongodb+srv://` deployments need `tls: verify_full` (or
-`require`).
+`require`). Since 0.5.1 `tls: disable`, the default, leaves TLS to the URL: a URL with
+`tls=true` stays encrypted (0.5.0 turned its TLS off), and `tls: require` or `verify_full` wins
+over what the URL says.
 
 ```yaml
 - name: hr
@@ -377,7 +392,9 @@ results control, 500 entries per page. `failover_urls` lists replicas tried in o
       attributes: [uid, mail, employeeNumber, telephoneNumber, title, jpegPhoto]
 ```
 
-The bind account needs read access to the entries and attributes the objects read.
+The bind account needs read access to the entries and attributes the objects read. Since
+0.5.1 an entry or a paged results control the server sends malformed fails the read with an
+error instead of stopping the source's task.
 
 **A private CA.** An `ldaps://` or StartTLS server's certificate is checked against the
 system's trust store unless the connection names a `ca_file` (since 0.5.0): PEM CA
@@ -421,6 +438,12 @@ turns it off):
   `container renamed in the source; its entries were read again`.
 - The last check's DNs are kept as a checkpoint of their own, committed with the entries
   it read again, so a rename made while the engine was stopped is found when it starts.
+- Since 0.5.1 the check also follows containers moved across the base. One moved in from
+  outside has the object's entries under it read (`container moved into the base; its entries
+  were read`). One moved out is found by its id where it went, and the object's entries under
+  it are deleted, since they left with it (`container moved out of the base; its entries were
+  deleted`). So syncrepl and DirSync streams, which report neither, no longer keep entries that
+  left or miss entries that came.
 - The check runs alongside the object's reader on its own connection. Either failing
   restarts both. `syncd run --once` makes no check.
 
@@ -431,9 +454,13 @@ also read the entries below a renamed container themselves; see
 
 ### Delta reads
 
-`mode: delta` searches for entries whose `watermark` attribute is at or after the last
-value seen (`modifyTimestamp` by default, or another attribute with an ordering rule, such
-as `entryCSN`).
+`mode: delta` searches for entries whose `watermark` attribute is at or after the mark the
+previous read took (`modifyTimestamp` by default, or another attribute with an ordering rule,
+such as `entryCSN`). Since 0.5.1 the mark is taken **before** the read, as the databases take
+theirs: the entries' marks alone are searched for first, and the highest becomes the next
+read's starting point. A paged search is no snapshot, so 0.5.0, which kept the highest mark
+the read itself saw, could skip a change made to an entry already read while later entries
+were being read.
 
 ### Streaming with syncrepl
 
@@ -484,9 +511,13 @@ the directory's log of changes instead:
   server has trimmed the checkpoint's own change entry, the stream starts over with a full
   read. Without a checkpoint it reads in full, starting from the newest change number (the
   root DSE's `lastChangeNumber`); an access log has no counter, so reading starts five
-  minutes before now.
-- An access log write whose `reqStart` is earlier than one already read (a long write that
-  commits late) is only seen at the next full read.
+  minutes before now. Since 0.5.1 a stream that resumes from the position a full read took
+  checks that the log still reaches back to it (the log may have been trimmed while the engine
+  was stopped), and reads in full again when it does not.
+- An access log entry is keyed by when its write started (`reqStart`) but logged when it
+  ends, so a long write can be logged after quicker ones a poll has read. Since 0.5.1 each poll
+  of an access log reads the last minute before its position again, and skips the changes it
+  applied already; a write logged more than a minute late is only seen at the next full read.
 
 Novell / NetIQ eDirectory's change cache is not supported.
 
@@ -497,15 +528,18 @@ Novell / NetIQ eDirectory's change cache is not supported.
 - **Full reads** are paged. A multi-valued attribute with more values than the domain
   controller's `MaxValRange` (1 500 by default), such as a large group's `member`, is read
   a range at a time.
-- **Delta reads** use `uSNChanged` by default. USNs belong to one domain controller, so a
-  checkpoint from another one (after a failover to a `failover_urls` entry) starts with a
-  full read.
+- **Delta reads** use `uSNChanged` by default. Since 0.5.1 the next read starts from the
+  domain controller's `highestCommittedUSN` (from the root DSE), taken before the read. USNs
+  belong to one domain controller, so a checkpoint from another one (after a failover to a
+  `failover_urls` entry) starts with a full read.
 - **Streaming** uses the DirSync control. DirSync is polled every `poll_interval_secs`
   (10 by default). It reports only the changed attributes, so syncd reads each changed
   object again in full by its `objectGUID`. Deletes arrive as tombstones identified by
   `objectGUID`, so streamed objects need `anchor: objectGUID`. On first start syncd takes
   a cookie for "now", reads everything, then polls from that cookie. A cookie is only
-  trusted on the domain controller that issued it.
+  trusted on the domain controller that issued it. Since 0.5.1 a `base` written with spaces
+  after its commas (`OU=Staff, DC=corp, DC=example, DC=com`) is compared as a DN with the
+  server's spelling; in 0.5.0 it turned every change into a delete.
 - **Binary attributes** (`objectGUID`, `objectSid`, `thumbnailPhoto` and others) arrive as
   bytes; rules turn them into text with `guid()`, `sid()`, `hex()` or `base64()`.
 
@@ -553,7 +587,11 @@ connector through its HTTP sink.
 
 - **One listener serves every object** of the connector; each object names the captured
   table its events come from. Snapshot reads, inserts and updates upsert the row after the
-  change; deletes delete by the row before it.
+  change; deletes delete by the row before it. Since 0.5.1 a truncate deletes every row staged
+  from the table, as a full read that finds nothing would, under the source connector's
+  `deletion_threshold` (0.5.0 left the rows for a full read, which a Debezium object never
+  makes). A truncate the threshold holds cannot be released by approving it, since the object
+  never reads in full: its deletes wait for the next truncate.
 - **Delivery.** An event is answered only once the engine has committed it, and the sink
   moves its offsets only past answered events. Nothing is lost when either side stops,
   and a repeat is harmless. While an object's source restarts, its events get `503` and
@@ -682,6 +720,11 @@ read them. A `csv` connector reads such a file in full (keys in
   half-good file never deletes half a directory. `on_error: skip` skips the row and
   counts it: the source's status shows a warning, `syncd status` prints it, and
   `syncd_source_rows_skipped_total` counts the rows. A clean read clears the warning.
+  Since 0.5.1 a skipped row is no leaver: when its key cell can still be read, its record
+  stays as it was; when any skipped row's key cannot be read (the wrong number of columns, an
+  empty key), anyone could be in it, so that read deletes nothing (logged as `rows without a
+  readable anchor were skipped; this read deletes nothing`). 0.5.0 deleted the records of
+  skipped rows.
 - **Complete files only.** The file is parsed into memory and nothing is sent until the
   end. A file whose size changes between two looks a second apart is still being
   written: the read waits up to a minute, then gives up until next time. With
@@ -760,7 +803,14 @@ connectors below, which fill in what their service fixes. Keys in
   JSONPath, enough to flatten a nested array "where a field is a value"
   (`$.emails[?(@.type=='work')].value`).
 - **Paging** in seven styles: `none`, `next_link`, `link_header`, `offset`, `page`,
-  `odata` (`@odata.nextLink` or `__next`) and `cursor`.
+  `odata` (`@odata.nextLink` or `__next`) and `cursor`. Offsets count records as they are
+  when each page is asked for, so a record removed from an earlier page during the read
+  would shift the next one back onto a page already read. Since 0.5.1 offset paging asks for
+  the last tenth of each page again with the next (one record when no `page_size` is set),
+  and when a page finds none of those records again, records moved between the pages: the
+  read is cancelled and deletes nothing (`records moved between two pages of the read`).
+  Page-number paging (`page`, UKG Pro's) has no such overlap and can still miss a record
+  that moves between pages during a read.
 - **Changes** (`mode: delta`). The object is read in full first and every
   `full_interval_secs` (or on `schedule`); in between, a delta read adds `delta.query`
   with `{since}`: the **service's own time** at the start of the last read (from its
@@ -768,7 +818,9 @@ connectors below, which fill in what their service fixes. Keys in
   used, so a service whose clock disagrees with the engine's loses nothing. Records read
   again in the overlap with an unchanged `delta.modified` stamp are not sent again.
   `delta.style: odata` follows the service's delta links instead. The position is a
-  checkpoint, so a restart resumes without a full read.
+  checkpoint, so a restart resumes without a full read. Since 0.5.1 an OData `$filter` a
+  delta read adds is joined with `and` to one the object's `query` already has, as
+  SuccessFactors' delta does; 0.5.0 sent two, which a service refuses or reads only one of.
 - **Deletes.** A full read deletes what it no longer finds, under the source's deletion
   threshold. A delta read finds deletes sooner with `deletes.tombstone` (a field that
   marks a deleted record) or `deletes.endpoint` (a "deleted since" listing).
@@ -898,6 +950,13 @@ targets too; see [SCIM targets](#scim-targets) and
   as a replace.
 - **Failures.** Exports that keep failing go to the dead-letter queue (`syncd dlq`, and
   the console), from where they are retried or discarded.
+- **A target that is down at start.** Since 0.5.1 an LDAP or Active Directory target that
+  cannot be reached when the engine starts or reloads (refused, unanswered, a name that does
+  not resolve) is reported down (`the directory cannot be reached; starting with it down`) and
+  connected later, as one lost while running is, with a wait that doubles from one second up
+  to a minute; its exports wait meanwhile. 0.5.0 failed the start, so a publish during a
+  target's outage rolled the configuration back. A refused bind or an untrusted certificate
+  still fails the start, and `syncd run --once` still fails at once.
 - **Reconciliation.** Every `engine.reconcile_interval_secs` the engine plans every entity
   of every publication against what it exported, and `syncd reconcile` does it on
   demand. With `drift` set, entries are also read back from the target; see
@@ -974,6 +1033,10 @@ not taken for one elsewhere.
   manages.
 - **A replayed rename** counts as already done only when the entry at the new DN has the
   entry's id.
+- **A new hire at a leaver's DN.** Since 0.5.1, when a batch moves a leaver away from a DN
+  (`move_to`, a rename) and adds a new entry at that DN, the add waits until the leaver has
+  moved; added first, it would have found the leaver's entry there and taken it over. If the
+  leaver's move fails, the add is tried again with the next batch.
 
 The halves of a swap that reach the writer in different batches still fail the first
 time; `syncd retry` puts the dead letters in one batch, which resolves them. A crash while
@@ -1043,6 +1106,9 @@ and enables it (a leaver moved aside is not taken over).
   CA in the connection's `ca_file` (since 0.5.0) or the system trust store.
 - Disabling and enabling read the `userAccountControl` the directory holds and set or
   clear ACCOUNTDISABLE on it, so the other flags stay, whether mapped or set by hand.
+- Since 0.5.1 drift checks read every member of a large group, which Active Directory sends a
+  range at a time (`member;range=0-1499`); 0.5.0 took such a group for one without
+  members. A drift read that loses its connection marks the target down, as an export does.
 - `writeback` is refused for Active Directory targets, which have no change log syncd can
   read.
 
@@ -1153,8 +1219,9 @@ A publication can give each entry it creates a password, read from the entity or
 generated (`passwords.initial`; keys in
 [Configuration](configuration.md#publication-passwords), the whole story in
 [Password synchronisation](password-sync.md#initial-passwords)). It is set right after a
-**fresh** add, and only then: an entry that was already there (adopted, replayed after a
-crash, put back after a move) keeps the password it has.
+**fresh** add, and only then: an entry that was already there (adopted, put back after a
+move) keeps the password it has. Since 0.5.1 an add replayed after its answer was lost
+finishes its own initial password (see below).
 
 On Active Directory, syncd sets `unicodePwd` as it creates the account:
 
@@ -1185,6 +1252,12 @@ replace with `write: replace`, after the add.
   `syncd_publication_dead_letters` and the `SyncdDeadLetters` alert, and `syncd retry`
   tries once more; 0.4.1 only logged it. Entries refused before the upgrade are not
   retried. The number of attempts and the wait are fixed.
+- **A replayed add.** An add whose answer was lost (the connection dropped, or the engine
+  stopped before it recorded the add) finds its own entry at the DN when it is tried again.
+  Since 0.5.1 the writer recognises that entry as its own earlier attempt, when everything says
+  so (created within the last day and never modified since, without a password, disabled with
+  `pwdLastSet` 0 on Active Directory, and holding exactly the values the add writes), and
+  finishes the initial password and the enabling steps; 0.5.0 took it over without a password.
 - **A change captured later** replaces the initial password.
 - An entry a drift check puts back gets an initial password since 0.5.0 (it was re-added
   without one before).
@@ -1419,6 +1492,15 @@ ones as deletes. Arrays become several values, objects are flattened to `name.fi
 a group's members are read whole as `members`. `onPremisesSyncEnabled` is a property like
 any other, so a view can tell synced users from cloud-only ones.
 
+- **A group whose members cannot be read** fails the poll, which starts again from the last
+  committed delta link (since 0.5.1). 0.5.0 staged the group without members, and the
+  publications then took every member out of it in the targets.
+- **An expired delta link.** Graph keeps a delta link's state for about a week. Since 0.5.1 a
+  link it refuses as expired (`410 Gone`, or `syncStateNotFound`, `syncStateInvalid`,
+  `resyncRequired`) starts a full read, after which the engine deletes what the read did not
+  find, and the log says `the delta link has expired; reading everything again`. 0.5.0 failed
+  on it at every restart.
+
 `syncd test-connection` gets a token, lists the tenant's licence SKUs and repeats the
 guard on synced users. `syncd discover` lists `users` and `groups`, and for one, a few
 records as the engine reads them.
@@ -1435,7 +1517,10 @@ sudo syncd discover hr_db public.people  # a container's fields and a few record
 
 `test-connection` reports a directory's change log and change numbers when its root DSE
 publishes them, for a Debezium connector checks that the address can be listened on, and
-for a REST connector signs in and reads the first page of the first object.
+for a REST connector signs in and reads the first page of the first object. Since 0.5.1 the
+checks the console asks the engine for (a test, a discovery, a preview) fill in the
+configuration's `{{ env.* }}` placeholders from the engine's own environment (its `--env`
+file) first.
 The console's configuration editor runs the same checks, with a schema browser and sample
 records read as the engine would read them, for designers; each check is audited and
 sensitive values stay hidden unless revealed.
