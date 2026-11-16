@@ -18,11 +18,27 @@ It has two parts:
 
 !!! info "Source of truth"
     Everything in this section comes from the `ldap-sync-merge-view` source repository
-    (version 0.5.0, as on `main` at commit `a9d17c6`; no release has been tagged yet, so nothing is
-    published for download): the engine and console code, the packaging under `deploy/packaging/`, the
+    (version 0.5.1, the tag `v0.5.1` at commit `7da4d9e`): the engine and console code, the packaging under `deploy/packaging/`, the
     container images and Helm chart under `deploy/container/` and `deploy/helm/`, and
     the repository's `docs/`. Where the code and a README disagree, these pages follow the
     code and say so.
+
+!!! info "Releases"
+    0.5.0 and 0.5.1 are released (tagged 14 and 15 November 2026). The bundles and packages, with
+    their SBOMs and `SHA256SUMS`, are on the ENS licensing portal's **Downloads** page; the GitHub
+    releases carry only the container images' SBOMs. The container images and Helm chart are on
+    `ghcr.io`, signed with cosign. The release files are not yet GPG-signed (no `SHA256SUMS.asc`),
+    so the signed apt and dnf repositories are not published yet: install from the files. See
+    [Getting the release](install.md#getting-the-release).
+
+!!! warning "0.5.1 fixes data loss and exposure in 0.5.0"
+    A full review of 0.5.0 found three critical issues, fixed in 0.5.1: a stream's checkpoint could
+    be saved before the changes it covered (losing them); the Entra ID source emptied a group when
+    its members could not be read; and the console showed the engine's environment secrets in the
+    running configuration to every reader ([Security](security.md#authorization)). Upgrade from 0.5.0, and read the
+    [upgrade notes](install.md#upgrading-from-050-to-051) first: 0.5.1 refuses some configurations
+    and access that 0.5.0 allowed. Going back is in
+    [Rolling back 0.5.1 to 0.5.0](install.md#rolling-back-051-to-050).
 
 !!! note "New in 0.5.0, and what is still unproven"
     0.5.0 adds a license check ([Licensing](licensing.md)), [SAML 2.0](single-sign-on.md#saml-20) and
@@ -125,7 +141,7 @@ flowchart LR
 | Console UI | React 19, TypeScript, Vite, TanStack Router and Query, Tailwind CSS, Monaco editor |
 | Cryptography | rustls with aws-lc-rs; the AWS-LC FIPS module in a FIPS build |
 | JDBC bridge (optional) | Java 17+, run separately, with your databases' JDBC drivers |
-| Delivery | Bundles for x86_64 and aarch64, each also as a FIPS bundle, `.deb` and `.rpm` packages (RHEL 8 and 9+) and signed apt and dnf repositories, the `syncd-capture` agent package for directory servers, CycloneDX SBOMs, and `SHA256SUMS` signed with GPG; systemd units `syncd` and `syncd-console`. arm64 builds need the release workflow's arm64 runners, on by default. Container images `ghcr.io/winllc/syncd` and `ghcr.io/winllc/syncd-console` (amd64 and arm64, with `-fips` variants; distroless, Trivy-scanned, cosign-signed with SPDX attestations) and the Helm chart `oci://ghcr.io/winllc/charts/syncd`, all published when a release is tagged (none is yet) |
+| Delivery | Bundles for x86_64 and aarch64, each also as a FIPS bundle, `.deb` and `.rpm` packages (RHEL 8 and 9+) and, once releases are signed, apt and dnf repositories, the `syncd-capture` agent package for directory servers, CycloneDX SBOMs, and `SHA256SUMS` (GPG-signed once the release key is set); systemd units `syncd` and `syncd-console`. arm64 builds need the release workflow's arm64 runners, on by default. Container images `ghcr.io/winllc/syncd` and `ghcr.io/winllc/syncd-console` (amd64 and arm64, with `-fips` variants; distroless, Trivy-scanned, cosign-signed with SPDX attestations) and the Helm chart `oci://ghcr.io/winllc/charts/syncd`. Published on a release tag: the files to the ENS licensing portal's release bucket, the images and chart to `ghcr.io`. The GPG signature and the apt and dnf repositories need the release key, which 0.5.0 and 0.5.1 were built without |
 
 ## Roles
 

@@ -8,10 +8,14 @@ the [Admin guide](admin-guide.md); the license and the **License** page are in
 [Licensing](licensing.md). People who only want to change their own directory password use the
 [self-service page](#changing-your-directory-password-password), which needs no console account.
 
-It describes syncd 0.5.0 (`main` at commit `a9d17c6`). New screens since 0.4.1 are
+It describes syncd 0.5.1 (tag `v0.5.1`, commit `7da4d9e`). New screens since 0.4.1 are
 [Unmanaged entries](#unmanaged-entries-enginesidunmanaged),
 [Custom functions](#custom-functions-enginesidfunctions), the **Promote** dialog and the
-**License** page.
+**License** page; 0.5.0 also added a message of the day and your previous sign-in on the
+[Engines](#engines) page. What 0.5.1 changes on screen: editors ask before you leave with unsaved
+changes, **Disable** and **Reset password** ask first, the Studio checks for a newer version before
+it saves, lists of DNs and change windows take one value per line, and the **Engines** page polls
+instead of streaming.
 
 ## Roles at a glance
 
@@ -58,7 +62,8 @@ recorded in the audit trail with the session it led to.
       15 minutes", whatever the lockout settings. By default, 5 failures lock the account for 15
       minutes; your administrator may have set other limits, or a lock that lasts until an
       administrator unlocks the account. More than 20 attempts from one address in 5 minutes are
-      refused with "too many attempts; try again later".
+      refused with "too many attempts; try again later". The **Engines** page tells you after
+      you sign in how many attempts on your account were refused since your previous sign-in.
 
 === "Single sign-on or certificate"
 
@@ -84,16 +89,21 @@ Other messages on the sign-in page:
 
 A session ends after **30 minutes** without activity or **12 hours** in all (your administrator may
 have changed these, and may have set a shorter idle limit for administrators, or a number of
-sessions per account beyond which a new sign-in ends your oldest). The console then sends you to
-sign in, and back to the page you were on. **Sign out** is at the top right; it ends the console
-session, not the identity provider's.
+sessions per account beyond which a new sign-in ends your oldest). Only what you do counts as
+activity: since 0.5.1 a page that refreshes itself, left open, no longer keeps the session alive.
+The console then sends you to sign in, and back to the page you were on; whatever the tab had
+fetched is cleared, so the next account to sign in there does not see your pages. Unsaved edits are
+lost when the session ends. **Sign out** is at the top right; it ends the console session, not the
+identity provider's. If the console does not confirm the sign-out, a **Not signed out** notice says
+so and you are still signed in: try again.
 
 ### Changing your console password
 
 Go to `/change-password` (type it after the console's address): the current password, the new one
 twice, **Set password**. The hint under the new password gives the rules (length, the kinds of
 character asked for, the username); your organisation may also refuse one of your recent passwords.
-Your other sessions are signed out. Accounts that sign in through single sign-on or a certificate
+Your other sessions are signed out. A wrong current password counts toward your account's lockout,
+as a failed sign-in does (since 0.5.1). Accounts that sign in through single sign-on or a certificate
 have no console password; change it at the identity provider.
 
 ### Changing your directory password (`/password`)
@@ -157,8 +167,17 @@ with its role (**active**, **passive** or **unreachable**; a link to its page) a
 engine's card. **no active engine** in red means neither holds the lease: nothing is read or
 exported.
 
-The cards follow each engine's live status stream, so these update about once a second. CPU is
-averaged over the last five seconds or so.
+The cards are refreshed every ten seconds (since 0.5.1; 0.5.0 held a live status stream open per
+card, which could take every connection the browser allows to the console and leave the page
+none). The small charts place each point by its time over the last minute. CPU is averaged over the
+last five seconds or so.
+
+Above the cards, when an administrator has set one, is the **Message of the day**, with who posted
+it and when. Under it a line gives **Your previous sign-in**: when, how (with a password, through
+single sign-on, with a certificate) and from which address, or "This is your first sign-in to this
+console." When attempts to sign in to your account with its password were refused since then (a
+wrong password, the account locked or disabled), a **Refused sign-in attempts** warning says how
+many: if they were not yours, tell an administrator.
 
 Above the cards, a line gives the **managed identities** counted against the license's tier (or
 "no license: evaluation"), with the license's state when it needs attention. Administrators of
@@ -177,7 +196,10 @@ functions**, the report downloads **Report CSV**, **Excel** and **PDF** (see
 engine** for administrators of everything.
 
 The page follows the engine's **live status stream**: it updates by itself, about once a second.
-If the stream drops, a red notice says it is reconnecting and the last status stays on screen.
+If the stream drops, a red notice says it is reconnecting and the last status stays on screen,
+refreshed every ten seconds until the stream is back. Since 0.5.1 the page opens a new stream by
+itself after the engine restarts (waiting longer each time, up to a minute), where 0.5.0's stayed
+down until the page was reloaded.
 
 Notices at the top:
 
@@ -478,7 +500,9 @@ Designers have:
   (see [Promoting a version](#promoting-a-version)). It shows once some version of the engine has
   been published;
 - **Import running**: saves what the engine runs now as a new version, to start managing an engine
-  that was configured by hand;
+  that was configured by hand. Since 0.5.1 the environment's secret values in it go back to being
+  placeholders (`{{ env.name }}`), so the version holds none, and the bytes of custom-function
+  modules are left out (each module's pin stays; the module store fills them in again);
 - **Import file**: imports an export file from another console (see
   [Export and import](#export-and-import));
 - **New version**: opens the editor on a copy of the latest version (or of what the engine runs,
@@ -525,6 +549,16 @@ the list and cannot be added; a connector of such a type already in the configur
 a form changes one place in the YAML, so comments, key order and settings the forms do not show
 (per-attribute precedence, watched tables mapped with SQL, `passwords`, `quality` checks, rule
 `packages`) are kept; the form says when something must be edited in YAML.
+
+- **Lists of values** are typed comma-separated, except where a value holds commas itself: since
+  0.5.1 **Groups never touched** (a list of DNs) and a change window's **When changes may be
+  applied** take one value per line, and any list written in the YAML whose values hold commas is
+  shown one per line too. 0.5.0 split a DN at its commas.
+- **Secrets** are references, never values: an environment variable, a file, or, shown in the forms
+  since 0.5.1, a secret store (**HashiCorp Vault** with its path and key, **AWS Secrets Manager**
+  with the secret and an optional JSON key, **Azure Key Vault** with the vault and secret name).
+  The store's other settings stay as written in the YAML, and a reference left behind when you pick
+  another kind comes back if you pick its kind again.
 
 Connector checks (designers): the engine runs these against the text being edited, saved or not,
 and writes nothing.
@@ -618,10 +652,21 @@ sources now** instead of the engine's copies) in a scratch store, and shows the 
 flows and computed attributes make, where each value came from, and the DN and attributes each
 publication gives them. It follows your edits; nothing is applied. Sensitive values are not shown.
 
+A view's second and later sources are joined as the edited join rules say, also where the running
+engine does not join them yet (a new view, a renamed one, a new join rule): the preview looks among
+the engine's copies of those sources for the records the rules join to the sampled entities, at most
+3 per sampled record among the first 200,000 records of each source, with a note when it stopped
+there. Other sources of the view that project and have no join rules are sampled like the first.
+Before 0.5.0 such a preview showed only the first source's records.
+
 ### Compare
 
 Side by side: **what the engine runs**, or any version, on the left, and the version or draft you
-are editing on the right. **No differences** when they match.
+are editing on the right. **No differences** when they match. What the engine runs shows the
+environment's secret values as `<secret name>`, whatever **Rendered for** says (0.5.0 masked only
+the values of the environment the comparison was rendered for, none **as written**). By default a saved version is
+compared with the version before it, and, since 0.5.1, a draft or an unsaved edit with what it
+started from; a draft or edit is compared as text only.
 
 On a saved version, **What changed** above the text says what changed by meaning: per section, the
 connectors, views, publications, rules and packages added, removed or changed, with each changed
@@ -642,7 +687,12 @@ why.
 to 500 characters) and **Save version**. The button is disabled while the text does not compile.
 
 If someone saved a newer version since you started editing, the save is refused so it cannot
-silently undo theirs. **Compare** to see the difference, or **Save anyway**.
+silently undo theirs. **Compare** to see the difference, or **Save anyway**. Since 0.5.1 the
+[Studio](#the-computed-attribute-studio) checks the same way.
+
+Leaving the editor (a link, the browser's Back button) with unsaved edits asks **Leave without
+saving?** first (since 0.5.1): **Stay**, or **Leave and discard**. The browser also asks before the
+tab is closed or reloaded.
 
 ### Simulate (designers)
 
@@ -663,7 +713,9 @@ them, and the reveal is recorded. Every simulation is recorded in the audit trai
 
 On a saved version with no unsaved edits:
 
-- **Approve** marks the version approved by you. You cannot approve your own. When your
+- **Approve** marks the version approved by you. You cannot approve your own: since 0.5.1 that
+  includes one saved with an API token you created, and one from a Git commit whose author's e-mail
+  address (or the part before the `@`) is your username. When your
   administrator requires approval (four eyes), a version never published before shows **awaiting
   approval** and cannot be published until someone else approves it. A version published before
   can be published again without one, so a rollback is never held up.
@@ -681,8 +733,12 @@ version. See [Admin guide → The pre-publish hook and change tickets](admin-gui
 
 **Publish** is disabled while the version is the one running, while any test case or golden test
 fails, or while it awaits approval; hover over it for the reason. The server checks the test cases
-and golden tests again on every publish, also one through the API, Git sync or promotion. To roll
-back, open an earlier version and publish it.
+and golden tests again on every publish, also one through the API, Git sync or promotion. Since
+0.5.1 golden tests that cannot be read from Git count as failing, so the publish is refused, saying
+why. To roll back, open an earlier version and publish it.
+
+Since 0.5.1 one publish to an engine runs at a time: a second one waits for the first to be
+recorded, and is refused ("another publish to … is still under way") after 150 seconds.
 
 The license is checked at publish too: a version that uses a connector or feature outside the
 license's packs is refused, and so is any version never published to the engine once the license's
@@ -735,8 +791,13 @@ To take a configuration to another console (a test system's to production, say):
    publish it.
 
 The `engine` and `api` sections stay with each engine host: the export leaves them out and the
-import takes them from the target engine's running configuration, so the target engine must be
-reachable. The file holds no secret values, only where secrets come from. It carries a SHA-256 of
+import takes them from the target engine's running configuration (since 0.5.1 with its secret
+values put back as placeholders), so the target engine must be reachable. Since 0.5.1 a version
+written with `{{ env.* }}` placeholders can be exported and imported, the placeholders kept as
+written for the target console's own environments, and an import is checked as a save is
+(rendered for the engine's environment, packages and modules read, the license and the size
+limit; a module written into the file is refused). The file holds no secret values, only where
+secrets come from. It carries a SHA-256 of
 the configuration that catches a truncated or edited file; it is not a signature. Within one
 console, environments do the same job without files.
 
@@ -779,8 +840,12 @@ and designers can edit.
 
 The preview uses the engine's own rules crate, so it computes what the engine would. **Save as new
 version** (designers) asks for a comment and saves the result as a new version, written into the
-YAML without disturbing the rest; review and publish it from the configuration page. The rule
-language is described in [Computed attributes and rules](rules.md).
+YAML without disturbing the rest; review and publish it from the configuration page. Since 0.5.1,
+as in the editor, the save is refused when someone saved a newer version since the Studio opened:
+**Compare** shows the newest version against what the Studio would save, and **Save anyway** saves
+regardless. Leaving the Studio with unsaved edits asks first, and a test case's number and boolean
+inputs stay numbers and booleans when you edit the rule. The rule language is described in
+[Computed attributes and rules](rules.md).
 
 ## The object explorer (`/engines/{id}/explore`)
 
@@ -814,7 +879,9 @@ become its own, or wait in correlation review.
 Sensitive attributes are shown without values, and are not searched. If your role may reveal them,
 use **Include sensitive attributes (audited)** on the search, or **Reveal sensitive attributes** on
 an entity. Every search (with its text), every entity you open, and every reveal is recorded in the
-audit trail.
+audit trail; a search that reveals is recorded with a digest of its text instead. Since 0.5.1 such a
+search also stays out of the address bar and the browser's history (Back still returns to it), so
+its text is not in a bookmark or a shared link; other searches are in the address, to share.
 
 ## Correlation review (`/engines/{id}/correlation`)
 
@@ -928,10 +995,14 @@ holds at most 50,000 rows by default; the mail says when it was cut.
 | "not published: version N needs approval by someone other than its author" | Four eyes is on; ask another designer or an admin |
 | "… needs the &lt;pack&gt; pack, which the license does not include" | The configuration uses a connector or feature the license leaves out; it cannot be saved or published until the license includes the pack (see [Licensing](licensing.md)) |
 | "not published: publishing configuration changes is blocked by the license (…)" | The license's grace period is over. Sync keeps running, and a version published to the engine before can still be published again; ask an administrator to install a license |
-| "promoting to environment X publishes to every engine in it, and your roles (…) do not allow publishing to …" | **Promote** needs the right to publish on every engine of the target environment |
+| "promoting to environment X publishes to every engine in it, and your roles (…) do not allow publishing to …" | **Promote** needs the right to publish on every engine of the target environment. Since 0.5.1 engines your roles do not reach are counted ("1 other engine"), not named |
+| "a version is approved by someone other than its author (who saved it, created the API token that saved it, or wrote its Git commit)" | You are accountable for this version (since 0.5.1); ask another designer or an admin |
+| "golden tests: cannot be read from Git, so not run: …" (among the failures of "not published: N of M test cases fail") | The version's golden tests could not be read (its commit is gone from the console's clone, or Git did not answer): the publish is refused until they can be |
+| "not published: another publish to X is still under way; try again once it has finished" | Another publish to the engine took more than 150 seconds to finish |
+| "refused: a change made with the console's session must come from the console's own pages" | Since 0.5.1 a change made with your session from another site (a link or form elsewhere) is refused; use the console's own pages |
 | "a publish needs a change ticket reference matching …", "the ticket reference … does not match …" | Your administrator requires a change ticket in that form |
 | "not published: the change hook refused version N: …" | The change-management system said no; the reason follows |
-| The change hook's error, with status `503` | The change-management system did not answer, and the console refuses to publish without it; try again, or ask your administrator |
+| The change hook's error, with status `503` | The change-management system did not answer, or (since 0.5.1) gave an answer that is neither an allow nor a deny, and the console refuses to publish without one; try again, or ask your administrator |
 | "the configuration cannot be rendered for environment X: …" | The engine's environment lacks a value the version needs (`{{ env.… }}`); ask an administrator to add it on **Integrations** |
 | "the engine could not start with vN and went back to …" | The engine refused the configuration; its log says why |
 | "the engine accepted vN but did not come back within 60 seconds" | The version shows as **publishing** until the engine reports it |

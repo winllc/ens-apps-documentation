@@ -4,10 +4,12 @@ A publication can say **when** its changes are applied, **how many** may go at o
 go first**. It can also run in a mode that writes nothing. Changes that wait are **held**. The
 engine can also act at a set time: an attribute that applies from a start date, a leaver who is
 disabled at once and deleted ninety days later, a group that expires. All of this is new in syncd
-0.4.0. This page describes syncd 0.5.0 (`main` at commit `a9d17c6`), which adds group reviews
-that reach a person, `placeholder_member`, leavers stripped of groups syncd does not manage,
-unique `sAMAccountName`s, and held changes kept in the store; each is marked where it is
-described.
+0.4.0. This page describes syncd 0.5.1 (tag `v0.5.1`, commit `7da4d9e`). 0.5.0 added group
+reviews that reach a person, `placeholder_member`, leavers stripped of groups syncd does not
+manage, unique `sAMAccountName`s, and held changes kept in the store; 0.5.1 checks deletion
+thresholds as strictly as the others, follows `effective()` dates in group filters and join
+rules, and has truncates in MySQL and Debezium sources go through the deletion threshold. Each
+is marked where it is described.
 
 Every setting on this page goes on a publication (or, for effective dates, in a rule).
 [Configuration](configuration.md) lists each key in one line; this page explains how they work
@@ -33,7 +35,10 @@ entity and publication in its store, with the reason, the kinds of change (`add`
 without their values, when it was first held and when it was last planned. Held changes survive
 a restart. From 0.5.0 they are kept in the store and only counted in memory, which saves memory
 for a publication with many of them (40 MiB less at 475,000 held changes, in the release's
-measurement) and makes passes over it slower (18 to 35% in a debug build).
+measurement) and makes passes over it slower (18 to 35% in a debug build). Since 0.5.1 those
+counts cannot wrap round: in 0.5.0 a hold whose removal was counted twice (its write dropped
+with a failed batch) could turn a count into a huge number that every threshold read as
+crossed.
 
 **A held change is never replayed.** When its hold ends (the window opens, the canary has
 soaked, someone approves), the entity is planned again from its current state, and whatever that
@@ -166,7 +171,10 @@ on this page.
 
 They have the same shape as the deletion threshold: `percent` of the publication's exported
 entries, `count`, or both. More than either crosses the threshold. At least one must be set, and
-`percent` is between 0 and 100.
+`percent` is between 0 and 100. Since 0.5.1 validation holds `deletion_threshold` to the same
+rule, on a publication and on a source connector alike: an empty one (`{}`), which nothing could
+ever cross, or a `percent` outside 0 to 100 is refused. 0.5.0 accepted both, so check a
+configuration with `syncd validate` and the new binary before the upgrade.
 
 - A **reconciliation** judges its whole pass at once. Over a threshold, that class of change is
   held (`modifications` or `additions`) until `syncd approve`, or until a later pass stays under
@@ -178,6 +186,11 @@ entries, `count`, or both. More than either crosses the threshold. At least one 
   as `deletions` when a reconciliation finds them.
 - Writes to computed group entries are not counted and not held.
 
+**A source taken out of a view** (since 0.5.1). At the full sync that follows the publish,
+the view's entities lose their records of that source and are computed again without them; an
+entity left with no projecting source is deleted. Both go through the deletion thresholds like
+any other delete. 0.5.0 left those records on the entities.
+
 **A truncated PostgreSQL table** (new in 0.5.0). A `TRUNCATE` of a table a PostgreSQL stream
 follows is read as a full read that finds every row gone (rows the same transaction put back
 excepted), so its entities are deleted in the targets, subject to the deletion thresholds; 0.4.1
@@ -187,6 +200,18 @@ hold, so `syncd approve "source <connector>/<object>"` reads the table in full a
 what it finds gone; after repairing the table, the same command finds nothing gone and clears the
 hold. The PostgreSQL publication must publish truncates (`truncate` in its `publish` list,
 PostgreSQL's default): the engine warns at start when one made by hand leaves it out.
+
+**Truncates in other sources** (since 0.5.1):
+
+- **MySQL and MariaDB.** A `TRUNCATE`, `DROP TABLE` or `RENAME TABLE` (or `ALTER TABLE ...
+  RENAME`) of a table a stream follows makes the stream read the object in full, so rows no
+  longer there are deleted, subject to the deletion thresholds. A dropped table fails the read,
+  and the stream with it, until the table is back. 0.5.0 did not notice these statements.
+- **Debezium.** A truncate event deletes every row staged from the table, as a full read that
+  finds nothing would, under the source connector's `deletion_threshold`. 0.5.0 logged it and
+  left the rows for a full read, which a Debezium object never makes. **Known limitation:** a
+  Debezium truncate held by the threshold cannot be released with `syncd approve`, because the
+  object never reads in full; its deletes wait for the next truncate.
 
 ## Canary publishing
 
@@ -273,10 +298,12 @@ rehire) does nothing, and the next one is armed from what the rules say then.
     refuses settings it does not know, so publish a configuration without the 0.4.0 settings
     before rolling back with the store kept. See [Installation](install.md).
 
-syncd 0.4.1 and 0.5.0 keep the 0.4.0 store format, so timers and held changes survive the
-upgrades. A rollback from 0.5.0 to 0.4.1 with the store kept loses the group-review timers (0.4.1
-drops them as unknown), and 0.4.1 refuses the settings new in 0.5.0: publish a configuration
-without them first (see [Installation](install.md)).
+Timers and held changes survive the upgrades. syncd 0.4.1 kept the 0.4.0 store format; 0.5.0
+migrates the store to format 2 at its first start (each view keeps its own links from records to
+entities), and a 0.4.1 engine refuses the migrated store, so a rollback from 0.5.0 to 0.4.1
+restores the backup taken before the upgrade (`syncdctl rollback`): timers and held changes go
+back to what they were then. 0.5.1 keeps format 2, and a 0.5.0 engine opens a 0.5.1 store. See
+[Installation](install.md).
 
 ## Effective dates
 
@@ -300,6 +327,12 @@ whether or not anything else about the person changed. The engine notes the next
 entity's rules change their result and arms a timer for it. A full recompute at that instant
 gives the same values, so the result depends on the engine's time, not on when it ran. All rules
 of one pass share one `now()`.
+
+Since 0.5.1 a computed group's `filter` and a view's join rules follow `effective()` dates on
+time too: an entity joins or leaves the group at the instant its filter's answer changes, and a
+record whose join rule gives other keys from an instant is correlated again then (an unjoined
+record tries to join; a joined one is checked against its entity). 0.5.0 evaluated them again
+only when something else about the entity or the record changed.
 
 The functions, their arguments and examples are in [Computed attributes and rules](rules.md).
 
@@ -595,6 +628,8 @@ starts another ninety days.
 - **`sAMAccountName`:** `on_conflict: unique` is uniqueness among the names syncd claims, not
   checked in the directory.
 - **Initial passwords:** the number of attempts (three) and the delay between them are fixed.
+- **Truncates in Debezium sources:** a truncate held by the deletion threshold cannot be released
+  by approving it; its deletes wait for the next truncate.
 - **Rollback:** syncd 0.3.0 ignores the timers and held changes that 0.4.0 keeps, and refuses the
-  0.4.0 settings (see the warning under [Persisted timers](#persisted-timers)); 0.4.1 drops the
-  group-review timers 0.5.0 keeps, and refuses the 0.5.0 settings.
+  0.4.0 settings (see the warning under [Persisted timers](#persisted-timers)); 0.4.1 refuses the
+  store 0.5.0 migrates, so a rollback from 0.5.0 restores the backup taken before the upgrade.

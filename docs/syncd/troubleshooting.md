@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Symptoms, likely causes and fixes, for syncd 0.5.0 (`main` at commit `a9d17c6`). Start with
+Symptoms, likely causes and fixes, for syncd 0.5.1 (tag `v0.5.1`, commit `7da4d9e`). Start with
 `sudo syncd status`, `sudo syncdctl status` and the journal (`journalctl -u syncd -u syncd-console
 -e`). Commands, metrics and alert rules are in the [Operator guide](operator-guide.md); settings
 are in [Configuration](configuration.md); the license is in [Licensing](licensing.md). The source
@@ -18,16 +18,38 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
     evaluation that ends in a publishing block about 60 days after the upgrade
     ([The license](#the-license)).
 
+!!! tip "Just upgraded from 0.5.0?"
+    Several 0.5.1 fixes close a gap by refusing something 0.5.0 allowed: configurations that no
+    longer validate ([Installation and upgrade](#installation-and-upgrade)), backups and HA
+    snapshots of an engine that holds password keys refused to the command line's certificate
+    or to a passive engine not listed under `api.access.passwords`
+    ([Backups and restore](#backups-and-restore), [High availability](#high-availability)), a
+    loopback listener with `api.local_reveal` alone ([The command line](#the-command-line)),
+    cross-site changes and idle single sign-on accounts' API tokens in the console
+    ([Signing in](#signing-in)), and an engine managed by a console without a license judged by
+    its own evaluation period again ([The license](#the-license)). `syncd restore` must run as the
+    engine's user. The full list is in
+    [Upgrading from 0.5.0 to 0.5.1](install.md#upgrading-from-050-to-051).
+
 ## Installation and upgrade
 
 ??? failure "`gpg: BAD signature`, `gpg: Can't check signature: No public key`, or `sha256sum: WARNING: ... computed checksum did NOT match`"
-    New in 0.4.0, a release's `SHA256SUMS` is signed (`SHA256SUMS.asc`). `No public key`: import
-    the syncd release key first (`gpg --import syncd-release.asc`), and check its fingerprint
-    against the one you were given separately. `BAD signature`: `SHA256SUMS` is not the one that
-    was signed; download both files again. A file whose checksum does not match is damaged or
-    not the published one: download it again, and do not install it. A release without
-    `SHA256SUMS.asc` was published without the signing key. See
+    New in 0.4.0, a signed release's `SHA256SUMS` is signed (`SHA256SUMS.asc`). `No public key`:
+    import the syncd release key first (`gpg --import syncd-release.asc`), and check its
+    fingerprint against the one you were given separately. `BAD signature`: `SHA256SUMS` is not
+    the one that was signed; download both files again. A file whose checksum does not match is
+    damaged or not the published one: download it again from the portal's **Downloads** page,
+    and do not install it. A release without `SHA256SUMS.asc` was published without the signing
+    key, as 0.5.0 and 0.5.1 were: there is nothing to `gpg --verify`, and `sha256sum -c
+    SHA256SUMS --ignore-missing` is the check. See
     [Verifying a release](install.md#verifying-a-release).
+
+??? failure "`apt update` or `dnf` cannot reach `https://winllc.github.io/ldap-sync-merge-view` (404)"
+    The signed apt and dnf repositories are not published yet: 0.5.0 and 0.5.1 were released
+    without the signing key. Remove `/etc/apt/sources.list.d/syncd.sources` or
+    `/etc/yum.repos.d/syncd.repo`, and install or upgrade from the `.deb` or `.rpm` downloaded
+    from the portal's **Downloads** page. See
+    [From the package repositories](install.md#from-the-package-repositories).
 
 ??? failure "`choose the console database: --local-database, or --database-url postgres://...`"
     `syncdctl install` needs to know where the console's database is. Pass `--local-database` to
@@ -43,8 +65,8 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
 
 ??? failure "`--fips needs a FIPS build of syncd`"
     The release you ran is not a FIPS build (it has no `FIPS` file, and no `-fips` in its name).
-    Use the FIPS bundle, `syncd-<version>-linux-x86_64-fips.tar.gz` (x86_64 only; there are no
-    FIPS packages). See [FIPS 140-3 and DISA STIG](fips-and-stig.md).
+    Use the FIPS bundle, `syncd-<version>-linux-x86_64-fips.tar.gz` (or, from 0.5.0,
+    `syncd-<version>-linux-aarch64-fips.tar.gz`; there are no FIPS packages). See [FIPS 140-3 and DISA STIG](fips-and-stig.md).
 
 ??? failure "`syncd <version> is installed already; to upgrade: syncdctl upgrade <release>`"
     `/etc/syncd/console.env` exists, so this host already has syncd. Upgrade it, or, to start
@@ -69,7 +91,24 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
     tools (`postgresql-client` on Debian and Ubuntu, `postgresql` on RHEL). Use `--skip-db-backup`
     only if you back up the database another way: without the dump, a rollback cannot restore it.
     On a package install the backup runs before the new files are unpacked, so the package
-    upgrade fails here and nothing changes.
+    upgrade fails here and nothing changes; from 0.5.1 the message ends `or set
+    SYNCD_SKIP_DB_BACKUP=1 for the package manager (sudo SYNCD_SKIP_DB_BACKUP=1 apt-get install
+    syncd, or the same with dnf)`. Upgrading a package from 0.5.0, 0.5.0's `syncdctl` takes that
+    backup and honours `SYNCD_SKIP_DB_BACKUP=1` only when `pg_dump` is not installed at all.
+
+??? failure "`pg_dump cannot back up the console database: ... (install the PostgreSQL client tools of the server's version, or pass --skip-db-backup)`"
+    New in 0.5.1: an upgrade or a backup checks, before it stops anything, that `pg_dump` can dump
+    the console's database. The usual cause is a `pg_dump` older than the server's major version
+    (`aborting because of server version mismatch`): install the client tools of the server's
+    version (on RHEL, the PostgreSQL module stream the server uses), or a server elsewhere that
+    the account cannot reach. `--skip-db-backup` (for a package, `SYNCD_SKIP_DB_BACKUP=1`) leaves
+    the database out. Nothing was stopped.
+
+??? failure "A package upgrade: `the backup before the upgrade to <new> failed (above); syncd <old> was started again, and the package was not upgraded`"
+    New in 0.5.1. The installed release's backup failed (the reason is above it: room, `pg_dump`,
+    a copy that failed), so the package manager stopped before unpacking anything, and the
+    services that were running were started again. Fix the cause, or leave the database out with
+    `SYNCD_SKIP_DB_BACKUP=1`, and run the upgrade again.
 
 ??? failure "`not enough space in /var/lib/syncd/backups for a backup (... KiB needed)`"
     An upgrade copies the engine store and the console's files before it changes anything, and
@@ -80,6 +119,23 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
     The new release's engine does not accept the running configuration. Nothing was stopped. Run
     the command it prints (`<release>/bin/syncd -c /etc/syncd/engine/engine.yaml validate`) to see
     why, fix the configuration (publish a fixed version from the console), and upgrade again.
+
+    Upgrading to 0.5.1, which refuses what 0.5.0 let through:
+
+    - `... unique() is only allowed in computed attributes`: `unique()` in a publication
+      attribute, a DN attribute or filter, a group filter or `owner_from`,
+      `passwords.initial.from` or a correlation hint, where it claimed nothing. Move it into a
+      computed attribute and use that;
+    - `deletion_threshold needs a percent, a count or both`, or `deletion_threshold: percent must
+      be between 0 and 100`, on a connector or a publication;
+    - `duplicate ... name ...: attribute names ignore case, so it is the same as ...`: two computed
+      attributes, two flows of one source, or two publication attributes whose names differ only
+      in case;
+    - `the expression nests too deeply: more than 200 levels ...` or `the expression is too large:
+      more than 100000 parts once its package functions are expanded` (also an operator chain
+      longer than 400 terms): split it into steps (`let`) or computed attributes;
+    - a WASM module written into the YAML (`packages[].wasm.module`): upload it in the console's
+      module store and have it approved instead.
 
     Upgrading to 0.4.0, the usual reason is `publication <p>: Active Directory takes passwords only
     over LDAPS or StartTLS; target <t> connects to ldap://... without starttls`: a `passwords`
@@ -112,17 +168,46 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
 ??? failure "`no backup of <old> was taken before upgrading to <new>`"
     `syncdctl rollback` restores the backup named `*-upgrade-<old>-to-<new>`, and it is gone (only
     the newest three backups are kept). Restore an older backup with `syncdctl restore`, or roll
-    back the programs alone with `--keep-data` if the previous release reads the store's format.
+    back the programs alone with `--keep-data` if the previous release reads the store's format
+    and the console's schema did not change.
 
-??? failure "After a rollback to 0.4.1 with `--keep-data`, the engine does not start, or agents, queued passwords or group reviews are gone"
-    The store's format did not change in 0.5.0, so 0.4.1 opens it, but 0.4.1 refuses settings it
-    doesn't know: publish a configuration without the settings new in 0.5.0 before rolling back
-    with the store kept. It also cannot read 0.5.0's password agent and queued password records
-    (do not roll back with agents enrolled or changes queued since the upgrade), ignores previous
-    password keys and a previous agent CA, and drops the group-review timers. The console's
-    database gained migrations 0018 to 0028 (and `users.role` is dropped), so a console rollback
-    needs the database backup taken before the upgrade, which `syncdctl rollback` and the
-    upgrade's own backup restore; what was done in the console since is lost.
+??? failure "`syncdctl rollback --keep-data`: `the console database is at schema N, and syncd <old>'s console knows schema M: it would not start on it`"
+    New in 0.5.1. The newer release migrated the console's database (0.5.1 took it from 29 to 30),
+    and the older console refuses a database with migrations it does not know. Roll back without
+    `--keep-data`, which restores the database from the backup taken before the upgrade (what was
+    done in the console since is lost). `no backup of <old> records its console database's
+    schema` or `the console database does not answer` are warnings: the check was skipped.
+
+??? failure "`not enough space in /var/lib/syncd to restore <backup> (... KiB needed, ... KiB free): nothing was changed`"
+    New in 0.5.1. `syncdctl restore` and `rollback` copy the backup's engine store and console
+    files in beside the live ones, and replace them only once the copy is complete, so they need
+    room for that copy. Free space under `/var/lib/syncd` (old backups you have copied elsewhere,
+    `replaced-<time>` directories left by earlier restores), and run the command again.
+
+??? failure "`restoring <backup> failed: copying its <part> files to /var/lib/syncd did not complete (is the disk full?). The services are stopped.`"
+    New in 0.5.1. The copy failed part way; the live files were not replaced. The message ends
+    with how to try again: `syncdctl restore <backup>`, or, for a rollback, `syncd <new> is still
+    the current release: once that is fixed, run syncdctl rollback again`. After an upgrade's own
+    automatic rollback, the failed release's store has already been removed: fix the cause (often
+    a full disk) and run `syncdctl rollback`, which restores the same backup.
+
+??? failure "After a rollback or a package downgrade to 0.4.1, the engine does not start: `the store has format 2, written by a newer syncd`"
+    0.5.0 migrated the store to format 2, which 0.4.1 cannot read. `syncdctl rollback` restores
+    the store backed up before the upgrade, and `--keep-data` is refused for this reason; after a
+    package downgrade or `helm rollback`, restore that backup yourself (`syncdctl restore
+    /var/lib/syncd/backups/<time>-upgrade-0.4.1-to-0.5.0`, or on Kubernetes the volume). 0.4.1
+    also refuses settings it doesn't know: where the configuration file is kept, publish one
+    without the settings new in 0.5.0 first. The console's database gained migrations 0018 to
+    0029, so it is restored from the same backup; what was done in the console since is lost. See
+    [Rolling back 0.5.0 to 0.4.1](install.md#rolling-back-050-to-041).
+
+??? failure "After a package downgrade from 0.5.1 to 0.5.0, the console does not start, and the message names the wrong backup"
+    0.5.1's console database (schema 30) is newer than 0.5.0's console knows. Restore the backup
+    taken before the upgrade, `sudo syncdctl restore
+    /var/lib/syncd/backups/<time>-upgrade-0.5.0-to-0.5.1`: 0.5.0's `syncdctl` names the newest
+    `*-upgrade-*-to-0.5.0` backup instead, which holds older data. From 0.5.1 a failed health check
+    on an older package says `syncd <old> is not healthy on the data syncd <new> left` and names
+    the right one. See [Rolling back 0.5.1 to 0.5.0](install.md#rolling-back-051-to-050).
 
 ??? failure "After a rollback to 0.3.0 with `--keep-data`, the engine does not start, or leavers, windows and canaries stopped"
     0.3.0 refuses settings it doesn't know: publish a configuration without the settings new in
@@ -184,6 +269,13 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
     or an engine is still stopping. Only one engine can open its store. Use `syncd status` and the
     other control commands against the running service instead. `syncd restore` refuses while
     the engine runs for the same reason.
+
+??? failure "After `syncd restore`, the engine cannot open its store or its keys (permission denied)"
+    From 0.5.1 every file `syncd restore` puts in place, the store's included, is mode 0600, owned
+    by whoever ran it. Run as root, it leaves files the `syncd` account cannot read. Run it as the
+    engine's user, `sudo -u syncd syncd restore ...`, as `syncdctl restore --from` does; to repair
+    a restore made as root, `sudo chown -R syncd:syncd /var/lib/syncd/engine` and start the
+    engine. On Kubernetes, run the restore as the image's user (65532).
 
 ??? failure "`starting the metrics listener on <addr>`, or the control API cannot listen"
     The address in `api.metrics_listen` or `api.listen` is in use. A taken port stops startup.
@@ -369,7 +461,22 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
     works until then. The new password is refused with `a password needs at least 12 characters`,
     `that password is too easy to guess` (it is the username or `admin`), or `choose a password you
     have not used here` (it is the current one). `the current password is wrong` means the one-time
-    password was mistyped.
+    password was mistyped. From 0.5.1 wrong current passwords count toward the lockout, and an
+    account with a temporary password gets an answer on the password change only.
+
+??? failure "A change is refused: `refused: a change made with the console's session must come from the console's own pages`"
+    New in 0.5.1. A change made with the session cookie (not with an API token) must come from the
+    console's own pages: the browser's `Sec-Fetch-Site`, or else its `Origin`, must name the
+    console. Behind a proxy that rewrites the `Host` header, the console may not recognise its own
+    address: have the proxy pass the original `Host` (or `X-Forwarded-Host`), or set
+    `CONSOLE_PUBLIC_URL` to the address people use, which the check accepts too. Scripts should
+    use API tokens, which this check does not apply to.
+
+??? failure "An API token stops working: `the account that created the token signs in through single sign-on and has not signed in for 35 days; the token works again once it has`"
+    New in 0.5.1. The console cannot ask the identity provider whether such an account is still
+    allowed in, so its tokens expire while it does not sign in for `CONSOLE_API_SSO_CREATOR_MAX_IDLE`
+    (35 days by default; `0` turns this off). Have the account sign in once, or create the
+    token from an account that signs in regularly.
 
 ??? failure "Local accounts cannot sign in after turning on FIPS mode"
     In FIPS mode the console hashes passwords with PBKDF2-HMAC-SHA512 and refuses the Argon2id
@@ -484,7 +591,8 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
     configuration (import it in the console), keep its `engine.data_dir`, `api` and `engine.ha`
     as they are, and change those only in `/etc/syncd/engine/engine.yaml` on the host. From 0.5.0
     so are `engine.require_signed_config` with `engine.config_signing_keys`, and
-    `engine.license_file`. The usual case after the upgrade: `syncdctl api-access strict` added
+    `engine.license_file`, and from 0.5.1 `passwords.key_file` (`passwords.key_file can only be
+    changed on the engine host`). The usual case after the upgrade: `syncdctl api-access strict` added
     `api.access` on the host, and the console's next version still has the old `api` section;
     import the running configuration once.
 
@@ -584,6 +692,11 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
     without the release's key), or the license was signed with it. Production runs release
     builds; `syncd version` names the license keys a build accepts. See
     [Release builds and the development key](licensing.md#release-builds-and-the-development-key).
+
+??? warning "After the upgrade to 0.5.1, an engine managed by a console without a license blocks publishing"
+    0.5.0 let a console that holds no license switch the engines' enforcement off. From 0.5.1 such
+    an engine is judged by its own evaluation period again, and blocks publishing once that
+    ends. Install a license in the console (see [Licensing](licensing.md)).
 
 ??? warning "The license stays expired after the clock was corrected"
     The console and the engines keep the latest time they have seen, so a clock that ran ahead
@@ -845,9 +958,29 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
     where you keep it, or the engine cannot open its keys. See
     [The password keys](operator-guide.md#the-password-keys).
 
-??? failure "`syncd backup`: `a backup carries the whole store: it needs mTLS (api.tls), the control socket, or api.local_reveal: true for the loopback listener`"
-    The backup was asked over a plain-text loopback listener that may not reveal values. Use the
-    installed mutual TLS (the default), the control socket, or `sudo syncdctl backup --to`.
+??? failure "`syncd backup`: `a backup carries the whole store: it needs mTLS (api.tls), the control socket, or both api.local_control: true and api.local_reveal: true for the loopback listener`"
+    The backup was asked over a plain-text loopback listener that may not take commands or reveal
+    values. From 0.5.1 it needs both settings: `api.local_reveal` alone, which 0.5.0 accepted, no
+    longer serves backups, HA snapshots or the password queue. Use the installed mutual TLS (the
+    default), the control socket, or `sudo syncdctl backup --to`. (0.5.0 said `... or
+    api.local_reveal: true for the loopback listener`.)
+
+??? failure "`Backup hands out the password keys: in strict mode it needs a client certificate listed under api.access.passwords on the engine's host, or the control socket`"
+    New in 0.5.1. The engine holds password keys (a password key or the agents' CA on disk), so in
+    strict access its backups go only to the control socket and to certificates listed under
+    `api.access.passwords`. `syncdctl backup --to` then fails with `the engine's backup failed (an
+    engine that holds password keys gives its backups, under strict access, only through its
+    control socket: uncomment api.control_socket in /etc/syncd/engine/engine.yaml and restart
+    syncd)`. Do that: `syncdctl backup --to` runs `syncd backup` as the engine's user, which opens
+    the socket. Listing `syncd command line` under `passwords` would work too, but gives the
+    `syncd` group the password keys. Scheduled backups (`engine.backup`) are taken by the engine
+    itself and are not affected. See [Control API access](operator-guide.md#control-api-access).
+
+??? warning "A backup listing, restore or `--keep` passes over an archive"
+    New in 0.5.1: an archive without its manifest (`syncd-<host>-<time>.tar.zst` with no
+    `.manifest.json` beside it) is not a backup. A failed backup of an earlier release could leave
+    one; 0.5.1's leave none. Delete such archives by hand. Backups are listed, and `keep`
+    prunes them, by when they were taken (0.5.0 ordered them by name, so by host first).
 
 ??? failure "`syncdctl backup`: `unknown option --sse`, or `--sse, --endpoint, --region and --s3-ca are for an off-host backup (--to)`"
     From 0.4.1, `syncdctl backup --to` and `syncdctl restore --from` take `--sse`, `--endpoint`,
@@ -902,8 +1035,20 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
     `syncd status` on either shows the lease's last error (`LEASE ERROR: ...`, and `the lease
     could not be read or renewed` in the log): the lease's database is unreachable or refuses the
     role (the URL, the network, the password, the rights on the `syncd_lease` table), or the
-    lease file's file system is not mounted; or both engines are configured with `role:
-    passive`. As soon as one engine can take the lease, it does.
+    lease file's file system is not mounted, or the engine may not write the lease file's
+    directory (a read-only file system error: the engine's unit lets it write only its own
+    directories, and needs the drop-in `syncdctl ha init --lease-path` writes from 0.5.1, or one
+    of your own with `ReadWritePaths=`; see
+    [What runs where](operator-guide.md#what-runs-where)); or both engines are configured with
+    `role: passive`. As soon as one engine can take the lease, it does.
+
+??? warning "`LEASE ERROR: the lease is held under this engine's name (<name>) by another process: ...; waiting for it to expire`"
+    New in 0.5.1. Either both engines of the pair have the same member name (`engine.ha.member`,
+    or `SYNCD_HA_MEMBER`, the host name by default: two hosts with the same short name, or two
+    containers), or this engine restarted after a crash while it held the lease. In the second
+    case it takes part again once its old lease expires (`ttl_secs`), and nothing is to be done.
+    In the first, give each engine its own name and restart it. 0.5.0 let both such engines hold
+    the lease.
 
 ??? warning "The snapshots are late (`SyncdHaSnapshotStale`)"
     On the active engine, taking them fails (`taking a store snapshot failed`: a full disk under
@@ -911,7 +1056,12 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
     failed`): the active engine's API unreachable on 7443, a client certificate it does not
     accept, or a name its certificate does not carry. In strict control API access the passive
     engine's certificate must be listed under `operate` on the active host (`cli.crt` on hosts,
-    `syncd engine` on Kubernetes, which the shipped files list). From 0.5.0 the default interval
+    `syncd engine` on Kubernetes, which the shipped files list), and from 0.5.1, when the active
+    engine holds password keys, under `passwords` too: the pull then fails with `PullSnapshot
+    hands out the password keys: in strict mode it needs a client certificate listed under
+    api.access.passwords ...` (or `PullSnapshotFiles`), and the password queue is not followed
+    either. List it on both hosts (see
+    [Passwords and the pair](install.md#passwords-and-the-pair)). From 0.5.0 the default interval
     is 60 s, so the alert's three intervals pass sooner than with 0.4.1's 300 s. `this engine takes no snapshots: it is not
     the active engine of a pair` means the passive engine reached the wrong one. Until it is
     fixed, a takeover starts from an older store and has more to read and reconcile; nothing is
@@ -924,7 +1074,8 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
     delivered, but one queued and not yet delivered when the active engine is lost, before the
     passive one catches up or the next snapshot, is not delivered by the engine that takes over.
     Bring the passive engine back; it catches up by itself. During an upgrade of the pair, the
-    queue is not followed until both engines run 0.5.0.
+    queue is not followed until both engines run 0.5.0. From 0.5.1, in strict access, following
+    the queue needs the passive engine's certificate under `api.access.passwords` (above).
 
 ??? failure "A Kubernetes lease: `LEASE ERROR` with 403, 404 or a timeout"
     New in 0.5.0, with `engine.ha.lease.kind: kubernetes`. 403: the engine's service account may
@@ -935,7 +1086,7 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
     `kubectl get lease -n <namespace> <name> -o yaml` shows the holder, the last renewal and the
     takeovers. A pod that has just started waits one lease duration before it takes over from a
     holder that is gone. Changing a pair's lease kind needs both engine pods stopped first. This
-    backend was tested against a fake API server only.
+    backend is tested in kind by the release's CI, not on a cloud cluster.
 
 ??? warning "`the pair's lease is lost: stopping the sources and the exports; this engine is now the passive one`"
     This engine could not renew the lease for longer than its TTL (cut off from the lease's
@@ -945,9 +1096,18 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
 
 ??? warning "Both engines claim to be active (`syncd_ha_active` 1 on both)"
     Only for the moments before the old one notices: an engine checks the lease before every
-    export batch and writes nothing within a second of its expiry. If it lasts, the hosts' clocks
-    disagree (the `file` lease is judged by them; keep them in NTP sync), or the lease file is not
-    on a file system both hosts share.
+    export batch (from 0.5.1, every 64 exports) and writes nothing within a second of its expiry.
+    If it lasts, the hosts' clocks disagree (the `file` lease is judged by them; keep them in NTP
+    sync), or the lease file is not on a file system both hosts share. With 0.5.0, two engines
+    with the same member name could both hold the lease; 0.5.1 refuses the second (above).
+
+??? failure "The engine exits while taking a pair over: `taking the pair over: the store could not be released for the received snapshot; restart the engine`"
+    New in 0.5.1. The passive engine won the lease, but calls it was still answering held its
+    store for more than 30 seconds, so it could not swap the received snapshot in. Rather than
+    take over with an older store, it exits (logging `the store is still in use by calls the
+    passive engine was answering: stopping ...`). systemd (`Restart=on-failure`) or Kubernetes
+    restarts it, and the restart swaps the snapshot in before anything opens the store. Nothing
+    is to be done unless it keeps happening: then send the engine's log with a support bundle.
 
 ??? failure "A command is refused: `this engine is the passive one of the pair <pair>; <engine> is active: send the command there`"
     Commands go to the active engine. `syncd status` names it. Run the command on its host, or in
@@ -1078,8 +1238,10 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
     sync down. Stopping the engine is safe: a full sync resumes where it stopped at the next start.
 
 ??? warning "`target <name> UNREACHABLE`, alert `SyncdTargetDown`"
-    The engine lost its connection to the directory and can't make a new one. The log says
-    `export target is unreachable` and `the directory is still unreachable`. It keeps reading and
+    The engine lost its connection to the directory and can't make a new one, or (from 0.5.1) the
+    directory did not answer when the engine started or reloaded, and the engine started without
+    it (`the directory cannot be reached; starting with it down`). The log says `export target is
+    unreachable` and `the directory is still unreachable`. It keeps reading and
     committing its sources; every export to that target fails at once into the dead-letter queue.
     It tries a new connection after waits from 1 s, doubling to a minute.
 
@@ -1100,11 +1262,19 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
     itself. If the write-back keeps failing, the log says why; it is tried again every minute.
 
 ??? warning "A published configuration rolled back: `the new configuration did not start; restoring the previous one`"
-    The engine saved and reloaded the new configuration but could not start with it: a source or
-    target it could not connect to, a listen address in use, a certificate it could not read, or a
-    secret reference (`env:`, `file:`) that doesn't resolve on this host. It wrote the previous
-    configuration back and runs that one; nothing was exported with the new rules. The console
-    shows the publish as failed and the version stays a draft.
+    The engine saved and reloaded the new configuration but could not start with it: an LDAP
+    target that refused its bind, or whose certificate it does not trust, a listen address in use,
+    a certificate it could not read, or a secret reference (`env:`, `file:`) that doesn't resolve
+    on this host. It wrote the previous configuration back and runs that one; nothing was exported
+    with the new rules. The console shows the publish as failed and the version stays a draft.
+    From 0.5.1 an LDAP or Active Directory directory that is only down does not roll a
+    configuration back: the engine starts with it, shows `target <name> UNREACHABLE`, and
+    connects once it answers (`syncd run --once` still fails at once).
+
+    If the previous configuration does not start either, 0.5.1 logs `the previous configuration
+    did not start either; trying it again` and tries it every 5 seconds, doubling up to a minute,
+    until it starts or is stopped (0.5.0 exited). Fix what stops it (the same causes), and it
+    starts by itself.
 
     Read the reason: `journalctl -u syncd -g "did not start" -A 3`. Fix it (often a variable
     missing from `/etc/syncd/engine.env`, then `systemctl restart syncd`), and publish again.
@@ -1273,7 +1443,8 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
     reads. The installed configuration uses mutual TLS; keep it. Similarly,
     `revealing sensitive values needs mTLS (api.tls), or api.local_reveal: true` for `--reveal`.
     In strict mode the loopback listener, like the control socket, stops at `operate`, on top of
-    these two settings.
+    these two settings. From 0.5.1 backups, HA snapshots and the password queue need both
+    settings on such a listener (see [Backups and restore](#backups-and-restore)).
 
 ??? failure "`the engine has too many commands waiting; try again shortly`, or `the engine is shutting down`"
     The engine's command queue is full, or it is stopping. Retry in a moment; check `systemctl
@@ -1302,14 +1473,18 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
     comes from a ConfigMap or a Secret, not both. See [Single sign-on](install.md#single-sign-on).
 
 ??? failure "The pods do not start: `ImagePullBackOff`, or `exec format error`"
-    No release has been published to `ghcr.io/winllc` yet: build the images and point
-    `image.engine.repository` and `image.console.repository` at your registry (see
-    [Getting the release](install.md#getting-the-release)), with `imagePullSecrets` if it needs
-    them. `exec format error` means an image for another platform: a release has arm64 images
-    only when it was built with the arm64 runners (`docker buildx imagetools inspect` lists a
-    tag's platforms), an image you built is for your build host's platform, and the `-fips`
-    images are amd64 only. Schedule the pods on matching nodes
-    (`nodeSelector: {kubernetes.io/arch: amd64}`), or build for the nodes' platform.
+    `ImagePullBackOff`: the tag is not in the registry the values name. The 0.5.1 images are on
+    `ghcr.io/winllc` (`syncd:0.5.1`, `syncd-console:0.5.1` and their `-fips` tags); there is no
+    `latest`. Check `image.engine.tag` and `image.console.tag` (the chart's `appVersion` by
+    default), and on a cluster that cannot reach ghcr.io, mirror the images (see
+    [Air-gapped clusters](install.md#air-gapped-clusters)) or build them (see
+    [Getting the release](install.md#getting-the-release)), with `imagePullSecrets` if your
+    registry needs them. `exec format error` means an image for another platform: a release has
+    arm64 images only when it was built with the arm64 runners (`docker buildx imagetools
+    inspect` lists a tag's platforms), and an image you built is for your build host's platform.
+    From 0.5.0 the `-fips` images are built for both platforms too (0.4.1's were amd64 only).
+    Schedule the pods on matching nodes (`nodeSelector: {kubernetes.io/arch: amd64}`), or build
+    for the nodes' platform.
 
 ??? failure "The engine fails at startup with the FIPS image: `not a FIPS build`, or `fips off` in its status"
     `SYNCD_FIPS_MODE=true` is refused by the standard images: use the `<version>-fips` tags for
@@ -1331,6 +1506,14 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
     Job registers the engine again by itself (`engine.re-registered`). Before 0.4.0 the Job did not
     get the setting and kept failing. See
     [The master key Secret](operator-guide.md#the-master-key-secret).
+
+??? failure "With Argo CD (or another tool that renders the chart), the console refuses its master key, or the engine restarts at every sync"
+    The chart keeps its generated master key, initial password and certificates by reading its
+    own Secrets with Helm's `lookup`, which `helm template` cannot: every render makes new ones.
+    From 0.5.1 keep them in Secrets of your own and name them (`console.masterKey.existingSecret`,
+    `console.adminPasswordExistingSecret`, `pki.existingSecret`); for a release that runs already,
+    copy what the chart made first, so nothing changes. See [GitOps](install.md#gitops). A key
+    already replaced: see the master key entry above.
 
 ??? failure "The registration Job fails"
     `syncd-register` runs after each install and upgrade, and retries (12 times, for up to 15

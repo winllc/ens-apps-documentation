@@ -2,7 +2,7 @@
 
 This page says what syncd relies on for FIPS 140-3, how its optional FIPS mode is turned on and
 what it changes, what has not been tested or validated, and which settings a DISA STIG
-deployment needs. It describes syncd 0.5.0 (commit `a9d17c6`). The suite-wide picture is in
+deployment needs. It describes syncd 0.5.1 (tag `v0.5.1`, commit `7da4d9e`). The suite-wide picture is in
 [FIPS 140-3 and DISA STIG](../fips-and-stig.md).
 
 !!! note "No ENS validation"
@@ -92,14 +92,16 @@ flag.
    (`syncd-<version>-linux-x86_64-fips.tar.gz`), and from 0.5.0 an aarch64 one too
    (`syncd-<version>-linux-aarch64-fips.tar.gz`); the images have `<version>-fips` variants, from
    0.5.0 for `linux/amd64` and `linux/arm64` (the arm64 ones only while the repository's arm64
-   runners are on). No release has been tagged and published yet, and the arm64 and aarch64 FIPS
-   jobs have never run in CI, so for now build it yourself:
+   runners are on). Releases are tagged from 0.5.0 on (`v0.5.0`, `v0.5.1`). For 0.5.1 the x86_64 and
+   aarch64 FIPS bundles were built and are on the ENS licensing portal's **Downloads** page, and the
+   `0.5.1-fips` images were pushed to GHCR and signed. When the
+   build you need is not there, build it yourself:
 
     ```sh
     scripts/package.sh --fips                      # bundle, .deb and .rpm, with -fips in the name
     deploy/packaging/build.sh --fips --packages    # the same, called directly
     docker build -f deploy/container/Dockerfile --target engine \
-      --build-arg FEATURES=syncd/fips,syncd-console/fips -t syncd:0.5.0-fips .   # the FIPS image
+      --build-arg FEATURES=syncd/fips,syncd-console/fips -t syncd:0.5.1-fips .   # the FIPS image
     ```
 
     The bundle carries a `FIPS` marker file and, from 0.5.0, a FIPS build of the capture agent
@@ -262,7 +264,12 @@ changes in FIPS mode. The check has not been run in FIPS mode end to end.
 From 0.5.0 the console has the ENS platform baseline's notice-and-consent banner, session limits,
 configurable lockout and password policy, HSTS, and certificate (CAC/PIV) sign-in, under the
 family's `ENS_*` names (see [Security](security.md#sign-in-baseline)). Unset, each keeps 0.4.1's
-behaviour, so an upgrade changes nothing until they are set. This table lists what to decide for
+behaviour, so an upgrade changes nothing until they are set. 0.5.1 adds checks that need no
+setting: changes made with a session from another site are refused (an `Origin` and
+`Sec-Fetch-Site` check besides `SameSite=Strict`), what the web UI asks on its own no longer keeps a
+session from its idle timeout, wrong current passwords on the password change count toward the
+lockout, refusals of a signed-in account are audited (`access.denied`), and the API tokens of a
+single sign-on account expire with its inactivity (below). This table lists what to decide for
 a STIG deployment. The console settings are environment variables in `/etc/syncd/console.env`;
 see [Configuration](configuration.md).
 
@@ -270,10 +277,11 @@ see [Configuration](configuration.md).
 |---|---|---|---|
 | Notice and consent banner (AC-8) | `ENS_CONSENT_BANNER_ENABLED`, `ENS_CONSENT_BANNER_TEXT` or `_TEXT_FILE` | off; the standard DoD notice when on | `true`. Enforced by the server for every sign-in method, and audited (`auth.consent`, then the session it led to) |
 | Classification marking | **Users** → Banners (top and bottom, shown on every page and the sign-in page) | off | Your system's marking, for example `UNCLASSIFIED//FOUO`. Colours below 4.5:1 contrast are refused. The top banner's text is also printed on every page of a PDF report |
-| Idle timeout (AC-11, AC-12) | `CONSOLE_SESSION_IDLE_MINUTES`; `ENS_SESSION_ADMIN_IDLE_TIMEOUT` for console administrators | `30`; unset | `15`, and `10` for administrators, or your policy's values |
+| Idle timeout (AC-11, AC-12) | `CONSOLE_SESSION_IDLE_MINUTES`; `ENS_SESSION_ADMIN_IDLE_TIMEOUT` for console administrators | `30`; unset | `15`, and `10` for administrators, or your policy's values. From 0.5.1 the UI's own polls and status stream are no activity (`X-Syncd-Background`), so an unattended tab reaches the timeout; in 0.5.0 a dashboard left open kept its session alive |
 | Absolute session lifetime | `CONSOLE_SESSION_MAX_HOURS` | `12` | Your policy's value |
 | Concurrent sessions per user (AC-10) | `ENS_SESSION_MAX_PER_USER` | `0` (no limit) | `3`, or your policy's value; a sign-in beyond it ends the oldest session |
-| Failed password sign-ins (AC-7) | `ENS_LOCKOUT_ATTEMPTS`, `ENS_LOCKOUT_WINDOW`, `ENS_LOCKOUT_DURATION` | `5`, `0`, `15` (minutes); 20 attempts per address in 5 minutes, not a setting | `3`, `15`, `0` (locked until an administrator unlocks the account) |
+| Failed password sign-ins (AC-7) | `ENS_LOCKOUT_ATTEMPTS`, `ENS_LOCKOUT_WINDOW`, `ENS_LOCKOUT_DURATION` | `5`, `0`, `15` (minutes); 20 attempts per address (an IPv6 client by its /64 from 0.5.1) in 5 minutes, not a setting | `3`, `15`, `0` (locked until an administrator unlocks the account). From 0.5.1 wrong current passwords on the password change count too, and attempts made at the same moment, through several consoles too, check no more passwords than the lockout allows |
+| Previous logon notification (AC-9) | none (always on, from 0.5.0) | on | The dashboard shows each account its previous sign-in (when, how, from which address) and the password sign-in attempts refused since, and **Users** lists each account's last sign-in |
 | Password complexity and lifetime (IA-5(1)) | `ENS_PASSWORD_MIN_LENGTH`, `_MIN_UPPERCASE`, `_MIN_LOWERCASE`, `_MIN_DIGITS`, `_MIN_SPECIAL`, `ENS_PASSWORD_HISTORY`, `ENS_PASSWORD_MAX_AGE_DAYS`, `ENS_PASSWORD_REJECT_USERNAME` | 12 characters minimum; no complexity, history or expiry | `15`, `1` of each class, history `5`, `60` days, `true`; better, single sign-on or certificates, with local sign-in limited to break-glass accounts. A minimum password lifetime and a minimum of changed characters are not enforced |
 | CAC/PIV sign-in (IA-2(12), IA-5(2)) | `ENS_X509_ENABLED`, `ENS_X509_CA_FILE`, `ENS_X509_REVOCATION`, `ENS_X509_REVOCATION_FAIL_OPEN` | off | On, with the issuing CAs you accept, revocation `ocsp,crl`, and fail-open left `false`. Tested with test PKIs only: try it with a real card and your PKI first ([Single sign-on](single-sign-on.md#certificate-sign-in-cacpiv)) |
 | Organisational sign-in and MFA (IA-2, IA-8) | `CONSOLE_OIDC_*`, `CONSOLE_SAML_*` | off | Through your OpenID Connect or SAML provider, with its MFA; SAML is tested against Keycloak only ([Single sign-on](single-sign-on.md)) |
@@ -281,12 +289,14 @@ see [Configuration](configuration.md).
 | Least privilege | role assignments scoped to environments or engines, `CONSOLE_REVEAL_ROLES` | roles on everything; `admin` may reveal | Assign the narrowest role at the narrowest scope; `CONSOLE_REVEAL_ROLES=none` if nobody needs sensitive values |
 | Separation of duties | **Users** → Configuration approval; `api.access` strict and `engine.require_signed_config` on the engine | off; strict on new installs, compatible on upgraded ones | Approval required where more than one designer works; strict access and signed configurations, so that only what the console's gates passed reaches the engine |
 | Secure session cookie | `SYNC_DEV_MODE` | off (cookie `Secure`) | Keep development mode off |
+| Cross-site request forgery (SC-23) | none; `CONSOLE_PUBLIC_URL` names an origin of the console's own | `SameSite=Strict`, and from 0.5.1 changes made with the session refused when `Sec-Fetch-Site` or `Origin` says they come from another site | Nothing to set behind a proxy that keeps `Host` or sends `X-Forwarded-Host`; otherwise set `CONSOLE_PUBLIC_URL`. See [Security](security.md#csrf-and-browser-security-headers) |
 | Transport encryption to browsers (SC-8) | The console's own HTTPS (`CONSOLE_TLS_CERT`, `CONSOLE_TLS_KEY`), or nginx `ssl_protocols`; `ENS_HSTS_MAX_AGE`, `ENS_HSTS_INCLUDE_SUBDOMAINS` | Plain HTTP on loopback; TLS 1.2 and 1.3 with either; HSTS for a year on the console's own HTTPS | Either. The console's protocols are not configurable: where a narrower list is required, use nginx (or an ingress). The shipped nginx file sends HSTS |
-| Audit trail format (AU-2, AU-12) | the console's audit trail | `ens-audit/1`, hash-chained, in PostgreSQL | The family's format: categories, severities (lockouts, a broken chain and failing delivery are `alert`), actors with their role assignments, client address and user agent; sign-ins, refusals, lockouts, consent and ended sessions are recorded. Verify it with **Verify chain** or `tools/audit/verify_chain.py` over an export |
+| Audit trail format (AU-2, AU-12) | the console's audit trail | `ens-audit/1`, hash-chained, in PostgreSQL | The family's format: categories, severities (lockouts, a broken chain and failing delivery are `alert`), actors with their role assignments, client address and user agent; sign-ins, refusals, lockouts, consent and ended sessions are recorded, and from 0.5.1 requests refused to a signed-in account (`access.denied`, at most once a minute per session). Verify it with **Verify chain** or `tools/audit/verify_chain.py` over an export |
 | Audit off-loading to a SIEM | `ENS_AUDIT_STDOUT`, `ENS_AUDIT_FILE`, `ENS_AUDIT_SPLUNK_*`, `ENS_AUDIT_SYSLOG_*`; the pull API | stdout (the journal) on; the others off | At least one off-host output: Splunk HEC, syslog over `tls`, a collected audit file, or the pull API (`GET /api/audit/events`) with an API token scoped `audit:read`. Delivery is at least once and in order; events queue while a receiver is down, and 15 minutes of failures raise an `audit.delivery-failed` alert in the trail. See [Audit logging](../audit-logging.md) |
-| Audit retention | `ENS_AUDIT_RETENTION_DAYS` | `0` (keep forever) | Your policy's period. Only events every enabled output has delivered are pruned, and each prune is recorded (`audit.pruned`) |
+| Audit retention | `ENS_AUDIT_RETENTION_DAYS` | `0` (keep forever) | Your policy's period. Only events every enabled output has delivered are pruned, and each prune is recorded (`audit.pruned`, from 0.5.1 in the same transaction as the delete); from 0.5.1 verification flags events missing from the start that no `audit.pruned` accounts for |
 | Audit integrity | the hash chain, the hourly `audit log head` lines | on | Keep the head lines (or an output) outside the database, and verify the chain against a recorded head regularly |
 | Non-person accounts | API tokens | none until created | One token per system, with the narrowest scopes, limited to an environment or engines where it can be, and an expiry (`CONSOLE_API_MAX_TOKEN_LIFETIME`, `365d` at most by default); each stops when its creator is disabled. Every state-changing token request is audited |
+| Inactive accounts' tokens (AC-2(3)) | `CONSOLE_API_SSO_CREATOR_MAX_IDLE` | `35d` (from 0.5.1) | Keep it on. A token whose creator signs in through single sign-on or a certificate stops working once the creator has not signed in for that long, and works again after their next sign-in. Local accounts are not disabled for inactivity by the console: review them |
 | Client addresses in the audit log | `CONSOLE_TRUSTED_PROXIES` | none | Your proxy's address |
 | FIPS 140-3 | `SYNCD_FIPS_MODE` with a FIPS build | off | See [Turning FIPS mode on](#turning-fips-mode-on) |
 
@@ -295,7 +305,7 @@ DISA Application Security and Development STIG, mapped to NIST SP 800-53 control
 to STIG rule ids: check them against the STIG release you are assessed with. Most of the `ENS_*`
 names were chosen in syncd 0.5.0 and have not yet been compared with the other ENS products'.
 
-Remaining gaps, as of 0.5.0: no minimum password lifetime or minimum of changed characters, no
+Remaining gaps, as of 0.5.1: no minimum password lifetime or minimum of changed characters, no
 warning before a session ends, SAML tested against Keycloak only (no encrypted assertions,
 signed requests, single logout or metadata signatures), certificate sign-in tested with test
 PKIs only (no delta or indirect CRLs; the delegated OCSP responder's own revocation is not
@@ -325,7 +335,9 @@ For a STIG host, also:
   are logged there;
 - run PostgreSQL configured to your database STIG, with TLS if it is on another host;
 - keep the `syncd` group (which can read the command line's client key, and so operate the
-  engine, or control it fully in compatible mode) to administrators;
+  engine, or control it fully in compatible mode) to administrators; from 0.5.1, in strict mode,
+  that key no longer takes backups or snapshots of an engine that holds password keys unless it
+  is listed under `api.access.passwords` (use the control socket for `syncd backup`);
 - protect the `syncdctl` backups, which hold the console's master key (off-host too, from 0.4.1)
   and the secrets in `/etc/syncd`, and keep a copy of the master key apart from them; an engine
   backup or off-host backup also holds the entity data and the password keys (in the clear unless

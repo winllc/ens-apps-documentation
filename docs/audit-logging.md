@@ -22,7 +22,10 @@ syncd (from 0.4.0; its console's trail, `product` `syncd`) and the ENS licensing
     CSV. From 0.5.0 sign-in events carry `roles` (a list of assignments) instead of `role`, and
     events carry `details.assignment`, the role assignment that allowed the action: update SIEM
     parsers that read `role`. Auditors whose role covers one environment or engine see its
-    entries. Pull-API tokens are made on its **Integrations** page with
+    entries. From 0.5.1 it records `access.denied` for a refused request, `wasm_module.upload`,
+    `wasm_module.approve` and `wasm_module.download` are in the ENS action table, and retention
+    records `audit.pruned` with the deletion, so **Verify integrity** flags a gap no `audit.pruned`
+    explains. Pull-API tokens are made on its **Integrations** page with
     the `audit:read` scope. See [syncd's admin guide](syncd/admin-guide.md).
 
 ## For administrators: the audit page

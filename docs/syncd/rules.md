@@ -29,7 +29,12 @@ the merged entity; or, for a group's owner, `group`.
 | Computed group `filter` | `e` | Yes | No | No |
 | Computed group `owner_from` | `group` (`group.name`, `group.dn`, `group.members`) | No | No | No |
 
-[Package functions](#rule-packages) can be called in any of them.
+[Package functions](#rule-packages) can be called in any of them. Since 0.5.1 validation refuses
+`unique()` and `unique_within()` everywhere the table says No: in publications (filters,
+attributes, DN attributes, the Active Directory conveniences, `passwords.initial.from`), in
+group filters and `owner_from`, and in correlation hints. 0.5.0 refused them only in flows, join
+rules and data-quality checks, and elsewhere they claimed nothing, so the first candidate always
+won.
 
 ```yaml
 flows:
@@ -138,6 +143,22 @@ so `lower(e.mail)` works whether `mail` holds one address or several.
   (`20240102030405Z`); a duration is exported as whole seconds (for `pwdMaxAge`, say).
 - Bytes are exported as they are.
 
+### Size limits
+
+Since 0.5.1 an expression is refused when it compiles to something too large to run safely,
+with an error that says which limit it passed:
+
+- it nests deeper than 200 levels, the bodies of the [package functions](#calling-package-functions)
+  it calls included;
+- its text has a chain of more than 400 operators (`a + b + ... + z`, `x.a.b.c`, `x[0][0]`),
+  counted before it is parsed;
+- it compiles to more than 100,000 parts once every package function call is expanded (a
+  function that calls another twice, which calls another twice, doubles at each level).
+
+Rules people write stay far below these. Split a rule that reaches one into `let` steps or
+computed attributes. 0.5.0 had no such limits: a long or deeply nested expression could overflow
+the stack and stop the engine.
+
 ## Function library
 
 The console's expression editor offers these as completions with the same descriptions.
@@ -163,7 +184,7 @@ Arguments ending in `?` are optional. Time zone arguments are IANA names
 | `endsWith(s, suffix)` | Whether `s` ends with `suffix`. | `e.mail.endsWith("@example.com")` |
 | `matches(s, regex)` | Whether a regular expression matches somewhere in `s`. | `matches(e.employeeId, "^E[0-9]+$")` |
 | `regexReplace(s, regex, replacement)` | Replaces every match. `$1` in a literal replacement is the first group; a replacement read from data is used as it is. | `regexReplace(e.phone, "[^0-9+]", "")` |
-| `regexExtract(s, regex)` | The first group of the first match (or the whole match); empty when nothing matches. | `regexExtract(e.mail, "@(.+)$")` |
+| `regexExtract(s, regex)` | The first group of the first match (or the whole match); null (no value) when nothing matches. (The 0.5.0 catalog said empty; the function has always given null.) | `regexExtract(e.mail, "@(.+)$")` |
 | `truncate(s, n)` | The first `n` characters of `s`, or all of it when shorter. On a list, each value. A negative `n` is an error. | `truncate(lower(e.sn), 20)` |
 
 A regular expression written as a literal is checked when the rule compiles. One read from
@@ -274,6 +295,12 @@ these functions; see [Connectors](connectors.md#active-directory-conveniences).
 
 Functions that take a timestamp also take text, read as `timestamp()` reads it. A literal
 zone, format or duration is checked when the rule compiles.
+
+A local time that a clock change skips (the hour lost in spring) is read as the end of the gap,
+the first instant that exists after it: in New York, `2024-03-10 02:30` is 03:00. So a date
+whose midnight is skipped (Santiago, Beirut, Havana) starts when the clock jumps, for
+`parseTime()`, `startOfDay()` and `addMonths()` alike. Since 0.5.1; 0.5.0 failed on such a time,
+or for a skipped midnight started the day an hour later. A time that happens twice is the first.
 
 !!! note "Not in the library"
     The product plan also lists padding, hashing, DN parsing and reading a named source's
@@ -455,14 +482,31 @@ scope, and claims it for this entity.
   They are released when the entity is deleted, except those of a
   [permanent](#permanent-values) attribute, which are never released. Claims are checked against the engine's
   own index, not against the live target.
+- **What is claimed.** Since 0.5.1 an entity claims the value `unique()` returned as well as
+  the attribute's own value, so an expression that builds on it
+  (`unique("uid", [...]) + "@example.com"`) still claims the `uid`; 0.5.0 claimed only the
+  attribute's final value, and two entities could get the same `unique()` result. Where the two
+  differ, the engine keeps what `unique()` gave in its store (`unique_values/<view>`).
+- **Values entities already hold.** Since 0.5.1, when an attribute comes to call `unique()`,
+  or its scope is renamed, the values entities already have are claimed before the full sync
+  that follows the publish, entity by entity in id order: of two entities that share a value,
+  the one with the lower entity id keeps it, and the full sync gives the other a new candidate.
+  Claims of scopes no attribute uses any more are released then. The first full sync after an
+  upgrade to 0.5.1 does this for every attribute that has a `unique()` scope; values duplicated
+  before the upgrade in an attribute that uses `let` with `assign_once` are not split up.
 - When no candidate is free, the rule fails with "no unique value left", and the error
   policy applies.
 - Use `mode: assign_once`. In `recompute` mode a value moves back to an earlier candidate
   once that one is released.
-- Claims are recorded only for computed attributes, so `unique()` is refused in flows and
-  join rules. Generate values in a computed attribute and map that attribute in
-  publications.
+- Claims are recorded only for computed attributes, so `unique()` is refused anywhere else
+  (since 0.5.1 in publications, group filters and correlation hints too; see
+  [Where expressions are used](#where-expressions-are-used)). Generate values in a computed
+  attribute and map that attribute in publications.
 - Previews and test cases treat every candidate as free, so the first candidate wins.
+- **Known limitation:** a claim is released when its entity is deleted, even if the entity's
+  entry stays in the target (`deprovision: disable`), so a later entity can be given the value a
+  disabled account still holds. Use [`permanent`](#permanent-values) for values that must outlive
+  the entity.
 
 ### `unique_within()`: a value cut to a length
 
@@ -579,7 +623,8 @@ views:
 - Read an entity's attributes with `.attr`. `has(ref(e.manager).mail)` is `false` when
   there is no manager either.
 - Paths can go up to 4 references deep (`ref(ref(e.manager).manager)`).
-- A reference whose entity does not exist gives no value, not an error.
+- A reference whose entity does not exist gives no value, not an error. Since 0.5.1 an entity
+  the store cannot read fails the batch instead of reading as absent.
 - When a referenced entity changes an attribute a rule read, the entities whose rules read
   it are evaluated again. The engine tracks which attributes each rule reads at the end of
   each path.
@@ -643,8 +688,11 @@ publications:
   same values: the result depends on the engine's time, not on when it ran.
 - Pending timers show in `syncd status` (`timers: N pending, next due in ...`), on the
   console's engine page and in the metric `syncd_timers_pending`.
-- They work in computed attributes and publication mappings. In a test case `now()` is
-  0 (1970), so `before` or `value` is what a test sees.
+- They work in flows, computed attributes and publication mappings, and since 0.5.1 in
+  computed group filters and join rules too: an entity joins or leaves a group at the instant,
+  and a record whose join keys change then is correlated again (0.5.0 evaluated those only when
+  something else changed). In a test case `now()` is 0 (1970), so `before` or `value` is what a
+  test sees.
 
 See [Change safety and lifecycle](change-safety.md#effective-dates) for joiners and
 leavers built on them.
@@ -767,9 +815,10 @@ views:
 - `from` is a file relative to the configuration file's directory. Instead of `from`, a
   package can be written inline under the same entry, with `functions`, `lookups`,
   `tests` and `requires` as in a file.
-- Reading the file checks the pin (`sha256:` and the file's SHA-256), that the file is
-  the package named and that it has the version the configuration expects. Any
-  difference is refused.
+- Reading the file checks the pin (`sha256:` and the file's SHA-256, its hex digits in
+  either case since 0.5.1), that the file is the package named and that it has the version
+  the configuration expects. Any difference is refused. (0.5.0's validation took an
+  upper-case pin but its file check then refused it.)
 - A configuration holds **one version of each package**: the same package at two
   versions is refused, so there is nothing to resolve.
 - A configuration read from its file carries the package's content and the file's
@@ -985,7 +1034,11 @@ The console fills the approved module in for its check, the Studio and publishin
 publishes each package whole, module bytes included, inside the configuration it signs. A
 module not uploaded, or not approved yet, makes the configuration fail its check. With Git
 sync, a module may instead sit in the repository beside its package file (`from`) and be
-reviewed with the change that adds it. See the
+reviewed with the change that adds it. Since 0.5.1 the console refuses a module written into
+the YAML itself (`wasm.module`, in the configuration or in a package file) when a configuration
+is checked, saved, imported or published: its bytes would skip the upload, its audit record and
+its approval. Importing what an engine runs keeps each module's pin and drops its bytes, which
+are filled in again from the module store. See the
 [user guide](user-guide.md#custom-functions-enginesidfunctions).
 
 **License.** Custom functions belong to the Extensibility pack: when the license does not

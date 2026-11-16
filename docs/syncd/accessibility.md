@@ -8,13 +8,15 @@ technology, or with users, and no accessibility auditor has reviewed them. syncd
 claim conformance: the report lists several criteria as only partially supported (see
 [Known limits](#known-limits)).
 
-This page describes syncd 0.5.0 (commit `a9d17c6`).
+This page describes syncd 0.5.1 (tag `v0.5.1`, commit `7da4d9e`). The self-audit and the draft
+report in the source still describe 0.5.0's console; what 0.5.1 changes for accessibility is noted
+below.
 
 ## How it is checked
 
 | Check | Status |
 |---|---|
-| Automated accessibility scan | **axe-core 4.14** through Playwright, with the rule tags `wcag2a`, `wcag2aa`, `wcag21a` and `wcag21aa`, in Chromium, on every route of the UI and every dialog, each in the light and the dark theme: 104 checks (64 page states, 40 dialog states), 208 scans (`console/web/e2e/a11y.spec.ts`, and `x509.spec.ts` for the sign-in page with certificate sign-in). The build fails on a violation axe rates serious or critical, and a test fails for a route that no check visits. The run at 0.5.0 reports no violation of any impact |
+| Automated accessibility scan | **axe-core 4.14** through Playwright, with the rule tags `wcag2a`, `wcag2aa`, `wcag21a` and `wcag21aa`, in Chromium, on every route of the UI and every dialog, each in the light and the dark theme: 104 checks (64 page states, 40 dialog states), 208 scans (`console/web/e2e/a11y.spec.ts`, and `x509.spec.ts` for the sign-in page with certificate sign-in). The build fails on a violation axe rates serious or critical, and a test fails for a route that no check visits. The run at 0.5.0 reports no violation of any impact. 0.5.1 adds a check of the dialog that now confirms a password reset before the one-time password is shown; the counts above are 0.5.0's |
 | Exclusions from the scan | The insides of the Monaco code editors and React Flow's own canvas, controls and attribution, which the libraries generate. Their names, keyboard behaviour and the alternatives around them are tested instead; colour contrast inside them is **not** verified |
 | Keyboard and behaviour tests | In the same suite: the skip link, page titles and the announcement of a navigation, status regions, every dialog (its name, focus moved in and kept in, **Escape**, focus given back), the notice before sign-in, adding and removing a role assignment, unlocking an account, the Promote dialog, leaving the code editors, the data flow designer without a pointer, focus order against visual order on eight pages, reflow at 320 and 640 CSS pixels on seventeen pages and two dialogs, and text spacing on five pages |
 | Contrast | Calculated for the palette steps the UI uses for text, field borders and the focus ring: body text 17:1 (light) and 16:1 (dark), secondary text 4.8:1 and 6.7:1, field borders 4.8:1 and 6.7:1, the focus ring 5.3:1 and 6.7:1 |
@@ -112,6 +114,15 @@ separate accessibility contact. Ask ENS Solutions when a procurement needs a rev
   text). White on yellow, for example, is refused.
 - **Notice before sign-in**: with the consent banner on, the notice is shown alone, scrolls from the
   keyboard, and is acknowledged with a button.
+- **Confirmations** (from 0.5.1): leaving an editor (the configuration editor, the Studio) with
+  unsaved changes opens a **Leave without saving?** dialog (**Stay**, **Leave and discard**), and
+  **Disable** and **Reset password** on the **Users** page ask first, in the same native modal
+  dialogs as the rest. A sign-out the console did not confirm is said in an alert, **Not signed
+  out**.
+- **Lists of DNs** (from 0.5.1): fields whose values hold commas, such as **Groups never touched**,
+  are text areas with one value per line instead of a comma-separated line.
+- **Dashboard** (from 0.5.0): the message of the day is plain text with its line breaks kept, and
+  refused sign-in attempts since the previous sign-in are a warning with its count in words.
 
 ## Known limits
 
@@ -122,8 +133,8 @@ The criteria the self-audit and the draft report give as **partially supported**
 | 1.3.1 Info and Relationships | The tab lists have `tab` roles and the selected state, but no tab panels tied to them; some explanations are only browser tooltips (`title`), shown on hover |
 | 1.4.3 Contrast (Minimum), 1.4.11 Non-text Contrast | Not verified inside the Monaco editors and React Flow's controls, nor for text and lines drawn in SVG (chart labels and lines, the dependency graph), which axe does not measure; the unselected state of tabs and the time-window buttons |
 | 1.4.10 Reflow | Data tables scroll inside their own frame, and the flow designer, the dependency graph, the charts and the YAML editor need two dimensions; whether the last three stay usable at 320 CSS pixels was not judged |
-| 2.2.1 Timing Adjustable | A session ends after its idle timeout (30 minutes by default) without a warning and without a way to extend it from the page; text not saved in the configuration editor is lost. After signing in again the user is back on the same page |
-| 2.2.2 Pause, Stop, Hide | Engine status and the metrics charts update once a second and cannot be paused |
+| 2.2.1 Timing Adjustable | A session ends after its idle timeout (30 minutes by default) without a warning and without a way to extend it from the page; from 0.5.1 a page that refreshes itself does not count as activity, so an unattended tab reaches the timeout sooner than in 0.5.0. Text not saved in the configuration editor is lost when the session ends (leaving the page on purpose asks first, from 0.5.1). After signing in again the user is back on the same page |
+| 2.2.2 Pause, Stop, Hide | An engine's status and the metrics charts update once a second and cannot be paused; from 0.5.1 the **Engines** page refreshes every ten seconds instead |
 | 2.4.5 Multiple Ways | No search across pages and no site map; an engine's sub-pages are reached from the engine's page |
 | 4.1.3 Status Messages | Not every inline result was audited, and counts that change with the live status are not announced |
 

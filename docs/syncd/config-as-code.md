@@ -15,7 +15,7 @@ In syncd 0.4.1 the golden tests from Git gate every publish (the API, Git auto-p
 promotion, not only the editor), `syncd config promote` prints each engine's diff summary, and
 `syncd test` finds golden files one directory level down, as the console does.
 
-This page describes syncd 0.5.0 (`main` at commit `a9d17c6`), which adds:
+This page describes syncd 0.5.1 (tag `v0.5.1`, commit `7da4d9e`). 0.5.0 added:
 
 - **Each version's own Git commit.** The console keeps the commit a version came from, and reads
   its golden tests and package files there, not at the branch head (see
@@ -30,6 +30,21 @@ This page describes syncd 0.5.0 (`main` at commit `a9d17c6`), which adds:
   allowed (see [The license](#the-license)).
 - **Scoped roles.** Git sync is for roles on everything; promotion needs the right to publish on
   every engine of the target environment.
+
+0.5.1 fixes what a review of 0.5.0 found. For this way of working:
+
+- **What an engine runs no longer shows its secret values.** The running configuration and
+  **Compare** against it mask the engine's environment secrets, and importing what the engine runs
+  puts them back as placeholders (see [Environments in the console](#environments-in-the-console)).
+- **Git sync** walks the branch's first-parent line, so a merge comes in as one version, and never
+  auto-publishes a commit the console pushed back (see [What a pass does](#what-a-pass-does) and
+  [Push-back](#push-back)). A commit's author can't approve the version it made.
+- **Golden tests that can't be read from Git fail the publish** instead of counting as none (see
+  [Golden tests in the console](#golden-tests-in-the-console)).
+- **Export and import** between consoles work with versions written with `{{ env.* }}`
+  placeholders, kept as written for the target console's own environments, and an import is
+  checked as a save is (see the [User guide](user-guide.md#export-and-import)).
+- **Two publishes to one engine** run one after the other.
 
 Rule packages, functions and lookup tables shared between configurations, fit the same way of
 working; see [Rule packages](#rule-packages) below and [Computed attributes and rules](rules.md).
@@ -141,11 +156,14 @@ publications:
   value.
 - A value that is one placeholder and nothing else takes the type of the environment's value, so
   `port: "{{ env.hr_port }}"` renders as `port: 5433`. A placeholder among other text renders as
-  text.
+  text, and so does one in a block scalar (`|`, `>`).
 - A placeholder with no value and no default is an error that names the key and where it is
   (``connectors[0].connection.host: the environment has no value for `hr_host` ``, with a hint to
   set it or give a default). Anything else in `{{ ... }}` is an error too.
-- Comments are not kept in a rendered configuration.
+- Since 0.5.1 rendering replaces each placeholder where it is written and leaves everything else
+  as it was, byte for byte: comments, quoting, and values such as `NO`, `on`, `yes` or `0100` that
+  a YAML reader could take for a boolean or a number. 0.5.0 wrote the whole configuration out
+  again, without its comments.
 
 Keep secrets as secret references (`{ env: NAME }`, `{ file: PATH }`), as above. An environment's
 values then hold only where the secret is, not the secret itself.
@@ -165,7 +183,8 @@ values:
 
 The name is lower-case letters, digits, `-` and `_`, at most 64 characters. A value is a scalar,
 or `{ value: x, secret: true }` for one that is shown as `<secret name>` wherever a rendering is
-displayed rather than run.
+displayed rather than run. Since 0.5.1 a value is read strictly: only `true` and `false`, `null` and
+plain decimal numbers are typed; `NO`, `on`, `0100` and `+33` are text, as written.
 
 ### Environments on the engine's host
 
@@ -222,6 +241,18 @@ the table work as before; see [Publishing to a strict engine](#publishing-to-a-s
   selector picks another environment, or **as written** to compare the texts as saved. A
   rendering shown this way still shows the plain values it uses, to any role that may view
   configuration.
+- **What an engine runs** holds the secret values it was sent in clear. **0.5.0 showed them to
+  every role that may view configuration** in the running configuration (`GET
+  .../configs/running`, the editor of an engine with no versions), and Compare against it masked
+  only those of the environment it was rendered for. Since 0.5.1 the console masks them as
+  `<secret name>` there and in Compare, whatever the environment, looking for the environment's
+  secret values now and the last five of each sent with the engine's publishes (kept sealed with
+  the master key), so a value changed since the last publish is masked too. **Import running** and
+  the host sections of an imported file put them back as `{{ env.name }}`, so a version never holds
+  them; what the engine runs that holds one but does not parse is not imported.
+- **Saving values** (since 0.5.1): a whole number that reads back the same keeps its type, but
+  `02134` (a postal code) stays text; a stored value left unchanged is saved as it was; and a stored
+  secret survives unticking and ticking **Secret** again.
 - **The versions list** shows each version's **Source** (`console`, `git` or `promotion`, with the
   commit or the version it came from) and where it **Runs in**: the environments whose engines run
   that text.
@@ -255,7 +286,7 @@ CONSOLE_CONFIG_GIT_ENGINES=dev-1,dev-2
 | `CONSOLE_CONFIG_GIT_TOKEN_FILE` | none | A token, for `https://` (basic authentication; the user name from the URL, else `x-access-token`). Not with an SSH key |
 | `CONSOLE_CONFIG_GIT_POLL` | `60s` | How often the branch is fetched |
 | `CONSOLE_CONFIG_GIT_AUTO_PUBLISH` | `off` | `off`, `validate` or `publish` (below) |
-| `CONSOLE_CONFIG_GIT_PUSH_BACK` | `false` | Commit versions saved in the console to the branch |
+| `CONSOLE_CONFIG_GIT_PUSH_BACK` | `false` | Commit versions saved in the console to the branch; never auto-published again (see [Push-back](#push-back)) |
 | `CONSOLE_CONFIG_GIT_ENGINES` | every engine | The engines the repository is for, comma-separated. Renaming an engine (`syncd-console admin rename-engine`) doesn't change this list: change it by hand. The command prints a warning saying so, the console logs one at start, and administrators see a notice on the **Engines** page while a name here matches no registered engine |
 
 The console checks these at start-up and refuses both credentials at once, absolute or `..`
@@ -271,7 +302,11 @@ engines.
 
 Every `CONSOLE_CONFIG_GIT_POLL`, or on **Sync now**, the console fetches the branch and takes in
 the commits since the last one it took that touch the configuration file or the environment
-files, oldest first, at most 50 a pass. The first time, it takes only the branch head. Nothing is
+files, oldest first, at most 50 a pass. The first time, it takes only the branch head. Since 0.5.1
+only the branch's own line of commits is walked (`git log --first-parent`): a merge is one step,
+taken in with the files as the merge left them, and the commits it brought in are not replayed one
+by one (each would have left the file as it was on its own side). A commit the console's clone
+does not have is an error, not an empty directory. Nothing is
 taken in while an engine named in `CONSOLE_CONFIG_GIT_ENGINES` is not registered yet; the Git card
 says what it waits for.
 
@@ -288,7 +323,12 @@ For each commit:
 |---|---|
 | `off` | It stays a draft. Someone publishes it from the console |
 | `validate` | It is checked: compiled, with the rules' test cases, the packages' tests and the [golden tests](#golden-tests-in-the-console) from the repository, at that commit. Failures are recorded as `config.git-failed`. It stays a draft either way, and one that fails can't be published, by any route |
-| `publish` | It is checked as for `validate`, then published through the same gate as the **Publish** button: four-eyes approval (the version waits for approval), the [license](#the-license), the pre-publish hook, and, when `CONSOLE_PUBLISH_TICKET_PATTERN` is set, a change-ticket reference found in the commit message (`HR port moved (CHG-12345)`). A commit without one is recorded as `config.git-failed` and its version stays a draft |
+| `publish` | It is checked as for `validate`, then published through the same gate as the **Publish** button: four-eyes approval (the version waits for approval), the [license](#the-license), the pre-publish hook, and, when `CONSOLE_PUBLISH_TICKET_PATTERN` is set, a change-ticket reference found in the commit message (`HR port moved (CHG-12345)`). A commit without one is recorded as `config.git-failed` and its version stays a draft. A commit the console pushed back is never published this way (since 0.5.1) |
+
+With approval required, the version's author is, since 0.5.1, the account whose username is the
+commit author's e-mail address, or the part of it before the `@`: that person can't approve it. A
+commit's author is whatever the commit says, and a commit whose address matches no account has no
+one accountable, so protect the branch (required reviews, signed commits) where four eyes matters.
 
 The commit counts as seen whatever happened to it, so a bad commit is reported once, not every
 minute.
@@ -312,7 +352,11 @@ engine the repository is for is committed to the branch at `CONSOLE_CONFIG_GIT_P
 console user, with the subject `<engine> v<n>: saved (<comment>)` (or `published (<comment>)`), and
 pushed. Nothing is committed when the branch already has that text. A push the server rejects
 (the branch moved, a protected branch) is recorded as `config.git-failed` with the reason. It is
-never forced. The next pass sees the pushed commit and makes no second version of it.
+never forced. The next pass sees the pushed commit and makes no second version of it on the engine
+it was saved for. Since 0.5.1 it is never auto-published anywhere: the other engines the repository
+is for get it as a version to publish by hand, so a draft saved for one engine is never published to
+another by Git sync (0.5.0 could). The file is written into Git as a blob, never through the clone's
+work tree, so a path in the repository that is a symbolic link is replaced, not followed.
 
 With push-back on, the repository needs a deploy key or token that may write to the branch.
 
@@ -374,7 +418,8 @@ the ticket pattern and the pre-publish hook.
 
 Since 0.5.0 the caller's roles are checked on every engine first: when they do not allow publishing
 to one of them, nothing is promoted ("promoting to environment prod publishes to every engine in
-it, and your roles (…) do not allow publishing to …").
+it, and your roles (…) do not allow publishing to …"). Since 0.5.1 the message names only the
+engines the caller can see, and counts the others ("1 other engine").
 
 | Outcome per engine | Meaning |
 |---|---|
@@ -458,9 +503,11 @@ promotion):
   `config.publish.start` ("published again as a rollback, which the license never blocks");
 - running sync never stops, whatever the license says.
 
-With no console, an engine applies the same rules to `ApplyConfig`. An installation upgraded from
-0.4.1 evaluates for 30 days and then has a 30-day grace period, so a pipeline that publishes keeps
-working for about 60 days without a license. See [Licensing](licensing.md).
+With no console, an engine applies the same rules to `ApplyConfig`, and since 0.5.1 so does an
+engine whose console holds no license (0.5.0 let such a console switch the engine's check off). An
+installation upgraded from 0.4.1 evaluates for 30 days and then has a 30-day grace period, so a
+pipeline that publishes keeps working for about 60 days without a license. See
+[Licensing](licensing.md#with-a-console-the-usual-case).
 
 ## Golden-file tests
 
@@ -594,6 +641,10 @@ now; an edited text, like any draft, against the branch head. The check names th
   head: save it again, which makes a version at the new commit.
 - A version saved before 0.5.0 has no commit: it is checked at the branch head, and the check and a
   refused publish say so in a note.
+- **Tests that can't be read are not "no tests"** (since 0.5.1): when the version's commit is no
+  longer in the console's clone (history was rewritten) or Git doesn't answer, the check lists
+  `golden tests: cannot be read from Git, so not run: …` among the failures, and the publish is
+  refused, saying why. 0.5.0 took them as none and let the publish through.
 
 In 0.4.1 every check read the golden files at the branch head, so a version from an older commit
 was checked against the newest tests.
@@ -719,6 +770,9 @@ inline. In a configuration-as-code repository, packages are files in the same re
   golden tests, license and hook run when you promote. `syncd config promote` has no dry run.
 - **Roles:** Git sync is for roles on everything, and an API token limited to an environment or to
   engines cannot use it; there are no per-view scopes.
+- **Four eyes and Git:** a version's author is taken from the commit's author, which is whatever
+  the commit says; a commit whose address matches no account has no one accountable. Protect the
+  branch where four eyes matters.
 - **Strict engines:** `syncd apply-config` on the engine's host is refused once the engine is
   strict or requires signed configurations; configuration goes through the console. Changing the
   configuration without the console means editing the file as root on the host, which the console

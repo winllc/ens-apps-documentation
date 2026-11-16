@@ -4,7 +4,12 @@ This page summarises syncd's security controls and the settings that affect them
 console's sign-in, sessions, roles and API tokens, its HTTPS, the engine's control API,
 secrets, password synchronisation, webhooks and other outbound connections, the audit trail,
 backups, high availability, the systemd hardening, the container images and Helm chart, and the
-supply chain. It describes syncd 0.5.0 (commit `a9d17c6`).
+supply chain. It describes syncd 0.5.1 (tag `v0.5.1`, commit `7da4d9e`). 0.5.1 fixes what a
+review of 0.5.0 found; for the console that includes one critical fix (0.5.0 showed the engine's
+environment secrets in the running configuration to every reader: see
+[Authorization](#authorization)) and several checks that refuse what 0.5.0 allowed (changes from
+another site, the API tokens of single sign-on accounts that stopped signing in, a version approved
+by its own author through a token or a Git commit).
 
 The source repository's `SECURITY.md` says how to report a vulnerability (GitHub's private
 vulnerability reporting) and that fixes go to the latest minor version only; its
@@ -59,16 +64,17 @@ lockout, the password rules and session limits are settings (the
 |---|---|
 | First sign-in | The first start creates `admin` with a random 24-character password, printed once and written to `$CONSOLE_DATA_DIR/initial-admin-password` (mode 0600). An installer can supply one with `CONSOLE_ADMIN_PASSWORD` or `CONSOLE_ADMIN_PASSWORD_FILE`; `admin`, empty, and passwords failing the policy are refused at startup. The first sign-in must set a new password, and the file is then deleted |
 | Notice and consent | With `ENS_CONSENT_BANNER_ENABLED=true` (from 0.5.0) every sign-in method refuses until the browser has acknowledged the notice (`POST /api/v1/auth/consent`) in the last 15 minutes; the server enforces it, not the page. See [Sign-in baseline](#sign-in-baseline) |
-| Forced password change | An account with a one-time password can call nothing but `POST /api/v1/auth/password` (and `GET /api/v1/auth/me`) until it sets a new one. Every other call answers 403 `password_change_required`. From 0.5.0 an account whose password is older than `ENS_PASSWORD_MAX_AGE_DAYS` is held to the same (`user.password_expired` in the trail) |
+| Forced password change | An account with a one-time password can call nothing but `POST /api/v1/auth/password` (and `GET /api/v1/auth/me` and sign-out) until it sets a new one; 0.5.0's message of the day and previous sign-in (`/api/v1/auth/message-of-the-day`, `/api/v1/auth/session`) answered it too, 0.5.1's do not. Every other call answers 403 `password_change_required`. From 0.5.0 an account whose password is older than `ENS_PASSWORD_MAX_AGE_DAYS` is held to the same (`user.password_expired` in the trail) |
 | Password policy | By default at least 12 characters; not the username and not `admin` (case-insensitive); not the current password. From 0.5.0 `ENS_PASSWORD_MIN_LENGTH`, the minimum of each character class, `ENS_PASSWORD_HISTORY`, `ENS_PASSWORD_MAX_AGE_DAYS` and `ENS_PASSWORD_REJECT_USERNAME` add to it. There is no minimum password lifetime |
 | Password hashing | Argon2id (the `argon2` crate's defaults), or PBKDF2-HMAC-SHA512 with 210 000 iterations and a 16-byte salt in FIPS mode, stored as PHC strings. Salts and generated passwords come from aws-lc-rs. In FIPS mode Argon2id hashes are not accepted, so those accounts need a reset |
-| Per-address throttle | 20 sign-in attempts per client address in 5 minutes, then 429 `too_many_requests`, audited as `auth.login` denied (`rate limited`). The counters are in memory and reset when the console restarts. Not a setting |
-| Account lockout | By default 5 failed password sign-ins lock a local account for 15 minutes, audited with `"locked": true` (an `alert` in the trail); a successful sign-in resets the count. From 0.5.0 `ENS_LOCKOUT_ATTEMPTS`, `ENS_LOCKOUT_WINDOW` and `ENS_LOCKOUT_DURATION` set them (`0` duration: until an administrator unlocks the account on **Users**, or resets its password) |
+| Per-address throttle | 20 sign-in attempts per client address in 5 minutes, then 429 `too_many_requests`, audited as `auth.login` denied (`rate limited`). From 0.5.1 an IPv6 client counts by its /64, and changing the current password (`POST /api/v1/auth/password`) is held to the same limit. The counters are in memory, bounded in size, and reset when the console restarts. Not a setting |
+| Account lockout | By default 5 failed password sign-ins lock a local account for 15 minutes, audited with `"locked": true` (an `alert` in the trail); a successful sign-in resets the count. From 0.5.0 `ENS_LOCKOUT_ATTEMPTS`, `ENS_LOCKOUT_WINDOW` and `ENS_LOCKOUT_DURATION` set them (`0` duration: until an administrator unlocks the account on **Users**, or resets its password). From 0.5.1 a wrong current password on the password change counts toward the lock too, and an account's password checks take turns, each taking one of its attempts before the password is checked: attempts made at the same time, through several consoles too, check no more passwords than the lockout allows, and a right password no longer lifts a lock set meanwhile |
 | Uniform refusals | Every failed sign-in gets the same 401 `sign_in_failed`, whether the account is unknown, disabled, locked, has no local password, or is outside break-glass. An unknown account spends as long as a real password check. The audit trail records the real reason |
 | Account recovery | `syncd-console admin reset-password [--user NAME]` on the host issues a one-time password. It needs the console's database settings (`console.env`). It refuses an account that signs in with single sign-on, as the **Users** page does, since a password would let it sign in without the identity provider (and its MFA). `--allow-single-sign-on` gives it one anyway, for recovery while the provider is down; the audit entry (`user.password_reset`) then records `"single_sign_on": true` |
 | Single sign-on | OpenID Connect authorization code flow with PKCE, state and nonce; ID token signature (asymmetric algorithms only), issuer, audience and expiry checked. From 0.5.0, SAML 2.0 (the Web Browser SSO profile; signed responses only, with defences against signature wrapping, comment injection, DTDs and replay; tested against Keycloak only). Accounts are bound to the provider's subject or `NameID`, never taken over by username. Role assignments come from a claim or attribute at every sign-in. See [Single sign-on](single-sign-on.md) |
 | Certificate sign-in | From 0.5.0, an X.509 client certificate (a CAC or PIV card) on the console's own HTTPS or through a trusted proxy's header: path validation to `ENS_X509_CA_FILE`, then OCSP and the CRL in the configured order, **failing closed** when the status cannot be learned. Tested with test PKIs only, never a real card or the DoD PKI. See [Single sign-on](single-sign-on.md#certificate-sign-in-cacpiv) |
-| Break-glass | With OpenID Connect, SAML or certificate sign-in configured, an admin can limit local sign-in to accounts marked break-glass (**Users** → Local sign-in). At least one enabled break-glass console administrator with a password must remain; switching signs out the local accounts that can no longer sign in |
+| Break-glass | With OpenID Connect, SAML or certificate sign-in configured, an admin can limit local sign-in to accounts marked break-glass (**Users** → Local sign-in). At least one enabled break-glass console administrator with a password must remain; switching signs out the local accounts that can no longer sign in, and from 0.5.1 so does unmarking one account while the limit is on |
+| Previous sign-in | From 0.5.0 the dashboard tells each account its sign-in before the current one (when, how, from which address) and how many password sign-in attempts on it were refused since (a wrong password, or the account locked or disabled), as a warning. **Users** lists each account's last sign-in. Every sign-in method records it; an account's newest session at the upgrade to 0.5.0 stands for its last sign-in until the next |
 | Disabling an account | Takes effect at the account's next request: its sessions are refused, single sign-on and certificate sign-in cannot sign it in, and its API tokens stop working (within a minute) |
 
 ### Sign-in baseline
@@ -80,7 +86,7 @@ Local sign-in shows the policy in effect, read-only.
 | Setting | Default | Meaning |
 |---|---|---|
 | `ENS_CONSENT_BANNER_ENABLED` | `false` | A notice that must be acknowledged before any sign-in. `ENS_CONSENT_BANNER_TEXT` or `_TEXT_FILE` replace the standard DoD notice. The acknowledgement is audited as `auth.consent`, and the sign-in it leads to carries the same `consent` id and the session's id. Scripts that sign in with a password call `POST /api/v1/auth/consent` first; API tokens are not affected |
-| `ENS_SESSION_MAX_PER_USER` | `0` (no limit) | Sessions one account may hold; one more ends its oldest (`auth.session.ended`) |
+| `ENS_SESSION_MAX_PER_USER` | `0` (no limit) | Sessions one account may hold; one more ends its oldest (`auth.session.ended`). From 0.5.1 sign-ins of one account at the same moment leave it its newest sessions, never ending each other's |
 | `ENS_SESSION_ADMIN_IDLE_TIMEOUT` | unset | A shorter idle limit for console administrators (`admin` on everything) |
 | `ENS_LOCKOUT_ATTEMPTS`, `_WINDOW`, `_DURATION` | `5`, `0`, `15` | Failed local sign-ins before a lock, the window they must fall in (`0`: until a sign-in succeeds), and the lock's length (`0`: until an administrator unlocks) |
 | `ENS_PASSWORD_MIN_LENGTH` | `12` | At least 8 |
@@ -100,7 +106,17 @@ products' settings.
 An admin can require it (**Users** → Configuration approval). A version is then published only
 after a designer or admin other than its author approves it. The database enforces it: a
 constraint refuses an approval by the author, and a trigger refuses any change to an approval
-once given. Versions published before can be published again without one, so a rollback is
+once given.
+
+From 0.5.1 the author is the person accountable for the version (`accountable` in the versions
+list), not only the name it was saved under: who saved it, the creator of the API token that saved
+it, or, for a version from Git sync, the account whose username is the commit author's e-mail
+address or the part of it before the `@`. In 0.5.0 a version saved with a token (`api-token:<id>`)
+or taken from Git (`git`) could be approved by the person behind it. A commit's author is whatever
+the commit says, and a commit whose address matches no account has no one accountable, so protect
+the branch (reviews, signed commits) where that matters. Approvals given before the upgrade stand.
+WebAssembly modules follow the same rule: a module uploaded with a token is not approved by the
+token's creator. Versions published before can be published again without one, so a rollback is
 never held up. Approvals and changes of the setting are audited (`config.approve`,
 `settings.config_approval`).
 
@@ -131,6 +147,7 @@ From 0.4.0, scripts, pipelines and SIEM collectors call the console's API with a
 | Never more than its creator, now | Each use reads the creator's account and role assignments (a good answer is reused for at most a minute and dropped when the account changes; a refusal never is): a creator that is gone or disabled refuses the token, a demoted creator's token loses what the new roles cannot do, and one whose creator was moved to another environment reaches nothing |
 | Endpoints that stay with people | Accounts, settings, tokens, webhooks, changes to environments, approvals (of versions and of WebAssembly modules), simulations, previews, connector checks, the object explorer and lineage, scheduled reports, the license, the support bundle and every sign-in take a session only: a token gets `403 insufficient_scope` |
 | Lifetime | At most `CONSOLE_API_MAX_TOKEN_LIFETIME` (`365d`): the expiry of a token created without one, the most that may be asked for, and the age at which any token stops working |
+| Creators who sign in through single sign-on | From 0.5.1 a token whose creator signs in through single sign-on stops working (`401`) once the creator has not signed in for `CONSOLE_API_SSO_CREATOR_MAX_IDLE` (`35d` by default, the inactivity after which NIST SP 800-53 AC-2(3) disables an account; counted from the token's creation at the earliest; `0` turns it off), and works again after their next sign-in. The identity provider decides who may use the console, and the console hears it only at a sign-in: someone it removed never signs in again. Disabling the account still stops its tokens at once |
 | Rate limit | `CONSOLE_API_REQUESTS_PER_MINUTE` (300) per token, per console process; then `429` with `Retry-After` |
 | No session, no cookie | A bearer request never reads or sets the session cookie, so tokens are not exposed to cross-site request forgery |
 | Turning tokens off | `CONSOLE_API_TOKENS_ENABLED=false` refuses every token without deleting any |
@@ -139,7 +156,9 @@ From 0.4.0, scripts, pipelines and SIEM collectors call the console's API with a
 Treat a token like a password: keep it in a secret store or a file readable by the job that uses
 it (`syncd config promote --token-file`), give each system its own with the narrowest scopes and
 an expiry, and revoke it when the system goes. A token's creator is an account: disabling the
-account disables its tokens.
+account disables its tokens, and a creator who signs in through single sign-on must keep signing
+in for them to work. What a token saves is the creator's for
+[configuration approval](#configuration-approval-four-eyes): they cannot approve it.
 
 ## Sessions
 
@@ -149,8 +168,15 @@ account disables its tokens.
   session. The audit trail names a session by a further hash of that, so one session's events can
   be grouped without naming it.
 - A session ends after `CONSOLE_SESSION_IDLE_MINUTES` without activity (default 30) or
-  `CONSOLE_SESSION_MAX_HOURS` after sign-in (default 12). Activity extends the idle window.
-- Signing out deletes the session. Changing a password signs out the account's other sessions.
+  `CONSOLE_SESSION_MAX_HOURS` after sign-in (default 12). Activity extends the idle window. From
+  0.5.1 what the web UI asks on its own (status polls, lists that refresh themselves, its status
+  stream) is marked as background (`X-Syncd-Background: 1`, or `?background=1` on the status
+  stream, which cannot set headers): it is answered, but is no activity, so a tab left open no
+  longer keeps its session alive.
+- Signing out deletes the session; from 0.5.1 the UI says so when the console did not confirm a
+  sign-out, rather than show the sign-in page over a session that still works, and clears what it
+  had fetched, so the next account to sign in on the tab does not see the previous one's pages.
+  Changing a password signs out the account's other sessions.
 - Live status streams re-check their session every 30 seconds and end when it is over.
 - From 0.5.0 `ENS_SESSION_MAX_PER_USER` limits the sessions one account may hold (a sign-in
   beyond it ends the oldest), and `ENS_SESSION_ADMIN_IDLE_TIMEOUT` gives console
@@ -166,12 +192,22 @@ account disables its tokens.
 
 ## CSRF and browser security headers
 
-- **No CSRF token or request header check.** The defence is the session cookie's
-  `SameSite=Strict`: browsers do not send it on requests that another site starts. Calls that
-  take a body accept JSON only (`Content-Type: application/json`), which a cross-site form
-  cannot send without a CORS preflight, and the console sends no CORS headers. Some calls take
-  no body (publish, approve, reset password, sign out), so they rely on `SameSite` alone; use
-  a browser that enforces it. API token requests carry no cookie, so they are not exposed.
+- **No CSRF token.** The first defence is the session cookie's `SameSite=Strict`: browsers do
+  not send it on requests that another site starts. Calls that take a body accept JSON only
+  (`Content-Type: application/json`), which a cross-site form cannot send without a CORS
+  preflight, and the console sends no CORS headers.
+- **The request's origin** (from 0.5.1). A request that would change something (`POST`, `PUT`,
+  `PATCH`, `DELETE`) and carries the session cookie is refused with `403` when the
+  browser says it comes from elsewhere: its `Sec-Fetch-Site` header is anything but
+  `same-origin` or `none`, or, when the browser sends no `Sec-Fetch-Site`, its `Origin` is not
+  the console's own (the `Host` the request was sent to, an `X-Forwarded-Host`, or the host of
+  `CONSOLE_PUBLIC_URL`; an `Origin` of `null` is refused). This holds where `SameSite` does not:
+  a sibling site under the same registrable domain, an older browser. A request with neither
+  header is not from a browser's page and passes, as do requests without the session cookie
+  (sign-in, scripts) and requests with an API token, which carry no cookie and so are not
+  exposed. Current browsers send `Sec-Fetch-Site`; for one that does not, behind a proxy that
+  rewrites `Host`, keep `X-Forwarded-Host` or set `CONSOLE_PUBLIC_URL`, or its changes are
+  refused.
 - **Headers** on every response:
 
 | Header | Value |
@@ -241,6 +277,19 @@ values through the API (#145). From 0.4.1 they need the admin or auditor role, a
 pages showed them, or a token with `environments:read`; every role still reads the names
 (`GET /api/v1/environment-names`). A configuration rendered for display (the editor's check,
 the Compare tab) still shows the plain values it uses, never the secret ones.
+
+**What an engine runs** holds its environment's secret values in clear, since it was sent the
+rendered text. **0.5.0 showed them to every reader** of the running configuration (`GET
+/api/v1/engines/{id}/configs/running`, the editor of an engine with no versions), and Compare
+against it masked only the values of the environment the comparison was rendered for. From 0.5.1
+the console masks them as `<secret name>` there and in Compare, whatever the comparison is rendered
+for, and an import of what the engine runs (**Import running**, the host sections of a file import)
+puts them back as placeholders (`{{ env.name }}`), so no version holds them. The values looked for
+are the engine's environment's secret values now and the last five of each sent with its publishes
+(kept sealed with the master key), so a value changed since the last publish is masked too. A
+running configuration that holds a secret value but does not parse is not imported. On a console
+that ran 0.5.0, consider every secret environment value known to whoever could read
+configurations there.
 
 Revealing sensitive values is separate: see [Sensitive attributes](#sensitive-attributes-and-reveal).
 The per-route roles and token scopes are in the [API reference](api-reference.md#console-rest-api).
@@ -338,9 +387,11 @@ The console encrypts stored secrets with envelope encryption:
 
 What it seals: each engine's control API client key; each webhook's URL and signing secret;
 the values marked secret in the console's environments (see
-[Configuration as code](config-as-code.md#environments)); and, from 0.5.0, the private half of
-its [configuration signing key](#signed-configurations). None is returned by the API once
-saved.
+[Configuration as code](config-as-code.md#environments)); from 0.5.0, the private half of
+its [configuration signing key](#signed-configurations); and, from 0.5.1, the secret values sent
+to each engine with its publishes (the last five of each key, bound to the engine's id), which the
+console looks for to mask what the engine runs (see [Authorization](#authorization)). None is
+returned by the API once saved.
 
 The master key is 32 bytes, from `CONSOLE_MASTER_KEY` (base64) or `$CONSOLE_DATA_DIR/master.key`
 (`/var/lib/syncd/console/master.key` on a packaged install), which the console creates (mode 0600)
@@ -361,8 +412,8 @@ has no values for it.
 
 At every start the console checks the key against **one sealed secret of each kind** the
 database holds (from 0.5.0): an engine's client key, a webhook's URL, a webhook's signing
-secret, a secret environment value and the configuration signing key (the first of each, not
-every secret of a kind). 0.4.1 stopped at the first one it found, so a database with secrets
+secret, a secret environment value, the configuration signing key and, from 0.5.1, the secret
+values sent to an engine (the first of each, not every secret of a kind). 0.4.1 stopped at the first one it found, so a database with secrets
 sealed under two keys that 0.4.1 started may now refuse to start.
 
 - if `master.key` is missing while the database holds sealed secrets, it does not create a new key
@@ -379,7 +430,9 @@ engine's id, and is audited as `engine.re-registered`. Without `--update`, the r
 refused with that reason rather than reported as done. Webhooks need their URL saved again and a
 new secret, secret environment values typing again, and the configuration signing key rotating
 (`syncd-console admin config-signing-key`), with its new public key given to every engine that
-requires signed configurations.
+requires signed configurations. The secret values sent to engines are written again at each
+engine's next publish; until then the console masks only the environments' current values in what
+those engines run.
 
 ### Other secret files of the console
 
@@ -401,7 +454,19 @@ With `CONSOLE_CONFIG_GIT_URL` set, the console takes configuration from a Git re
 configuration, and with `CONSOLE_CONFIG_GIT_AUTO_PUBLISH=publish` publish it through the usual
 gates (approval, test cases and golden tests, the ticket pattern, the hook): protect the branch
 accordingly. The golden tests come from the same repository, so whoever can push can change
-them too.
+them too, and from 0.5.1 the commit's author is who [approval](#configuration-approval-four-eyes)
+takes to be the version's author.
+
+- From 0.5.1 Git sync walks only the branch's first-parent line (`git log --first-parent`): a
+  merge is taken in as one version, with the files as the merge left them, not commit by commit.
+- From 0.5.1 a commit the console pushed back is never published by Git sync: it is a version of
+  the engine it was saved for already, and the other engines the repository is for get it as a
+  version to publish by hand, so a draft saved for one engine is never published to another. The
+  file is written into Git as a blob, never through the clone's work tree, so a path in the
+  repository that is a symbolic link is replaced, not followed.
+- Golden tests that cannot be read from Git (a commit no longer in the clone after history was
+  rewritten, Git not answering) count as failing from 0.5.1, so the publish is refused, saying
+  why; 0.5.0 took them as no tests.
 
 - Plain `http://` is refused at startup. Give either a deploy key (`ssh://`, with
   `CONSOLE_CONFIG_GIT_KNOWN_HOSTS_FILE` so the server's host key is checked) or a token
@@ -436,7 +501,7 @@ missing from the table is refused to everyone):
 |---|---|
 | `read` | The status, the lists (dead letters, held changes, quarantine, data quality, unjoined records, queued password changes), the running configuration, simulations, the reconciliation report |
 | `operate` | Runs, approvals, drift and unmanaged-entry checks, adopting an entry, dead-letter actions, joins, group reviews, a person's own password change (the self-service page), revoking a capture agent, backups and HA snapshots, connector checks, schema discovery and previews, and sensitive values (`reveal`) |
-| `operate` and `passwords` | Setting a password of the caller's choosing, and deciding who else can: `SubmitPasswords`, adding or binding a capture agent, rotating the password key or the agent CA, and `ForwardPasswordIngest` (the passive engine of a pair speaking for agents) |
+| `operate` and `passwords` | Setting a password of the caller's choosing, and deciding who else can: `SubmitPasswords`, adding or binding a capture agent, rotating the password key or the agent CA, and `ForwardPasswordIngest` (the passive engine of a pair speaking for agents). From 0.5.1, on an engine that holds password key material, also the calls that hand the keys out with the store: `Backup`, `PullSnapshot`, `PullSnapshotFiles` and `FollowPasswordQueue` |
 | `configure` | `ApplyConfig` (the console's publish, `syncd apply-config`) and `SetLicense` |
 
 `api.access` in `engine.yaml` names who has which tier:
@@ -479,7 +544,13 @@ api:
   and pid on the control socket).
 - **`Backup`, `PullSnapshot`** and the incremental snapshot calls hand out the whole store, the
   password keys and the agent CA's key (sealed, when a passphrase is set). They need `operate`
-  and what a reveal needs (mTLS, the control socket, or `api.local_reveal: true`).
+  and a listener that both takes commands and reveals: mTLS, the control socket, or, from 0.5.1,
+  `api.local_control` **and** `api.local_reveal` on the loopback listener (0.5.0 let
+  `api.local_reveal` alone serve backups, HA snapshots and the password queue). In strict mode,
+  on an engine that holds password keys, they also need `api.access.passwords` or the control
+  socket, since the keys open every change captured or queued: list the passive engine's
+  certificate there in a pair that delivers passwords, and enable `api.control_socket` for
+  `syncd backup`.
 - **The passive engine of an HA pair** refuses commands, naming the active one.
 - TLS goes through rustls on the process crypto provider, with its safe default protocol
   versions (TLS 1.2 and 1.3), and TLS handshakes time out after 10 seconds.
@@ -546,8 +617,9 @@ line both use certificates even on loopback. `sudo syncd status` (as root or a m
 other files. `--api-key` is the certificate's private key file, not a token.
 
 Membership of the `syncd` group therefore grants what `cli.crt` may do: in strict mode, reading
-and operating the engine (runs, approvals, backups of the whole store, sensitive values), but
-not applying a configuration or setting passwords; in compatible mode, full control. Keep it to
+and operating the engine (runs, approvals, sensitive values, and backups of the whole store when
+the engine holds no password keys), but not applying a configuration, setting passwords or, from
+0.5.1, taking the password keys away in a backup or snapshot; in compatible mode, full control. Keep it to
 administrators either way. On an HA pair in strict mode, the certificate the passive engine
 uses must also be listed under `passwords` on both hosts, so that agents' changes can be handed
 on; a certificate of its own for the pair (`engine.ha.peer.cert_file`) keeps that power away
@@ -618,7 +690,7 @@ synchronisation has been done; the plan makes both release gates for it.
 | Part | Implementation |
 |---|---|
 | Envelope | HPKE (RFC 9180, base mode): DHKEM(P-256, HKDF-SHA256), HKDF-SHA256, AES-256-GCM, implemented by syncd on aws-lc-rs primitives (so the FIPS module in a FIPS build). The key's id is the additional data; captured changes and self-service requests use different HPKE `info` strings, so one can never be taken for the other. Checked against the RFC 9180 test vector. Base mode with a static recipient key: no per-change forward secrecy |
-| The engine's password keys | A P-256 key pair, created on first start as `password.key` in the data directory (`passwords.key_file`), mode 0600, sealed with the passphrase when one is set (below). Capture points get only the public half (`GetPasswordKey`). From 0.5.0 `syncd password rotate-key` makes a new current key; each previous one is kept beside it as `password.key.<id>` to open what was sealed to it, until it is retired after `passwords.rotation_overlap_days` (7) with nothing queued under it, or by `rotate-key --retire`. Nothing rotates on a schedule; `SyncdPasswordKeyOld` fires after a year |
+| The engine's password keys | A P-256 key pair, created on first start as `password.key` in the data directory (`passwords.key_file`, from 0.5.1 a host setting that a published configuration may not change), mode 0600 (from 0.5.1 also when written by a restore or an HA snapshot, and a key file found readable by others is made 0600 when it is read), sealed with the passphrase when one is set (below). Capture points get only the public half (`GetPasswordKey`). From 0.5.0 `syncd password rotate-key` makes a new current key; each previous one is kept beside it as `password.key.<id>` to open what was sealed to it, until it is retired after `passwords.rotation_overlap_days` (7) with nothing queued under it, or by `rotate-key --retire`. Nothing rotates on a schedule; `SyncdPasswordKeyOld` fires after a year |
 | The agent CA | A P-256 key and a ten-year self-signed certificate (`password-agent-ca.key`, mode 0600, and `.crt` beside the password key), made with `rcgen` on aws-lc-rs. Its key is sealed like the password key. It issues each agent's client certificate (client authentication only, the subject is the agent's name whatever the request asked, `passwords.ingest.agent_cert_days`, 365 by default) and, at every start, the ingest listener's own server certificate. From 0.5.0 `syncd password rotate-agent-ca` makes a new one; the previous CA stays trusted for the overlap, and agents renew their certificates with the one they hold (`Renew`), keeping their key |
 | The keys at rest | From 0.4.1, with `SYNCD_PASSWORD_KEY_PASSPHRASE_FILE` (a file holding the passphrase; `SYNCD_PASSWORD_KEY_PASSPHRASE`, the passphrase itself, is read when the file variable is unset), the key files are **sealed**: PBKDF2-HMAC-SHA256 (600,000 iterations, a random 16-byte salt) derives an AES-256-GCM key from the passphrase, both through aws-lc-rs, so a FIPS build uses its FIPS module. The file's format line and derivation parameters are the additional data. A sealed file without the passphrase, or with the wrong one, stops the engine with an error naming the variable. From 0.5.0 `syncd password rekey` changes the passphrase (the previous one keeps opening files until they are sealed again), and the passphrase file can be wrapped by a KMS key (`SYNCD_PASSWORD_KEY_PASSPHRASE_KMS`). **Without a passphrase the keys are stored in the clear** (the password key as hex, the CA key as PEM), protected by the file mode only: the engine warns at start and `syncd status` says `password keys: stored in the clear`. The status API's `keys_sealed` and the console's engine page say which |
 | Enrollment tokens | `syncd password agent add <name> --source <connector>` prints a one-time token, good for an hour. The engine keeps only its SHA-256 and compares in constant time. The agent makes its own key, which never leaves its host, and sends a signing request with the token; the token is then spent, and an earlier certificate of the same agent stops working |
@@ -648,7 +720,10 @@ synchronisation has been done; the plan makes both release gates for it.
 - **What was tested**: the OpenLDAP overlay (slapd 2.6.10) and the 389 DS plugin (389-ds-base
   2.4.5) end to end, on Ubuntu 24.04 only, with no SELinux or AppArmor policy for the agent's
   socket. **The Windows password filter, service and installer are compile-checked only**:
-  never loaded by LSASS, never run on a domain controller, not signed. An agent can set any
+  never loaded by LSASS, never run on a domain controller, not signed. From 0.5.1 the filter
+  sends a password only to a pipe whose serving process runs as LocalSystem, as the service does
+  (any local user could otherwise create the pipe while the service is stopped); that check is
+  compile-checked only too. An agent can set any
   account of its source; there is no per-agent rate limit; whoever may call
   `ForwardPasswordIngest` can act as any enrolled agent.
 
@@ -675,6 +750,8 @@ own directory password without a console account.
   time, whatever the password, on top of the per-address limit.
 - The page is public: put it behind the same TLS as the console, and consider who may reach it.
   There is no reset of a forgotten password.
+- From 0.5.1 a user name holding control characters is refused (`400`) before anything is asked,
+  and recorded escaped.
 - `ChangeOwnPassword` needs only the `operate` tier, not `api.access.passwords`: the engine
   proves the person's current password before it changes anything. The source people sign in
   to is held to the clear-text rule above.
@@ -694,10 +771,19 @@ Publishing a configuration can be made to carry a change-ticket reference
 - The URL must be `https://`, and its address is held to the
   [webhook address rules](webhooks.md#where-a-webhook-may-go) (`CONSOLE_WEBHOOKS_ALLOWED_HOSTS`,
   `CONSOLE_WEBHOOKS_BLOCK_PRIVATE_NETWORKS`, `CONSOLE_WEBHOOKS_CA_FILE`). Redirects are not
-  followed.
-- A deny (or a 4xx) refuses the publish with `409` and the reason, and raises `config.rejected`.
-  A timeout (`CONSOLE_PUBLISH_HOOK_TIMEOUT`, 10 s), a 5xx or a connection failure refuses it with
-  `503 hook_unavailable`, **failing closed**, unless `CONSOLE_PUBLISH_HOOK_ON_ERROR=allow`.
+  followed, and from 0.5.1 no proxy from the environment (`HTTPS_PROXY`, `HTTP_PROXY`) is used,
+  since it would resolve the name again past those rules.
+- Only a 2xx with `{"decision":"allow"}` or an empty body lets the publish go. A deny (or a 4xx)
+  refuses it with `409` and the reason (kept to 1,000 characters), and raises `config.rejected`.
+  Anything else is the hook failing, not an answer: a timeout (`CONSOLE_PUBLISH_HOOK_TIMEOUT`,
+  10 s), a 5xx, a connection failure, and from 0.5.1 also a 2xx with another decision (`Deny`,
+  `rejected`), no decision, a body that is not that JSON (an HTML page) or one not read whole
+  (over 64 KiB, cut off, stalled); 0.5.0 let those 2xx answers through. A failing hook refuses
+  the publish with `503 hook_unavailable`, **failing closed**, unless
+  `CONSOLE_PUBLISH_HOOK_ON_ERROR=allow`.
+- From 0.5.1 one publish to an engine runs at a time, across consoles sharing the database: a
+  publish holds its engine from the send until its outcome is recorded, and one that waits more
+  than 150 seconds for the one before it is refused (`409`).
 - The ticket, note and decision are kept on the version and in the `config.publish.start` and
   `config.publish` audit events. The hook applies to publishes from the console, the API,
   promotions and Git sync; not to `syncd apply-config` on the engine, which strict access mode
@@ -718,8 +804,8 @@ loopback, link-local and cloud metadata addresses (169.254.0.0/16, fe80::/10, fd
 100.100.100.200, 168.63.129.16), unspecified, multicast and broadcast addresses, and IPv6 forms
 that embed or translate them, are always refused. Private ranges are refused for new webhooks
 unless `CONSOLE_WEBHOOKS_ALLOWED_HOSTS` lists the host, or `CONSOLE_WEBHOOKS_BLOCK_PRIVATE_NETWORKS`
-is `false`. The post goes to the address that was checked (no DNS rebinding), verifies the
-certificate against the URL's host, and never follows a redirect. See
+is `false`. The post goes to the address that was checked (no DNS rebinding), through no proxy
+(from 0.5.1), verifies the certificate against the URL's host, and never follows a redirect. See
 [Webhooks](webhooks.md#where-a-webhook-may-go).
 
 ### Connections
@@ -740,7 +826,7 @@ certificate against the URL's host, and never follows a redirect. See
 | Prometheus `/metrics` | Plain HTTP, no authentication, counters and states only. Keep `api.metrics_listen` on loopback or a management network |
 | Single sign-on provider | HTTPS (plain HTTP only to loopback), checked against the Mozilla root set plus `CONSOLE_OIDC_CA_FILE`; redirects are not followed; 10-second timeout. A SAML metadata URL the same, with `CONSOLE_SAML_CA_FILE` (its signature is not checked: it is as trusted as its TLS certificate) |
 | OCSP responders and CRL distribution points (certificate sign-in) | Plain HTTP by design (the answers are signed and checked), to the addresses the certificates name or `ENS_X509_OCSP_URL` and `ENS_X509_CRL_URL`; `ENS_X509_REVOCATION_TIMEOUT` (10 s); a CRL at most `ENS_X509_CRL_MAX_BYTES` |
-| Webhooks and the pre-publish hook | HTTPS only, the address checks above, the Mozilla root set plus `CONSOLE_WEBHOOKS_CA_FILE`, no proxy |
+| Webhooks and the pre-publish hook | HTTPS only, the address checks above, the Mozilla root set plus `CONSOLE_WEBHOOKS_CA_FILE`, no proxy (from 0.5.1 `HTTPS_PROXY` and `HTTP_PROXY` are ignored; 0.5.0 used them) |
 | Splunk HTTP Event Collector | HTTPS, checked against the public roots, unless `ENS_AUDIT_SPLUNK_INSECURE=true` (test systems only) |
 | syslog | `ENS_AUDIT_SYSLOG_PROTOCOL`: `tls` (checked against the public roots), or `tcp` and `udp` in plain text |
 | SMTP (scheduled reports, group review mail) | STARTTLS by default, or from 0.5.0 TLS from the first byte (`CONSOLE_SMTP_IMPLICIT_TLS`, SMTPS), checked against the public roots or `CONSOLE_SMTP_CA_FILE`; AUTH PLAIN or, from 0.5.0, AUTH LOGIN (`CONSOLE_SMTP_AUTH`), only over TLS. `CONSOLE_SMTP_STARTTLS=false` sends in plain text: a relay on the host or a private network only. Mail goes only to `CONSOLE_REPORTS_RECIPIENT_DOMAINS`, checked again at every run |
@@ -763,7 +849,11 @@ sensitive attributes. Golden-file test output masks them as well.
 | Engine | Callers on mTLS or the control socket, or on loopback with `api.local_reveal: true`, with the `operate` tier (from 0.5.0; a `read` certificate gets no values). Each reveal is logged with its caller |
 
 A search that reveals is audited with the SHA-256 of its text rather than the text itself, which
-may be a sensitive value; an ordinary search is audited with its text. Attributes the running
+may be a sensitive value; an ordinary search is audited with its text. From 0.5.1 the text stays
+out of other places too: the console traces requests without their query string, so it is not in
+the debug log, and the object explorer keeps a revealing search's text out of the address bar and
+the browser's history. A connector's schema discovery with values (`reveal`) is refused, from
+0.5.1, when its record cannot be written, as other reveals are. Attributes the running
 configuration treats as sensitive stay hidden in a simulation even if the simulated version
 drops them.
 
@@ -781,7 +871,11 @@ target, outcome, details, client address and user agent. From 0.5.0 also the ack
 the consent banner (`auth.consent`), SAML and certificate sign-ins (`auth.saml.login`,
 `auth.x509.login`, the latter with the certificate's subject, issuer, serial and fingerprint and
 how revocation was checked), sessions ended by the per-account limit (`auth.session.ended`), the license,
-WebAssembly module uploads and approvals, and `config.unpublished-running`. See
+WebAssembly module uploads and approvals (whose `wasm_module.*` actions have their ENS category
+and severity from 0.5.1), the message of the day (`settings.message_of_the_day`) and
+`config.unpublished-running`. From 0.5.1 a request the access rules refuse a signed-in account
+(`403`) is recorded as `access.denied`, with the method, the path and the reason, at most once a
+minute per session (a token's refusals are `api.token-refused`). See
 [Audit logging](../audit-logging.md).
 
 - **Roles in the record (from 0.5.0).** Sign-in records carry the account's `roles` (a list of
@@ -832,7 +926,10 @@ output catches up.
 
 `ENS_AUDIT_RETENTION_DAYS` (0, keep forever) removes events older than that, once a day, but only
 events every enabled output has delivered, never the newest; each run is recorded as
-`audit.pruned`, and the chain still verifies from the oldest kept event.
+`audit.pruned` (from 0.5.1 in the same transaction as the delete, so events never go without the
+record), and the chain still verifies from the oldest kept event. From 0.5.1 verification also
+flags events missing from the start of the trail that no `audit.pruned` accounts for: deleted
+around retention, not by it.
 
 The engine itself does not write an audit trail: its control requests, refusals by access tier,
 reveals, backups and password deliveries go to its journal with their caller (a delivery with who
@@ -919,7 +1016,8 @@ port (7443) is open between them only. With sealed password keys, both engines n
 passphrase. From 0.5.0 the passive engine also follows the queue of sealed password changes
 between snapshots, and its ingest listener hands agents' calls to the active engine with the
 fingerprint of the certificate the agent presented; in strict mode the certificate it uses for
-that must be listed under `api.access.passwords`. An agent enrolled, or a key rotated, after the
+that, and from 0.5.1 for pulling snapshots and following the queue from an engine that holds
+password keys, must be listed under `api.access.passwords`. An agent enrolled, or a key rotated, after the
 last snapshot is lost with the active engine.
 
 ## systemd hardening
@@ -970,8 +1068,11 @@ the sign-in limit see client addresses.
   0.5.0, of what WebAssembly modules return are fuzzed in CI.
 - **Releases.** A release is built in CI from a `v*` tag (Rocky Linux 9, and Rocky Linux 8 for
   the RHEL 8 `.rpm`), after the package lifecycle tests and the upgrade test from the previous
-  release pass. **No tag has been pushed yet, so nothing is published so far, and none of 0.5.0's
-  release jobs has run.** A release carries the x86_64 and aarch64 bundles, `.deb` and `.rpm`
+  release pass. Releases are tagged from 0.5.0 on (`v0.5.0`, `v0.5.1`). For 0.5.1 the release job
+  uploaded the files to the ENS licensing portal's release bucket (the **Downloads** page), and the
+  images and chart were pushed to GHCR and signed with cosign; the files are **not GPG-signed** (no
+  release key was set), so there is no `SHA256SUMS.asc` and no apt or dnf repository yet, and the
+  GitHub release holds only the images' SBOMs. A release carries the x86_64 and aarch64 bundles, `.deb` and `.rpm`
   (aarch64 only when the repository's arm64 runners are enabled, which from 0.5.0 is the
   default), the RHEL 8 `.rpm`, x86_64 and (from 0.5.0) aarch64 FIPS bundles, and from 0.5.0 the
   `syncd-capture` packages, with:
@@ -991,7 +1092,7 @@ the sign-in limit see client addresses.
     the pinned nfpm and check its SHA-256.
 - **Container images and chart.** A `v*` tag also pushes `ghcr.io/winllc/syncd:<version>`,
   `ghcr.io/winllc/syncd-console:<version>`, their `<version>-fips` variants and the chart
-  (`oci://ghcr.io/winllc/charts/syncd`). None is published until a release is tagged.
+  (`oci://ghcr.io/winllc/charts/syncd`).
     - **Multi-arch:** `linux/amd64` and `linux/arm64` (amd64 alone when the arm64 runners are
       off); from 0.5.0 the FIPS images too. Tagged by version only (no `latest`).
     - **Signed:** each image and the chart are signed with cosign (keyless, the release
@@ -1002,7 +1103,7 @@ the sign-in limit see client addresses.
     - **Scanned:** on every pull request CI builds the standard and FIPS images, amd64 and (with
       arm64 runners) arm64, and scans the amd64 ones, standard and FIPS, with Trivy; a fixable
       HIGH or CRITICAL finding fails the build. Accepted risks are listed in `.trivyignore`, each with its reason, who accepted
-      it and until when. At 0.5.0 it holds one: CVE-2026-84782 (OpenSSL's DTLS, in the
+      it and until when. At 0.5.1 it holds one: CVE-2026-84782 (OpenSSL's DTLS, in the
       distroless base's `libssl3`, which syncd does not link), accepted until 2026-12-08.
     - **Pinned:** the base images are referenced by digest, and Dependabot proposes updates.
 
@@ -1032,12 +1133,15 @@ is not validated, and the settings a STIG deployment needs.
 - [ ] The sign-in baseline your policy asks for: the consent banner, session limits, lockout and
       password rules (`ENS_*`), and HSTS from the console or the proxy
 - [ ] Role assignments scoped to the environments and engines each person works on
-- [ ] Configuration approval required where more than one person designs configurations; a
-      ticket pattern and pre-publish hook where change management requires them
+- [ ] Configuration approval required where more than one person designs configurations, and
+      the Git branch protected when Git sync is on (a commit's author is who approval takes to be
+      the version's author); a ticket pattern and pre-publish hook where change management
+      requires them
 - [ ] `CONSOLE_REVEAL_ROLES` as narrow as your policy allows (`none` if nobody needs to see values),
       and `attributes.sensitive` listing every personal-data attribute
 - [ ] API tokens with the narrowest scopes, limited to an environment or engines where they can
-      be, with an expiry, one per system, revoked when unused
+      be, with an expiry, one per system, revoked when unused; `CONSOLE_API_SSO_CREATOR_MAX_IDLE`
+      left on
 - [ ] Webhooks limited with `CONSOLE_WEBHOOKS_ALLOWED_HOSTS`, and private networks left blocked
 - [ ] The control API on loopback with mTLS (as packaged), `local_control` and `local_reveal` off,
       and the `syncd` group kept to administrators
