@@ -482,10 +482,14 @@ The metrics `syncd_engine_busy` and `syncd_engine_busy_seconds` show a long oper
 
 `ApplyConfig` compiles the new YAML, saves it over the configuration file (so the engine needs
 write access to it), reloads the engine in-process, and runs a full sync. If the new
-configuration does not start, the previous file is put back. `engine.data_dir`, `engine.ha`, the
-`api` section and, from 0.5.0, `engine.require_signed_config`, `engine.config_signing_keys` and
-`engine.license_file` can only be changed on the engine host; a published configuration that
-changes them is refused. After `ApplyConfig` the log shows `starting sources` before the full
+configuration does not start, the previous file is put back; from 0.5.1, if the previous one does
+not start either, the engine tries it again every 5 seconds, doubling up to a minute, rather than
+exit. An LDAP or Active Directory target that does not answer no longer stops a start or a
+reload: from 0.5.1 the engine starts with it down and connects later (exports to it wait in the
+dead-letter queue), so such a publish no longer rolls back. `engine.data_dir`, `engine.ha`, the
+`api` section, from 0.5.0 `engine.require_signed_config`, `engine.config_signing_keys` and
+`engine.license_file`, and from 0.5.1 `passwords.key_file` can only be changed on the engine
+host; a published configuration that changes them is refused. After `ApplyConfig` the log shows `starting sources` before the full
 sync's summary.
 
 From 0.5.0:
@@ -605,7 +609,10 @@ flowchart LR
   client library): every write names the `resourceVersion` it read, and an engine takes the lease
   only once the object has stood unchanged for its whole duration on its own clock, as client-go's
   leader election does. The holder renews every third of `ttl_secs` (15 by default) and gives the
-  lease up on a clean stop.
+  lease up on a clean stop. An engine that starts to a free lease waits a third of the TTL before
+  taking it, so that the other engine takes it first after a clean handover. From 0.5.1 an engine
+  that finds the lease held under its own name by another process (an engine of the same member
+  name, or itself before a crash) waits it out rather than take it.
 - **The passive engine** serves its control API and metrics on its own store, runs no source,
   writes nothing, and refuses commands with the active engine's name. It keeps a warm copy: it
   pulls the active engine's newest **snapshot** every half interval (`snapshot_every_secs`, 60 by
@@ -624,25 +631,33 @@ flowchart LR
   the password ingest port, once it has its first snapshot (which carries the agent CA), and hands
   each call to the active engine (`ForwardPasswordIngest`), which checks the agent as its own
   listener would.
-- **Fencing.** Every export batch of every target kind and every password delivery asks first
-  whether this engine holds the lease with more than a second to go. The lease's time is counted
-  from when the renewal was sent, so a slow answer cannot stretch it. An engine that cannot renew
+- **Fencing.** Every export batch of every target kind (from 0.5.1, every 64 exports of it) and
+  every password delivery asks first whether this engine holds the lease with more than a second
+  to go. The lease's time is counted from when the renewal was sent, so a slow answer cannot
+  stretch it, and from 0.5.1 on a clock NTP cannot step (`CLOCK_BOOTTIME` on Linux), as is the
+  Kubernetes lease's. An engine that cannot renew
   stops writing before the other may take over, and steps down to passive when it finds the
   lease gone. A refused batch is neither written nor recorded, so the engine that takes over
   plans it again.
 - **Takeover.** When the lease expires, the passive engine takes it, swaps the newest snapshot
   in for its store (in recorded steps under `ha/`, so a crash part way is rolled back or
   finished at the next start), applies the password queue it followed since that snapshot,
-  reconciles every publication, and starts the sources from the snapshot's checkpoints. They re-read what the old engine read after the snapshot; a
+  reconciles every publication, and starts the sources from the snapshot's checkpoints. From
+  0.5.1 this happens after a promotion or a restart only, not again at a reload. To swap the
+  snapshot in, the engine waits up to 30 seconds for calls it was answering as the passive engine
+  to let go of its store; if they do not, it exits, and its restart swaps the snapshot in before
+  anything opens the store (with no snapshot received, it takes over with its own store). They re-read what the old engine read after the snapshot; a
   PostgreSQL logical replication stream, which cannot go back past what its slot confirmed,
   reads its tables in full first. The reconciliation finds what the old engine already exported
   (an LDAP entry already there is updated in place, a SCIM or Entra ID resource adopted).
 - **The console** shows the two engines of a pair as one card, with the active one's status,
   and sends the `ha.failover` webhook once, from the engine that took over.
 
-There is no etcd backend. The Kubernetes Lease backend has met only a fake API server in the
-project's tests, incremental snapshots were measured at 3,000 people only, and a pair of mixed
-versions was not run. A capture agent enrolled, or a password key rotated, after the last
+There is no etcd backend. The Kubernetes Lease backend is tested in kind (the release's CI) and
+against a fake API server, not on a cloud cluster; incremental snapshots were measured at 3,000
+people only, and a pair of mixed versions was not run. In strict access, from 0.5.1, an active
+engine that holds password keys gives its snapshots and its password queue only to a certificate
+listed under `api.access.passwords`. A capture agent enrolled, or a password key rotated, after the last
 snapshot is lost with the active engine. See
 [Availability and sizing](availability-and-sizing.md#high-availability) and
 [Installation](install.md#an-activepassive-pair-on-hosts).
@@ -650,17 +665,23 @@ snapshot is lost with the active engine. See
 ## Backups
 
 `syncd backup --to <directory | s3://bucket/prefix>` asks the running engine for a backup
-(`Backup`, which needs what a reveal needs): a RocksDB checkpoint of the store (hard-linked, so
+(`Backup`: mutual TLS or the control socket, or on the plain-text loopback listener both
+`api.local_control` and `api.local_reveal` from 0.5.1; in strict access on an engine that holds
+password keys, also `api.access.passwords` or the socket): a RocksDB checkpoint of the store (hard-linked, so
 consistent at one instant while the engine goes on writing), the configuration file, the
 password key and the agent CA (as they are on disk: sealed when a passphrase is set), streamed as
 one `tar.zst` with a manifest of every file's size and
-SHA-256. Nothing is staged on the engine's disk but the checkpoint. `engine.backup` takes one on a
-schedule (`every_secs`, `keep`). S3 is reached with syncd's own SigV4 client on the process's
+SHA-256. Nothing is staged on the engine's disk but the checkpoint. From 0.5.1 the manifest is
+written, and the archive put in place, only once the archive is complete, so a failed backup
+leaves nothing (a failed S3 multipart upload is aborted); archives without a manifest are not
+listed, restored or pruned, and backups are ordered by the time they were taken. `engine.backup`
+takes one on a schedule (`every_secs`, `keep`). S3 is reached with syncd's own SigV4 client on the process's
 crypto provider, with optional server-side encryption (`AES256`, `aws:kms`).
 
 `syncd restore` (with the engine stopped) verifies every file against the manifest, refuses a
 store format newer than it reads, and puts the backed-up configuration beside the live one as
-`engine.restored.yaml`, never over it. A restored engine with sealed keys needs the passphrase
+`engine.restored.yaml`, never over it. From 0.5.1 every file it puts in place, and every file an
+HA snapshot brings, is mode 0600, so it runs as the engine's user. A restored engine with sealed keys needs the passphrase
 they were sealed with. From 0.5.0 backups carry previous password keys and a previous agent CA
 too; a WebAssembly module next to a configuration written by hand on the host is in neither
 backups nor HA snapshots. `syncdctl backup --to ...` adds the console's database, `/etc/syncd` and,
@@ -734,23 +755,26 @@ resumes where it was, and several consoles on one database share the work withou
 
 PostgreSQL 13 or newer. The console applies its migrations (`console/server/migrations`) every
 time it starts. 0.4.0 takes the schema from 8 to 17; 0.4.1 keeps it at 17, so a rollback to
-0.4.0 keeps the database. 0.5.0 takes it from 17 to 28 (migrations 0018 to 0028), so a rollback
-to 0.4.1 restores the database backed up before the upgrade.
+0.4.0 keeps the database. 0.5.0 takes it from 17 to 29 (migrations 0018 to 0029), and 0.5.1 to 30
+(`0030_review_fixes`), so a rollback to the previous release restores the database backed up
+before the upgrade: a console does not start on a database with migrations it does not know.
 
 | Table | Holds | Migration |
 |---|---|---|
-| `users` | Accounts: username, display name, password hash (PHC string, or none for single sign-on accounts), forced change, disabled, failed sign-ins, lock time, OIDC subject, break-glass flag. Its `role` column is dropped in 0.5.0 | `0001_init`, `0004_oidc`, `0005_local_sign_in`, `0019_sign_in_policy`, `0021_role_assignments` |
+| `users` | Accounts: username, display name, password hash (PHC string, or none for single sign-on accounts), forced change, disabled, failed sign-ins, lock time, OIDC subject, break-glass flag; from 0.5.0 the last sign-in (when, how, from where) and the sign-in attempts refused since. Its `role` column is dropped in 0.5.0 | `0001_init`, `0004_oidc`, `0005_local_sign_in`, `0019_sign_in_policy`, `0021_role_assignments`, `0029_motd_last_sign_in` |
 | `role_assignments` | From 0.5.0: each account's roles, each on everything, one environment or one engine (by name). The upgrade gives every account its former role on everything | `0021_role_assignments` |
-| `sessions` | The SHA-256 of each session token, its account, last activity and end; from 0.5.0 its sign-in method and when the notice was accepted | `0001_init`, `0019_sign_in_policy` |
+| `sessions` | The SHA-256 of each session token, its account, last activity and end; from 0.5.0 its sign-in method, when the notice was accepted, and the sign-in before the one that started it (the dashboard's "previous sign-in") | `0001_init`, `0019_sign_in_policy`, `0029_motd_last_sign_in` |
 | `password_history`, `sign_in_consents` | From 0.5.0: earlier password hashes, for the sign-in policy's history rule; the notice-and-consent acceptances | `0019_sign_in_policy` |
 | `saml_logins`, `saml_assertions` | From 0.5.0: SAML sign-ins in flight, and the assertions already used (replay) | `0020_saml` |
 | `audit_log` | The append-only, hash-chained audit trail in `ens-audit/1`: `seq`, the event's fields, `prev_hash` and `hash`; from 0.5.0 the environment and engine an event concerns, and indexes for the audit page's filters. Triggers refuse `UPDATE`, `DELETE` and `TRUNCATE`, except the retention prune | `0001_init`, `0009_audit_ens`, `0022_audit_scope`, `0026_audit_filters` |
 | `audit_output_cursor` | How far each audit output has delivered, and its last error | `0009_audit_ens` |
 | `engines` | Registered engines: name, `host:port` or `unix:<socket path>`, the server CA and client certificate, the client key sealed with the master key, and the environment | `0002_engines`, `0013_environments` |
-| `engine_configs` | Configuration versions per engine: YAML, comment, author, source (`console`, `git`, `promotion`), publication, approval, pending publish, ticket, note and the hook's decision; from 0.5.0 the SHA-256 of the text last sent, and the Git commit the version came from. A trigger refuses changes to a saved version; a constraint refuses an approval by the author; another trigger makes an approval final | `0003_engine_configs`, `0006_config_approval`, `0007_publish_pending`, `0012_publish_hook`, `0013_environments`, `0018_config_signing`, `0028_config_git_commit` |
+| `engine_configs` | Configuration versions per engine: YAML, comment, author, source (`console`, `git`, `promotion`), publication, approval, pending publish, ticket, note and the hook's decision; from 0.5.0 the SHA-256 of the text last sent, and the Git commit the version came from; from 0.5.1 the person accountable for a version saved through an API token or from Git (the token's creator, or the commit author's account). A trigger refuses changes to a saved version; constraints refuse an approval by the author and, from 0.5.1, by the accountable person; another trigger makes an approval final | `0003_engine_configs`, `0006_config_approval`, `0007_publish_pending`, `0012_publish_hook`, `0013_environments`, `0018_config_signing`, `0028_config_git_commit`, `0030_review_fixes` |
+| `engine_sent_secrets` | From 0.5.1: the secret environment values sent to each engine with its publishes, sealed with the master key, so the console masks them in what the engine reports running | `0030_review_fixes` |
+| `config_git_pushes` | From 0.5.1: the commits Git push-back made, which a later sync does not take in again for their engine, nor publish automatically | `0030_review_fixes` |
 | `config_signing_keys` | From 0.5.0: the console's configuration signing key (ECDSA P-256), the private half sealed with the master key, and a key staged for a rotation | `0018_config_signing` |
 | `oidc_logins` | Single sign-on requests in flight: state, nonce, PKCE verifier, where to go next | `0004_oidc` |
-| `settings` | One row: who may sign in locally, configuration approval, the banners, and the installation id of the audit trail | `0005_local_sign_in`, `0006_config_approval`, `0008_banners`, `0009_audit_ens` |
+| `settings` | One row: who may sign in locally, configuration approval, the banners, the installation id of the audit trail, and from 0.5.0 the message of the day (its text, who set it and when) | `0005_local_sign_in`, `0006_config_approval`, `0008_banners`, `0009_audit_ens`, `0029_motd_last_sign_in` |
 | `api_tokens` | API tokens: the SHA-256, a display prefix, scopes, creator, expiry, last use, revocation; from 0.5.0 a limit to an environment or to engines | `0010_api_tokens`, `0023_token_limits` |
 | `webhook_endpoint`, `webhook_delivery`, `webhook_engine_state` | Webhooks (the URL and signing secret sealed with the master key), their deliveries, and what the status watcher last saw of each engine | `0011_webhooks` |
 | `environments` | Each environment's values; secret ones sealed with the master key | `0013_environments` |
@@ -758,7 +782,7 @@ to 0.4.1 restores the database backed up before the upgrade.
 | `scheduled_reports`, `mail_outbox` | Scheduled reports (from 0.5.0 also as xlsx), and mail waiting to be sent | `0015_reports`, `0027_report_xlsx` |
 | `syncd_lease` | The HA lease of each engine pair, when the console's database holds it | `0016_syncd_lease` |
 | `quality_daily` | Per engine, view and check, the day's count of failing entities | `0017_quality_daily` |
-| `wasm_modules` | From 0.5.0: WebAssembly modules uploaded for an engine, by SHA-256, with their manifest; approved by someone other than the uploader (the database refuses otherwise) | `0024_wasm_modules` |
+| `wasm_modules` | From 0.5.0: WebAssembly modules uploaded for an engine, by SHA-256, with their manifest; approved by someone other than the uploader (from 0.5.1, other than the person accountable for an upload through a token; the database refuses otherwise) | `0024_wasm_modules`, `0030_review_fixes` |
 | `license_install`, `licenses`, `license_usage_daily` | From 0.5.0: the installation id and what the license state machine remembers; the licenses installed, kept after removal; each day's highest managed-identity count | `0025_license` |
 
 At startup, and then every hour when it has changed, the console writes the head of the audit
@@ -796,7 +820,10 @@ on top of `operate`) against `api.access`, by the client certificate's common na
 one place before the handler; an RPC missing from the table is refused to everyone. New installs
 are strict, and the console's certificate (`syncd console`) is the one that applies
 configurations; installs upgraded from 0.4.1 stay compatible (every certificate may do
-everything) until they opt in. See [Control API access](install.md#control-api-access).
+everything) until they opt in. From 0.5.1, on an engine that holds password keys, the calls that
+hand them out (`Backup`, `PullSnapshot`, `PullSnapshotFiles`, `FollowPasswordQueue`: `KEY_RPCS` in
+`access.rs`) need `passwords` too in strict mode, and the plain-text loopback listener serves them
+only with both `api.local_control` and `api.local_reveal`. See [Control API access](install.md#control-api-access).
 
 Each operation the console proxies (runs, approvals, drift checks, dead-letter actions, joins
 and unjoins, group reviews, publishes) is checked against the caller's role assignments (and an
@@ -864,9 +891,9 @@ Events from before 0.4.0 keep their earlier chain; the first new event continues
 
 ## Running on Kubernetes
 
-The release workflow publishes two container images and a Helm chart when a release is tagged
-(`v*`). No release has been tagged yet, so none is published so far: build the images yourself
-from the source (`docker build -f deploy/container/Dockerfile --target engine`, or
+The `Container` workflow publishes two container images and a Helm chart when a release is
+tagged (`v*`), once its kind tests have passed; 0.5.1's are published. You can also build the
+images from the source (`docker build -f deploy/container/Dockerfile --target engine`, or
 `--target console`; `--build-arg FEATURES=syncd/fips,syncd-console/fips` for the FIPS variant)
 and install the chart from `deploy/helm/syncd`.
 
@@ -907,7 +934,7 @@ or `<release>-…` when the release name contains `syncd`.
 | Service accounts | From 0.5.0, `engine.serviceAccount` and `console.serviceAccount` (the registration Job runs as the console's): none by default, the namespace's `default` account. No pod mounts an API token, except the engine's with a Kubernetes lease |
 | Console | A Deployment (`console.replicas`, 1 by default) on port 8080, plain HTTP, or HTTPS with `console.tls.existingSecret`, with an optional Ingress. Its data directory is an `emptyDir`: the master key comes from a Secret |
 | Certificates | The `syncd-pki` Secret: a CA of the chart's own, the engine's server certificate (named for its Service, and for each pod of an HA pair) and the console's client certificate, ECDSA P-256, issued by Helm at install (`pki.days`, ten years by default), kept across upgrades and when the release is uninstalled |
-| Console secrets | The `syncd-console` Secret: the master key (32 random bytes) and the initial admin password, generated at install, kept across upgrades, and kept when the release is uninstalled |
+| Console secrets | The `syncd-console` Secret: the master key (32 random bytes) and the initial admin password, generated at install, kept across upgrades, and kept when the release is uninstalled. From 0.5.1 the master key, the admin password and the certificates can come from Secrets of your own instead (`console.masterKey.existingSecret`, `console.adminPasswordExistingSecret`, `pki.existingSecret`), for Argo CD and other tools that render the chart without Helm's `lookup` |
 | Registration | A Job after each install and upgrade runs `syncd-console admin register-engine --update` with the chart's certificates, and with `console.env`. From chart 0.4.1 a registered engine keeps its environment unless `engine.environment` names one, and with `engine.ha.enabled` an init container first renames an earlier `<name>` registration to `<name>-0` (`syncd-console admin rename-engine`), keeping its configuration versions, reports and history |
 | Password ingest | From chart 0.4.1, `engine.passwordIngest.enabled`: the ingest port (7445 by default) on a Service of its own (`syncd-engine-ingest`), let in from `networkPolicy.passwordIngestFrom`; from 0.5.0 both pods of a pair answer on it. `engine.passwordKeyPassphrase.existingSecret` seals the password keys with a passphrase from a Secret of your own (`previousKey`, from 0.5.0, while it is changed) |
 | Signing key, CA certificates, license | From 0.5.0: `engine.configSigning` mounts the console's public signing key at `/etc/syncd/config-signing`; `engine.extraCaCertificates` mounts CA certificates at `/etc/syncd/ca`; `console.license.existingSecret` mounts the license at `/etc/syncd/license` and sets `CONSOLE_LICENSE_FILE` |
@@ -921,9 +948,9 @@ liveness probe fetches `/metrics`; the console's probes fetch `/healthz`. The Po
 for the console is yours; the chart does not bundle one. Upgrades and rollbacks are `helm
 upgrade` and `helm rollback`; a store or database that the newer release migrated must be
 restored from backups before rolling back. From 0.5.0 a `kind-ha` CI job installs a pair and
-fails it over with the PostgreSQL lease (it had not run in GitHub Actions before the pull request
-that brought 0.5.0); its Kubernetes-lease variant has never run, and none of the 0.5.0 chart
-changes had been rendered by `helm` or installed on a cluster during development. See
+fails it over, once with the PostgreSQL lease and once with a Kubernetes Lease; with the chart's
+install and upgrade in kind and the rendering checks of its values, it passed in the run that
+published 0.5.1. No cloud cluster was used. See
 [Installation](install.md#install-with-helm) and
 [Security](security.md#container-images-and-the-helm-chart).
 
@@ -947,10 +974,10 @@ changes had been rendered by `helm` or installed on a cluster during development
 | Metrics | Prometheus text format from the engine's own HTTP listener; alert rules shipped |
 | Console server | Rust, Axum 0.8, `sqlx` 0.8 on PostgreSQL 13+, `tokio-rustls` (its own HTTPS), `utoipa` (OpenAPI), `jsonwebtoken` and `reqwest` (OpenID Connect, webhooks, Splunk), `argon2`; its own SMTP client (from 0.5.0 also SMTPS and AUTH LOGIN); the `git` binary for Git sync. From 0.5.0, SAML 2.0 with its own XML reader and exclusive canonicalization (no XML library; aws-lc for the signatures), and X.509 path validation with OCSP and CRLs |
 | Console UI | React 19, TypeScript, Vite, TanStack Router and Query, Tailwind CSS 4, Monaco editor, React Flow (`@xyflow/react`), `openapi-fetch` with types generated from the OpenAPI document |
-| Packaging | systemd units; `.tar.gz` bundle (x86_64 and aarch64, and FIPS bundles for both from 0.5.0), `.deb` and `.rpm` (nfpm), RHEL 8 `.rpm`, and from 0.5.0 the `syncd-capture` packages and signed apt and dnf repositories on GitHub Pages; `syncdctl` (bash) |
+| Packaging | systemd units; `.tar.gz` bundle (x86_64 and aarch64, and FIPS bundles for both from 0.5.0), `.deb` and `.rpm` (nfpm), RHEL 8 `.rpm`, and from 0.5.0 the `syncd-capture` packages and signed apt and dnf repositories on GitHub Pages (not published yet: 0.5.0 and 0.5.1 were built without the signing key); the files are delivered through the ENS licensing portal's **Downloads** page; `syncdctl` (bash) |
 | Containers | Images on `gcr.io/distroless/cc-debian12:nonroot` pinned by digest (`linux/amd64`, `linux/arm64`, and from 0.5.0 FIPS for both), built from `rust:1.97.0-bookworm` and `node:22-bookworm-slim`; a Helm 3 chart (`deploy/helm/syncd`), published to GHCR as an OCI chart |
 | Front proxy | Optional: the console serves HTTPS itself, or behind the shipped nginx configuration or a Kubernetes ingress |
-| CI | GitHub Actions: fmt and clippy, tests, the console UI with a Playwright smoke test and a Keycloak sign-in, end-to-end suites per source and target (with fake SCIM, Graph and S3 services), password synchronisation, HA and backup, golden-file tests, benchmarks, fuzzing, the FIPS build, `cargo-deny`, `cargo-audit`, CycloneDX SBOMs, package lifecycle tests, Trivy scans of the images, and the chart installed, upgraded and uninstalled in a kind cluster. A release signs `SHA256SUMS` with GPG and the images and chart with cosign. From 0.5.0: axe-core accessibility checks in the browser tests, an HA pair in kind (`kind-ha`), and nightly jobs against real systems (Entra ID, hosted SCIM applications, PingDirectory, Windows Server AD, the HR services), each skipped until its credentials are configured (none is yet: only the open-source SCIM server runs every night) |
+| CI | GitHub Actions: fmt and clippy, tests, the console UI with a Playwright smoke test and a Keycloak sign-in, end-to-end suites per source and target (with fake SCIM, Graph and S3 services), password synchronisation, HA and backup, golden-file tests, benchmarks, fuzzing, the FIPS build, `cargo-deny`, `cargo-audit`, CycloneDX SBOMs, package lifecycle tests, Trivy scans of the images, and the chart installed, upgraded and uninstalled in a kind cluster. A release signs `SHA256SUMS` with GPG when the signing key is set (it was not for 0.5.0 and 0.5.1) and the images and chart with cosign. From 0.5.0: axe-core accessibility checks in the browser tests, an HA pair in kind (`kind-ha`), and nightly jobs against real systems (Entra ID, hosted SCIM applications, PingDirectory, Windows Server AD, the HR services), each skipped until its credentials are configured (none is yet: only the open-source SCIM server runs every night) |
 
 ## Code layout
 
