@@ -67,8 +67,8 @@ in its own format and with its own rules: see [syncd's Licensing](syncd/licensin
 
 Releases are downloaded from the licensing portal's **Downloads** page: every version of each
 product you hold a license for, an evaluation included. See [Releases and downloads](releases.md)
-for the files and how to verify them. syncd's releases are not on the portal yet; see
-[its install guide](syncd/install.md#getting-the-release).
+for the files and how to verify them. syncd's releases are there too from 0.5.0; its container
+images and chart come from `ghcr.io` (see [its install guide](syncd/install.md#getting-the-release)).
 
 ## Audit logging
 

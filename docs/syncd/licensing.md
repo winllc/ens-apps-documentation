@@ -73,6 +73,11 @@ before each publish, and whenever an engine shows something else. Each engine ve
 signature itself and keeps the license in its store, so it starts and runs without the console.
 An engine's own `engine.license_file` is ignored once a console manages it.
 
+Since 0.5.1, that holds only while the console has a license to give. When the console has none,
+each engine it manages judges a published configuration by **its own** evaluation period, as an
+engine without a console does, and blocks publishing changes once that period and its grace
+period are over. (0.5.0 let a console without a license switch the engines' enforcement off.)
+
 ### Without a console
 
 Set `engine.license_file` in the engine's configuration (a path relative to the configuration's

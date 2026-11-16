@@ -11,12 +11,14 @@ ways to install it:
   at `oci://ghcr.io/winllc/charts/<chart>` and included in the download.
 
 !!! note "syncd"
-    syncd ships differently. Its releases go to GitHub on a version tag, not to the licensing portal
-    (no syncd release has been tagged yet, so none is published): offline bundles (`.tar.gz`, x86_64 and
-    aarch64, each also as a FIPS build; arm64 builds use the release workflow's arm64 runners, on by
-    default from 0.5.0), `.deb` and `.rpm` packages for a Linux host with systemd, also from signed apt and
-    dnf repositories, the `syncd-capture` package for directory servers, CycloneDX SBOMs, and `SHA256SUMS` with a GPG signature (`SHA256SUMS.asc`) when the release key is
-    set. The container images `ghcr.io/winllc/syncd` and `ghcr.io/winllc/syncd-console` (amd64 and arm64,
+    syncd's pipeline differs from the others'. On a version tag it uploads the release to the same
+    bucket, under `syncd/<version>/`, so syncd appears on the **Downloads** page like the other products
+    (from 0.5.0; 0.5.0 and 0.5.1 are there): offline bundles (`.tar.gz`, x86_64 and aarch64, each also as
+    a FIPS build), `.deb` and `.rpm` packages for a Linux host with systemd, the `syncd-capture` package
+    for directory servers, CycloneDX SBOMs (`.cdx.json`), and `SHA256SUMS`. With the release key set it
+    also signs `SHA256SUMS` (`SHA256SUMS.asc`) and the `.rpm` files and publishes apt and dnf
+    repositories; 0.5.0 and 0.5.1 were released without it, so they are **unsigned** and there are no
+    repositories yet. The GitHub release carries only the images' SPDX SBOMs. The container images `ghcr.io/winllc/syncd` and `ghcr.io/winllc/syncd-console` (amd64 and arm64,
     with `-fips` tags) and the Helm chart `oci://ghcr.io/winllc/charts/syncd` are signed
     with cosign as below, from the repository `winllc/ldap-sync-merge-view`. See
     [syncd's install guide](syncd/install.md#getting-the-release).
