@@ -336,12 +336,15 @@ directory is fixed whatever a configuration says.
   computed attribute of the view sets (for `match`, of the referenced view; for a hint, of
   the view or its `other_views`): nothing then joins on it, the reference finds nothing,
   the order is never used or the hint scores nothing. A name that differs from a flow's only
-  in case is the same attribute and is not warned about. At start, a PostgreSQL stream whose
+  in case is the same attribute and is not warned about. Since 0.5.4 two more are warned
+  about, both of which left a rule that reads other entities without values (see
+  [Validation rules](#validation-rules)). At start, a PostgreSQL stream whose
   publication does not publish `TRUNCATE`, and since 0.5.1 a streamed query whose watched
   table's replica identity leaves out the watched column, are warned about in the log; see
   [Connectors](connectors.md#postgresql).
-- **Rolling back.** 0.5.1 adds no settings: a configuration 0.5.1 accepts works on 0.5.0
-  (0.5.1 only refuses more; see [Validation rules](#validation-rules)). A rollback from
+- **Rolling back.** 0.5.2 and 0.5.4 add no settings and refuse nothing new: a configuration
+  0.5.4 accepts works on 0.5.2 and 0.5.1. 0.5.1 adds no settings either: a configuration 0.5.1
+  accepts works on 0.5.0 (0.5.1 only refuses more; see [Validation rules](#validation-rules)). A rollback from
   0.5.0 to 0.4.1 cannot keep the store, which 0.5.0 migrates to a format 0.4.1 refuses:
   `syncdctl rollback` restores the backup taken before the upgrade. 0.4.1 added no settings, so a configuration for 0.4.1 works on 0.4.0.
 
@@ -1003,6 +1006,15 @@ second view reading the same object stopped the engine. Since 0.5.1:
   join rules as they are now, so changed join rules join or project records that waited, even
   from a source read as a stream, which has no full read of its own to retry them.
 
+**Joining at scale** (since 0.5.2). An `all:` rule finds its candidates by its rarest condition
+and checks the others for those only, so a condition many people share (a department) next to a
+unique one (an employee id) costs no more than the unique one alone; alone, it finds a crowd and
+the record waits for review. A record waiting for review is matched again at a full read only
+when the entities its keys find, or its source's joins, changed. When two records of one source
+wait for the same entity and it appears, the first in order of source and record joins it and the
+other waits for review (in 0.5.1 either could). How a first read joins, and what keeps it fast, is
+in [Joins and first reads](availability-and-sizing.md#joins-and-first-reads).
+
 ### Precedence
 
 | Key | Type | What |
@@ -1068,6 +1080,12 @@ references:
   manager: { match: employeeId }                 # within the same view
   member: { view: people, match: employeeId }    # a group view pointing at people
 ```
+
+A reference only finds entities when a flow or a computed attribute of the view sets it (a
+group's `member: source.member`); since 0.5.4 validation warns when none does (see
+[Validation rules](#validation-rules)).
+
+To compute each person's groups (`memberOf`), see [Computing memberOf from groups](rules.md#computing-memberof-from-groups).
 
 ### Correlation assistance (`correlation`)
 
@@ -1675,7 +1693,8 @@ Export reconciliations and drift checks run on intervals (`reconcile_interval_se
 
 `syncd validate` and the console report every problem at once. 0.5.1 refuses some
 configurations 0.5.0 accepted (the items marked "since 0.5.1" below): check yours with the new
-binary's `syncd validate` before the upgrade. Beyond the per-key rules above, a configuration is
+binary's `syncd validate` before the upgrade. 0.5.2 and 0.5.4 refuse nothing new; 0.5.4 adds two
+warnings (below). Beyond the per-key rules above, a configuration is
 refused when:
 
 - `version` is not `1`;
@@ -1779,6 +1798,23 @@ refused when:
   attributes, and since 0.5.1 an expression nested deeper than 200 levels, with an operator
   chain longer than 400 terms, or of more than 100,000 parts once package functions are
   expanded (see [Size limits](rules.md#size-limits)).
+
+Some mistakes are warnings, not errors: the configuration is accepted, and `syncd validate`, the
+reply to `apply-config`, the log at start and the console's check report them (see
+**Warnings** in [Changing the configuration](#changing-the-configuration)). Since 0.5.4 two of
+them concern rules that read other entities:
+
+- a reference attribute that no flow or computed attribute of its view sets, so it points at
+  nothing and `ref()`, `refs()` and `referrers()` find nothing through it:
+  `view V: reference R: e.R is not set by any flow or computed attribute of view V; it points at no entity`;
+- an attribute that a computed attribute or a quality check reads of another view's entities,
+  and that no flow or computed attribute of that view sets (the groups' `dn` in
+  `referrers(e, "member").map(g, g.dn)`, with no `dn` flowed into the groups' view):
+  `view V: computed A: reads X of view W's entities, which no flow or computed attribute of that view sets; it reads as absent`
+  (`quality Q` for a check).
+
+Both left a computed `memberOf` empty without a word before 0.5.4; see
+[Computing memberOf from groups](rules.md#computing-memberof-from-groups).
 
 ## Engine environment variables and options
 
@@ -2379,7 +2415,7 @@ The images (`ghcr.io/winllc/syncd` and `ghcr.io/winllc/syncd-console`) and the H
 (`oci://ghcr.io/winllc/charts/syncd`) run the same two programs with the settings on this
 page. This section is a reference for what differs; [Install](install.md) has the
 procedure. They are pushed to GHCR, signed, when a `v*` tag is built in the repository's
-`release` environment: the 0.5.1 images (and their `-fips` variants) and chart are published
+`release` environment: the 0.5.4 images (and their `-fips` variants) and chart are published
 there, signed with cosign, with SBOM attestations.
 
 The images are built for `linux/amd64` and `linux/arm64` (unless a release was built with
@@ -2471,7 +2507,8 @@ system. Their base images are pinned by digest.
 
 ### Helm chart values
 
-The chart's `values.yaml`, by key. The chart's version is the release's (`0.5.1`).
+The chart's `values.yaml`, by key. The chart's version is the release's (`0.5.4`; 0.5.2 and
+0.5.4 add no values).
 
 | Key | Default | What |
 |---|---|---|
@@ -2583,9 +2620,10 @@ A kind test (`tests/k8s/ha.sh`) installs a pair, turns HA on for an existing rel
 fails it over by lease expiry, with the PostgreSQL lease. The chart's 0.5.0 additions
 (service accounts, the signing key, CA certificates, the Kubernetes Lease and its RBAC,
 the license Secret, `previousKey`) had not been rendered by `helm` or installed on a
-cluster when 0.5.0 was released, and the Kubernetes Lease variant of the kind test has
-not run. 0.5.1's Secrets of your own (`console.masterKey`, `console.adminPasswordExistingSecret`,
-`pki.existingSecret`) are rendered by CI (`tests/helm/check-values.py` in the source
+cluster when 0.5.0 was released, nor had the Kubernetes Lease variant of the kind test run;
+it passed in the `Container` run that published 0.5.4. 0.5.1's Secrets of your own
+(`console.masterKey`, `console.adminPasswordExistingSecret`, `pki.existingSecret`) are rendered by
+CI (`tests/helm/check-values.py` in the source
 repository).
 
 ## Complete example

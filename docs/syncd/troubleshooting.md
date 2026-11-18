@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Symptoms, likely causes and fixes, for syncd 0.5.1 (tag `v0.5.1`, commit `7da4d9e`). Start with
+Symptoms, likely causes and fixes, for syncd 0.5.4 (tag `v0.5.4`, commit `14c6668`). Start with
 `sudo syncd status`, `sudo syncdctl status` and the journal (`journalctl -u syncd -u syncd-console
 -e`). Commands, metrics and alert rules are in the [Operator guide](operator-guide.md); settings
 are in [Configuration](configuration.md); the license is in [Licensing](licensing.md). The source
@@ -31,6 +31,14 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
     engine's user. The full list is in
     [Upgrading from 0.5.0 to 0.5.1](install.md#upgrading-from-050-to-051).
 
+!!! tip "Just upgraded from 0.5.1 or 0.5.2?"
+    0.5.4 refuses nothing new. A value a rule makes of several related entities may change once,
+    as they now come in the order of their ids; from 0.5.1, of two records waiting for the same
+    entity the first in order of source and record joins it, and the `ambiguous` count grows more
+    slowly. `syncd validate` may print two new warnings, each about a rule that reads nothing
+    today ([The engine at work](#the-engine-at-work)). The full list is in
+    [Upgrading from 0.5.1 or 0.5.2 to 0.5.4](install.md#upgrading-from-051-or-052-to-054).
+
 ## Installation and upgrade
 
 ??? failure "`gpg: BAD signature`, `gpg: Can't check signature: No public key`, or `sha256sum: WARNING: ... computed checksum did NOT match`"
@@ -40,13 +48,13 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
     the one that was signed; download both files again. A file whose checksum does not match is
     damaged or not the published one: download it again from the portal's **Downloads** page,
     and do not install it. A release without `SHA256SUMS.asc` was published without the signing
-    key, as 0.5.0 and 0.5.1 were: there is nothing to `gpg --verify`, and `sha256sum -c
+    key, as 0.5.0, 0.5.1 and 0.5.4 were: there is nothing to `gpg --verify`, and `sha256sum -c
     SHA256SUMS --ignore-missing` is the check. See
     [Verifying a release](install.md#verifying-a-release).
 
 ??? failure "`apt update` or `dnf` cannot reach `https://winllc.github.io/ldap-sync-merge-view` (404)"
-    The signed apt and dnf repositories are not published yet: 0.5.0 and 0.5.1 were released
-    without the signing key. Remove `/etc/apt/sources.list.d/syncd.sources` or
+    The signed apt and dnf repositories are not published yet: 0.5.0, 0.5.1 and 0.5.4 were
+    released without the signing key. Remove `/etc/apt/sources.list.d/syncd.sources` or
     `/etc/yum.repos.d/syncd.repo`, and install or upgrade from the `.deb` or `.rpm` downloaded
     from the portal's **Downloads** page. See
     [From the package repositories](install.md#from-the-package-repositories).
@@ -1237,6 +1245,49 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
     and at disk I/O: rules that read many other entities (`referrers()`, large groups) slow a full
     sync down. Stopping the engine is safe: a full sync resumes where it stopped at the next start.
 
+??? warning "A source's first read joins slowly, with the engine on one core for most of it"
+    A source's first full read, or the first after a view is added, takes much longer than the
+    figures in [Joins and first reads](availability-and-sizing.md#joins-and-first-reads): on
+    4 vCPU a joining source loads at about 50,000-75,000 records a second, and one whose records
+    each find a few dozen people at about 12,000. Each record is matched against the view's join
+    index one at a time, and from 0.5.2 the entities it joins or projects are recomputed in
+    batches on every core (`engine.shards`). A record waits for the batch's recomputes, and runs
+    alone, when they could change what it finds: a key it joins by arrives with them, it joins by
+    a computed attribute, or one of its candidates is among them. A record that finds several
+    entities reads each of them and then waits for review.
+
+    1. Join on unique, single-valued keys: an employee id, a GUID. Use an attribute many people
+       share (a department, a surname) only next to a unique one in an `all:` rule, never alone:
+       alone, each record finds a crowd and waits for review.
+    2. Leave out records that can never match at the source: an LDAP object's `filter`, or a
+       `query` for a table, without the service and test accounts. A join rule's `when:` keeps
+       such a record from being looked up, but it still waits as unmatched.
+    3. Load the projecting source before the sources that join it. A record read before its
+       entity exists waits, and is joined alone when the entity appears.
+    4. Keep `engine.shards` at the number of cores (the default, `0`).
+    5. A later full read is quick when nothing changed: records whose staged copy is the same are
+       skipped, and from 0.5.2 a record waiting for review is matched again only when the entities
+       its keys find, or its source's joins, changed.
+
+    Join rules are in [Sources](configuration.md#sources).
+
+??? warning "`syncd validate` warns: `reference R: e.R is not set by any flow or computed attribute`, or `reads X of view W's entities, which no flow or computed attribute of that view sets`"
+    New in 0.5.4. Both are warnings: the configuration is accepted, and the engine logs them at
+    start and reload (`configuration: ...`). Each names a rule that reads other entities and,
+    as configured, finds nothing:
+
+    - `view V: reference R: e.R is not set by any flow or computed attribute of view V; it points
+      at no entity`: view V declares R as a reference (a group's `member`), but none of its
+      sources flows a value into R, so `ref()`, `refs()` and `referrers(e, "R")` find nothing.
+      Add the flow (`member: source.member`).
+    - `view V: computed A: reads X of view W's entities, which no flow or computed attribute of
+      that view sets; it reads as absent` (or `quality Q:`): the rule reads X of the entities it
+      reaches (the groups' `dn` in `referrers(e, "member").map(g, g.dn)`), and view W never sets
+      X. Flow it in view W (`dn: source.dn`).
+
+    See [Computing memberOf from groups](rules.md#computing-memberof-from-groups) and
+    [Validation rules](configuration.md#validation-rules).
+
 ??? warning "`target <name> UNREACHABLE`, alert `SyncdTargetDown`"
     The engine lost its connection to the directory and can't make a new one, or (from 0.5.1) the
     directory did not answer when the engine started or reloaded, and the engine started without
@@ -1473,8 +1524,8 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
     comes from a ConfigMap or a Secret, not both. See [Single sign-on](install.md#single-sign-on).
 
 ??? failure "The pods do not start: `ImagePullBackOff`, or `exec format error`"
-    `ImagePullBackOff`: the tag is not in the registry the values name. The 0.5.1 images are on
-    `ghcr.io/winllc` (`syncd:0.5.1`, `syncd-console:0.5.1` and their `-fips` tags); there is no
+    `ImagePullBackOff`: the tag is not in the registry the values name. The 0.5.4 images are on
+    `ghcr.io/winllc` (`syncd:0.5.4`, `syncd-console:0.5.4` and their `-fips` tags); there is no
     `latest`. Check `image.engine.tag` and `image.console.tag` (the chart's `appVersion` by
     default), and on a cluster that cannot reach ghcr.io, mirror the images (see
     [Air-gapped clusters](install.md#air-gapped-clusters)) or build them (see

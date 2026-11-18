@@ -228,7 +228,7 @@ Computed attributes only. See [Reading other entities](#reading-other-entities).
 | `ref(e.reference)` | The entity a reference attribute points at, such as the manager. | `ref(e.manager).displayName` |
 | `refs(e.reference)` | Every entity a multi-valued reference points at. | `refs(e.manager).map(m, m.mail)` |
 | `reports(e)` | The entities whose `manager` reference points at this one. | `size(reports(e))` |
-| `referrers(e, "reference")` | The entities whose given reference points at this one. | `size(referrers(e, "manager"))` |
+| `referrers(e, "reference")` | The entities whose given reference points at this one: a person's groups, when the groups' view declares `member` as a reference to the people's. See [Computing memberOf from groups](#computing-memberof-from-groups). | `referrers(e, "member").map(g, g.dn)` |
 
 ### Binary
 
@@ -627,7 +627,13 @@ views:
   the store cannot read fails the batch instead of reading as absent.
 - When a referenced entity changes an attribute a rule read, the entities whose rules read
   it are evaluated again. The engine tracks which attributes each rule reads at the end of
-  each path.
+  each path. Since 0.5.4, when only the key a path finds entities by changes (a group's
+  `member`, a manager's `employeeId`), only the entities of the values gained or lost are
+  evaluated again, not all of them.
+- `ref()`, `refs()`, `reports()` and `referrers()` give related entities in the order of
+  their ids, so a value made of several (`.join(", ")`) is the same after a restart. (Before
+  0.5.4 the order could change after a restart; such a value may change once at the
+  upgrade.)
 - Cross-entity functions work in computed attributes only, not in flows or publication
   mappings, and cannot be previewed on their own or run in test cases: `syncd test`
   reports such tests as skipped, not failed.
@@ -635,6 +641,154 @@ views:
 Publications export a reference attribute as the DN its entity has in the same target,
 through the publication's own `references` map; see
 [Configuration](configuration.md#publications-publications).
+
+## Computing memberOf from groups
+
+A person's groups (`memberOf`) can be computed from the groups that name them. The groups
+are a view of their own, its `member` attribute is declared a reference to the people's
+view, and a computed attribute of the people's view lists the groups whose `member` points
+at the person. This keeps `memberOf` right when either side changes: a person added to or
+taken out of a group, a group renamed or deleted, a person renamed. Since 0.5.4 it is
+tested end to end (OpenLDAP read with syncrepl), and a change to a large group costs only
+the people it gained or lost.
+
+Use it when the groups come from a source other than the people (a database, another
+directory), when the people's directory keeps no `memberOf` of its own, or when you need
+the membership in rules and filters before it reaches a target. If the people's own
+directory keeps `memberOf` (Active Directory; OpenLDAP with the `memberof` overlay) and you
+need only that directory's groups, flowing it from the person's record
+(`memberOf: source.memberOf`) may be enough.
+
+### The configuration
+
+```yaml
+attributes:
+  # memberOf and member are lists: read as lists in rules, diffed as sets on export.
+  multi_valued: [memberOf, member]
+
+views:
+  - name: people
+    sources:
+      - connector: hr_db
+        object: employee
+        project: true
+        flows:
+          employeeId: source.emp_id
+          # ...
+      - connector: corp_ldap
+        object: person
+        join:
+          - { entity: employeeId, source: source.employeeNumber }
+        flows:
+          # The person's DN in the directory the groups come from: what the groups'
+          # member values equal.
+          corpDn: source.dn
+    computed:
+      # The groups naming the person as a member, by their DNs.
+      - name: memberOf
+        output: referrers(e, "member").map(g, g.corpDn)
+
+  - name: groups
+    sources:
+      - connector: corp_ldap
+        object: group
+        project: true
+        flows:
+          cn: source.cn
+          corpDn: source.dn
+          member: source.member
+    references:
+      # Each member value is a person's DN in corp_ldap: find the person whose corpDn
+      # equals it. DNs differ in case often, so compare ignoring case.
+      member: { view: people, match: corpDn, case_insensitive: true }
+```
+
+What each part does:
+
+1. **The people hold the value the groups' members carry.** An LDAP group's `member`
+   values are DNs, so the people's view flows the person's DN in that same directory
+   (`corpDn: source.dn`). Groups whose members are employee ids, logins or mail addresses
+   (a database table) match on that attribute instead: `match: employeeId`. Whatever the
+   name, it must be set by a flow or computed attribute of the people's view.
+2. **The groups' view declares `member` as a reference** to the people's view, with `match`
+   naming that attribute. `case_insensitive: true` is what you want for DNs.
+3. **The rule** `referrers(e, "member")` gives the groups whose `member` points at the
+   person, in the order of their ids; `.map(g, g.corpDn)` takes each group's DN. Any
+   attribute of the groups' view works: `g.cn` for names, or a computed one.
+4. **`multi_valued`** makes `memberOf` (and `member`) a list everywhere: one group is a
+   one-element list, none an empty list, and a target attribute built from it is diffed as
+   a set. The list is sorted, so it doesn't change order from one evaluation to the next.
+
+The two views may be read in either order, and a group may name a person before the person
+exists: the reference resolves when the person appears.
+
+### Using it
+
+In rules and filters, like any list:
+
+```yaml
+computed:
+  - name: vpnAccess
+    output: e.memberOf.exists(g, g.startsWith("cn=vpn-users,"))
+publications:
+  - name: people_to_target
+    filter: size(e.memberOf) > 0
+```
+
+To a target, mind what the target computes itself:
+
+- **The target maintains `memberOf` itself** (Active Directory, where it is a back-link;
+  OpenLDAP with the `memberof` overlay, where it is operational): it can't be written. Publish
+  the groups instead, with their `member` exported through the publication's `references`
+  map, and the target's own `memberOf` follows:
+
+    ```yaml
+    publications:
+      - name: groups_to_target
+        view: groups
+        target: target
+        dn: cn={cn},ou=Groups,dc=example,dc=com
+        object_classes: [groupOfNames]
+        attributes:
+          cn: e.cn
+        references:
+          member: member       # each member as the DN the person has in this target
+    ```
+
+- **To put syncd's list on the person's entry** anyway (for an application that reads it
+  there), export it as an attribute the target lets you write. syncd's own end-to-end test
+  exports it as `seeAlso` (`seeAlso: e.memberOf` in the people's publication). The
+  values are the DNs the groups have in the *source* (`corpDn`): export `g.cn` or build the
+  target DN in the rule if the application needs the target's.
+
+### What to check
+
+- **The configuration's warnings.** Since 0.5.4 `syncd validate` and the console's check
+  warn about the two mistakes that leave such a rule silently empty (see
+  [Validation rules](configuration.md#validation-rules)):
+  `view groups: reference member: e.member is not set by any flow or computed attribute of
+  view groups; it points at no entity` (no flow sets `member`), and `view people: computed
+  memberOf: reads corpDn of view groups's entities, which no flow or computed attribute of
+  that view sets; it reads as absent` (the groups' view doesn't set the attribute the rule
+  maps). A `match` attribute the people's view never sets is warned about as well (`the
+  reference finds no entity`).
+- **One entity in the explorer.** Open a person in the console's object explorer: `memberOf`
+  lists their groups. An empty list where you expect groups means the warnings above, or
+  `member` values that equal no person's `corpDn`: check that the people's view reads the
+  same directory the groups do, and set `case_insensitive: true`.
+- **Membership is direct.** A group whose `member` names another group matches no person, so
+  nested groups are not followed: a person's `memberOf` lists the groups that name them
+  themselves.
+- **Tests and preview.** Rule test cases and the console's preview can't run a rule that
+  reads other entities (it needs the rest of the configuration): `syncd test` reports such
+  tests as skipped, and since 0.5.4 the visual editor and the Studio say so instead of
+  "Does not compile" (see [Rules that read other entities](user-guide.md#rules-that-read-other-entities)). The configuration's check compiles the rule. Test it end to end, or
+  with a [simulation](user-guide.md#simulate-designers).
+- **Large groups.** Before 0.5.4, one person added to a group of 10,000 evaluated 10,000
+  people's rules; now it evaluates that person's. The groups are read for such a rule
+  without their member lists. A full sync still evaluates every person's rule, so very
+  large groups make it slower (see [Joins and first reads](availability-and-sizing.md#joins-and-first-reads)
+  and [Troubleshooting](troubleshooting.md#the-engine-at-work)).
 
 ## Dates and times
 

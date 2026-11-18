@@ -8,9 +8,9 @@ technology, or with users, and no accessibility auditor has reviewed them. syncd
 claim conformance: the report lists several criteria as only partially supported (see
 [Known limits](#known-limits)).
 
-This page describes syncd 0.5.1 (tag `v0.5.1`, commit `7da4d9e`). The self-audit and the draft
+This page describes syncd 0.5.4 (tag `v0.5.4`, commit `14c6668`). The self-audit and the draft
 report in the source still describe 0.5.0's console; what 0.5.1 changes for accessibility is noted
-below.
+below. 0.5.2 and 0.5.4 change nothing for accessibility.
 
 ## How it is checked
 

@@ -4,12 +4,13 @@ This page summarises syncd's security controls and the settings that affect them
 console's sign-in, sessions, roles and API tokens, its HTTPS, the engine's control API,
 secrets, password synchronisation, webhooks and other outbound connections, the audit trail,
 backups, high availability, the systemd hardening, the container images and Helm chart, and the
-supply chain. It describes syncd 0.5.1 (tag `v0.5.1`, commit `7da4d9e`). 0.5.1 fixes what a
+supply chain. It describes syncd 0.5.4 (tag `v0.5.4`, commit `14c6668`). 0.5.1 fixes what a
 review of 0.5.0 found; for the console that includes one critical fix (0.5.0 showed the engine's
 environment secrets in the running configuration to every reader: see
 [Authorization](#authorization)) and several checks that refuse what 0.5.0 allowed (changes from
 another site, the API tokens of single sign-on accounts that stopped signing in, a version approved
-by its own author through a token or a Git commit).
+by its own author through a token or a Git commit). 0.5.2 and 0.5.4 change no security control;
+0.5.4 updates dependencies (see [Supply chain](#supply-chain)).
 
 The source repository's `SECURITY.md` says how to report a vulnerability (GitHub's private
 vulnerability reporting) and that fixes go to the latest minor version only; its
@@ -1064,17 +1065,30 @@ the sign-in limit see client addresses.
   yanked crates denied, crates only from crates.io, no git or unknown registries, no wildcard
   versions. `cargo-audit` checks advisories; the few advisories ignored are each justified in
   `deny.toml` or `.cargo/audit.toml`, and CI checks that the code they concern stays unbuilt.
+  In 0.5.4:
+    - `libz-sys` is 1.1.33 in the lock file, for RUSTSEC-2026-0544 (a heap overflow). syncd does
+      not build it: the RocksDB build leaves zlib out;
+    - `chrono` and `chrono-tz` are reported unmaintained (RUSTSEC-2026-0543, RUSTSEC-2026-0555),
+      with no vulnerability. Both advisories are ignored, with the reason in `deny.toml`: the
+      rules, schedules, change windows and licence dates use them, and the CEL parser (`cel`
+      0.15) depends on both. `chrono-tz`'s time zone rules stay as in its 0.10.4, so a zone whose
+      rules change later is computed by the old ones until the planned move to `jiff`;
+    - `wasmi`, which runs rule packages' WebAssembly functions, is 2.0.1: 2.0.0 was withdrawn
+      from crates.io.
 - **Fuzzing.** The decoders of what sources send (`pgoutput`, DirSync, syncrepl) and, from
   0.5.0, of what WebAssembly modules return are fuzzed in CI.
 - **Releases.** A release is built in CI from a `v*` tag (Rocky Linux 9, and Rocky Linux 8 for
   the RHEL 8 `.rpm`), after the package lifecycle tests and the upgrade test from the previous
-  release pass. Releases are tagged from 0.5.0 on (`v0.5.0`, `v0.5.1`). For 0.5.1 the release job
-  uploaded the files to the ENS licensing portal's release bucket (the **Downloads** page), and the
-  images and chart were pushed to GHCR and signed with cosign; the files are **not GPG-signed** (no
-  release key was set), so there is no `SHA256SUMS.asc` and no apt or dnf repository yet, and the
-  GitHub release holds only the images' SBOMs. A release carries the x86_64 and aarch64 bundles, `.deb` and `.rpm`
-  (aarch64 only when the repository's arm64 runners are enabled, which from 0.5.0 is the
-  default), the RHEL 8 `.rpm`, x86_64 and (from 0.5.0) aarch64 FIPS bundles, and from 0.5.0 the
+  release pass. Releases are tagged from 0.5.0 on (`v0.5.0`, `v0.5.1`, `v0.5.2`, `v0.5.4`). For
+  0.5.4 the release job succeeded (on its second attempt): it uploaded the files to the ENS
+  licensing portal's release bucket (the **Downloads** page), then to the source repository's
+  GitHub release, which holds every file (marked pre-release, with no notes text); the images and
+  chart were pushed to GHCR and signed with cosign. The files are still **not GPG-signed** (no
+  release key was set), so there is no `SHA256SUMS.asc` and no apt or dnf repository yet. 0.5.2
+  was published as images and a chart only, its packages having failed to build; there is no
+  0.5.3. For 0.5.1 the GitHub release held only the images' SBOMs. A release carries the x86_64
+  and aarch64 bundles, `.deb` and `.rpm` (aarch64 only when the repository's arm64 runners are
+  enabled, which from 0.5.0 is the default), the RHEL 8 `.rpm`, x86_64 and (from 0.5.0) aarch64 FIPS bundles, and from 0.5.0 the
   `syncd-capture` packages, with:
     - `SHA256SUMS` over every file as published, and its **GPG signature** `SHA256SUMS.asc`, made
       in a protected `release` environment that holds the key. From 0.5.0 the `.rpm` files are
@@ -1103,7 +1117,7 @@ the sign-in limit see client addresses.
     - **Scanned:** on every pull request CI builds the standard and FIPS images, amd64 and (with
       arm64 runners) arm64, and scans the amd64 ones, standard and FIPS, with Trivy; a fixable
       HIGH or CRITICAL finding fails the build. Accepted risks are listed in `.trivyignore`, each with its reason, who accepted
-      it and until when. At 0.5.1 it holds one: CVE-2026-84782 (OpenSSL's DTLS, in the
+      it and until when. At 0.5.4 it holds one: CVE-2026-84782 (OpenSSL's DTLS, in the
       distroless base's `libssl3`, which syncd does not link), accepted until 2026-12-08.
     - **Pinned:** the base images are referenced by digest, and Dependabot proposes updates.
 

@@ -396,6 +396,10 @@ The bind account needs read access to the entries and attributes the objects rea
 0.5.1 an entry or a paged results control the server sends malformed fails the read with an
 error instead of stopping the source's task.
 
+**Groups.** A second object can read the directory's groups (`groupOfNames`) into a view of their
+own, flowing `member` and the group's `source.dn`. To compute each person's groups (`memberOf`)
+from them, see [Computing memberOf from groups](rules.md#computing-memberof-from-groups).
+
 **A private CA.** An `ldaps://` or StartTLS server's certificate is checked against the
 system's trust store unless the connection names a `ca_file` (since 0.5.0): PEM CA
 certificates, then the only ones trusted for that connector, such as an Active Directory
@@ -1542,7 +1546,7 @@ Actions before the release's own pull request:
 | LDAP source | OpenLDAP 2.6 | Full reads, delta reads, syncrepl, failover to a second URL, the access log, a container renamed under the base, case-only renames |
 | LDAP source | 389 Directory Server 2.4 | Retro Changelog (`cn=changelog`), anchored on `nsUniqueId` |
 | Active Directory source | Samba AD DC (4.19 in the benchmarks) | DirSync streaming |
-| LDAP target | OpenLDAP 2.6, with and without ppolicy | Adds, renames, moves, case-only renames, containers created and removed when empty, groups, references, adoption, drift, write-back, entries moved by hand put back (`entryUUID`), permanent values, `openldap` profile; since 0.5.0 unmanaged entries and privileged members (`tests/e2e/unmanaged.sh`), a leaver taken out of groups made by hand except `keep_groups`, a rehired person taking over their locked entry |
+| LDAP target | OpenLDAP 2.6, with and without ppolicy | Adds, renames, moves, case-only renames, containers created and removed when empty, groups, references, since 0.5.4 a computed `memberOf` following the source's groups (added, renamed, losing a member, deleted), adoption, drift, write-back, entries moved by hand put back (`entryUUID`), permanent values, `openldap` profile; since 0.5.0 unmanaged entries and privileged members (`tests/e2e/unmanaged.sh`), a leaver taken out of groups made by hand except `keep_groups`, a rehired person taking over their locked entry |
 | LDAP target | 389 Directory Server 2.4 | `389ds` profile: disable and re-enable, case-only renames, entries moved by hand put back (`nsUniqueId`), a move aside into a taken RDN |
 | Active Directory target | Samba AD DC | Users and groups, containers, disable and move, group membership following moves, entries moved by hand put back (`objectGUID`), two users swapping names, a move aside into a taken RDN; since 0.5.0 unmanaged entries with a nested privileged group, `sam_account_name.on_conflict: unique` |
 | Initial passwords on Active Directory | Samba AD DC over LDAPS and StartTLS, its certificate trusted through `ca_file` (`tests/e2e/ad-passwords.sh`, since 0.5.0) | Users created enabled with the password HR chose (they bind with it) or a generated one they must change; a connector with another CA, or none, refused the connection. The syncd repository's `docs/TESTED.md` still says the Samba row does not cover `unicodePwd`; its CI workflow runs this scenario |

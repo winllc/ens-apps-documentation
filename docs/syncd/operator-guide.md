@@ -3,8 +3,8 @@
 This guide covers running syncd day to day: the services, starting and stopping them, checking
 health, reading logs, the `syncd` and `syncdctl` commands, who may use the control API, held
 changes, unmanaged entries, backups, the support bundle, an active/passive pair, monitoring,
-certificates, the master key and the password keys. It describes syncd 0.5.1 (tag `v0.5.1`,
-commit `7da4d9e`). [Running on Kubernetes](#running-on-kubernetes) covers the same for the Helm chart.
+certificates, the master key and the password keys. It describes syncd 0.5.4 (tag `v0.5.4`,
+commit `14c6668`). [Running on Kubernetes](#running-on-kubernetes) covers the same for the Helm chart.
 Installing and upgrading are in [Installation](install.md); the license is in
 [Licensing](licensing.md); what to do when something goes wrong is in
 [Troubleshooting](troubleshooting.md).
@@ -76,6 +76,16 @@ sudo syncd status                          # what the engine is doing
   start, and each source carries on from its last committed checkpoint. A backup under way
   finishes first. The active engine of a pair gives its lease up, so the passive one takes over
   at once.
+- **A source's first read** (a new source, or the first read after a view is added) is the
+  slowest thing the engine does with a source: each record is matched against the view's join
+  index on one core, and from 0.5.2 the entities it joins or projects are recomputed in batches
+  on every core. On 4 vCPU a joining source loads at about 50,000-75,000 records a second; one
+  whose records each find a few dozen people (a join on a surname alone) at about 12,000. Load the
+  projecting source first, join on unique keys, and leave records that can never match out at
+  the source (see [Joins and first reads](availability-and-sizing.md#joins-and-first-reads) and
+  [Troubleshooting](troubleshooting.md#the-engine-at-work)). A later full read with nothing changed
+  is quick: from 0.5.2 a record waiting for review is matched again only when the entities its
+  keys find, or its source's joins, changed.
 - **What needs a restart.** Changes to `console.env` and `engine.env`, and hand edits to
   `engine.yaml`. A configuration published from the console needs none: the engine reloads with it
   (see [Admin guide](admin-guide.md)). `engine.cache_mb` takes effect only when syncd restarts.
@@ -83,15 +93,15 @@ sudo syncd status                          # what the engine is doing
 `syncdctl status` prints:
 
 ```text
-release:   0.5.1
-previous:  0.5.0
+release:   0.5.4
+previous:  0.5.1
 engine:    active, control API answers
-store:     format 2 (syncd 0.5.1 reads up to 2)
+store:     format 2 (syncd 0.5.4 reads up to 2)
 console:   active, http://127.0.0.1:8080 answers
 certificates: valid until Nov  4 10:15:00 2036 GMT (ca.crt expires first)
 users:     https://syncd.example.com
 backups:
-  /var/lib/syncd/backups/20261116T101500Z-upgrade-0.5.0-to-0.5.1
+  /var/lib/syncd/backups/20261118T101500Z-upgrade-0.5.1-to-0.5.4
 ```
 
 The `backups:` it lists are the host-local ones. Off-host and scheduled backups show in
@@ -122,7 +132,7 @@ running totals. It also shows:
 
 | Line | What it says |
 |---|---|
-| `engine 0.5.1  up 3d2h  fips off`, `configuration version ...` | The version, uptime, FIPS mode and the configuration running |
+| `engine 0.5.4  up 3d2h  fips off`, `configuration version ...` | The version, uptime, FIPS mode and the configuration running |
 | `configuration applied by CN=syncd console at 10.0.0.5:41234, 2h ago (signed by key ..., sha256 ...)`, or `configuration from the file on this host, not applied through the control API (...)` | Who applied the running configuration, when, and whether the console signed it (new in 0.5.0; see [Control API access](#control-api-access)) |
 | `control API access: strict (...)`, or `control API access: COMPATIBLE: every client certificate from the CA may apply configurations and approve changes; ...` | Who may use the control API (new in 0.5.0). `configurations: applied only when the console signed them` follows with `engine.require_signed_config` |
 | `license: GRACE (L-0001 for ..., 5000 managed identities, expires ...; packs ...)`, `license: N managed identities on this engine ...`, `license: installation ...` | The license's state, the managed identities counted and the installation id, then any message (new in 0.5.0; see [Licensing](licensing.md)). Absent on the passive engine of a pair |
@@ -776,7 +786,7 @@ On Kubernetes, see [Backups on Kubernetes](availability-and-sizing.md#backups-on
 
 ```bash
 sudo syncdctl backup                  # stops syncd briefly; prints the backup's directory
-sudo syncdctl restore /var/lib/syncd/backups/20261116T101500Z-manual-0.5.1
+sudo syncdctl restore /var/lib/syncd/backups/20261118T101500Z-manual-0.5.4
 ```
 
 A backup is a directory under `/var/lib/syncd/backups`, readable by root only, named
@@ -1024,7 +1034,7 @@ stops the engine from starting. The passive engine of a pair serves its metrics 
 | `process_resident_memory_bytes`, `syncd_memory_limit_bytes` | Resident memory, and the cgroup's limit (`MemoryMax`, or a container's memory limit) when one is set |
 | `process_cpu_seconds_total`, `process_threads`, `process_open_fds` | CPU time used, user and system (its rate is the CPUs in use), threads and open files |
 | `syncd_export_operations_total`, `syncd_export_failures_total` | Export results |
-| `syncd_entities_changed_total`, `syncd_entities_deleted_total`, `syncd_records_joined_total`, `syncd_records_projected_total`, `syncd_records_unchanged_total`, `syncd_ambiguous_joins_total`, `syncd_rule_errors_total`, `syncd_orphans` | Pipeline counters |
+| `syncd_entities_changed_total`, `syncd_entities_deleted_total`, `syncd_records_joined_total`, `syncd_records_projected_total`, `syncd_records_unchanged_total`, `syncd_ambiguous_joins_total`, `syncd_rule_errors_total`, `syncd_orphans` | Pipeline counters. `syncd_ambiguous_joins_total` counts evaluations of joins (or references) that match several entities; from 0.5.2 a full read evaluates a record waiting for review again only when what its keys find changed, so it grows more slowly than in 0.5.1 |
 | `syncd_build_info`, `syncd_config_info`, `syncd_start_time_seconds` | The version, the configuration version, and when the engine started |
 
 A scrape job:

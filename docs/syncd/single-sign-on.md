@@ -9,8 +9,8 @@ be used together, and local accounts keep working alongside them; an admin can t
 sign-in to [break-glass accounts](#break-glass-accounts). The sign-in page shows a "Sign in with
 &lt;label&gt;" button for each method that is configured.
 
-This page describes the code at syncd 0.5.1 (tag `v0.5.1`, commit `7da4d9e`). Single sign-on is for people in a
-browser: other systems call the API with [API tokens](#api-tokens-and-single-sign-on).
+This page describes the code at syncd 0.5.4 (tag `v0.5.4`, commit `14c6668`). Single sign-on is
+for people in a browser: other systems call the API with [API tokens](#api-tokens-and-single-sign-on).
 
 !!! warning "What SAML and certificate sign-in were tested with"
     SAML was tested against **Keycloak only** (26.4.2) and against responses signed by an

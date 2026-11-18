@@ -10,15 +10,16 @@ Installing, upgrading and backing up are in the [Install guide](install.md) and 
 [Operator guide](operator-guide.md); the screens designers and operators use every day are in the
 [User guide](user-guide.md).
 
-This page describes syncd 0.5.1 (tag `v0.5.1`, commit `7da4d9e`). The biggest change for administrators
-since 0.4.1: roles are held as **assignments** that can be limited to an environment or an engine,
+This page describes syncd 0.5.4 (tag `v0.5.4`, commit `14c6668`). The biggest change for
+administrators since 0.4.1: roles are held as **assignments** that can be limited to an environment or an engine,
 and role maps add up (see [Roles](#roles)); sign-in gains a policy of its own
 ([Sign-in policy](#sign-in-policy)) and the product a [license](#the-license). 0.5.0 also brought a
 [message of the day](#message-of-the-day) and each account's last sign-in. 0.5.1 refuses some
 things 0.5.0 allowed: changes made with a session from another site, the API tokens of single
 sign-on accounts that stopped signing in ([API tokens](#api-tokens)), and a version approved by the
 person who saved it through a token or wrote its Git commit
-([Configuration approval](#configuration-approval-four-eyes)). See [Security](security.md).
+([Configuration approval](#configuration-approval-four-eyes)). See [Security](security.md). 0.5.2
+and 0.5.4 change nothing for administrators.
 
 ## Becoming an administrator
 
