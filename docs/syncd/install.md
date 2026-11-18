@@ -75,16 +75,31 @@ files, with `SHA256SUMS`, to the portal's release bucket (`syncd/<version>/`), f
 **Downloads** page serves them. With the release signing key set, it also signs `SHA256SUMS` and
 the `.rpm` files and publishes the apt and dnf repositories.
 
-!!! warning "0.5.0 and 0.5.1: unsigned, and no package repositories yet"
-    0.5.0 and 0.5.1 are tagged (14 and 15 November 2026), and their files are on the portal's
-    **Downloads** page. They were built without the release signing key: there is no
+!!! warning "0.5.0 to 0.5.4: unsigned, and no package repositories yet"
+    0.5.0, 0.5.1 and 0.5.4 are tagged (14, 15 and 18 November 2026), and their files are on the
+    portal's **Downloads** page. They were built without the release signing key: there is no
     `SHA256SUMS.asc`, the `.rpm` files are not signed, and the apt and dnf repositories were not
     published (`https://winllc.github.io/ldap-sync-merge-view` has none). Install and upgrade
     from the downloaded files, and check them against `SHA256SUMS` (see
     [Verifying a release](#verifying-a-release)), which shows that a file is complete, not who
-    built it. The source repository's GitHub releases of the two tags, marked pre-release, were
-    made by hand; 0.5.1's holds only the images' SPDX SBOMs, not the bundles or the packages.
-    The 0.5.1 images and chart are on ghcr.io, signed with cosign.
+    built it.
+
+    - **0.5.4** is the first release with packages since 0.5.1. Its `Package` run succeeded (on
+      its second attempt): it uploaded the files to the portal's release bucket, then to the
+      source repository's GitHub release of `v0.5.4`, which holds every file (the bundles for
+      x86_64 and aarch64 and their FIPS variants, the `.deb` and `.rpm` files of `syncd` and
+      `syncd-capture` with the RHEL 8 `.rpm`, the CycloneDX SBOMs, `SHA256SUMS`,
+      `TESTED-0.5.4.md` and the images' SPDX SBOMs). That GitHub release is marked pre-release
+      and carries no notes text: the notes are in the source repository.
+    - **0.5.2** (17 November) was published as container images and a Helm chart only: its
+      bundles and packages failed to build, so the portal has no files for it, and its GitHub
+      release holds only the images' SPDX SBOMs.
+    - **There is no 0.5.3.** Its tag was made on a commit still at version 0.5.2, and nothing was
+      published under it.
+    - **0.5.0 and 0.5.1.** Their GitHub releases, marked pre-release, were made by hand; 0.5.1's
+      holds only the images' SPDX SBOMs, not the bundles or the packages.
+
+    The 0.5.4, 0.5.2 and 0.5.1 images and charts are on ghcr.io, signed with cosign.
 
 | File | For |
 |---|---|
