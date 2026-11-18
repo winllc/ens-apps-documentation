@@ -6,8 +6,8 @@ PagerDuty. Webhooks are managed on **Integrations** (`/integrations`): administr
 test and delete them; auditors can look. Webhooks belong to the whole console: from 0.5.0, when
 roles can be limited to an environment or an engine, managing them takes `admin` on everything
 and seeing them `auditor` (or `admin`) on everything. They are for people with a session only: no
-[API token](api-reference.md#api-tokens) can see or change them. This page describes syncd 0.5.1
-(tag `v0.5.1`, commit `7da4d9e`).
+[API token](api-reference.md#api-tokens) can see or change them. This page describes syncd 0.5.4
+(tag `v0.5.4`, commit `14c6668`).
 
 Nothing is sent until an administrator adds a webhook. The engine sends nothing itself: the
 console watches each registered engine and posts on its behalf.

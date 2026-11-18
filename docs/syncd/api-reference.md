@@ -1,7 +1,7 @@
 # API reference
 
-syncd has these programmable interfaces. This page describes syncd 0.5.1 (tag `v0.5.1`, commit
-`7da4d9e`).
+syncd has these programmable interfaces. This page describes syncd 0.5.4 (tag `v0.5.4`, commit
+`14c6668`).
 
 | Interface | Served by | Used by | Authentication |
 |---|---|---|---|
@@ -430,7 +430,7 @@ See [Reports, lineage and data quality](reports-and-data-quality.md).
 
 | Method | Path | Role | Token | Purpose |
 |---|---|---|---|---|
-| POST | `/api/v1/rules/preview` | any | — | Run a computed attribute's steps on given input, with the engine's own rules crate, and its test cases |
+| POST | `/api/v1/rules/preview` | any | — | Run a computed attribute's steps on given input, with the engine's own rules crate, and its test cases. Since 0.5.4 a rule that reads other entities (`ref()`, `refs()`, `reports()`, `referrers()`) is not run: the reply has `reads_other_entities: true` and nothing else set (before 0.5.4, a compile `error`); the configuration's check compiles such a rule |
 | GET | `/api/v1/rules/functions` | any | — | The function catalogue for the CEL editor, with the configuration's package functions |
 
 See [Computed attributes and rules](rules.md).

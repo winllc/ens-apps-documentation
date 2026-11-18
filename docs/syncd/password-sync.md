@@ -11,12 +11,13 @@ console, and enrolment for capture agents. 0.4.1 added sealing of the engine's k
 metrics and alerts. **syncd 0.5.0** added the **capture points** inside the directories, with a
 packaged capture agent (`syncd-capture`); agents bound to the sources they speak for; rotation of
 the keys and a change of passphrase; queued changes that survive an HA failover; and a refusal to
-send passwords to a directory in clear text. This page describes **syncd 0.5.1** (tag `v0.5.1`,
-commit `7da4d9e`), which fixes delivery and access: delivery looks past changes it cannot deliver
+send passwords to a directory in clear text. This page describes **syncd 0.5.4** (tag `v0.5.4`,
+commit `14c6668`), which fixes delivery and access: delivery looks past changes it cannot deliver
 yet, a refusal is shown by its result code only, the HA fence is checked before every password
 written, `passwords.key_file` is a host setting, backups and snapshots of an engine with password
 keys need the passwords permission in strict mode, and the Windows filter checks who serves its
-pipe. Each is marked where it is described.
+pipe. Each is marked where it is described. 0.5.2 and 0.5.4 change nothing in password
+synchronisation.
 
 !!! warning "Not yet for production capture from Active Directory"
     The OpenLDAP overlay and the 389 Directory Server plugin were built and run end to end. The
@@ -32,7 +33,7 @@ running.
 
 ## What is built
 
-| Piece | In 0.5.1 |
+| Piece | In 0.5.4 |
 |---|---|
 | Delivery of captured changes to targets (the sealed queue, routing, retries, ordering, echo suppression) | Built |
 | Initial passwords: a password set as the account is created, read from the entity or generated | Built; from 0.5.0 a refused one is tried again, then held as a dead letter |
@@ -51,7 +52,7 @@ running.
 | A console page for agents | **Not built**: agents are managed with the command line |
 | The threat model sign-off and the third-party penetration test that the plan sets as release gates | **Not done**: the threat model is a draft |
 
-So in 0.5.1 a password reaches syncd in one of four ways: a person changes it in OpenLDAP or 389
+So in 0.5.4 a password reaches syncd in one of four ways: a person changes it in OpenLDAP or 389
 DS where a capture point is installed, a person changes it on the console's self-service page, a
 publication creates an account with an initial password, or a script submits it with `syncd
 password set`. A password changed directly in Active Directory is not captured in production

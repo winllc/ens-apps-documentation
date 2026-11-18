@@ -27,8 +27,8 @@ It has two parts:
     The latest release is 0.5.4 (18 November 2026). Its bundles and packages, with their SBOMs
     and `SHA256SUMS`, are on the ENS licensing portal's **Downloads** page and on the GitHub
     release; the container images and Helm chart are on `ghcr.io`, signed with cosign. 0.5.2
-    was published as images and a chart only (its packages failed to build), and 0.5.3 was
-    not released. The release files are not yet GPG-signed (no `SHA256SUMS.asc`), so the
+    was published as images and a chart only (its packages failed to build), and nothing was
+    published as 0.5.3 (its tag holds 0.5.2's version and an empty GitHub release). The release files are not yet GPG-signed (no `SHA256SUMS.asc`), so the
     signed apt and dnf repositories are not published yet: install from the files. See
     [Getting the release](install.md#getting-the-release).
 
@@ -37,7 +37,8 @@ It has two parts:
     join rules start from their rarest condition, and records waiting for review are not
     evaluated again when nothing they found changed. Computed `memberOf` (0.5.4): a person's
     groups from the groups that name them, tested end to end and cheap on large groups; see
-    [Computing memberOf from groups](rules.md#computing-memberof-from-groups).
+    [Computing memberOf from groups](rules.md#computing-memberof-from-groups). Upgrading is in
+    [Upgrading from 0.5.1 or 0.5.2 to 0.5.4](install.md#upgrading-from-051-or-052-to-054).
 
 !!! warning "0.5.1 fixes data loss and exposure in 0.5.0"
     A full review of 0.5.0 found three critical issues, fixed in 0.5.1: a stream's checkpoint could

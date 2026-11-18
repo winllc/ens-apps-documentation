@@ -1,10 +1,12 @@
 # Reports, lineage and data quality
 
 This page covers the evidence syncd gives operators and auditors, and the tools that keep bad
-data out of the targets. All of it is new in syncd 0.4.0; this page describes syncd 0.5.1 (tag
-`v0.5.1`, commit `7da4d9e`). 0.5.0 added unmanaged entries, Excel exports, PDFs with an embedded
+data out of the targets. All of it is new in syncd 0.4.0; this page describes syncd 0.5.4 (tag
+`v0.5.4`, commit `14c6668`). 0.5.0 added unmanaged entries, Excel exports, PDFs with an embedded
 font and tagging, an hourly quality trend and a wider correlation search; 0.5.1 changes little
-here (see [Correlation assistance](#correlation-assistance) and the console's pages below).
+here (see [Correlation assistance](#correlation-assistance) and the console's pages below), and
+0.5.2 changes only how records waiting for review are retried (see
+[The unmatched queue](#the-unmatched-queue)); 0.5.4 changes nothing here.
 
 - **Reconciliation reports**: what each publication holds, what the last drift check found, what
   is held or dead-lettered, and (from 0.5.0) the target's unmanaged entries, as text, CSV, JSON,
@@ -441,7 +443,13 @@ address at one mail domain) is not read in that pass. It never scans the view.
 
 ### The unmatched queue
 
-The engine keeps the time each record became unjoined, across restarts.
+The engine keeps the time each record became unjoined, across restarts. From 0.5.2 a full read
+tries a waiting record again only when the entities its keys find, or its source's joins, have
+changed since it was last tried, so a re-read of many ambiguous records with nothing changed is
+quick (17.2 s before, 0.21 s after, for 200,000 accounts joining by surname alone), and the
+`ambiguous` count (`syncd_ambiguous_joins_total`) grows more slowly. When two records of one
+source wait for the same entity and it appears, the first in order of source and record joins it
+and the other stays in the queue (in 0.5.1 either could).
 
 | Where | What |
 |---|---|

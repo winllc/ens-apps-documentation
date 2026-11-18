@@ -4,12 +4,12 @@ A publication can say **when** its changes are applied, **how many** may go at o
 go first**. It can also run in a mode that writes nothing. Changes that wait are **held**. The
 engine can also act at a set time: an attribute that applies from a start date, a leaver who is
 disabled at once and deleted ninety days later, a group that expires. All of this is new in syncd
-0.4.0. This page describes syncd 0.5.1 (tag `v0.5.1`, commit `7da4d9e`). 0.5.0 added group
+0.4.0. This page describes syncd 0.5.4 (tag `v0.5.4`, commit `14c6668`). 0.5.0 added group
 reviews that reach a person, `placeholder_member`, leavers stripped of groups syncd does not
 manage, unique `sAMAccountName`s, and held changes kept in the store; 0.5.1 checks deletion
 thresholds as strictly as the others, follows `effective()` dates in group filters and join
 rules, and has truncates in MySQL and Debezium sources go through the deletion threshold. Each
-is marked where it is described.
+is marked where it is described. 0.5.2 and 0.5.4 change nothing here.
 
 Every setting on this page goes on a publication (or, for effective dates, in a rule).
 [Configuration](configuration.md) lists each key in one line; this page explains how they work

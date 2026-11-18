@@ -149,13 +149,25 @@ flowchart LR
    reported. Operators can join or unjoin records by hand, or accept scored suggestions, and
    those decisions are kept in the store (`pinned_joins/<view>`, `exclusions`). From 0.5.0 each
    view keeps its own links and joins made by hand, so one connector object can feed several
-   views.
+   views. From 0.5.2:
+    - a join rule's candidates come from the join index by its rarest condition, the others
+      checked for those candidates only, and the index keeps short keys (up to 24 bytes) and
+      single entities inline;
+    - a record waiting unjoined is tried again at a full read only once the entities its keys
+      find, or its source's joins, changed since it was last evaluated;
+    - a joined record is checked against its entity again only when its join rules read an
+      attribute that changed;
+    - records woken for one entity are correlated in order of source and record, so of two that
+      wait for the same entity the first joins it, the same way every time.
 4. **Merge.** Any change recomputes the entity from all its contributors: inbound attribute
    flows, then per-attribute precedence between sources.
 5. **Computed attributes.** Rules compiled from CEL run in dependency order. Calls to rule
    package functions are expanded by the compiler. Rules that read other entities
    (references, `referrers()`, groups) are re-evaluated across entities, up to 16 rounds per
-   change. When a rule with `on_error: quarantine` fails, the entity's exports are held back.
+   change. From 0.5.4, when only the key such a rule found another entity by changes (a group's
+   `member`, a manager's employee id), only the entities of the values gained or lost are
+   evaluated again, and the other entity is read without that key (a group without its member
+   list); several related entities come in the order of their ids. When a rule with `on_error: quarantine` fails, the entity's exports are held back.
    The hold is recorded in the store (`quarantine/<view>`), so it lasts across restarts, and
    ends once the rule evaluates again for the entity. All rules of one pass share one `now()`.
 6. **Data-quality checks.** A view's `quality` checks run as the entity is computed, so they
@@ -177,7 +189,17 @@ flowchart LR
 
 The CPU-bound, read-only stages (recomputing entities, planning exports) run on
 `engine.shards` worker threads (one per CPU by default). The run loop's own thread applies
-their results, so writes to the store stay single-threaded and ordered.
+their results, so writes to the store stay single-threaded and ordered. The run loop applies the
+changes it has received in batches, and an entity a batch changes several times is recomputed once.
+From 0.5.2 this includes a source's first read: each record no entity has yet is correlated at once, on the
+run loop's thread, and the entity it joins or projects waits for the batch's recompute on the
+workers. A record waits for that recompute, and is correlated alone, when it could change what the
+record finds (a key the record joins by, a join on a computed attribute, a candidate among the
+waiting entities); a join that wakes unjoined records, may move joined ones or hands on a
+permanent key has the batch recomputed before the next record. The result is the same as one
+record at a time, which a property test checks. A transaction writes each entity to the store
+once, at its commit. The figures are in
+[Joins and first reads](availability-and-sizing.md#joins-and-first-reads).
 
 ## Timers and held changes
 
@@ -391,7 +413,8 @@ one. Neither 0.4.0 nor 0.4.1 changes the format (1). 0.4.0 adds the column famil
 link and a pin for each view a source record belongs to (`links/<view>`, `pinned_joins/<view>`),
 rebuilt in one pass over every entity from the records each lists (300,000 entities in 1.4 s in
 the release notes' measurement). 0.4.1 refuses a format-2 store. 0.5.1 keeps format 2 and adds
-`unique_values/<view>`, which 0.5.0 opens and ignores. See
+`unique_values/<view>`, which 0.5.0 opens and ignores. 0.5.2 and 0.5.4 keep format 2 and add
+nothing. See
 [Installation](install.md#store-format) for upgrades and rollbacks.
 
 History keeps at most `engine.history.keep_per_entity` entries per entity (100 by default) for
@@ -892,7 +915,8 @@ Events from before 0.4.0 keep their earlier chain; the first new event continues
 ## Running on Kubernetes
 
 The `Container` workflow publishes two container images and a Helm chart when a release is
-tagged (`v*`), once its kind tests have passed; 0.5.1's are published. You can also build the
+tagged (`v*`), once its kind tests have passed; 0.5.4's are published (and 0.5.2's, which had
+no packages). You can also build the
 images from the source (`docker build -f deploy/container/Dockerfile --target engine`, or
 `--target console`; `--build-arg FEATURES=syncd/fips,syncd-console/fips` for the FIPS variant)
 and install the chart from `deploy/helm/syncd`.
@@ -950,7 +974,7 @@ upgrade` and `helm rollback`; a store or database that the newer release migrate
 restored from backups before rolling back. From 0.5.0 a `kind-ha` CI job installs a pair and
 fails it over, once with the PostgreSQL lease and once with a Kubernetes Lease; with the chart's
 install and upgrade in kind and the rendering checks of its values, it passed in the run that
-published 0.5.1. No cloud cluster was used. See
+published 0.5.4. No cloud cluster was used. See
 [Installation](install.md#install-with-helm) and
 [Security](security.md#container-images-and-the-helm-chart).
 

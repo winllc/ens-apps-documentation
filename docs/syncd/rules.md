@@ -764,7 +764,8 @@ To a target, mind what the target computes itself:
 ### What to check
 
 - **The configuration's warnings.** Since 0.5.4 `syncd validate` and the console's check
-  warn about the two mistakes that leave such a rule silently empty:
+  warn about the two mistakes that leave such a rule silently empty (see
+  [Validation rules](configuration.md#validation-rules)):
   `view groups: reference member: e.member is not set by any flow or computed attribute of
   view groups; it points at no entity` (no flow sets `member`), and `view people: computed
   memberOf: reads corpDn of view groups's entities, which no flow or computed attribute of
@@ -781,12 +782,13 @@ To a target, mind what the target computes itself:
 - **Tests and preview.** Rule test cases and the console's preview can't run a rule that
   reads other entities (it needs the rest of the configuration): `syncd test` reports such
   tests as skipped, and since 0.5.4 the visual editor and the Studio say so instead of
-  "Does not compile". The configuration's check compiles the rule. Test it end to end, or
+  "Does not compile" (see [Rules that read other entities](user-guide.md#rules-that-read-other-entities)). The configuration's check compiles the rule. Test it end to end, or
   with a [simulation](user-guide.md#simulate-designers).
 - **Large groups.** Before 0.5.4, one person added to a group of 10,000 evaluated 10,000
   people's rules; now it evaluates that person's. The groups are read for such a rule
   without their member lists. A full sync still evaluates every person's rule, so very
-  large groups make it slower (see [Troubleshooting](troubleshooting.md)).
+  large groups make it slower (see [Joins and first reads](availability-and-sizing.md#joins-and-first-reads)
+  and [Troubleshooting](troubleshooting.md#the-engine-at-work)).
 
 ## Dates and times
 

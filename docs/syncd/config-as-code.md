@@ -15,7 +15,7 @@ In syncd 0.4.1 the golden tests from Git gate every publish (the API, Git auto-p
 promotion, not only the editor), `syncd config promote` prints each engine's diff summary, and
 `syncd test` finds golden files one directory level down, as the console does.
 
-This page describes syncd 0.5.1 (tag `v0.5.1`, commit `7da4d9e`). 0.5.0 added:
+This page describes syncd 0.5.4 (tag `v0.5.4`, commit `14c6668`). 0.5.0 added:
 
 - **Each version's own Git commit.** The console keeps the commit a version came from, and reads
   its golden tests and package files there, not at the branch head (see
@@ -45,6 +45,10 @@ This page describes syncd 0.5.1 (tag `v0.5.1`, commit `7da4d9e`). 0.5.0 added:
   placeholders, kept as written for the target console's own environments, and an import is
   checked as a save is (see the [User guide](user-guide.md#export-and-import)).
 - **Two publishes to one engine** run one after the other.
+
+0.5.2 and 0.5.4 change nothing in this way of working. In a pipeline, 0.5.4's `syncd validate`
+may print two more warnings, about rules that read other entities and find nothing (see
+[Validation rules](configuration.md#validation-rules)); like the others, they do not fail it.
 
 Rule packages, functions and lookup tables shared between configurations, fit the same way of
 working; see [Rule packages](#rule-packages) below and [Computed attributes and rules](rules.md).

@@ -21,7 +21,9 @@ picture, see [Sizing, availability and recovery](../availability-and-sizing.md).
     format 2, which 0.5.0 runs at its first start, took 1.4 s for 300,000 entities with one record
     each (release build, 4 vCPU); entities with many attributes take longer. 0.5.1 measured
     nothing new; the extra work of its first full sync (claiming `unique()` values) was not
-    measured. Start with these figures, watch the signals named here, and adjust.
+    measured. 0.5.2 measured its faster joins in release builds on 4 vCPU, at 200,000 people and
+    some at 1,000,000 (see [Joins and first reads](#joins-and-first-reads)); 0.5.4 measured
+    nothing new. Start with these figures, watch the signals named here, and adjust.
 
 ### What drives the size
 
@@ -45,7 +47,7 @@ picture, see [Sizing, availability and recovery](../availability-and-sizing.md).
 | Custom functions in WebAssembly | From 0.5.0, an interpreter (wasmi) runs a package's module: about 5.4 µs a call (release build). Each call is limited in fuel and each instance in memory | `engine.wasm_functions`: `fuel` (10,000,000), `memory_mb` (16) |
 | The queue between sources and the engine | Up to 10 000 changes, each a whole record. A few tens of MiB for people; much more for sources that send large groups (thousands of members per entry) while the engine is busy | |
 | Large deletes, dead letters, groups, renames | Read a page at a time: about 20 MiB for a full read that finds 400 000 records gone, a few MiB for 400 000 dead letters, a group of 400 000 members, or 800 000 references to a renamed entity | |
-| CPU | Recompute and export planning run on every core; loads, merges and commits on one | `engine.shards` (0: one per core) |
+| CPU | Recompute and export planning run on every core, and from 0.5.2 the recompute of the entities a source's first read joins or projects too; matching records to entities, applying the results and commits run on one | `engine.shards` (0: one per core) |
 
 ### Starting figures
 
@@ -90,6 +92,58 @@ Still waiting for the operation to end (they aren't lost): a full read's deletes
 after an initial load, drift checks, the release of held changes, `syncd approve`'s
 reconciliation, dead-letter retries and write-back, and the end-of-pass pages for thresholds and
 canaries. The figures at a million people on the reference node have not been measured.
+
+### Joins and first reads
+
+New in 0.5.2. A source's first full read (or the first after a view is added) matches each record
+against the view's join index one at a time, on one core, and recomputes the entities it joins or
+projects in batches, on every core (`engine.shards`). A record waits for the batch's recomputes,
+and is matched alone, when they could change what it finds: a key it joins by arrives with them, it
+joins by a computed attribute, or one of its candidates is among them. The result is the same as
+one record at a time, which a property test checks. A transaction writes each entity once, at its
+commit (a join and the recompute after it wrote it twice).
+
+Measured on 4 vCPU at 200,000 people, before and after the change that brought each gain, with
+release builds (`docs/phase1/BENCHMARKS.md`, "Several joining sources"):
+
+| Measurement | Before | After |
+|---|---|---|
+| Initial load of the HR source (projecting) | 52,100 records/s | 61,600 records/s |
+| Initial load of the directory (joining) | 41,600 records/s | 47,600 records/s |
+| A join rule with a condition many people share (department and employee id) | 561 records/s | 51,200 records/s |
+| A full read, with nothing changed, of 200,000 accounts that join by surname alone and wait for review | 17.2 s | 0.21 s |
+| A directory that brings the mail address another source joins by | 53,400 records/s | 59,900 records/s |
+| Reopening a store of 1,000,000 people (the join index rebuilt at start) | 1.64-1.70 s | 1.34-1.41 s |
+
+- **A join rule starts from its rarest condition** and checks the others for those candidates
+  only, so a condition many entities share (a department) costs no more than the rarest one.
+- **A record waiting for review** is evaluated again at a full read only when the entities its
+  keys find, or its source's joins, changed.
+- **A joined record is checked against its entity again** only when its join rules read an
+  attribute that changed.
+- **The join index** keeps short keys (up to 24 bytes) and single entities inline: smaller, and
+  rebuilt faster at start.
+- **The later joins and the larger store gain most**: a third source joining by employee id
+  gained 21% at 200,000 people and 32% at 1,000,000. A projection with almost nothing to recompute
+  gains little, and can pay a few percent for the batch's bookkeeping.
+- **What stays serial** is matching each record (reading its candidate, 1.5-3 µs a record at
+  200,000), applying the recompute results, and the store's commit: about a quarter of a load.
+
+On 4 vCPU a joining source loads at about 50,000-75,000 records a second, and one whose records
+each find a few dozen people (accounts joining by surname alone) at about 12,000. If a first read
+is much slower, see [The engine at work](troubleshooting.md#the-engine-at-work) in Troubleshooting.
+
+**Rules that read other entities.** From 0.5.4, when only the key a rule found another entity by
+changes (a group's `member`, for a rule computing each person's groups), only the entities of the
+values gained or lost are evaluated again: one person added to a group of 10,000 evaluates that
+person's rules, where 0.5.2 and older evaluated the rules of all 10,000 members. The groups are
+also read for such a rule without their member lists. See
+[Computing memberOf from groups](rules.md#computing-memberof-from-groups).
+
+**Known limitation.** In one batch of changes, a record that moves because its own join keys
+changed, and records that move because their entity's join attribute changed, are checked in
+another order than one change at a time would check them: when both find the same entity, they can
+end differently placed. This needs keys that change in the same batch, and was so in 0.5.1.
 
 ### Entity history
 
@@ -295,7 +349,7 @@ to the active engine is enough. When they differ, it runs its own: publish to bo
   [Installation](install.md#an-activepassive-pair-on-hosts)).
 - **Tested on Kubernetes in kind only.** From 0.5.0 a `kind-ha` CI job installs a pair, fails it
   over and hands it over, once with a PostgreSQL lease and once with a Kubernetes Lease; it passed
-  in the run that published the 0.5.1 images and chart. No cloud cluster was used. The pair is
+  in the run that published the 0.5.4 images and chart. No cloud cluster was used. The pair is
   tested end to end on hosts.
 - **The lease's store is a dependency.** Without the lease's database (or, with a Kubernetes
   lease, the API server) neither engine can hold the lease, and nothing is exported
@@ -363,7 +417,7 @@ still be running, or both engines export.
 | The password-key passphrase (the file `SYNCD_PASSWORD_KEY_PASSPHRASE_FILE` names), when the password keys are sealed | Opens the sealed password keys and agents' CA key, in the store and in every backup and snapshot. With `SYNCD_PASSWORD_KEY_PASSPHRASE_KMS` (new in 0.5.0) the file holds it wrapped, and the KMS key is needed to open it | A copy kept apart from the backups: a restore needs it. Keep the file outside `/etc/syncd`, for example in `/etc/syncd-keys/`: from 0.5.0 `syncdctl backup --to` leaves a passphrase file inside `/etc/syncd` out of its archive, with a warning |
 | `/etc/syncd` | `console.env`, `engine.env` (secrets, S3 keys, how to reach a vault), `engine/engine.yaml`, and the control API's CA and certificates; from 0.5.0, a license installed with `syncdctl license install` (`license.lic`) and the console's signing key for signed configurations (`pki/console-signing.pub`) | `syncdctl backup --to` (`<name>.etc.tar.gz`), `syncdctl backup`, or your configuration management. It holds secrets |
 | nginx's configuration and certificate, or the console's own (`CONSOLE_TLS_CERT`) | HTTPS for the console | Your configuration management |
-| The release | The bundle or package you installed | Keep the download, with `SHA256SUMS` (and `SHA256SUMS.asc` for a signed release; 0.5.0 and 0.5.1 are unsigned). The portal's **Downloads** page keeps earlier versions too |
+| The release | The bundle or package you installed | Keep the download, with `SHA256SUMS` (and `SHA256SUMS.asc` for a signed release; 0.5.0, 0.5.1 and 0.5.4 are unsigned). The portal's **Downloads** page keeps earlier versions too |
 | People, accounts, groups | The source systems and the target directories | Their own backups. The engine reads the sources again |
 | The audit trail | Also in your SIEM, when the console sends it there (the journal, `ENS_AUDIT_*`) | The SIEM's own retention |
 | A WebAssembly module next to a configuration written by hand on the engine's host (from 0.5.0) | A rule package's custom functions | Your configuration management: such a module is in neither backups nor HA snapshots. Modules uploaded in the console are in its database |
@@ -597,6 +651,10 @@ sudo syncdctl rollback
   back, so a rollback whose restore fails can be run again. The automatic rollback of a failed
   upgrade removes the failed release's store first, and needs no more room than the backup took.
 
+**From 0.5.4 to 0.5.2 or 0.5.1**, neither the store's format nor the console's schema changed, so
+the console's database is kept, and `--keep-data`, a package downgrade or `helm rollback` can keep
+the store too. See [Rolling back 0.5.4 to 0.5.2 or 0.5.1](install.md#rolling-back-054-to-052-or-051).
+
 **From 0.5.1 to 0.5.0**, the console's schema changed (29 to 30, migration 0030), so the rollback
 restores the console's database from the backup taken before the upgrade, and loses everything
 recorded in the console since; `--keep-data` is refused, as 0.5.0's console would not start on
@@ -636,7 +694,8 @@ the engine's volume nor the console's database, nor any Secret. A rollback to a 
 cannot read the store's format leaves the engine refusing to start (`the store has format N,
 written by a newer syncd`), and a console older than its database's schema may not start either:
 restore the backups taken before the upgrade (see [Backups on Kubernetes](#backups-on-kubernetes)),
-then roll back. From chart 0.5.1 to 0.5.0, restore the console's database into an empty
+then roll back. From chart 0.5.4 to 0.5.2 or 0.5.1, nothing needs restoring. From chart 0.5.1 to
+0.5.0, restore the console's database into an empty
 database, and the engine's store from the same time. From chart 0.5.0 to 0.4.1, restore both the
 console's database into an empty database and the engine's store (0.4.1 refuses the format-2
 store), and publish a configuration without 0.5.0's settings first; a pair on the Kubernetes lease

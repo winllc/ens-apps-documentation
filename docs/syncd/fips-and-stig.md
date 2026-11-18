@@ -2,8 +2,8 @@
 
 This page says what syncd relies on for FIPS 140-3, how its optional FIPS mode is turned on and
 what it changes, what has not been tested or validated, and which settings a DISA STIG
-deployment needs. It describes syncd 0.5.1 (tag `v0.5.1`, commit `7da4d9e`). The suite-wide picture is in
-[FIPS 140-3 and DISA STIG](../fips-and-stig.md).
+deployment needs. It describes syncd 0.5.4 (tag `v0.5.4`, commit `14c6668`). The suite-wide
+picture is in [FIPS 140-3 and DISA STIG](../fips-and-stig.md).
 
 !!! note "No ENS validation"
     ENS Solutions does not supply or claim a FIPS 140-3 validated cryptographic module, and
@@ -92,16 +92,18 @@ flag.
    (`syncd-<version>-linux-x86_64-fips.tar.gz`), and from 0.5.0 an aarch64 one too
    (`syncd-<version>-linux-aarch64-fips.tar.gz`); the images have `<version>-fips` variants, from
    0.5.0 for `linux/amd64` and `linux/arm64` (the arm64 ones only while the repository's arm64
-   runners are on). Releases are tagged from 0.5.0 on (`v0.5.0`, `v0.5.1`). For 0.5.1 the x86_64 and
-   aarch64 FIPS bundles were built and are on the ENS licensing portal's **Downloads** page, and the
-   `0.5.1-fips` images were pushed to GHCR and signed. When the
-   build you need is not there, build it yourself:
+   runners are on). Releases are tagged from 0.5.0 on (`v0.5.0`, `v0.5.1`, `v0.5.2`, `v0.5.4`).
+   For 0.5.4 the x86_64 and aarch64 FIPS bundles were built and are on the ENS licensing portal's
+   **Downloads** page and the source repository's GitHub release, unsigned like the other files
+   (no `SHA256SUMS.asc`: check them against `SHA256SUMS`), and the `0.5.4-fips` images were
+   pushed to GHCR and signed with cosign. 0.5.2 has FIPS images but no FIPS bundles (its
+   packages failed to build). When the build you need is not there, build it yourself:
 
     ```sh
     scripts/package.sh --fips                      # bundle, .deb and .rpm, with -fips in the name
     deploy/packaging/build.sh --fips --packages    # the same, called directly
     docker build -f deploy/container/Dockerfile --target engine \
-      --build-arg FEATURES=syncd/fips,syncd-console/fips -t syncd:0.5.1-fips .   # the FIPS image
+      --build-arg FEATURES=syncd/fips,syncd-console/fips -t syncd:0.5.4-fips .   # the FIPS image
     ```
 
     The bundle carries a `FIPS` marker file and, from 0.5.0, a FIPS build of the capture agent
@@ -305,7 +307,7 @@ DISA Application Security and Development STIG, mapped to NIST SP 800-53 control
 to STIG rule ids: check them against the STIG release you are assessed with. Most of the `ENS_*`
 names were chosen in syncd 0.5.0 and have not yet been compared with the other ENS products'.
 
-Remaining gaps, as of 0.5.1: no minimum password lifetime or minimum of changed characters, no
+Remaining gaps, as of 0.5.4 (0.5.2 and 0.5.4 change nothing here): no minimum password lifetime or minimum of changed characters, no
 warning before a session ends, SAML tested against Keycloak only (no encrypted assertions,
 signed requests, single logout or metadata signatures), certificate sign-in tested with test
 PKIs only (no delta or indirect CRLs; the delegated OCSP responder's own revocation is not

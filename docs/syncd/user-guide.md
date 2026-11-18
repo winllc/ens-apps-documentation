@@ -8,14 +8,15 @@ the [Admin guide](admin-guide.md); the license and the **License** page are in
 [Licensing](licensing.md). People who only want to change their own directory password use the
 [self-service page](#changing-your-directory-password-password), which needs no console account.
 
-It describes syncd 0.5.1 (tag `v0.5.1`, commit `7da4d9e`). New screens since 0.4.1 are
+It describes syncd 0.5.4 (tag `v0.5.4`, commit `14c6668`). New screens since 0.4.1 are
 [Unmanaged entries](#unmanaged-entries-enginesidunmanaged),
 [Custom functions](#custom-functions-enginesidfunctions), the **Promote** dialog and the
 **License** page; 0.5.0 also added a message of the day and your previous sign-in on the
 [Engines](#engines) page. What 0.5.1 changes on screen: editors ask before you leave with unsaved
 changes, **Disable** and **Reset password** ask first, the Studio checks for a newer version before
 it saves, lists of DNs and change windows take one value per line, and the **Engines** page polls
-instead of streaming.
+instead of streaming. 0.5.4 stops calling a rule that reads other entities broken (see
+[Rules that read other entities](#rules-that-read-other-entities)).
 
 ## Roles at a glance
 
@@ -574,7 +575,8 @@ and writes nothing.
 
 In a view:
 
-- each computed attribute is compiled and its test cases run as you type; a test case can be
+- each computed attribute is compiled and its test cases run as you type (except one that reads
+  other entities: see [Rules that read other entities](#rules-that-read-other-entities)); a test case can be
   written by hand (the input attributes and the expected value), starting with the attributes the
   rule reads. Reads of attributes the view does not have are flagged (the engine accepts them; they
   read as empty). On a saved, unedited version, **Studio** opens the view's computed attributes in
@@ -625,7 +627,9 @@ environment, and the **Check** panel shows:
   and the pack: such a configuration does not compile here, cannot be saved and cannot be published;
 - rules whose tests cannot run because they read other entities (shown, not counted as failures);
 - **warnings**: likely mistakes that do not stop the configuration, such as an attribute nothing
-  sets.
+  sets. Since 0.5.4 also a reference nothing sets, and an attribute a rule reads of another view's
+  entities that nothing in that view sets: both leave a rule such as a computed `memberOf` empty
+  (see [Validation rules](configuration.md#validation-rules)).
 
 ### Packages
 
@@ -846,6 +850,24 @@ as in the editor, the save is refused when someone saved a newer version since t
 regardless. Leaving the Studio with unsaved edits asks first, and a test case's number and boolean
 inputs stay numbers and booleans when you edit the rule. The rule language is described in
 [Computed attributes and rules](rules.md).
+
+### Rules that read other entities
+
+A computed attribute that reads other entities, with `ref()`, `refs()`, `reports()` or
+`referrers()`, needs the rest of the configuration: the view's references and the entities they
+find. The preview has neither, so it does not run such a rule. Since 0.5.4 the Studio and the
+visual editor say so with a note, **Reads other entities** (*ref(), refs(), reports() and
+referrers() need the rest of the configuration, so this rule is not previewed or tested here. The
+configuration's check compiles it with the view's references*), and its test cases are marked
+**not run here**. Errors in such a rule show in the **Check** panel
+([Checking as you type](#checking-as-you-type-designers)), which compiles the whole configuration.
+Before 0.5.4 both showed **Does not compile** for such a rule, although the configuration
+compiled.
+
+The **Functions** catalog lists `referrers(e, "reference")` with the group membership example,
+`referrers(e, "member").map(g, g.dn)`: a person's groups, when the groups' view declares `member`
+as a reference to the people's view and flows the groups' DNs from `source.dn`. See
+[Computing memberOf from groups](rules.md#computing-memberof-from-groups).
 
 ## The object explorer (`/engines/{id}/explore`)
 
