@@ -18,18 +18,26 @@ It has two parts:
 
 !!! info "Source of truth"
     Everything in this section comes from the `ldap-sync-merge-view` source repository
-    (version 0.5.1, the tag `v0.5.1` at commit `7da4d9e`): the engine and console code, the packaging under `deploy/packaging/`, the
+    (version 0.5.4, the tag `v0.5.4` at commit `14c6668`): the engine and console code, the packaging under `deploy/packaging/`, the
     container images and Helm chart under `deploy/container/` and `deploy/helm/`, and
     the repository's `docs/`. Where the code and a README disagree, these pages follow the
     code and say so.
 
 !!! info "Releases"
-    0.5.0 and 0.5.1 are released (tagged 14 and 15 November 2026). The bundles and packages, with
-    their SBOMs and `SHA256SUMS`, are on the ENS licensing portal's **Downloads** page; the GitHub
-    releases carry only the container images' SBOMs. The container images and Helm chart are on
-    `ghcr.io`, signed with cosign. The release files are not yet GPG-signed (no `SHA256SUMS.asc`),
-    so the signed apt and dnf repositories are not published yet: install from the files. See
+    The latest release is 0.5.4 (18 November 2026). Its bundles and packages, with their SBOMs
+    and `SHA256SUMS`, are on the ENS licensing portal's **Downloads** page and on the GitHub
+    release; the container images and Helm chart are on `ghcr.io`, signed with cosign. 0.5.2
+    was published as images and a chart only (its packages failed to build), and 0.5.3 was
+    not released. The release files are not yet GPG-signed (no `SHA256SUMS.asc`), so the
+    signed apt and dnf repositories are not published yet: install from the files. See
     [Getting the release](install.md#getting-the-release).
+
+!!! tip "New in 0.5.2 and 0.5.4"
+    Faster joins (0.5.2): a source's first read recomputes entities in batches on every core,
+    join rules start from their rarest condition, and records waiting for review are not
+    evaluated again when nothing they found changed. Computed `memberOf` (0.5.4): a person's
+    groups from the groups that name them, tested end to end and cheap on large groups; see
+    [Computing memberOf from groups](rules.md#computing-memberof-from-groups).
 
 !!! warning "0.5.1 fixes data loss and exposure in 0.5.0"
     A full review of 0.5.0 found three critical issues, fixed in 0.5.1: a stream's checkpoint could
@@ -141,7 +149,7 @@ flowchart LR
 | Console UI | React 19, TypeScript, Vite, TanStack Router and Query, Tailwind CSS, Monaco editor |
 | Cryptography | rustls with aws-lc-rs; the AWS-LC FIPS module in a FIPS build |
 | JDBC bridge (optional) | Java 17+, run separately, with your databases' JDBC drivers |
-| Delivery | Bundles for x86_64 and aarch64, each also as a FIPS bundle, `.deb` and `.rpm` packages (RHEL 8 and 9+) and, once releases are signed, apt and dnf repositories, the `syncd-capture` agent package for directory servers, CycloneDX SBOMs, and `SHA256SUMS` (GPG-signed once the release key is set); systemd units `syncd` and `syncd-console`. arm64 builds need the release workflow's arm64 runners, on by default. Container images `ghcr.io/winllc/syncd` and `ghcr.io/winllc/syncd-console` (amd64 and arm64, with `-fips` variants; distroless, Trivy-scanned, cosign-signed with SPDX attestations) and the Helm chart `oci://ghcr.io/winllc/charts/syncd`. Published on a release tag: the files to the ENS licensing portal's release bucket, the images and chart to `ghcr.io`. The GPG signature and the apt and dnf repositories need the release key, which 0.5.0 and 0.5.1 were built without |
+| Delivery | Bundles for x86_64 and aarch64, each also as a FIPS bundle, `.deb` and `.rpm` packages (RHEL 8 and 9+) and, once releases are signed, apt and dnf repositories, the `syncd-capture` agent package for directory servers, CycloneDX SBOMs, and `SHA256SUMS` (GPG-signed once the release key is set); systemd units `syncd` and `syncd-console`. arm64 builds need the release workflow's arm64 runners, on by default. Container images `ghcr.io/winllc/syncd` and `ghcr.io/winllc/syncd-console` (amd64 and arm64, with `-fips` variants; distroless, Trivy-scanned, cosign-signed with SPDX attestations) and the Helm chart `oci://ghcr.io/winllc/charts/syncd`. Published on a release tag: the files to the ENS licensing portal's release bucket, the images and chart to `ghcr.io`. From 0.5.4 the GitHub release carries the same files. The GPG signature and the apt and dnf repositories need the release key, which every release so far (0.5.0 to 0.5.4) was built without |
 
 ## Roles
 
@@ -172,7 +180,7 @@ exact permissions.
 | [Admin guide](admin-guide.md) | Console administrators | Users and roles, local and break-glass sign-in, configuration approval, the pre-publish hook, API tokens, webhooks, environments, Git sync, banners, engines, the audit log |
 | [User guide](user-guide.md) | Designers and operators | Every console screen: engines, the configuration editor, the Computed Attribute Studio, the object explorer |
 | [Connectors](connectors.md) | Designers | Each source and target type, what it needs on the other side, and its settings |
-| [Computed attributes and rules](rules.md) | Designers | The rule language, the function library, transforms, lookups, references, effective dates, rule packages, test cases |
+| [Computed attributes and rules](rules.md) | Designers | The rule language, the function library, transforms, lookups, references, computing memberOf from groups, effective dates, rule packages, test cases |
 | [Password synchronisation](password-sync.md) | Designers, security reviewers | Initial passwords, self-service changes, capture on directory servers, password agents, key rotation, delivery |
 | [Change safety and lifecycle](change-safety.md) | Designers, operators | Change windows, thresholds, canaries, report mode, held changes, timers, leaver stages, group lifecycle |
 | [Configuration as code](config-as-code.md) | Designers, platform teams | Semantic diff, environments, Git sync, promotion, golden-file tests in CI |
