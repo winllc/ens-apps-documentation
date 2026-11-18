@@ -299,10 +299,83 @@ Packaged templates live in `templates/email/` in the jar:
 | `expiring-user.html` / `.txt` | The recipient's own certificates |
 | `expiring-server.html` / `.txt` | Certificates on servers the recipient is a contact for |
 
-Only files present in the override directory are used; the rest fall back to the packaged ones.
-Templates are read once and cached, so changes take effect on restart. The model is
-`digest.recipientName`, `digest.headline`, `digest.entries` and each entry's fields; start by
-copying the packaged template you want to change.
+Every message goes out as both HTML and plain text, so change both files of a message.
+
+#### Using your own templates
+
+Put your templates in a directory and point `email.template-directory` at it. **Only the files
+you provide are used**; any template that is missing still comes from the jar, so you copy and
+maintain only the ones you change. Start from the packaged copy in
+`src/main/resources/templates/email/` in the CertAlert repository: the model it renders is
+`digest.recipientName`, `digest.headline`, `digest.entries` and each entry's fields.
+
+The files go in an `email` subdirectory of the template directory:
+
+```
+<template directory>/
+└── email/
+    ├── expiring-user.html      expiring-user.txt
+    └── expiring-server.html    expiring-server.txt
+```
+
+=== "Release package"
+
+    The package's `docker-compose.yml` already mounts `./email-templates` (next to `.env`) at
+    `/etc/cert-alert/templates`.
+
+    1. Put the files in `email-templates/email/`.
+    2. In `.env`, uncomment
+       `CERT_ALERT_NOTIFICATIONS_EMAIL_TEMPLATE_DIRECTORY=/etc/cert-alert/templates`.
+    3. Run `./install.sh` again (or `docker compose up -d`).
+
+    The container runs as uid 185: make the files readable with `chmod -R a+rX email-templates`
+    (rootless Podman: `podman unshare chown -R 185:0 email-templates`). `upgrade.sh` copies
+    `email-templates/` into each new release.
+
+=== "Helm"
+
+    Create a ConfigMap whose keys are the file names, and name it in your values:
+
+    ```bash
+    kubectl -n cert-alert create configmap cert-alert-email-templates \
+        --from-file=expiring-user.html --from-file=expiring-user.txt
+    ```
+
+    ```yaml
+    notifications:
+      email:
+        templatesConfigMap: cert-alert-email-templates
+    ```
+
+    The chart mounts it at `/etc/cert-alert/templates/email` and sets
+    `CERT_ALERT_NOTIFICATIONS_EMAIL_TEMPLATE_DIRECTORY`. Keys that are missing fall back to the
+    packaged templates.
+
+=== "Your own Compose file or the jar"
+
+    Mount the directory read-only and name it in the environment:
+
+    ```yaml
+    services:
+      cert-alert:
+        volumes:
+          - ./email-templates:/etc/cert-alert/templates:ro
+        environment:
+          CERT_ALERT_NOTIFICATIONS_EMAIL_TEMPLATE_DIRECTORY: /etc/cert-alert/templates
+    ```
+
+    Running the jar directly, set `cert-alert.notifications.email.template-directory` instead.
+
+**Restart after editing.** Templates are read once and cached, so an edit takes effect on the
+next restart. At startup a log line names the directory in use:
+`Email templates will be read from /etc/cert-alert/templates/ before the packaged ones`.
+
+**Off means absent.** To stop using your templates, remove the setting. An empty value is a
+misconfiguration and is reported at startup.
+
+**Check before sending.** The [dry run](admin-guide.md#notifications-administration) (or `CERT_ALERT_EMAIL_DRY_RUN=true`)
+renders every message and sends none. A template that fails to render, for example because of a
+typo in an expression, is shown in red at the top of the dry-run results.
 
 ## Operator alert channels (`cert-alert.alerts`)
 

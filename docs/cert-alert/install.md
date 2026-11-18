@@ -679,7 +679,8 @@ whoever signs in. The sign-in page lists one account per role (`demo.admin`, `de
 - Operator alerts go to a fixed list: `CERT_ALERT_ALERTS_EMAIL_ENABLED`, `_FROM` and `_TO`.
 - Your own templates go in `email-templates/email/` next to the package's compose file (and set
   `CERT_ALERT_NOTIFICATIONS_EMAIL_TEMPLATE_DIRECTORY=/etc/cert-alert/templates`), or in a ConfigMap
-  named in `notifications.email.templatesConfigMap`.
+  named in `notifications.email.templatesConfigMap`. See
+  [Configuration → Email templates](configuration.md#email-templates).
 
 ### Image facts
 
