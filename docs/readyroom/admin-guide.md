@@ -137,10 +137,12 @@ group's report also needs the `MANAGER` role. A sub-group is a separate group wi
 managers.
 
 !!! note "Group managers and absence alerts"
-    Absence alerts go only to the person's **directory manager** and their **delegates**, not to
-    group managers, and group managers do not decide status requests; the card says so. If a
-    group's managers must be alerted, make them the members' delegates (see
-    [Delegates](#delegates)).
+    A group's managers (its directory owner and its alternate managers) receive the absence alerts
+    of the group's members, with the person's **directory manager** and **delegates**. They are
+    told, not asked: their email says the person's manager or delegates record what happened, and
+    only those people (and administrators) can answer the alert. Group managers do not decide
+    status requests either. If a group's manager must answer alerts and approve requests, make
+    them the members' delegate (see [Delegates](#delegates)).
 
 ### Favorites
 
