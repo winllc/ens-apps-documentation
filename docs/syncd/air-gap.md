@@ -61,8 +61,9 @@ flowchart LR
   the far side applied. Monitoring and recovery are done on each side, as below.
 
 What crosses is what the connected side's publications export: the attributes you map,
-and group membership as member DNs. **Passwords never cross**: validation refuses
-`passwords` on a publication to a `dsml` target.
+and group membership as member DNs. **syncd's password delivery never crosses**:
+validation refuses `passwords` on a publication to a `dsml` target. An attribute you map is
+written whatever it holds, so never map `userPassword` or another secret.
 
 ## Before you start
 
@@ -748,7 +749,7 @@ far-side pair, prefer `after_read: keep` and clear old files away yourself.
 
 | Concern | How it is handled |
 |---|---|
-| **Confidentiality of what crosses** | Files hold the exported attributes in clear (XML, binary values in base64). Map only what the far side needs; keep the outbox, inbox, `processed/` and any media to the engine and the transfer; encrypt the volumes and media they are on. Passwords never cross. |
+| **Confidentiality of what crosses** | Files hold the exported attributes in clear (XML, binary values in base64). Map only what the far side needs; keep the outbox, inbox, `processed/` and any media to the engine and the transfer; encrypt the volumes and media they are on. syncd's password delivery never crosses, but an attribute you map is written whatever it holds: never map `userPassword` or another secret. |
 | **Integrity** | Each file's SHA-256 (in its `.sha256`) detects damage on the way, not tampering: anyone who can write the inbox can write a file and its checksum. There is no signature on DSML files. The integrity of what the far side applies rests on the transfer path (a one-way diode, a cross-domain solution's checks) and on who can write the inbox. |
 | **Hostile content** | The far side refuses a file with a document type declaration (no entity expansion, no external references), an `anyURI` value, a request a file cannot carry (a search), or a file over `max_bytes`, and parses a file whole before applying any of it. Every file syncd writes validates against the OASIS schema, so a content-checking transfer can refuse anything that does not. |
 | **Mass deletes** | Deletion thresholds on the connected side's publications, on the far side's inbox connector (for snapshots) and on its publications. |

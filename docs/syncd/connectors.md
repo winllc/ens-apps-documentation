@@ -1651,7 +1651,7 @@ connectors:
 - **A file is not a directory**: nothing is read back. On a publication to a `dsml`
   target, validation refuses `drift`, `unmanaged`, `writeback`, `adopt`,
   `create_containers`, `remove_empty_containers`, `strip_unmanaged_groups` and
-  `passwords` (a file carries no passwords). The far side creates containers with its own
+  `passwords` (password delivery does not go into files; nor map `userPassword` as an attribute, which would be written in clear). The far side creates containers with its own
   publication.
 - **A write that fails** (the directory gone or unmounted, a full disk, the SFTP server
   down) leaves the exports in the store and uses no sequence number. It is tried again
