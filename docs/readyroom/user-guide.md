@@ -18,6 +18,11 @@ Without a certificate, the **Sign in** page asks for your directory credentials:
 A wrong username or password shows an error on the same page. When you signed in with a password,
 **Log out** in the user menu (your avatar, top right) ends the session.
 
+Once you are signed in, the top right of every page shows your name, your role (*Administrator*,
+*Manager* or *User*) and when you last signed in before this session, in your time zone, or *First
+sign-in*. If you don't recognise that time, tell your administrator: someone may have used your
+account. On a narrow screen the same details are at the top of the user menu.
+
 Where your organization has set up **single sign-on**, the **Sign in** page also has a button for it
 (for example *Sign in with single sign-on*). You sign in at your organization's identity provider and
 come back signed in, provided the directory holds exactly one account for you. **Log out** ends your
