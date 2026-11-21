@@ -2,12 +2,24 @@
 
 This guide covers running syncd day to day: the services, starting and stopping them, checking
 health, reading logs, the `syncd` and `syncdctl` commands, who may use the control API, held
-changes, unmanaged entries, backups, the support bundle, an active/passive pair, monitoring,
-certificates, the master key and the password keys. It describes syncd 0.5.4 (tag `v0.5.4`,
-commit `14c6668`). [Running on Kubernetes](#running-on-kubernetes) covers the same for the Helm chart.
+changes, unmanaged entries, backups, the support bundle, an active/passive pair, the files of an
+air gap, monitoring, certificates, the master key and the password keys. It describes syncd 0.6.1
+(tag `v0.6.1`, commit `59cbf19`). [Running on Kubernetes](#running-on-kubernetes) covers the same for the Helm chart.
 Installing and upgrading are in [Installation](install.md); the license is in
 [Licensing](licensing.md); what to do when something goes wrong is in
 [Troubleshooting](troubleshooting.md).
+
+0.5.5 changes how some things behave day to day: control commands are refused, rather than
+queued, while the engine exports after its initial load, releases held changes, writes back
+after an outage or delivers queued passwords ([Commands](#commands)); systemd waits longer
+between restarts ([Start, stop and status](#start-stop-and-status)); `syncdctl backup --to
+--keep` prunes only once the new backup is whole ([Off-host backups](#off-host-backups)); and
+the console's `/healthz` names a background task that keeps failing, with `/livez` for probes
+([Health checks](#health-checks)). It also brings `syncdctl register`, which finishes an
+installation that did not finish. 0.6.0 adds the `dsml` connector for air gaps
+([DSML files across an air gap](#dsml-files-across-an-air-gap)). 0.6.1 fixes the installer:
+`openssl`'s errors are shown, and finishing an installation issues the certificates and installs
+the units a first run did not.
 
 ## What runs where
 
@@ -30,7 +42,8 @@ server for Git sync, a SAML identity provider's metadata (when given as a URL) a
 certificate sign-in, and a KMS when its master key is wrapped by one. The engine reaches S3 or a
 backup directory for [off-host backups](#off-host-backups), and from 0.5.0 a Vault, AWS Secrets
 Manager or Azure Key Vault when its configuration refers to secrets there (`vault`,
-`aws_secret`, `azure_keyvault`), or a KMS that wraps its password-key passphrase. Nothing calls a
+`aws_secret`, `azure_keyvault`), or a KMS that wraps its password-key passphrase; from 0.6.0 also
+the SFTP server of a [`dsml` connector](connectors.md#dsml-files-air-gap). Nothing calls a
 licensing service: a license is a file checked offline (see [Licensing](licensing.md)).
 
 Both units run with systemd's sandboxing: `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`,
@@ -42,8 +55,10 @@ from 0.5.1 `/var/log/syncd`, which its unit creates for an `ENS_AUDIT_FILE`, own
 65 536 open files.
 
 Any other directory a service must write needs a drop-in that names it: a directory for scheduled
-backups (`engine.backup.to`), an audit file outside `/var/log/syncd`, or
-`CONSOLE_REPORTS_SHARE_DIR`. `sudo systemctl edit syncd` (or `syncd-console`) opens one; put in it
+backups (`engine.backup.to`), from 0.6.0 the directory of a `dsml` connector on this host (a
+target writes there, and a source with `after_read: delete` or `move` too), an audit file
+outside `/var/log/syncd`, or `CONSOLE_REPORTS_SHARE_DIR`. Without one the writes fail with
+`Read-only file system`. `sudo systemctl edit syncd` (or `syncd-console`) opens one; put in it
 
 ```ini
 [Service]
@@ -67,14 +82,21 @@ sudo syncdctl status                       # releases, services, health, store f
 sudo syncd status                          # what the engine is doing
 ```
 
-- **Restarts.** Both units restart on failure after 5 seconds (`Restart=on-failure`). systemd's
-  default start limit (5 starts in 10 seconds) still stops a real crash loop. `syncdctl` clears
-  that limit (`systemctl reset-failed`) before its own starts and restarts. After a crash loop,
-  clear it yourself with `systemctl reset-failed syncd` once the cause is fixed.
+- **Restarts.** Both units restart on failure (`Restart=on-failure`). From 0.5.5 the first restart
+  comes after 10 seconds, and the wait grows over six failures in a row to 5 minutes
+  (`RestartSec=10`, `RestartSteps=6`, `RestartMaxDelaySec=300`), instead of every 5 seconds for
+  ever. The last two need systemd 254 or newer: older systemd (RHEL 8 and 9, Debian 12,
+  Ubuntu 22.04) logs that it does not know them and waits 10 seconds each time. The units have
+  no start limit (`StartLimitIntervalSec=0`), so a service whose database or directory is down
+  starts again once it is back. `syncdctl` still clears a failed state (`systemctl
+  reset-failed`) before its own starts and restarts; upgrades install the new units.
 - **Stopping the engine is safe.** It stops between pages, within seconds; systemd waits up to 90
   seconds (`TimeoutStopSec=90`). A full sync in progress resumes where it stopped at the next
   start, and each source carries on from its last committed checkpoint. A backup under way
-  finishes first. The active engine of a pair gives its lease up, so the passive one takes over
+  finishes first; from 0.5.5 a stop waits at most 30 seconds for a backup or a snapshot. Also from
+  0.5.5 a drift check, an unmanaged-entries pass, a dead-letter retry and a history prune stop
+  between pages, and the export after an initial load that a stop cuts short is still owed at the
+  next start. The active engine of a pair gives its lease up, so the passive one takes over
   at once.
 - **A source's first read** (a new source, or the first read after a view is added) is the
   slowest thing the engine does with a source: each record is matched against the view's join
@@ -93,16 +115,22 @@ sudo syncd status                          # what the engine is doing
 `syncdctl status` prints:
 
 ```text
-release:   0.5.4
-previous:  0.5.1
+release:   0.6.1
+previous:  0.6.0
 engine:    active, control API answers
-store:     format 2 (syncd 0.5.4 reads up to 2)
+store:     format 2 (syncd 0.6.1 reads up to 2)
 console:   active, http://127.0.0.1:8080 answers
 certificates: valid until Nov  4 10:15:00 2036 GMT (ca.crt expires first)
 users:     https://syncd.example.com
 backups:
-  /var/lib/syncd/backups/20261118T101500Z-upgrade-0.5.1-to-0.5.4
+  /var/lib/syncd/backups/20261121T101500Z-upgrade-0.6.0-to-0.6.1
 ```
+
+From 0.5.5, on a host whose installation did not finish (installed with `--no-start`, or a first
+start or run that failed), a line follows `release:`: `install:   NOT FINISHED (the engine is not
+registered in the console): syncdctl register`. See
+[Finishing an installation](#finishing-an-installation). A backup directory without its `info`
+file, left by a backup that did not finish, is listed as `(incomplete: not a backup; remove it)`.
 
 The `backups:` it lists are the host-local ones. Off-host and scheduled backups show in
 `syncd status` (`backups:` line, below). `syncdctl status` says nothing of the license or of
@@ -113,7 +141,8 @@ control API access: `sudo syncdctl license status` and `sudo syncdctl api-access
 
 | Check | Answers |
 |---|---|
-| `curl -s http://127.0.0.1:8080/healthz` | `ok` while the console runs. No sign-in needed. It does not check the database or the engine. With the console's own HTTPS, `curl -sk https://127.0.0.1:8443/healthz` (its address), as `syncdctl` does from 0.5.1 |
+| `curl -s http://127.0.0.1:8080/healthz` | `ok` while the console runs and its background tasks work. No sign-in needed. From 0.5.5 it answers 503 with `unwell` and a line per background task (`mail outbox`, `webhook sender`, `engine status watcher`, `scheduled reports`, `git sync`, the audit outputs, ...) that is waiting to start again, has stopped three times in 10 minutes, or says it cannot work (`webhook sender: its TLS configuration does not load: ...`): point monitoring at it. It does not check the database or the engine themselves. With the console's own HTTPS, `curl -sk https://127.0.0.1:8443/healthz` (its address), as `syncdctl` does from 0.5.1 |
+| `curl -s http://127.0.0.1:8080/livez` | New in 0.5.5: `ok` while the console serves requests, whatever its background tasks do. For probes and load balancers, so that a setting the console cannot use (a mail server, a webhook CA file) does not take its pages out of service. The Helm chart's probes use it |
 | `sudo syncd status` | The engine answers on its control API, with the state of each source and publication. It always answers, even while the engine is busy (in strict mode, to the control socket and to a certificate listed under any tier of `api.access`) |
 | `sudo syncdctl status` | Both of the above, as `syncdctl` checks them during installs and upgrades |
 | `GET /metrics` | The engine answers scrapes, when `api.metrics_listen` is set. `up{job="syncd"}` in Prometheus |
@@ -128,11 +157,14 @@ error (and, for a REST source, `throttled=`; for a PostgreSQL stream whose table
 `warning: truncated at the source ...; read in full, N rows remain`). For each publication it
 shows its target and dead letters, the last drift check and the last unmanaged-entries pass. Then
 any unreachable target, deletes held back by a threshold, what the engine is busy with, and
-running totals. It also shows:
+running totals. From 0.5.5 the engine publishes its status at most every 250 ms while source
+events keep coming, and at once when they stop: what `syncd status` and the console show may be
+that much behind. It also shows:
 
 | Line | What it says |
 |---|---|
-| `engine 0.5.4  up 3d2h  fips off`, `configuration version ...` | The version, uptime, FIPS mode and the configuration running |
+| `engine 0.6.1  up 3d2h  fips off`, `configuration version ...` | The version, uptime, FIPS mode and the configuration running |
+| `target <name> UNREACHABLE (since ... ago); failed exports wait in the dead-letter queue (a DSML target keeps its exports for the next file it writes)` | A target the engine cannot reach. The last part, in brackets, is new in 0.6.0; a script matching `target <name> UNREACHABLE` is unaffected. A `dsml` target that cannot write its file keeps the exports in its store and tries again within a minute: nothing goes to the dead-letter queue (see [DSML files across an air gap](#dsml-files-across-an-air-gap)) |
 | `configuration applied by CN=syncd console at 10.0.0.5:41234, 2h ago (signed by key ..., sha256 ...)`, or `configuration from the file on this host, not applied through the control API (...)` | Who applied the running configuration, when, and whether the console signed it (new in 0.5.0; see [Control API access](#control-api-access)) |
 | `control API access: strict (...)`, or `control API access: COMPATIBLE: every client certificate from the CA may apply configurations and approve changes; ...` | Who may use the control API (new in 0.5.0). `configurations: applied only when the console signed them` follows with `engine.require_signed_config` |
 | `license: GRACE (L-0001 for ..., 5000 managed identities, expires ...; packs ...)`, `license: N managed identities on this engine ...`, `license: installation ...` | The license's state, the managed identities counted and the installation id, then any message (new in 0.5.0; see [Licensing](licensing.md)). Absent on the passive engine of a pair |
@@ -189,7 +221,7 @@ Useful engine log messages:
 | `refused a control request` (with `rpc`, `caller`, `needed`, `granted`), `refused a client certificate that api.access does not list`, `refused a password request: the caller is not listed under api.access.passwords` | Strict control API access refused a call (new in 0.5.0; see [Control API access](#control-api-access)). From 0.5.1 the last one also covers backups, snapshots and the password queue of an engine that holds password keys |
 | `revealing sensitive values` / `refused a request to reveal sensitive values` | A caller asked for sensitive attribute values |
 | `source failed; restarting it from its checkpoint` | A source failed and will be retried |
-| `export target is unreachable; failed exports wait in the dead-letter queue` | A target directory went away |
+| `export target is unreachable; failed exports wait in the dead-letter queue` | A target directory went away. From 0.6.0 the message ends `(a DSML target keeps its exports for the next file it writes)` |
 | `the directory cannot be reached; starting with it down` | An LDAP or Active Directory target did not answer when the engine started or reloaded; it starts anyway and connects later (new in 0.5.1) |
 | `connected to the directory again` | It came back |
 | `exceeds the deletion threshold` | A deletion threshold holds deletes back |
@@ -206,6 +238,8 @@ Useful engine log messages:
 | `the lease is held under this engine's name (...) by another process: ...; waiting for it to expire` | Another engine of the pair has the same member name, or this engine restarted after a crash while it held the lease (new in 0.5.1) |
 | `the store is still in use by calls the passive engine was answering: stopping, so that a restart takes the pair over with the received snapshot ...` | A promotion could not release the store within 30 seconds; the engine exits, and its restart swaps the received snapshot in (new in 0.5.1) |
 | `not writing: this engine no longer holds the pair's lease` | The fence stopped an export batch |
+| `stopped writing: this engine's lease runs out` | New in 0.5.5: a chunk of exports still being written at the lease's margin was abandoned; the engine taking over reconciles it (see [Fencing](#fencing)) |
+| `taking the pair over: changes the other engine took from Debezium after its last snapshot are not sent again; ...` | New in 0.5.5: this engine took a pair over with `debezium` sources, which it names. Have Debezium send the tables again (see [Failover](#failover)) |
 | `store snapshot received from the active engine`, `pulling a store snapshot failed`, `taking a store snapshot failed` | Snapshots of a pair |
 | `password delivered`, `password change not delivered` | Password deliveries, by account and DN, never the password |
 | `the target refused the initial password; the entry is there without it (tried again with a new one, a limited number of times)`, then `the target refused the initial password as often as it is tried; the entry stays without one, held in the dead-letter queue (syncd retry tries again)` | An initial password refused (from 0.5.0 tried three times, then a dead letter; see [Troubleshooting](troubleshooting.md#passwords)) |
@@ -241,6 +275,16 @@ Useful console log messages:
 | `the console listens on ... over plain HTTP: browsers on other machines will not keep its session cookie` | It listens beyond loopback over plain HTTP, without an HTTPS `CONSOLE_PUBLIC_URL` |
 | `development mode: do not use this console in production` | `SYNC_DEV_MODE=true` |
 | `single sign-on could not start` | The identity provider could not be reached or is misconfigured |
+| `a background task stopped; starting it again in N s` (with `task` and `why`) | New in 0.5.5: a background task (the mail outbox, the webhook sender, the engine status watcher, an audit output, ...) ended or panicked; it starts again after a wait that doubles from a second to a minute. `/healthz` names it while it keeps stopping |
+| `webhooks cannot be sent: their TLS configuration does not load; trying again in a minute` | `CONSOLE_WEBHOOKS_CA_FILE` does not load. Events queue meanwhile (new in 0.5.5; before, webhooks stopped until a restart) |
+
+**The console's own limits** (from 0.5.5). A page's request is given up after ten minutes: the page
+says `The console did not answer within 10 minutes. What was asked may still be under way: look
+again before trying it once more.` Downloads (exports, reports) are the browser's own and have no
+such limit. A PDF report holds at most 20,000 rows: a download of a larger one is refused (`a PDF
+holds at most 20000 rows, and this report has N: download it as CSV or Excel, or one publication
+at a time`), and a scheduled PDF report is cut there, with its mail saying so. CSV and Excel files
+have no such limit.
 
 ## The syncd command line
 
@@ -272,7 +316,7 @@ Running the engine:
 | `syncd dlq` | Lists failed exports waiting to be retried: publication, entity id, attempts, last failure, DN, error. Reads the store directly, read-only | No (works while it runs) |
 | `syncd retry [--publication P] [--entity ID]` | Exports dead-lettered entities again now: all, one publication's, or one entity (as `syncd dlq` lists it) | Yes |
 | `syncd discard --publication P --entity ID` | Removes a dead letter without retrying it | Yes |
-| `syncd reconcile [--publication P]` | Reconciles a publication (or all) with its target now | Yes |
+| `syncd reconcile [--publication P]` | Reconciles a publication (or all) with its target now. From 0.6.0, for a `dsml` target, it also writes out the exports waiting for the end of the interval and, with `full_snapshots: true`, a snapshot (see [DSML files across an air gap](#dsml-files-across-an-air-gap)) | Yes |
 | `syncd full-sync` | Recomputes every entity from its sources (after a rule change), then exports | Yes |
 | `syncd check-drift [--publication P]` | Reads a publication's entries (or every checked publication's) back from the target now, and acts on drift by its `drift` policy | Yes |
 | `syncd unmanaged [--publication P] [--last]` | Looks in a publication's target (or every one's) for [unmanaged entries](#unmanaged-entries) and for members of privileged groups no rule accounts for, and prints them; `--last` prints the last pass's result without reading the target. Writes nothing to the target. New in 0.5.0 | Yes |
@@ -287,6 +331,7 @@ Running the engine:
 | `syncd correlation suggest --view V [--source S] [--above X] [--limit N] [--json]` | Scored suggestions for a view's records that joined no entity. New in 0.4.0. See [Correlation assistance](reports-and-data-quality.md#correlation-assistance) | Yes |
 | `syncd correlation accept --view V [--source S] [--above X \| --from FILE] [--limit N] [--yes]` | Joins the records whose best suggestion scores at least `--above` (the view's `correlation.accept_at` by default), or the decisions in a file `suggest --json` wrote. A dry run unless `--yes` | Yes |
 | `syncd backup --to DIR\|s3://... [--keep N] [...]` | An [off-host backup](#off-host-backups) of the running engine, without stopping it, with the password keys as they are on disk (sealed or not). From 0.5.1, in strict access on an engine that holds password keys, only through the control socket or a certificate listed under `api.access.passwords`. New in 0.4.0 | Yes |
+| `syncd backup-prune --to DIR\|s3://... --keep N [...]` | Removes the oldest backups there beyond `N`, each with every file of its set. `syncdctl backup --to --keep` runs it once every part of the new backup is stored. Takes the S3 options of `syncd backup`. New in 0.5.5 | No |
 | `syncd restore --from DIR\|s3://... [--name NAME] [--replace]` | Restores a backup into the data directory, with the engine stopped (see [Restore](#restoring-an-off-host-backup)). Run it as the engine's user (`sudo -u syncd`): from 0.5.1 the files it puts in place are mode 0600. New in 0.4.0 | No: refused while it runs |
 | `syncd support-bundle [--out FILE\|-]` | Writes the engine's [support bundle](#support-bundle); `--out -` streams it to standard output (from 0.4.1). New in 0.4.0 | Yes (collects less without it) |
 | `syncd password set`, `password change`, `password queue [--limit N]`, `password agent add NAME --source C\|bind NAME --source C\|list\|revoke\|enroll\|renew` | Submit a password change, change a person's own password, list the changes waiting (who submitted each, never a password; new in 0.5.0), and manage the capture agents. From 0.5.0 a new agent needs `--source`, and `bind` binds an agent enrolled before 0.5.0. See [Password synchronisation](password-sync.md) | Yes (`agent enroll` and `agent renew --dir DIR` run on the agent's host) |
@@ -309,7 +354,7 @@ Configuring and testing (mostly for designers):
 | `syncd apply-config FILE [--version LABEL]` | Sends a new configuration to the engine, which validates it, saves it over its file and reloads, then runs a full sync. The label is shown by `syncd status` (default: the time). Refused in strict [control API access](#control-api-access) (`ApplyConfig needs the configure tier ...`) unless the certificate is listed under `configure`, and with `engine.require_signed_config` whoever sends it: configurations then go through the console | Yes |
 | `syncd simulate FILE [--samples N] [--reveal]` | What applying a configuration would send each target, without applying it: the engine dry-runs it on a copy of its state. Lists `N` operations per publication (default 20) | Yes |
 | `syncd preview FILE [--view V] [--samples N] [--random] [--live] [--reveal]` | Runs a configuration over a sample of source records (default 10, at most 100, of each view's first source) in a scratch store, and shows the entities and what each publication would write. `--live` reads the sources now instead of the engine's copies | Yes |
-| `syncd test-connection CONNECTOR` | Connects with a connector (and binds, for a directory) and shows what answered. Writes nothing | No |
+| `syncd test-connection CONNECTOR` | Connects with a connector (and binds, for a directory) and shows what answered. From 0.6.0, for a `dsml` connector, signs in to the SFTP server and lists the directory, with how many files are there. Writes nothing | No |
 | `syncd discover CONNECTOR [CONTAINER] [--object O] [--samples N] [--random] [--reveal]` | Lists what a connector holds (tables, collections, directory entries); with a container (`schema.table`, a collection, a DN), its fields and a few records (default 5, at most 100). `--object` reads a configured object's records as the engine reads them. Writes nothing | No |
 
 `--reveal` shows the values of sensitive attributes. It needs mutual TLS (the default on an
@@ -317,7 +362,16 @@ installed host).
 
 A command that changes something waits up to 10 seconds while the engine is busy with a long
 operation (a full sync, a reconciliation, a reload), then is refused: `the engine is busy
-(<activity>); try again when it is done`. Scripts should retry on that message.
+(<activity>); try again when it is done`. Scripts should retry on that message. From 0.5.5 the
+same holds while the engine is `exporting after the initial load`, `firing timers and releasing
+held changes`, `writing back a target's changes after its outage` or `delivering password
+changes`: before, commands queued behind these, with their callers waiting. The activity in the
+message says which it is. A command whose caller stopped waiting (Ctrl-C, a timeout) is not run
+when the engine gets to it.
+
+From 0.5.5 the control API's listings of dead letters, quarantined entities and quality failures
+return at most 10,000 entries, whatever limit is asked for (`syncd quality --list --limit`, the
+console's pages). `syncd dlq` and `syncd quarantine` read the store and list everything.
 
 ### Global options
 
@@ -450,21 +504,22 @@ the reasoning, and [Troubleshooting](troubleshooting.md#the-command-line) for th
 
 | Command | Options | What it does |
 |---|---|---|
-| `install` | `--local-database` or `--database-url URL`; `--listen ADDR`, `--fips`, `--no-start` | First installation ([Installation](install.md#syncdctl-install-options)) |
-| `upgrade RELEASE` | `--yes`, `--no-rollback`, `--skip-db-backup`, `--reinstall` | Upgrades a bundle install to a `.tar.gz` or unpacked release ([Upgrade](install.md#upgrade)). From 0.5.1 it checks that `pg_dump` can dump the console's database before it stops anything, and `--skip-db-backup` always leaves the database out |
-| `rollback` | `--keep-data`, `--yes` | Back to the previous release, restoring the backup taken before the upgrade ([Rollback](install.md#rollback)). From 0.5.1 `--keep-data` is also refused when the console's schema changed, and a full rollback checks first that there is room to restore |
+| `install` | `--local-database`, `--database-url-file FILE` or `--database-url URL`; `--listen ADDR`, `--fips`, `--no-start` | First installation ([Installation](install.md#syncdctl-install-options)). From 0.5.5 `--database-url-file` reads the database's URL from the first line of a file: a URL with a password on the command line can be read by every account on the host (`ps`) and stays in the shell's history. Run on a host whose installation did not finish, it finishes it (see [Finishing an installation](#finishing-an-installation)) |
+| `register` | | New in 0.5.5: finishes an installation made with `--no-start`, or one that stopped. From 0.6.1 it issues the control API's certificates that are missing and installs the units before it starts the services and registers the engine in the console (see [Finishing an installation](#finishing-an-installation)) |
+| `upgrade RELEASE` | `--yes`, `--no-rollback`, `--skip-db-backup`, `--reinstall` | Upgrades a bundle install to a `.tar.gz` or unpacked release ([Upgrade](install.md#upgrade)). From 0.5.1 it checks that `pg_dump` can dump the console's database before it stops anything, and `--skip-db-backup` always leaves the database out. From 0.5.5, without that dump a schema change of the new release cannot be undone: the upgrade says so before it starts, its own rollback leaves the new release in place when the database's schema changed, and `syncdctl rollback` refuses until the database is back at its old schema (restore it from a backup of your own first) |
+| `rollback` | `--keep-data`, `--skip-schema-check`, `--yes` | Back to the previous release, restoring the backup taken before the upgrade ([Rollback](install.md#rollback)). From 0.5.1 `--keep-data` is also refused when the console's schema changed, and a full rollback checks first that there is room to restore. From 0.5.5 `--keep-data` is refused too when the schema cannot be checked (no backup records it, or the database does not answer), unless `--skip-schema-check` is added; the database is restored when its schema is not known, as when it changed |
 | `backup` | `--skip-db-backup`, `--leave-stopped` | A [host-local backup](#host-local-backups): stops syncd briefly to take a consistent copy; prints its directory. `--leave-stopped` leaves the services stopped afterwards. From 0.5.1 it checks the room and `pg_dump` before it stops anything |
-| `backup --to DIR\|s3://bucket/prefix` | `--keep N`, `--skip-db-backup`; from 0.4.1 `--sse`, `--endpoint`, `--region`, `--s3-ca` | An [off-host backup](#off-host-backups) of the running engine, with the console's database, `/etc/syncd` and (from 0.4.1) the console's master key beside it. Nothing is stopped. From 0.5.0 a password-key passphrase file inside `/etc/syncd` is left out, with a warning. New in 0.4.0 |
-| `restore DIR` | `--yes` | Restores a host-local backup: engine store, console files and database, `/etc/syncd`. From 0.5.1 it checks first that `/var/lib/syncd` has room for the copy it makes beside the live data, and changes nothing when it has not |
+| `backup --to DIR\|s3://bucket/prefix` | `--keep N`, `--skip-db-backup`; from 0.4.1 `--sse`, `--endpoint`, `--region`, `--s3-ca` | An [off-host backup](#off-host-backups) of the running engine, with the console's database, `/etc/syncd` and (from 0.4.1) the console's master key beside it. Nothing is stopped. From 0.5.0 a password-key passphrase file inside `/etc/syncd` is left out, with a warning. From 0.5.5 `--keep` removes older backups only once every part of the new one is stored. New in 0.4.0 |
+| `restore DIR` | `--yes` | Restores a host-local backup: engine store, console files and database, `/etc/syncd`. From 0.5.1 it checks first that `/var/lib/syncd` has room for the copy it makes beside the live data, and changes nothing when it has not. From 0.5.5 a backup taken with `--skip-db-backup` keeps the database as it is, and says so before it starts |
 | `restore --from DIR\|s3://...` | `--name syncd-<host>-<time>`, `--yes`; from 0.4.1 `--sse`, `--endpoint`, `--region`, `--s3-ca` | Restores an off-host backup, the newest or the named one ([Restoring an off-host backup](#restoring-an-off-host-backup)). New in 0.4.0 |
 | `support-bundle [FILE]` | | Writes a [support bundle](#support-bundle). New in 0.4.0 |
-| `status` | | Releases, services, health, store format, when the control API's certificates expire, public URL, host-local backups |
+| `status` | | Releases, services, health, store format, when the control API's certificates expire, public URL, host-local backups. From 0.5.5 it says when the installation is not finished |
 | `renew-certs` | `--new-ca`, `--yes` | Renews the control API's certificates, restarts the engine with them and gives the console its new credentials (see [Certificates](#certificates)) |
 | `cli-cert` | | Issues the command line's client certificate, if it is missing |
 | `api-access strict` | `--dry-run`, `--yes` | Opts a host upgraded from 0.4.x in to strict [control API access](#control-api-access). New in 0.5.0 |
 | `api-access signing-key FILE\|--from-console` | `--add`, `--require`, `--dry-run`, `--yes` | Installs the console's configuration signing key; `--require` makes the engine apply only signed configurations; `--add` keeps the keys already there (a rotation). New in 0.5.0 |
 | `api-access status` | | The engine's lines on access and on who applied the running configuration. New in 0.5.0 |
-| `ha init` | `--name PAIR`, `--lease-url URL` or `--lease-path FILE`, `--advertise HOST[:PORT]`, `--member NAME`, `--ttl SECS`, `--snapshot-every SECS`, `--join-file FILE`, `--dry-run`, `--yes` | Makes this host the first engine of an [active/passive pair](#high-availability) and writes a join file for the second. New in 0.5.0. From 0.5.1, with `--lease-path`, it (and `ha join`) writes the engine's drop-in for the lease file's directory, and on a first host whose engine does not see the lease it puts the previous settings back |
+| `ha init` | `--name PAIR`, `--lease-url-file FILE` (from 0.5.5: the lease database's URL on the file's first line, kept off the command line), `--lease-url URL` or `--lease-path FILE`, `--advertise HOST[:PORT]`, `--member NAME`, `--ttl SECS`, `--snapshot-every SECS`, `--join-file FILE`, `--dry-run`, `--yes` | Makes this host the first engine of an [active/passive pair](#high-availability) and writes a join file for the second. New in 0.5.0. From 0.5.1, with `--lease-path`, it (and `ha join`) writes the engine's drop-in for the lease file's directory, and on a first host whose engine does not see the lease it puts the previous settings back |
 | `ha join FILE` | `--advertise`, `--member`, `--dry-run`, `--yes` | On the second host, with that file. New in 0.5.0 |
 | `ha register NAME HOST:PORT` | `--update` | Registers the pair's other engine in this host's console. New in 0.5.0 |
 | `ha status` | | The engine's line on the pair. New in 0.5.0 |
@@ -478,17 +533,53 @@ Environment variables it reads:
 | Variable | Default | |
 |---|---|---|
 | `SYNCD_HEALTH_TIMEOUT` | 120 | Seconds to wait for both services to be healthy. Raise it for an upgrade that migrates a very large store |
-| `SYNCD_KEEP_BACKUPS` | 3 | Host-local backups kept after an upgrade |
+| `SYNCD_KEEP_BACKUPS` | 3 | Host-local backups kept after an upgrade. From 0.5.5 the newest, taken by the upgrade itself, is always kept (0 counts as 1) |
 | `SYNCD_SKIP_DB_BACKUP` | | `1` in the package manager's environment (`sudo SYNCD_SKIP_DB_BACKUP=1 apt install ...`) leaves the console's database out of the backup a package upgrade takes. New in 0.5.1 |
 | `SYNCD_PG_SOCKET`, `SYNCD_PG_PORT` | `/var/run/postgresql`, 5432 | Where `--local-database` reaches PostgreSQL |
 
 `upgrade`, `rollback` and `uninstall` refuse to run on a host installed from a package; use the
 package manager there. Only one `syncdctl` that changes something runs at a time
-(`/run/syncdctl.lock`). From 0.5.0 `syncdctl ha init` and `ha join` set up an HA pair on two hosts
+(`/run/syncdctl.lock`). From 0.5.5 a run that stopped the services and is interrupted (Ctrl-C, an
+error) before it changed anything starts them again, and leaves no half backup. `upgrade`,
+`backup`, `restore`, `rollback` and the package upgrades start again, and check, only the services
+that were running before: a console stopped on purpose stays stopped (`syncd was not running
+before: it is left stopped`). Removing the package disables and stops the services; installing it
+again enables and starts those that were enabled and running when it was removed. From 0.5.0
+`syncdctl ha init` and `ha join` set up an HA pair on two hosts
 (see [An active/passive pair on hosts](install.md#an-activepassive-pair-on-hosts)); they open no
 firewall ports. The join file holds the CA's private key, the lease database's URL and, when the
 keys are sealed, the password-key passphrase: copy it as a secret and delete it on both hosts
 afterwards. `syncdctl license` was not run on a packaged host before the release.
+
+### Finishing an installation
+
+New in 0.5.5. An installation has not finished when it was made with `--no-start`, or when its run
+stopped before the engine was registered in the console: the services did not start, the
+registration failed, or (with 0.6.0) `openssl` failed while it issued the control API's
+certificates. `syncdctl status` then says `install:   NOT FINISHED (the engine is not registered in
+the console): syncdctl register`. Once the cause is fixed:
+
+```bash
+sudo syncdctl register                                 # or run the installer again:
+sudo ./syncd-0.6.1-linux-x86_64/install.sh
+```
+
+From 0.6.1 either one issues the control API's certificates that are missing (under the CA
+`syncdctl` made; a `ca.crt` you put there without its `ca.key` is left as it is), installs the
+systemd units, then starts the services, waits for them and registers the engine in the console
+as `local`. The installer finishes with its own release, which may be newer than the one the
+stopped run installed (`the installation of syncd <old> did not finish: finishing it with syncd
+<new> and the configuration it wrote (the options given now are not used)`); an installation for
+FIPS mode is finished with a FIPS build only. On a package install, installing the package again
+says `the installation did not finish: syncdctl register finishes it`.
+
+**A 0.6.0 install that stopped after `==> installing syncd 0.6.0`** (no `/etc/syncd/pki/ca.key`
+or `engine.key`, no `syncd.service`): 0.6.0's `openssl` failed, and what it said was not shown.
+0.6.0's own installer run again, or its `syncdctl register`, only starts the services, which
+cannot start without their keys and units. Run 0.6.1's installer (`install.sh` from the bundle),
+or install the 0.6.1 package and run `sudo syncdctl register`. If `openssl` fails again, its
+errors are shown, followed by `openssl could not make <what> (above)`. See
+[Troubleshooting](troubleshooting.md#installation-and-upgrade).
 
 ## Held changes
 
@@ -623,7 +714,13 @@ backup` as the engine's user, and adds beside it, named after it:
   `syncdctl` says so.
 
 It ends by listing what the backup holds. `--keep N` removes the oldest backups there beyond `N`,
-ordered from 0.5.1 by when they were taken (0.5.0 ordered them by name, so by host first).
+ordered from 0.5.1 by when they were taken (0.5.0 ordered them by name, so by host first). From
+0.5.5 the database dump and `/etc/syncd`'s archive are made first, before anything is written to
+the destination: when either fails, nothing is written there and no backup is removed. The oldest
+backups are removed last, by `syncd backup-prune`, once every part of the new one is stored, so a
+backup that fails part way never costs an older, whole one. When adding a part beside the engine's
+archive fails, `syncdctl` says the backup is `INCOMPLETE`: delete its files (`<name>.*`) there and
+take another.
 `--skip-db-backup` leaves the database out. `--sse`, `--endpoint`, `--region` and `--s3-ca`, as for
 `syncd backup` below, are passed on to every command that writes a part of the backup (new in
 0.4.1; 0.4.0 refused them). Other options are refused.
@@ -742,9 +839,20 @@ sudo syncdctl restore --from s3://backups/syncd/prod --name syncd-idm1-20261108T
 5. starts the services and checks them.
 
 Give it the S3 options the backup was taken with (`--endpoint`, `--region`, `--s3-ca`; `--sse` is
-not needed to read). A part it cannot fetch is named (`<name>.<part> was not fetched: ...`), and
-the restore goes on without it. In 0.4.0 every fetch of the dump and of `/etc/syncd`'s archive
-failed on file permissions, silently.
+not needed to read). In 0.4.0 every fetch of the dump and of `/etc/syncd`'s archive failed on file
+permissions, silently. From 0.5.5:
+
+- it checks first that `/var/lib/syncd` has room for the restored store beside the current one;
+- when the engine's restore fails before it has touched the store (a wrong name, prefix or
+  credentials, a backup that cannot be fetched whole), nothing is changed and syncd is started
+  again; after that, the services stay stopped, and the output says where the previous store went;
+- a part of the backup that cannot be fetched stops the restore there (`fetching <name>.<part>
+  from ... failed: ...`), with the command to run again; a part the backup does not have (no dump
+  after `--skip-db-backup`) is named, and the restore goes on, keeping what the host has;
+- delete `/var/lib/syncd/engine/replaced-<time>` once the restored engine is good.
+
+Before 0.5.5 a part it could not fetch was named (`<name>.<part> was not fetched: ...`), and the
+restore went on without it.
 
 For the engine alone, run `syncd restore` as the engine's user with the engine stopped, as
 `syncdctl restore --from` does. From 0.5.1 every file it puts in place, the store's included, is
@@ -766,7 +874,12 @@ sudo -u syncd syncd restore --from s3://backups/syncd/prod --replace
 - **Checked.** It refuses while the engine's control API answers, refuses a backup whose store
   format the installed release cannot read (install that release first), and checks every file
   against the manifest before it puts anything in place. An archive without a manifest is not
-  listed or restored (from 0.5.1).
+  listed or restored (from 0.5.1). From 0.5.5 `--replace` fetches and checks the backup before it
+  moves the store in place aside.
+- **After the restore** (from 0.5.5), the snapshots an engine of a pair received or took of the
+  old store are dropped, so the next start does not swap one in over the restored store, and that
+  start reads PostgreSQL replication streams in full, since their slots have moved past the
+  backup.
 - **Sealed keys.** The password keys come back as they were backed up. When they are sealed, the
   engine needs the passphrase of the engine they came from; `syncd restore` says so when the
   passphrase it has is missing or does not open them (`the restored password key is sealed:
@@ -778,7 +891,8 @@ sudo -u syncd syncd restore --from s3://backups/syncd/prod --replace
 - **Catching up.** The restored engine resumes its sources from the checkpoints in the backup, so
   changes since are read again where the source still has them, and its next reconciliation brings
   the targets in line (`syncd reconcile` runs one now). Password changes delivered after the backup
-  are not sent again.
+  are not sent again. A `dsml` target's file numbers go back with the store, and the far side
+  passes over numbers it has read: see [When the connected side's numbers go back](air-gap.md#when-the-connected-sides-numbers-go-back).
 
 On Kubernetes, see [Backups on Kubernetes](availability-and-sizing.md#backups-on-kubernetes).
 
@@ -786,7 +900,7 @@ On Kubernetes, see [Backups on Kubernetes](availability-and-sizing.md#backups-on
 
 ```bash
 sudo syncdctl backup                  # stops syncd briefly; prints the backup's directory
-sudo syncdctl restore /var/lib/syncd/backups/20261118T101500Z-manual-0.5.4
+sudo syncdctl restore /var/lib/syncd/backups/20261121T101500Z-manual-0.6.1
 ```
 
 A backup is a directory under `/var/lib/syncd/backups`, readable by root only, named
@@ -794,19 +908,28 @@ A backup is a directory under `/var/lib/syncd/backups`, readable by root only, n
 
 | Part | From |
 |---|---|
-| `engine/` | The engine store, `/var/lib/syncd/engine`, with the password key and agent CA (copied with reflinks where the file system supports them) |
+| `engine/` | The engine store, `/var/lib/syncd/engine`, with the password key and agent CA. From 0.5.5 its table files (`*.sst`, almost all of it) are hard-linked when the backups are on the store's file system (the default), and everything else is copied; on another file system the whole store is copied (with reflinks where the file system supports them) |
 | `console/` | `/var/lib/syncd/console`, with the master key |
 | `etc/` | `/etc/syncd`: configuration, secrets and the control API's certificates and CA key |
 | `console.dump` | The console's database, `pg_dump --format=custom` |
 | `info` | The version, the console's schema version, the store format and the reason |
 
 - **Consistency.** Both services are stopped while the store is copied, so the copy is consistent.
-  They start again afterwards if they were running. Plan for a short outage: the time to copy the
-  store. From 0.5.1 room and a working `pg_dump` are checked before anything is stopped, every
-  step is checked, a backup that fails part way is removed, and two backups in one second no
-  longer go into the same directory.
+  They start again afterwards if they were running. Plan for a short outage: dumping the console's
+  database and copying its files and `/etc/syncd`, which is quick for a database of configuration
+  versions and an audit log, and the store. From 0.5.5 the store's table files are hard-linked
+  rather than copied when the backups are on the store's file system, so a large store adds little
+  to the stop; with the backups on another file system the whole store is copied, and the stop
+  grows with it, about as long as a copy of `/var/lib/syncd/engine` to that file system. The same
+  holds for the backup an upgrade takes. From 0.5.1 room and a working `pg_dump` are checked before
+  anything is stopped, every step is checked, a backup that fails part way is removed, and two
+  backups in one second no longer go into the same directory.
+- **Room.** A backup's linked table files are the store's own until the engine compacts them away,
+  after which the backup keeps them: in time a backup takes as much room as the store. From 0.5.5
+  the check before a backup counts the store's whole size and the console's files, a tenth more,
+  and 100 MiB for the engine to go on writing.
 - **Certificates kept by a rollback.** `syncdctl rollback` restores the console's database only
-  when the schema changed. When it keeps the database, it keeps `/etc/syncd/pki` too, since the
+  when the schema changed (from 0.5.5, or is not known). When it keeps the database, it keeps `/etc/syncd/pki` too, since the
   console's stored credentials for the engine match the current certificates (after a
   `renew-certs`, say).
 - **Restore** stops the services, puts every part back, always restores the console's database
@@ -815,7 +938,9 @@ A backup is a directory under `/var/lib/syncd/backups`, readable by root only, n
   with another version, and refuses a backup whose store format the installed release cannot read.
   From 0.5.1 it copies the engine store and the console's files in beside the live ones and
   replaces them only once the copy is complete, after checking that `/var/lib/syncd` has room for
-  it.
+  it. The copies are its own, never links, so the restored store shares nothing with the backup.
+  From 0.5.5 a backup taken with `--skip-db-backup` has no dump: the restore keeps the database as
+  it is, and says so before it starts; the console starts on it only if it knows its schema.
 - **Protect copies.** A backup holds the console's master key and the secrets in `/etc/syncd`.
 - **Retention.** Upgrades keep the newest three backups (`SYNCD_KEEP_BACKUPS`), manual ones
   included. They stay on the host: use off-host backups for disaster recovery.
@@ -928,7 +1053,11 @@ engine holds the lease and that it is not within a second of expiring; from 0.5.
 again before every 64 exports, and the fence measures time on a clock NTP cannot step. An engine that cannot renew
 (cut off from the lease's database) stops writing before the other may take over, logs `the
 pair's lease is lost`, and steps down to passive. A batch it refused is neither written nor
-recorded as written, so the engine that takes over plans it again.
+recorded as written, so the engine that takes over plans it again. From 0.5.5 a chunk of exports
+still being written when the lease reaches that margin is abandoned (`stopped writing: this
+engine's lease runs out`) rather than written on beside the engine taking over: a write the target
+had already taken stays, and the engine taking over reconciles it. Writing back a target's changes
+after an outage checks the fence before each write.
 
 ### Snapshots
 
@@ -964,6 +1093,13 @@ its restart, by systemd or Kubernetes, swaps the snapshot in. After a failover:
    a takeover. `syncd reconcile` runs another reconciliation if in doubt. The log says `password
    queue: what the old active engine wrote after the snapshot was applied`, or warns that its
    copy had a gap.
+   **`debezium` sources** are the exception to the failover window: Debezium keeps its own
+   position and moves on once an engine answered, so what the old engine took in after its last
+   snapshot is not sent again. The log names them (`taking the pair over: changes the other engine
+   took from Debezium after its last snapshot are not sent again; ...`, from 0.5.5). Have Debezium
+   send the tables again with an incremental snapshot (`execute-snapshot` through its signal
+   table); the engine skips what it already has. A `dsml` target goes back to the snapshot's
+   sequence number too: see [When the connected side's numbers go back](air-gap.md#when-the-connected-sides-numbers-go-back).
 3. Bring the old engine back. It starts passive, pulls a snapshot, and is ready to take over
    again.
 
@@ -1046,7 +1182,8 @@ scrape_configs:
       - targets: ["127.0.0.1:9464"]
 ```
 
-The console has no metrics endpoint; watch it with `/healthz`. It shows the engine's CPU and
+The console has no metrics endpoint; watch it with `/healthz`, which from 0.5.5 answers 503
+naming a background task that cannot work. It shows the engine's CPU and
 memory live, from the engine's status: on each engine's card on the engines dashboard, with a
 sparkline of the last minute (amber at 90% of the CPUs the engine may use, or of its memory
 limit), and in the **Engine process** section of the live metrics page, charted over 1, 5 or 15
@@ -1127,6 +1264,39 @@ keeps it. It ends by itself once the rule evaluates again, or the check passes, 
 To release them, fix the source data the rule reads (the next change to the entity releases it),
 or fix the rule and publish it (the full sync that follows releases the entities). See
 [Troubleshooting](troubleshooting.md).
+
+## DSML files across an air gap
+
+New in 0.6.0. A `dsml` connector carries changes between networks that are not connected, as
+DSML v2 files in a directory or on an SFTP server. On the connected side a target gathers what it
+exports into a file every `batch_secs` (900 by default, on the quarter hour), with a `.sha256`
+beside it; on the far side a source reads the files in order. Setting it up, and what to do when
+a file is lost on the way, are in [Air-gapped synchronisation](air-gap.md); the settings are in
+[Connectors](connectors.md#dsml-files-air-gap). Day to day:
+
+| Where | Shows |
+|---|---|
+| The outbox (connected side) | `<prefix>-<sequence>-<UTC time>.dsml.xml` with its `.sha256` (and its `.done` with `done_files`), one per interval in which something was exported, and `.full.dsml.xml` for a snapshot. The twelve-digit sequence has no gaps. `.<name>.part` is a file being written |
+| `syncd status` (connected side) | `target <name> UNREACHABLE ... (a DSML target keeps its exports for the next file it writes)` while a file cannot be written: the directory gone or not mounted, a full disk, the SFTP server down. The exports wait in the store, none goes to the dead-letter queue, no sequence number is used, and the write is tried again within a minute. `SyncdTargetDown` fires after 5 minutes |
+| The inbox (far side) | The files not read yet; with `after_read: move`, the read ones in `processed/` |
+| `syncd status` (far side) | Under the source, `warning: file N of <prefix> not arrived: ...` while a missing file holds the ones after it, `warning: <file> has no <file>.sha256 (require_checksums): waiting for it`, or `warning: <file>: N changes to entries the source does not hold were skipped (a snapshot carries them whole)`. A damaged file (a checksum that does not match, XML cut short, a file over `max_bytes`) fails the source with an error naming it, until it is replaced |
+| `syncd test-connection <connector>` | Signs in to the SFTP server and lists the directory, with how many files are there |
+| The console | *Browse the files* on the connector's page lists them, newest first, and shows the entries one carries |
+
+- **Sending what is waiting now.** Until its interval ends, each export waits in the engine's store,
+  where a stop or a crash loses none. `sudo syncd reconcile` on the connected side writes them out
+  at once and, with `full_snapshots: true`, a snapshot of everything exported after them: before a
+  transfer window, and to put the far side right after a file was lost (the far side goes on from
+  a snapshot past a missing file).
+- **Written at least once.** After a stop between writing a file and recording its number, the
+  next file has the same number and the same changes; the far side takes it as the same position.
+  An export may be in two files; it applies the same the second time.
+- **The engine's sandbox.** A directory on the host needs a drop-in that lets the engine write it
+  (see [What runs where](#what-runs-where)). An `sftp://` location is refused in FIPS mode.
+
+What to do when something goes wrong is in [Troubleshooting](troubleshooting.md#dsml-files-across-an-air-gap),
+and in [Monitoring](air-gap.md#monitoring) and [Recovery](air-gap.md#recovery) in the air-gap
+guide.
 
 ## Certificates
 
@@ -1335,7 +1505,7 @@ pods, and Helm installs, upgrades and removes them.
 |---|---|---|
 | Kind | StatefulSet, one replica (two with `engine.ha.enabled`) | Deployment (`console.replicas`, 1) |
 | Ports | 7443 control API (mutual TLS), 9464 metrics (plain HTTP); Service `syncd-engine`, and the headless `syncd-engine-peers` for a pair. With `engine.passwordIngest.enabled` (0.4.1), the ingest port (7445) on the Service `syncd-engine-ingest`; from 0.5.0 both pods of a pair answer on it | 8080, HTTP or HTTPS with `console.tls`; Service `syncd-console` |
-| Probes | Startup: the control API accepts connections (every 5 s, up to 10 minutes, for opening a large store). Readiness: the same. Liveness: `GET /metrics` on 9464 | `GET /healthz`, readiness and liveness |
+| Probes | Startup: the control API accepts connections (every 5 s, up to 10 minutes, for opening a large store; from chart 0.5.5 `engine.startupProbe.periodSeconds` and `failureThreshold`, 5 and 120). Readiness: the same. Liveness: `GET /metrics` on 9464. From chart 0.5.5 `engine.minReadySeconds` (0) makes a new engine pod stay ready that long before it counts as available | `GET /livez`, readiness and liveness (from chart 0.5.5; `/healthz` before, which now answers 503 while a background task cannot work) |
 | Volumes | `data` (the PersistentVolumeClaim) at `/var/lib/syncd`; the `syncd-pki` Secret at `/etc/syncd/pki`; `/run/syncd` (memory) for the control socket; `/tmp`; with `engine.passwordKeyPassphrase`, its Secret at `/run/secrets/syncd-password-key`; `engine.extraVolumes` | `/var/lib/syncd/console` and `/tmp`, both `emptyDir`; `console.extraVolumes` |
 | Stopping | 90 s to finish its batch (`engine.terminationGracePeriodSeconds`) | |
 
@@ -1433,7 +1603,10 @@ set one, caps the CPUs the console shows the engine may use.
 ### Upgrades
 
 `helm upgrade` with the new chart version (see [Upgrade with Helm](install.md#helm-upgrade)).
-Back up first: the chart takes no backup. The engine migrates its store when it starts, if the new
+The newest published chart and images are 0.6.0, signed with cosign. 0.6.1's were not published:
+the tag's Container workflow failed building the amd64 binaries, so the job that pushes and signs
+was skipped. 0.6.1 changes only the host installer, so a Kubernetes install loses nothing by
+staying on chart 0.6.0. Back up first: the chart takes no backup. The engine migrates its store when it starts, if the new
 release changed its format, and the console migrates its database. `helm rollback` restores no data
 (see [Rollback](install.md#on-kubernetes)).
 
@@ -1513,6 +1686,7 @@ way. `console.newMasterKey` below is for the chart's own Secret.
 | `/var/lib/syncd/engine/ha/` | `swap.json` and `old-store`, only while an engine of a pair swaps a snapshot in; the received snapshot. From 0.5.0, on the active engine, `snapshots/` (the newest two snapshots as hard links to the store's files; `snapshot.tar.zst` only for a whole pull), and on the passive one `password-queue.replica` |
 | `/var/lib/syncd/console/` | The console's master key (`master.key`; `master.key.previous` when `syncdctl restore --from` replaced a different one), until first used `initial-admin-password`, and the Git sync clone (`git/`) |
 | `/var/lib/syncd/backups/` | Host-local backups, taken before every upgrade and on request. Root only |
+| `/var/lib/syncd/.install-unfinished` | Written by `syncdctl install` before it writes the configuration, and removed once the engine is registered in the console: while it is there, `syncdctl status` says the installation is not finished. New in 0.5.5 |
 | `/etc/syncd/pki/before-renewal-<time>/` | The certificates replaced by `syncdctl renew-certs`. Root only |
 | `/run/syncd/control.sock` | The engine's control socket, when `api.control_socket` is set. `/run/syncd` exists while the engine runs |
 | `/opt/syncd/current/share/config/console.env`, `engine.env` | The release's templates, with every setting commented (from 0.4.1, notes on lines of their own). Upgrades don't change yours |
@@ -1536,7 +1710,8 @@ configuration in the console by importing the running one, which copies them.
   quarantined, dead letters not growing, no password failures or drops, `backups:` not `FAILED`,
   `password keys: sealed with the passphrase`, no agent bound to no source, `license:` not in
   `WARNING`, `GRACE` or `BLOCKED`, and for a pair one engine `ACTIVE` with a recent snapshot and
-  the passive engine following the password queue. Alerts quiet.
+  the passive engine following the password queue. Alerts quiet. With a `dsml` connector, files
+  arriving in the outbox or inbox as expected, and no source `warning:` of a file not arrived.
 - **After publishing a configuration:** `syncd status` shows the new `configuration version`, and
   the log has no `did not start`. `syncd_rule_errors_total` is not climbing. A publication in
   report mode: `syncd held <publication> --reason report` lists what it would do.
@@ -1556,8 +1731,13 @@ configuration in the console by importing the running one, which copies them.
   control socket for off-host backups, and list the passive engine's certificate under
   `api.access.passwords` on both hosts of a pair; delete archives without a manifest left in the
   backup destination by failed backups.
+- **Once, after upgrading from 0.5.4:** point the console's monitoring at `/healthz`, and probes
+  or load balancers of your own at `/livez`; make sure scripts that send control commands retry on
+  `the engine is busy`, which they now meet more often.
 - **Before an upgrade:** read the release notes (store format changes, `SYNCD_HEALTH_TIMEOUT`,
-  what the new release refuses), and take an off-host backup.
+  what the new release refuses) and [Upgrading from 0.5.4 to 0.6.1](install.md#upgrading-from-054-to-061),
+  check the room in `/var/lib/syncd/backups` (about the store's size again), and take an off-host
+  backup.
 - **Regularly:** keep the master key and the password-key passphrase off the host, apart from the
   backups; practise a restore (`syncdctl restore --from`) on a test host. Rotate the password key
   before `SyncdPasswordKeyOld` asks (`syncd password rotate-key`): nothing rotates it on a
