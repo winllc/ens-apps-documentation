@@ -58,7 +58,7 @@ remains the source of truth; ReadyRoom copies some of them, as listed.
 |---|---|
 | The person | All of their own data, and **My data** to download it |
 | Their directory manager and their delegates | Their times, notes, check-in history (with administrators' corrections) and calendar, their working days, and their absence alerts. They decide the person's status requests, may record a status for them, and set their working days and start date |
-| Managers of a group the person belongs to (the group's directory owner, or an alternate manager set in ReadyRoom) | Their times, notes, check-in history (with administrators' corrections), calendar and working days. Group managers with the `MANAGER` role can run group reports, which include check-in times and statuses. Group managers do not decide requests |
+| Managers of a group the person belongs to (the group's directory owner, or an alternate manager set in ReadyRoom) | Their times, notes, check-in history (with administrators' corrections), calendar and working days, and their absence alerts (to see, not to answer). Group managers with the `MANAGER` role can run group reports, which include check-in times and statuses. Group managers do not decide requests |
 | Administrators (`ADMIN`) | Everything, including the audit log, any person's export, and erasure. They correct check-in records, except their own. **Administration → Privacy** lists who they are |
 | The `MANAGER` role on its own | Organization-wide counts on the metrics page, never names |
 | Coworkers | Name and directory details, and what `application.privacy.coworker-visibility` allows: by default whether the person is in and the day's status; with `status`, only in or out; with `none`, no status. Never times, notes or history |

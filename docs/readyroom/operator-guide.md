@@ -150,7 +150,7 @@ Useful messages:
 |---|---|
 | `MarkInactiveCron checked out N inactive user(s) of M locked, in Xms` | The auto check-out job ran and checked people out. |
 | `End SendAbsentNotificationsCron. Checked N user(s), sent M notification(s) in Xms` | One run of the absence-alert job (logged on working days). M counts the people alerted about, not people with nobody to alert. |
-| `no directory manager or delegate for <dn>; no absence alert sent` (`WARN`) | The person is late, but has no directory manager and no delegate, or none of them is found in the directory. Logged once a person a day; tried again at each run. Fix the reporting-line attributes or set a delegate. |
+| `no directory manager, delegate or group manager for <dn>; no absence alert sent` (`WARN`) | The person is late, but has no directory manager, no delegate and no group with a manager, or none of them is found in the directory. Logged once a person a day; tried again at each run. Fix the reporting-line attributes or set a delegate. |
 | `No absence alert about <dn> today: <reason>` | The person's directory entry is gone, or their account is disabled or expired, so nobody is alerted about them. |
 | `No absence alert about <dn> this run, tried again next run: <reason>` (`WARN`) | The directory could not be read to find who to alert. Nothing was saved; the next run tries again. |
 | `Notification <id> about <dn> sent to <email>` | An absence email was sent. |
