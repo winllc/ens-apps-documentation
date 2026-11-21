@@ -15,7 +15,7 @@ In syncd 0.4.1 the golden tests from Git gate every publish (the API, Git auto-p
 promotion, not only the editor), `syncd config promote` prints each engine's diff summary, and
 `syncd test` finds golden files one directory level down, as the console does.
 
-This page describes syncd 0.5.4 (tag `v0.5.4`, commit `14c6668`). 0.5.0 added:
+This page describes syncd 0.6.1 (tag `v0.6.1`, commit `59cbf19`). 0.5.0 added:
 
 - **Each version's own Git commit.** The console keeps the commit a version came from, and reads
   its golden tests and package files there, not at the branch head (see
@@ -50,6 +50,31 @@ This page describes syncd 0.5.4 (tag `v0.5.4`, commit `14c6668`). 0.5.0 added:
 may print two more warnings, about rules that read other entities and find nothing (see
 [Validation rules](configuration.md#validation-rules)); like the others, they do not fail it.
 
+0.5.5 fixes what a review of the engine and the console found. For this way of working:
+
+- **A version nobody can be told apart from** cannot be approved: a Git commit whose author's
+  address matches no account, or a version saved with a token whose creator is gone. Save it
+  again in the console, and have another person approve that version (see
+  [What a pass does](#what-a-pass-does)). A commit the console pushed back is the account's that
+  saved it, not its author line's.
+- **Publishing** reads a version's package files and modules at its own Git commit, never at the
+  branch head. A publish holds its turn on the engine with a lease in the console's database,
+  not a held connection; a second publish to the same engine is refused after two seconds
+  (`another publish to … is still under way`) instead of waiting up to 150.
+- **`syncd config diff`** shows a change of order among named items, which matters for a view's
+  `sources` (see [What changed](#what-changed-syncd-config-diff)).
+- **`syncd validate`** refuses an attribute listed twice in `precedence.attributes`, and warns
+  about a computed group's filter that reads an attribute nothing sets (see
+  [Validation rules](configuration.md#validation-rules)): check a pipeline's configurations with
+  the new binary before the upgrade.
+- **What an engine runs**, asked through the control API by a caller below the `configure` tier,
+  comes without the values its environment marks secret, and such a caller's simulations run
+  without them.
+
+0.6.0 adds the `dsml` connector type (see [Air-gapped synchronisation](air-gap.md)). A 0.5.5
+engine refuses a configuration with a `dsml` connector, so promote one only to an environment
+whose engines all run 0.6.0 or later. 0.6.1 changes nothing here.
+
 Rule packages, functions and lookup tables shared between configurations, fit the same way of
 working; see [Rule packages](#rule-packages) below and [Computed attributes and rules](rules.md).
 
@@ -79,7 +104,14 @@ expression.
   or `key`, ends in `_file`, `_key` or (since 0.5.0) `_token`, or is `assertion`, the HA lease's
   `url`, and a URL carrying `password=` or `pwd=`, shows as `<redacted> (changed)`. Not even where a secret lives is printed. Two Active
   Directory flags, `password_never_expires` and `must_change_password`, are rules, not secrets,
-  and are shown.
+  and are shown. A `dsml` connector's `sftp.private_key_passphrase` (0.6.0) matches none of these
+  rules, so where the passphrase lives (its `env` or `file`) is shown; its value never is.
+- **Order** (since 0.5.5). Named parts within an item are matched by name, so a change of
+  their order is shown as an entry of its own, `<path> (order)` with both orders: a view's
+  `sources (order)`, say, whose order ranks them for precedence. A part added or removed is not
+  also an order change.
+  A value that reads the same on both sides but is not (`4` and `"4"`, `["a, b"]` and
+  `["a", "b"]`) is shown exactly.
 
 | Exit code | Meaning |
 |---|---|
@@ -331,8 +363,12 @@ For each commit:
 
 With approval required, the version's author is, since 0.5.1, the account whose username is the
 commit author's e-mail address, or the part of it before the `@`: that person can't approve it. A
-commit's author is whatever the commit says, and a commit whose address matches no account has no
-one accountable, so protect the branch (required reviews, signed commits) where four eyes matters.
+commit's author is whatever the commit says, so protect the branch (required reviews, signed
+commits) where four eyes matters. Since 0.5.5 a commit whose address matches no account cannot be
+approved at all (`this version's author is not known to the console, so nobody can approve it as
+someone else`): save it again in the console, and have another person approve that version. 0.5.4
+let anyone approve it. A commit the console pushed back counts as the work of the account that
+saved it in the console.
 
 The commit counts as seen whatever happened to it, so a bad commit is reported once, not every
 minute.

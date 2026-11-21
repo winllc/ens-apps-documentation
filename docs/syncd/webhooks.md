@@ -6,8 +6,11 @@ PagerDuty. Webhooks are managed on **Integrations** (`/integrations`): administr
 test and delete them; auditors can look. Webhooks belong to the whole console: from 0.5.0, when
 roles can be limited to an environment or an engine, managing them takes `admin` on everything
 and seeing them `auditor` (or `admin`) on everything. They are for people with a session only: no
-[API token](api-reference.md#api-tokens) can see or change them. This page describes syncd 0.5.4
-(tag `v0.5.4`, commit `14c6668`).
+[API token](api-reference.md#api-tokens) can see or change them. This page describes syncd 0.6.1
+(tag `v0.6.1`, commit `59cbf19`). 0.5.5 sends a webhook's events in order across a retry, pins a
+host written with a trailing dot as written, refuses reserved address ranges, and has the status
+watcher wait for two failed looks before it says an engine is down. 0.6.0 and 0.6.1 change
+nothing for webhooks: no event is added.
 
 Nothing is sent until an administrator adds a webhook. The engine sends nothing itself: the
 console watches each registered engine and posts on its behalf.
@@ -58,7 +61,9 @@ The `engine.*`, `source.*`, `target.*`, `run.*`, `dead_letters.*`, `quarantine.*
 `hold.*`, `password.*`, `group.*`, `correlation.*`, `backup.*` and `ha.*` events, and
 `config.unpublished-running`, come from the console's **status watcher**. It reads every registered engine's status every ten seconds and raises an event
 on each change worth telling (edge-triggered), so one change of state sends one event, not one
-per poll. A rising count is told once per order of magnitude it crosses.
+per poll. A rising count is told once per order of magnitude it crosses. From 0.5.5 it reads up to
+eight engines at once, and an engine is down (`engine.down`) only after two looks in a row could
+not reach it, so one lost answer tells nobody.
 
 - What the watcher last saw is kept in the database (`webhook_engine_state`), so a console
   restart fires nothing again.
@@ -246,8 +251,18 @@ database post each delivery once.
   all puts that webhook's other waiting deliveries back to the same retry time, and the webhook is
   left alone for the rest of the pass. What a pass does not reach waits for the next one (every 30
   seconds, or at once when something new is raised).
-- A disabled webhook keeps its queue. Nothing is posted to it until it is enabled again.
-- Deliveries are posted in the order they were raised, per webhook.
+- A disabled webhook keeps its queue. Nothing is posted to it until it is enabled again. From
+  0.5.5 deliveries waiting for a disabled webhook that were raised more than 14 days ago are
+  removed.
+- Deliveries are posted in the order they were raised, per webhook. From 0.5.5 that holds across a
+  retry too: while one delivery waits to be tried again, the ones raised after it for the same
+  webhook wait with it, so a receiver never gets a `resolve` before its `trigger`, or a `.up`
+  before its `.down`. A delivery given up (`failed`) no longer holds the ones after it. Other
+  webhooks are not held up.
+- The sender is started again if it stops. A `CONSOLE_WEBHOOKS_CA_FILE` that does not load no
+  longer stops webhooks until a restart (before 0.5.5): events queue, the file is read again every
+  minute, and the console's `/healthz` says `webhook sender: its TLS configuration does not load:
+  ...` meanwhile.
 
 ### The delivery log
 
@@ -269,10 +284,16 @@ The console must not become a way into its own network, so a webhook's address i
     - unspecified (including 0.0.0.0/8), multicast or broadcast addresses;
     - an IPv6 address carrying one of those (IPv4-compatible, 6to4, the NAT64 prefix);
     - Teredo (2001::/32), the local-use NAT64 prefix (64:ff9b:1::/48), and IPv4-mapped or
-      translated (::ffff:0:0/96) addresses.
+      translated (::ffff:0:0/96) addresses;
+    - from 0.5.5, reserved addresses: 192.0.0.0/24 (protocol assignments), 198.18.0.0/15
+      (benchmarking, often routed inside a network) and 240.0.0.0/4, and an IPv6 address carrying
+      one of them (`a reserved address, which webhooks may never go to`).
 - The post goes to the address that was checked, with TLS SNI and certificate host-name
   verification against the URL's host. A name that later resolves somewhere internal (DNS
-  rebinding) is refused at the send.
+  rebinding) is refused at the send. From 0.5.5 a host written with a trailing dot
+  (`relay.example.gov.`) is pinned as written: the post goes to the name without the dot, at the
+  address checked for it, where before the name with the dot was resolved again when sent, past
+  the addresses that were checked.
 - The receiver's certificate must chain to the public roots built into the console (the Mozilla
   set, not the host's trust store), or to a CA in `CONSOLE_WEBHOOKS_CA_FILE`.
 - **Private addresses** (10/8, 172.16/12, 192.168/16, 100.64/10, fc00::/7) are governed by
@@ -287,7 +308,7 @@ The console must not become a way into its own network, so a webhook's address i
 - **A receiver inside your network**, such as a chat bridge or a ticketing relay, is let in by
   `CONSOLE_WEBHOOKS_ALLOWED_HOSTS`: a host it names, or addresses all inside a CIDR range it
   lists, may be private whatever the setting above says. Loopback, link-local and the metadata
-  addresses stay refused whatever is listed.
+  addresses, and from 0.5.5 reserved ones, stay refused whatever is listed.
 - **Narrow it further** with `CONSOLE_WEBHOOKS_ALLOWED_HOSTS` (names, `*.suffix`, CIDR ranges,
   comma-separated): once set, a webhook may go only to the hosts it lists.
 - **Webhooks connect directly.** A proxy from the console's environment (`HTTPS_PROXY`,

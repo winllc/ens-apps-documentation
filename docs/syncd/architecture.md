@@ -5,7 +5,8 @@ or run on Kubernetes from their container images with the Helm chart (see
 [Running on Kubernetes](#running-on-kubernetes)):
 
 - **`syncd`**, the engine: it reads sources, merges their records into views, and writes
-  the results to LDAP directories, SCIM 2.0 applications and Entra ID. It keeps its state in
+  the results to LDAP directories, SCIM 2.0 applications and Entra ID, and from 0.6.0 to DSML
+  files that another engine reads across an air gap. It keeps its state in
   an embedded RocksDB store. It also delivers password changes, backs itself up, and can run
   as one of an [active/passive pair](#high-availability).
 - **`syncd-console`**, the web console: accounts and their scoped roles, sign-in (local,
@@ -26,6 +27,7 @@ flowchart LR
         DB[("PostgreSQL · MySQL / MariaDB<br/>SQL Server · MongoDB")]
         DIR[("LDAP directories<br/>Active Directory")]
         CSV[("CSV / flat files<br/>(an inbox)")]
+        DIN[("DSML files<br/>(an inbox, or SFTP)")]
         ENS[("Entra ID<br/>(delta queries)")]
         HR[("HR and REST services<br/>Workday · SuccessFactors · UKG Pro")]
         DBZ["Debezium Server sidecar<br/>(HTTP sink)"]
@@ -35,7 +37,7 @@ flowchart LR
         ING["Source tasks<br/>scrape · stream · delta"]
         LOOP["Run loop<br/>batches, commits, timers,<br/>long operations"]
         PIPE["Pipeline<br/>staging → correlation → merge →<br/>computed attributes → quality →<br/>export planning → change safety"]
-        WR["Target writers<br/>LDAP · SCIM · Entra (Graph)"]
+        WR["Target writers<br/>LDAP · SCIM · Entra (Graph) · DSML"]
         PW["Password delivery<br/>(HPKE envelopes)"]
         STORE[("RocksDB store<br/>data_dir")]
         API["Control API<br/>gRPC, mTLS or loopback,<br/>access tiers"]
@@ -49,6 +51,8 @@ flowchart LR
         PG[("PostgreSQL<br/>accounts, versions, audit trail,<br/>tokens, webhooks, HA lease")]
     end
     TGT[("Targets<br/>AD · OpenLDAP · 389 DS · Ping/UnboundID<br/>SCIM 2.0 apps · Entra ID")]
+    DOUT[("DSML files<br/>(an outbox, or SFTP)")]
+    GAP["Across the air gap<br/>(diode, appliance, media)<br/>to another engine's inbox"]
     AG["syncd-capture agents<br/>(OpenLDAP, 389 DS hooks)"]
     VLT[("Secret stores<br/>Vault · AWS · Azure")]
     NGX["nginx or an ingress (TLS)"]
@@ -62,11 +66,13 @@ flowchart LR
     DB --> ING
     DIR --> ING
     CSV --> ING
+    DIN --> ING
     ENS --> ING
     HR -->|HTTPS| ING
     DBZ -->|"HTTP POST"| ING
     JDBC -->|gRPC| ING
     ING --> LOOP --> PIPE --> WR -->|"LDAPS / StartTLS · HTTPS"| TGT
+    WR -->|"a file per interval"| DOUT -.-> GAP
     PW -->|"password writes"| TGT
     LOOP <--> STORE
     PIPE <--> STORE
@@ -91,13 +97,13 @@ flowchart LR
 
 | Component | Responsibility | Source |
 |---|---|---|
-| Source connectors | Read objects from a source in full (`scrape`), as a stream of changes (`stream`: PostgreSQL logical replication, MySQL binlog, SQL Server change data capture, MongoDB change streams, LDAP syncrepl, AD DirSync, LDAP changelogs), or by a watermark (`delta`). Full reads run on an interval or a cron `schedule`. A CSV file is read in full, on a schedule or when it changes; Entra ID users and groups are read through Graph delta queries. From 0.5.0 a `rest` source reads a JSON or OData API page by page, with presets for Workday, SAP SuccessFactors and UKG Pro (tested against fakes of those services only). Streaming sources send a checkpoint at each transaction boundary. A database connect (TCP, TLS and login) fails after 10 seconds without an answer, so a hung server restarts the source rather than stalling it | `engine/crates/connectors` |
+| Source connectors | Read objects from a source in full (`scrape`), as a stream of changes (`stream`: PostgreSQL logical replication, MySQL binlog, SQL Server change data capture, MongoDB change streams, LDAP syncrepl, AD DirSync, LDAP changelogs), or by a watermark (`delta`). Full reads run on an interval or a cron `schedule`. A CSV file is read in full, on a schedule or when it changes; Entra ID users and groups are read through Graph delta queries. From 0.5.0 a `rest` source reads a JSON or OData API page by page, with presets for Workday, SAP SuccessFactors and UKG Pro (tested against fakes of those services only). From 0.6.0 a `dsml` source reads DSML v2 files from a directory or an SFTP server, in the order they were written, each file one transaction checkpointed at its name; a file of changes is applied to the entries the source holds, and a snapshot is a full read. Streaming sources send a checkpoint at each transaction boundary. A database connect (TCP, TLS and login) fails after 10 seconds without an answer, so a hung server restarts the source rather than stalling it | `engine/crates/connectors` |
 | Wire decoders | Decoders of what sources send (`pgoutput`, DirSync, syncrepl), fuzzed in CI | `engine/crates/wire` |
 | Run loop | One loop owns the engine. It batches changes from every source, plans and applies exports, fires the persisted timers, and commits each batch with its source checkpoints. It also runs the long operations and the commands that come from the control API | `engine/bin/syncd/src/run.rs` |
 | Pipeline | Staging, correlation, precedence merge, computed attributes and rule packages, data-quality checks, groups and their lifecycle, export planning, change safety (windows, thresholds, canaries, report mode), leaver stages, drift decisions | `engine/crates/engine` |
 | Rules | The CEL rule compiler, function library, rule packages and computed-attribute transforms. From 0.5.0, custom functions in WebAssembly carried in rule packages, run by the wasmi interpreter with fuel and memory limits and no host functions. The console's previews link the same crate | `engine/crates/rules` (`wasm.rs`); the value encoding in `engine/crates/wasm-abi` |
 | Store | RocksDB column families for staging, entities, links, exported state, checkpoints, the dead-letter queue, history, held changes, timers, the password queue and the rest (see [The store](#the-store)) | `engine/crates/store` |
-| Target writers | Apply planned operations to a target: LDAP (parent entries first, a bounded number of entities in flight per connection), SCIM 2.0 (`POST`, `PATCH` or `PUT` with ETags, paced and waiting out `429`) and Entra ID (Microsoft Graph, members in `$batch`, licences, app roles). Every batch checks the HA lease first | `engine/crates/connectors` (`ldap.rs`, `scim.rs`, `entra.rs`, `target.rs`) |
+| Target writers | Apply planned operations to a target: LDAP (parent entries first, a bounded number of entities in flight per connection), SCIM 2.0 (`POST`, `PATCH` or `PUT` with ETags, paced and waiting out `429`) and Entra ID (Microsoft Graph, members in `$batch`, licences, app roles); from 0.6.0 DSML files (the operations kept in the store, then written as one DSML v2 `batchRequest` per interval, with a `.sha256`, for another engine across an air gap). Every batch checks the HA lease first | `engine/crates/connectors` (`ldap.rs`, `scim.rs`, `entra.rs`, `target.rs`, `dsml/`) |
 | Password synchronisation | The engine's password keys (from 0.5.0 a ring, rotated with an overlap), HPKE envelopes, the agent CA, enrollment and agents' bindings to sources, the self-service policy, and delivery of captured changes and initial passwords to targets | `engine/crates/password`, `engine/bin/syncd` |
 | Capture agent | From 0.5.0, `syncd-capture`: takes changes from a directory server's hook, seals each at once, spools it, and submits it over mutual TLS; the OpenLDAP overlay, the 389 Directory Server plugin and the Windows password filter as source | `engine/bin/syncd-capture`, `capture/` |
 | Control API | gRPC service `syncd.v1.EngineControl`: status, the status stream, runs, approvals, held changes, dead letters, quarantine, data quality, configuration, previews, the object explorer, lineage, reports, correlation, passwords, unmanaged entries, the license, backups and HA snapshots. From 0.5.0 every call has an access tier, checked in one place before its handler, and a configuration can be required to carry the console's signature | `engine/crates/api` (`access.rs`, `signing.rs`), `proto/syncd/v1/engine.proto` |
@@ -185,7 +191,13 @@ flowchart LR
 9. **Target writer.** Each entity's operations are applied in order. An LDAP target takes
    parent entries first, and up to `max_inflight` entities (32 by default) at once over one
    multiplexed connection. A successful export updates the exported state; a failed one goes
-   to the dead-letter queue.
+   to the dead-letter queue. A `dsml` target (from 0.6.0) writes no entry: each export is kept
+   in the store, in order, and counts as exported once it is there; at the end of the interval
+   (`batch_secs`, 15 minutes by default) the waiting exports are written as one file, and taken
+   out of the store in the commit that records the file's sequence number. On the far side of
+   the air gap, another engine's `dsml` source reads the files and that engine publishes what
+   they carry. See [Air-gapped synchronisation](air-gap.md) and
+   [Connectors](connectors.md#dsml-files-air-gap).
 
 The CPU-bound, read-only stages (recomputing entities, planning exports) run on
 `engine.shards` worker threads (one per CPU by default). The run loop's own thread applies
@@ -373,7 +385,7 @@ install), with LZ4 compression and a shared block cache of `engine.cache_mb`.
 
 | Column family | Key | Value |
 |---|---|---|
-| `meta` | `attr/<id>`, `source/<id>`, settings | Attribute and source registries, the store format, the running configuration version, full-sync progress, when the last scheduled backup succeeded; from 0.5.0 also the installation id and the license ledger, each publication's unmanaged-entries result and adopted entries, the password queue's position (for an HA pair's follower), and the data-quality 24-hour trend |
+| `meta` | `attr/<id>`, `source/<id>`, settings | Attribute and source registries, the store format, the running configuration version, full-sync progress, when the last scheduled backup succeeded; from 0.5.0 also the installation id and the license ledger, each publication's unmanaged-entries result and adopted entries, the password queue's position (for an HA pair's follower), and the data-quality 24-hour trend; from 0.6.0 each `dsml` target's last file sequence number and the exports waiting for its next file (`setting/dsml/<connector>/sequence` and `.../spool/`) |
 | `staging/<source id>` | anchor | Staged record |
 | `entities/<view>` | entity id | Merged entity |
 | `links/<view>` | source id and anchor | The entity of the view the source record belongs to. From 0.5.0 (format 2), one per view |
@@ -413,8 +425,10 @@ one. Neither 0.4.0 nor 0.4.1 changes the format (1). 0.4.0 adds the column famil
 link and a pin for each view a source record belongs to (`links/<view>`, `pinned_joins/<view>`),
 rebuilt in one pass over every entity from the records each lists (300,000 entities in 1.4 s in
 the release notes' measurement). 0.4.1 refuses a format-2 store. 0.5.1 keeps format 2 and adds
-`unique_values/<view>`, which 0.5.0 opens and ignores. 0.5.2 and 0.5.4 keep format 2 and add
-nothing. See
+`unique_values/<view>`, which 0.5.0 opens and ignores. 0.5.2, 0.5.4 and 0.5.5 keep format 2 and
+add nothing. 0.6.0 and 0.6.1 keep format 2 too: a `dsml` target keeps its sequence number and its
+waiting exports as settings in `meta`, beside the data, which 0.5.5 ignores (run `syncd reconcile`
+before rolling such an engine back, to write out what waits). See
 [Installation](install.md#store-format) for upgrades and rollbacks.
 
 History keeps at most `engine.history.keep_per_entity` entries per entity (100 by default) for
@@ -546,12 +560,20 @@ From 0.5.0:
 - The writer converges on the common drift cases instead of failing: an entry that already
   exists is updated in place, a delete of a missing entry succeeds, and a value-level modify
   that no longer fits the live entry is retried as a replace.
+- A `dsml` target (from 0.6.0) that writes a file per interval sends nothing to the queue: a
+  file that cannot be written (the directory gone, a full disk, the SFTP server down) leaves its
+  exports in the store, is tried again within a minute, and the target shows as down meanwhile.
+  No sequence number is used by a failed write. With `batch_secs: 0` (a file per batch), a batch
+  that cannot be written fails its exports, as on other targets.
 
 ## Reconciliation and drift
 
 - **Reconciliation** compares every entity with its exported state and fixes the target
   where they differ. It works from the store's record of what was exported, not from the
-  target.
+  target. A full reconciliation also writes out what waits for a `dsml` target and, with
+  `full_snapshots: true`, a snapshot of everything exported to it, which the far side reads as a
+  full read (from 0.6.0). A `dsml` target is never read back: drift checks, unmanaged entries,
+  writeback and adoption are refused on its publications.
 - **Drift detection** (a publication's `drift` section, every `interval_secs` or with
   `syncd check-drift`) reads each exported entry back from the target and compares the
   attributes the engine manages with what it last wrote. Per attribute, the policy is `flag`
@@ -755,7 +777,9 @@ It serves:
 
 - the REST API at `/api/v1`, the audit pull API at `/api/audit/events`, and the OpenAPI
   document at `/api/openapi.json` (see [API reference](api-reference.md));
-- `GET /healthz`, which answers `ok`;
+- `GET /healthz`, which answers `ok`, and from 0.5.5 `503` naming a background task that keeps
+  stopping or cannot do its work; and from 0.5.5 `GET /livez`, which answers `ok` while the
+  console serves (the Helm chart's probes use it);
 - the UI's static files, with `index.html` for the UI's own routes, including the public
   self-service password page (`/password`).
 
@@ -763,13 +787,15 @@ It serves:
 
 The console process also runs these tasks. Each keeps its state in the database, so a restart
 resumes where it was, and several consoles on one database share the work without doing it twice
-(rows claimed with `FOR UPDATE SKIP LOCKED`, or an advisory lock):
+(rows claimed with `FOR UPDATE SKIP LOCKED`, an advisory lock, or from 0.5.5 a lease in the
+`leases` table, which holds no database connection). From 0.5.5 a task that ends or panics is
+started again, after a wait doubling from a second to a minute, and `/healthz` names it meanwhile:
 
 | Task | Does | See |
 |---|---|---|
 | Status watcher | Reads every engine's status every 10 seconds; raises webhook events on each change (from 0.4.1 it tells runs by the engine's count of runs ended, so none is missed between two reads); keeps the data-quality daily rollup (`quality_daily`). From 0.5.0 it also compares the configuration an engine runs with the one last published (`config.unpublished-running`), gives engines the license and its assessment, adds up the managed identities, and raises `license.state-changed`, `group.review-due` (and the reviewers' mail) and `quality.errors` | [Webhooks](webhooks.md), [syncd licensing](licensing.md) |
 | Webhook sender | Posts queued deliveries, signed, with retries for a day | [Webhooks](webhooks.md) |
-| Audit outputs | One sender per output (stdout, file, Splunk HEC, syslog), each from its own cursor; the daily retention prune | [Audit trail](#the-audit-trail) |
+| Audit outputs | One sender per output (stdout, file, Splunk HEC, syslog), each from its own cursor; from 0.5.5 one console at a time sends each output, holding its lease. The daily retention prune | [Audit trail](#the-audit-trail) |
 | Git sync | Polls the repository, turns new commits into configuration versions, pushes console versions back | [Configuration as code](#configuration-as-code) |
 | Scheduled reports and mail | Runs reports that are due, writes them to a share or queues them in the mail outbox, and sends the mail over SMTP with STARTTLS | [Reports, lineage and data quality](reports-and-data-quality.md) |
 | Housekeeping | Deletes ended sessions and old single sign-on requests every ten minutes; logs the audit chain's head every hour | |
@@ -778,13 +804,15 @@ resumes where it was, and several consoles on one database share the work withou
 
 PostgreSQL 13 or newer. The console applies its migrations (`console/server/migrations`) every
 time it starts. 0.4.0 takes the schema from 8 to 17; 0.4.1 keeps it at 17, so a rollback to
-0.4.0 keeps the database. 0.5.0 takes it from 17 to 29 (migrations 0018 to 0029), and 0.5.1 to 30
-(`0030_review_fixes`), so a rollback to the previous release restores the database backed up
-before the upgrade: a console does not start on a database with migrations it does not know.
+0.4.0 keeps the database. 0.5.0 takes it from 17 to 29 (migrations 0018 to 0029), 0.5.1 to 30
+(`0030_review_fixes`), and 0.5.5 to 33 (`0031_leases`, `0032_engine_configs_published`,
+`0033_one_time_password_expiry`), so a rollback to the previous release restores the database
+backed up before the upgrade: a console does not start on a database with migrations it does not
+know. 0.6.0 and 0.6.1 keep it at 33.
 
 | Table | Holds | Migration |
 |---|---|---|
-| `users` | Accounts: username, display name, password hash (PHC string, or none for single sign-on accounts), forced change, disabled, failed sign-ins, lock time, OIDC subject, break-glass flag; from 0.5.0 the last sign-in (when, how, from where) and the sign-in attempts refused since. Its `role` column is dropped in 0.5.0 | `0001_init`, `0004_oidc`, `0005_local_sign_in`, `0019_sign_in_policy`, `0021_role_assignments`, `0029_motd_last_sign_in` |
+| `users` | Accounts: username, display name, password hash (PHC string, or none for single sign-on accounts), forced change, disabled, failed sign-ins, lock time, OIDC subject, break-glass flag; from 0.5.0 the last sign-in (when, how, from where) and the sign-in attempts refused since; from 0.5.5 until when a one-time password an administrator issued is good (`one_time_until`). Its `role` column is dropped in 0.5.0 | `0001_init`, `0004_oidc`, `0005_local_sign_in`, `0019_sign_in_policy`, `0021_role_assignments`, `0029_motd_last_sign_in`, `0033_one_time_password_expiry` |
 | `role_assignments` | From 0.5.0: each account's roles, each on everything, one environment or one engine (by name). The upgrade gives every account its former role on everything | `0021_role_assignments` |
 | `sessions` | The SHA-256 of each session token, its account, last activity and end; from 0.5.0 its sign-in method, when the notice was accepted, and the sign-in before the one that started it (the dashboard's "previous sign-in") | `0001_init`, `0019_sign_in_policy`, `0029_motd_last_sign_in` |
 | `password_history`, `sign_in_consents` | From 0.5.0: earlier password hashes, for the sign-in policy's history rule; the notice-and-consent acceptances | `0019_sign_in_policy` |
@@ -792,9 +820,10 @@ before the upgrade: a console does not start on a database with migrations it do
 | `audit_log` | The append-only, hash-chained audit trail in `ens-audit/1`: `seq`, the event's fields, `prev_hash` and `hash`; from 0.5.0 the environment and engine an event concerns, and indexes for the audit page's filters. Triggers refuse `UPDATE`, `DELETE` and `TRUNCATE`, except the retention prune | `0001_init`, `0009_audit_ens`, `0022_audit_scope`, `0026_audit_filters` |
 | `audit_output_cursor` | How far each audit output has delivered, and its last error | `0009_audit_ens` |
 | `engines` | Registered engines: name, `host:port` or `unix:<socket path>`, the server CA and client certificate, the client key sealed with the master key, and the environment | `0002_engines`, `0013_environments` |
-| `engine_configs` | Configuration versions per engine: YAML, comment, author, source (`console`, `git`, `promotion`), publication, approval, pending publish, ticket, note and the hook's decision; from 0.5.0 the SHA-256 of the text last sent, and the Git commit the version came from; from 0.5.1 the person accountable for a version saved through an API token or from Git (the token's creator, or the commit author's account). A trigger refuses changes to a saved version; constraints refuse an approval by the author and, from 0.5.1, by the accountable person; another trigger makes an approval final | `0003_engine_configs`, `0006_config_approval`, `0007_publish_pending`, `0012_publish_hook`, `0013_environments`, `0018_config_signing`, `0028_config_git_commit`, `0030_review_fixes` |
+| `engine_configs` | Configuration versions per engine: YAML, comment, author, source (`console`, `git`, `promotion`), publication, approval, pending publish, ticket, note and the hook's decision; from 0.5.0 the SHA-256 of the text last sent, and the Git commit the version came from; from 0.5.1 the person accountable for a version saved through an API token or from Git (the token's creator, or the commit author's account). A trigger refuses changes to a saved version; constraints refuse an approval by the author and, from 0.5.1, by the accountable person; another trigger makes an approval final. From 0.5.5 an index finds each engine's latest published version without reading its history | `0003_engine_configs`, `0006_config_approval`, `0007_publish_pending`, `0012_publish_hook`, `0013_environments`, `0018_config_signing`, `0028_config_git_commit`, `0030_review_fixes`, `0032_engine_configs_published` |
 | `engine_sent_secrets` | From 0.5.1: the secret environment values sent to each engine with its publishes, sealed with the master key, so the console masks them in what the engine reports running | `0030_review_fixes` |
 | `config_git_pushes` | From 0.5.1: the commits Git push-back made, which a later sync does not take in again for their engine, nor publish automatically | `0030_review_fixes` |
+| `leases` | From 0.5.5: work one console of several does at a time (a publish to an engine, sending an audit output), claimed until a time and given back, without holding a database connection; a claim not given back expires | `0031_leases` |
 | `config_signing_keys` | From 0.5.0: the console's configuration signing key (ECDSA P-256), the private half sealed with the master key, and a key staged for a rotation | `0018_config_signing` |
 | `oidc_logins` | Single sign-on requests in flight: state, nonce, PKCE verifier, where to go next | `0004_oidc` |
 | `settings` | One row: who may sign in locally, configuration approval, the banners, the installation id of the audit trail, and from 0.5.0 the message of the day (its text, who set it and when) | `0005_local_sign_in`, `0006_config_approval`, `0008_banners`, `0009_audit_ens`, `0029_motd_last_sign_in` |
@@ -895,7 +924,8 @@ See [Configuration as code](config-as-code.md).
 Every event is one row of `audit_log` and one JSON object in the ENS family's format,
 `ens-audit/1`, hash-chained with a gapless `seq`. It is stored first; then one sender per
 output delivers it from its own cursor, at least once and in order, so an output that is down
-holds up nothing and loses nothing.
+holds up nothing and loses nothing. From 0.5.5 one console at a time sends each output, and an
+event an output cannot take at all is passed over with an alert rather than holding it up.
 
 ```mermaid
 flowchart LR
@@ -909,14 +939,17 @@ flowchart LR
 ```
 
 Events from before 0.4.0 keep their earlier chain; the first new event continues its head.
-`ENS_AUDIT_RETENTION_DAYS` prunes only what every enabled output has delivered. See
+`ENS_AUDIT_RETENTION_DAYS` prunes only what every enabled output has delivered, and from 0.5.5
+only a prefix of the chain. See
 [Security](security.md#audit-trail) and [Audit logging](../audit-logging.md).
 
 ## Running on Kubernetes
 
 The `Container` workflow publishes two container images and a Helm chart when a release is
-tagged (`v*`), once its kind tests have passed; 0.5.4's are published (and 0.5.2's, which had
-no packages). You can also build the
+tagged (`v*`), once its kind tests have passed. The newest published are 0.6.0's (and 0.5.5's,
+0.5.4's and 0.5.2's before them; 0.5.2 had no packages). 0.6.1's were not: the tag's Container
+workflow failed building the amd64 binaries, so the job that pushes and signs was skipped. 0.6.1
+changes only the host installer, so on Kubernetes run 0.6.0. You can also build the
 images from the source (`docker build -f deploy/container/Dockerfile --target engine`, or
 `--target console`; `--build-arg FEATURES=syncd/fips,syncd-console/fips` for the FIPS variant)
 and install the chart from `deploy/helm/syncd`.
@@ -968,13 +1001,15 @@ or `<release>-…` when the release name contains `syncd`.
 | Extra volumes | `engine.extraVolumes` and `console.extraVolumes` with their mounts: a CSV inbox, a CA bundle |
 
 Probes: the engine's startup and readiness probes connect to the control API port, and its
-liveness probe fetches `/metrics`; the console's probes fetch `/healthz`. The PostgreSQL server
+liveness probe fetches `/metrics`; the console's probes fetch `/livez` from chart 0.5.5
+(`/healthz` before), so a background task that stops does not restart the pod. The PostgreSQL server
 for the console is yours; the chart does not bundle one. Upgrades and rollbacks are `helm
 upgrade` and `helm rollback`; a store or database that the newer release migrated must be
 restored from backups before rolling back. From 0.5.0 a `kind-ha` CI job installs a pair and
 fails it over, once with the PostgreSQL lease and once with a Kubernetes Lease; with the chart's
-install and upgrade in kind and the rendering checks of its values, it passed in the run that
-published 0.5.4. No cloud cluster was used. See
+install and upgrade in kind and the rendering checks of its values, it passed in the runs that
+published 0.5.4, 0.5.5 and 0.6.0 (in 0.6.1's run it did not run, the build having failed before
+it). No cloud cluster was used. See
 [Installation](install.md#install-with-helm) and
 [Security](security.md#container-images-and-the-helm-chart).
 
@@ -987,6 +1022,7 @@ published 0.5.4. No cloud cluster was used. See
 | Rules | CEL syntax (parsed by the `cel` crate), compiled into closures by syncd's own compiler; from 0.5.0 custom functions in WebAssembly on `wasmi` 2, an interpreter (Wasmtime's JIT cannot run under the units' `MemoryDenyWriteExecute=yes`), with no host functions |
 | Database sources | `tokio-postgres` and `pgwire-replication` (PostgreSQL, with syncd's own `pgoutput` decoder), `mysql_async` (MySQL and MariaDB binlog), `tiberius` (SQL Server), the MongoDB Rust driver; Debezium Server over HTTP; a JDBC bridge in Java 17 over gRPC for other databases |
 | File sources | The `csv` crate, with syncd's own delimiter sniffing and encodings (UTF-8, Latin-1, UTF-16) |
+| DSML files | From 0.6.0, `quick-xml` 0.42 (a streaming reader, so a snapshot of a large directory is never held as a tree) with syncd's own DSML v2 reader and writer, and `russh` 0.65 with `russh-sftp` for SFTP (built without RSA) |
 | Directory sources and targets | `ldap3` 0.12 with syncd's DirSync and syncrepl controls; target profiles for Active Directory, OpenLDAP, 389 Directory Server and Ping/UnboundID |
 | SaaS targets and sources | SCIM 2.0 and Microsoft Graph (Entra ID) clients of syncd's own on `reqwest`, with bearer, basic or OAuth 2.0 client-credentials authentication; from 0.5.0 also `private_key_jwt` for SCIM, a certificate, a federated token or a managed identity for Entra ID, and a REST/OData source reader (Workday, SuccessFactors, UKG Pro) |
 | Secrets | From 0.5.0, HashiCorp Vault, AWS Secrets Manager and Azure Key Vault, and AWS KMS, Azure Key Vault keys and Vault transit, through small HTTPS clients of syncd's own (no vendor SDK) |
@@ -998,10 +1034,10 @@ published 0.5.4. No cloud cluster was used. See
 | Metrics | Prometheus text format from the engine's own HTTP listener; alert rules shipped |
 | Console server | Rust, Axum 0.8, `sqlx` 0.8 on PostgreSQL 13+, `tokio-rustls` (its own HTTPS), `utoipa` (OpenAPI), `jsonwebtoken` and `reqwest` (OpenID Connect, webhooks, Splunk), `argon2`; its own SMTP client (from 0.5.0 also SMTPS and AUTH LOGIN); the `git` binary for Git sync. From 0.5.0, SAML 2.0 with its own XML reader and exclusive canonicalization (no XML library; aws-lc for the signatures), and X.509 path validation with OCSP and CRLs |
 | Console UI | React 19, TypeScript, Vite, TanStack Router and Query, Tailwind CSS 4, Monaco editor, React Flow (`@xyflow/react`), `openapi-fetch` with types generated from the OpenAPI document |
-| Packaging | systemd units; `.tar.gz` bundle (x86_64 and aarch64, and FIPS bundles for both from 0.5.0), `.deb` and `.rpm` (nfpm), RHEL 8 `.rpm`, and from 0.5.0 the `syncd-capture` packages and signed apt and dnf repositories on GitHub Pages (not published yet: 0.5.0 and 0.5.1 were built without the signing key); the files are delivered through the ENS licensing portal's **Downloads** page; `syncdctl` (bash) |
+| Packaging | systemd units; `.tar.gz` bundle (x86_64 and aarch64, and FIPS bundles for both from 0.5.0), `.deb` and `.rpm` (nfpm), RHEL 8 `.rpm`, and from 0.5.0 the `syncd-capture` packages and signed apt and dnf repositories on GitHub Pages (not published yet: every release so far, 0.6.1 included, was built without the signing key); the files are delivered through the ENS licensing portal's **Downloads** page; `syncdctl` (bash) |
 | Containers | Images on `gcr.io/distroless/cc-debian12:nonroot` pinned by digest (`linux/amd64`, `linux/arm64`, and from 0.5.0 FIPS for both), built from `rust:1.97.0-bookworm` and `node:22-bookworm-slim`; a Helm 3 chart (`deploy/helm/syncd`), published to GHCR as an OCI chart |
 | Front proxy | Optional: the console serves HTTPS itself, or behind the shipped nginx configuration or a Kubernetes ingress |
-| CI | GitHub Actions: fmt and clippy, tests, the console UI with a Playwright smoke test and a Keycloak sign-in, end-to-end suites per source and target (with fake SCIM, Graph and S3 services), password synchronisation, HA and backup, golden-file tests, benchmarks, fuzzing, the FIPS build, `cargo-deny`, `cargo-audit`, CycloneDX SBOMs, package lifecycle tests, Trivy scans of the images, and the chart installed, upgraded and uninstalled in a kind cluster. A release signs `SHA256SUMS` with GPG when the signing key is set (it was not for 0.5.0 and 0.5.1) and the images and chart with cosign. From 0.5.0: axe-core accessibility checks in the browser tests, an HA pair in kind (`kind-ha`), and nightly jobs against real systems (Entra ID, hosted SCIM applications, PingDirectory, Windows Server AD, the HR services), each skipped until its credentials are configured (none is yet: only the open-source SCIM server runs every night) |
+| CI | GitHub Actions: fmt and clippy, tests, the console UI with a Playwright smoke test and a Keycloak sign-in, end-to-end suites per source and target (with fake SCIM, Graph and S3 services), password synchronisation, HA and backup, golden-file tests, benchmarks, fuzzing, the FIPS build, `cargo-deny`, `cargo-audit` (from 0.5.5 the advisory checks in a workflow of their own, daily and on dependency changes), CycloneDX SBOMs, package lifecycle tests, Trivy scans of the images, and the chart installed, upgraded and uninstalled in a kind cluster. A release signs `SHA256SUMS` with GPG when the signing key is set (it has not been for any release yet; from 0.5.5 the release job refuses to publish without it unless `ALLOW_UNSIGNED_RELEASE` is set) and the images and chart with cosign. From 0.6.0 the DSML files the writer makes are validated against the OASIS `DSMLv2.xsd`, and an end-to-end test runs two engines across SFTP (OpenSSH 9.6) and OpenLDAP 2.6. From 0.5.0: axe-core accessibility checks in the browser tests, an HA pair in kind (`kind-ha`), and nightly jobs against real systems (Entra ID, hosted SCIM applications, PingDirectory, Windows Server AD, the HR services), each skipped until its credentials are configured (none is yet: only the open-source SCIM server runs every night) |
 
 ## Code layout
 
@@ -1024,7 +1060,7 @@ the source to install or run syncd: install it from a release, as described in
 | `engine/crates/secrets` | From 0.5.0, the Vault, AWS and Azure secret references and KMS-wrapped keys, and doubles of those services for the tests |
 | `engine/crates/store` | The RocksDB store and its format migrations |
 | `engine/crates/engine` | Correlation and suggestions, merge, computed attributes, data quality, groups and their lifecycle, export planning, change safety, timers, leaver stages, drift, writeback |
-| `engine/crates/connectors` | Source connectors (CSV, Entra ID and, from 0.5.0, REST and the HR presets included), the LDAP, SCIM and Entra ID targets, connector probes, the unmanaged-entries search |
+| `engine/crates/connectors` | Source connectors (CSV, Entra ID and, from 0.5.0, REST and the HR presets included), the LDAP, SCIM and Entra ID targets, from 0.6.0 the `dsml` source and target and their file access (`dsml/`, local and SFTP), connector probes, the unmanaged-entries search |
 | `engine/crates/ha` | The HA lease (PostgreSQL, file, and from 0.5.0 Kubernetes), the fence, the controller, snapshots (incremental from 0.5.0) |
 | `engine/crates/password` | The password keys (from 0.5.0 a ring), HPKE, envelopes, the agent CA and tokens, self-service requests and policy, generated passwords |
 | `engine/crates/wire` | Decoders of `pgoutput`, DirSync and syncrepl (with fuzz targets) |

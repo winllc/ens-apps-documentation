@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Symptoms, likely causes and fixes, for syncd 0.5.4 (tag `v0.5.4`, commit `14c6668`). Start with
+Symptoms, likely causes and fixes, for syncd 0.6.1 (tag `v0.6.1`, commit `59cbf19`). Start with
 `sudo syncd status`, `sudo syncdctl status` and the journal (`journalctl -u syncd -u syncd-console
 -e`). Commands, metrics and alert rules are in the [Operator guide](operator-guide.md); settings
 are in [Configuration](configuration.md); the license is in [Licensing](licensing.md). The source
@@ -39,6 +39,21 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
     today ([The engine at work](#the-engine-at-work)). The full list is in
     [Upgrading from 0.5.1 or 0.5.2 to 0.5.4](install.md#upgrading-from-051-or-052-to-054).
 
+!!! tip "Just upgraded from 0.5.4?"
+    0.5.5 changes some things on purpose: control commands are refused while the engine exports
+    after its initial load, releases held changes, writes back after an outage or delivers queued
+    passwords, and a CSV file with a header and no rows deletes nothing
+    ([The engine at work](#the-engine-at-work)); the console's `/healthz` answers 503 while a
+    background task cannot work, which `syncdctl`'s health check sees too
+    ([Installation and upgrade](#installation-and-upgrade)); a one-time password an administrator
+    issued is refused after 7 days, and a password reset revokes the account's API tokens
+    ([Signing in](#signing-in)); reserved addresses are refused for webhooks
+    ([Webhooks, reports and Git sync](#webhooks-reports-and-git-sync)); and Debezium sources need
+    an incremental snapshot after an HA takeover ([High availability](#high-availability)). 0.6.0
+    adds the `dsml` connector ([DSML files across an air gap](#dsml-files-across-an-air-gap)), and
+    0.6.1 fixes an install that stopped after `==> installing syncd`. The full list is in
+    [Upgrading from 0.5.4 to 0.6.1](install.md#upgrading-from-054-to-061).
+
 ## Installation and upgrade
 
 ??? failure "`gpg: BAD signature`, `gpg: Can't check signature: No public key`, or `sha256sum: WARNING: ... computed checksum did NOT match`"
@@ -48,20 +63,26 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
     the one that was signed; download both files again. A file whose checksum does not match is
     damaged or not the published one: download it again from the portal's **Downloads** page,
     and do not install it. A release without `SHA256SUMS.asc` was published without the signing
-    key, as 0.5.0, 0.5.1 and 0.5.4 were: there is nothing to `gpg --verify`, and `sha256sum -c
-    SHA256SUMS --ignore-missing` is the check. See
+    key, as 0.5.0, 0.5.1, 0.5.4, 0.5.5, 0.6.0 and 0.6.1 were: there is nothing to `gpg --verify`,
+    and `sha256sum -c SHA256SUMS --ignore-missing` is the check. From 0.5.5 the release job
+    refuses to publish an unsigned release unless the maintainers allow it
+    (`ALLOW_UNSIGNED_RELEASE`), which they did for 0.5.5, 0.6.0 and 0.6.1. See
     [Verifying a release](install.md#verifying-a-release).
 
 ??? failure "`apt update` or `dnf` cannot reach `https://winllc.github.io/ldap-sync-merge-view` (404)"
-    The signed apt and dnf repositories are not published yet: 0.5.0, 0.5.1 and 0.5.4 were
-    released without the signing key. Remove `/etc/apt/sources.list.d/syncd.sources` or
+    The signed apt and dnf repositories are not published yet: 0.5.0, 0.5.1, 0.5.4, 0.5.5, 0.6.0
+    and 0.6.1 were released without the signing key. Remove `/etc/apt/sources.list.d/syncd.sources` or
     `/etc/yum.repos.d/syncd.repo`, and install or upgrade from the `.deb` or `.rpm` downloaded
     from the portal's **Downloads** page. See
     [From the package repositories](install.md#from-the-package-repositories).
 
-??? failure "`choose the console database: --local-database, or --database-url postgres://...`"
+??? failure "`choose the console database: --local-database, or --database-url-file FILE (a file holding its postgres://... URL)`"
     `syncdctl install` needs to know where the console's database is. Pass `--local-database` to
-    create it on this host's PostgreSQL, or `--database-url` with a database you created. See
+    create it on this host's PostgreSQL, or `--database-url-file` with a file whose first line is
+    the URL of a database you created (`--database-url URL` takes the URL itself, for one without
+    a password: the command line is readable by every account on the host). Before 0.5.5 the
+    message ended `or --database-url postgres://...`. `<file> is empty: the URL goes on its first
+    line` and `cannot read <file>` are about that file. See
     [Installation](install.md#the-consoles-database).
 
 ??? failure "`cannot reach PostgreSQL as postgres on /var/run/postgresql (port 5432); is the server running?`"
@@ -79,7 +100,37 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
 ??? failure "`syncd <version> is installed already; to upgrade: syncdctl upgrade <release>`"
     `/etc/syncd/console.env` exists, so this host already has syncd. Upgrade it, or, to start
     again from nothing, `syncdctl uninstall --purge` first (it removes the configuration and the
-    engine store, not the console's database).
+    engine store, not the console's database). From 0.5.5 an installation that did not finish is
+    finished instead (next entries).
+
+??? failure "The install stops after `==> installing syncd 0.6.0`, with nothing else; running it again says `syncd did not start`"
+    0.6.0's installer, on a fresh host: `openssl` failed while it made the control API's
+    certificates, and what it said went nowhere. The run stopped after writing `console.env`, but
+    before the certificates and the systemd units (no `/etc/syncd/pki/ca.key` or `engine.key`, no
+    `syncd.service`). 0.6.0's installer run again, or its `syncdctl register`, only starts the
+    services, which cannot start without them. Upgrades were not affected, and 0.5.5's installer
+    does the same.
+
+    Fixed in 0.6.1. Run 0.6.1's installer (`sudo ./syncd-0.6.1-linux-x86_64/install.sh` from the
+    bundle), or install the 0.6.1 package and run `sudo syncdctl register`. Either finishes the
+    installation as 0.6.1, with the configuration the first run wrote: it issues the missing
+    certificates, installs the units, starts syncd and registers the engine. If `openssl` fails
+    again, what it said is shown, followed by `openssl could not make <what> (above)`: the
+    control API's CA, the engine's certificate, the console's or the command line's. See
+    [Finishing an installation](operator-guide.md#finishing-an-installation).
+
+??? failure "`syncdctl status`: `install:   NOT FINISHED (the engine is not registered in the console): syncdctl register`"
+    New in 0.5.5. The installation did not finish: it was made with `--no-start`, its first start
+    failed (`syncd did not start; ... Once that is fixed, finish the installation with: syncdctl
+    register`), the engine could not be registered in the console, or the run stopped earlier. The
+    same is said by a package installed again (`the installation did not finish: syncdctl register
+    finishes it`) and by `syncdctl upgrade` (`syncd <version> is installed already (--reinstall to
+    install it again); its installation did not finish: syncdctl register finishes it`). Fix the
+    cause the earlier run showed, then run `sudo syncdctl register`, or the installer again: from
+    0.6.1 either issues the certificates that are missing and installs the units before it starts
+    the services. The installer finishes with its own release, and the options given to it again
+    are not used. `this installation is for FIPS mode: finish it with a FIPS build of syncd`: use
+    the FIPS bundle. See [Finishing an installation](operator-guide.md#finishing-an-installation).
 
 ??? failure "`<dir> is damaged: files do not match MANIFEST.sha256`"
     The unpacked release differs from what was built: a damaged download or a changed file.
@@ -93,6 +144,16 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
     `console.env` with a trailing comment (below). On a slow host or a large store, raise
     `SYNCD_HEALTH_TIMEOUT` (seconds). During an upgrade, the failure makes `syncdctl` roll back to
     the previous release and restore the backup by itself.
+
+    `the console did not become healthy`, with the console running: from 0.5.5 `syncdctl` asks
+    the console's `/healthz`, which answers 503 while a background task keeps stopping or cannot
+    work. `curl -s http://127.0.0.1:8080/healthz` (or the console's own HTTPS address) names it,
+    for example `webhook sender: its TLS configuration does not load: ...` for a
+    `CONSOLE_WEBHOOKS_CA_FILE` that does not load: fix that setting in `console.env`.
+
+    From 0.5.5 only the services that were running before are started again and checked: a console
+    stopped on purpose stays stopped. An install's first start that fails ends `Once that is
+    fixed, finish the installation with: syncdctl register`.
 
 ??? failure "`pg_dump is not installed: install the PostgreSQL client tools to back up the console database, or pass --skip-db-backup`"
     Upgrades and backups dump the console's database with `pg_dump`. Install the PostgreSQL client
@@ -118,10 +179,13 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
     services that were running were started again. Fix the cause, or leave the database out with
     `SYNCD_SKIP_DB_BACKUP=1`, and run the upgrade again.
 
-??? failure "`not enough space in /var/lib/syncd/backups for a backup (... KiB needed)`"
-    An upgrade copies the engine store and the console's files before it changes anything, and
-    refuses to start without room for them plus 10 MiB. Free space, or remove old backups you
-    have copied elsewhere.
+??? failure "`not enough space in /var/lib/syncd/backups for a backup (... KiB needed: the engine store and the console's files, and room for the engine to go on writing; ... KiB free)`"
+    An upgrade (and `syncdctl backup`) backs up the engine store and the console's files before it
+    changes anything. From 0.5.5 the store's table files are hard-linked into the backup when it is
+    on the store's file system, which is quick, but the backup keeps each one the engine later
+    compacts away, so in time it takes as much room as the store: the check counts the store's
+    whole size and the console's files, a tenth more, and 100 MiB (before 0.5.5, the copy and
+    10 MiB). Free space, or remove old backups you have copied elsewhere.
 
 ??? failure "`the engine configuration is not valid for syncd <version>`"
     The new release's engine does not accept the running configuration. Nothing was stopped. Run
@@ -180,11 +244,26 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
     and the console's schema did not change.
 
 ??? failure "`syncdctl rollback --keep-data`: `the console database is at schema N, and syncd <old>'s console knows schema M: it would not start on it`"
-    New in 0.5.1. The newer release migrated the console's database (0.5.1 took it from 29 to 30),
-    and the older console refuses a database with migrations it does not know. Roll back without
-    `--keep-data`, which restores the database from the backup taken before the upgrade (what was
-    done in the console since is lost). `no backup of <old> records its console database's
-    schema` or `the console database does not answer` are warnings: the check was skipped.
+    New in 0.5.1. The newer release migrated the console's database (0.5.1 took it from 29 to 30,
+    0.5.5 from 30 to 33), and the older console refuses a database with migrations it does not
+    know. Roll back without `--keep-data`, which restores the database from the backup taken
+    before the upgrade (what was done in the console since is lost). From 0.5.5, when no backup
+    records the database's schema or the database does not answer, `--keep-data` is refused too
+    (`... whether syncd <old>'s console can start on the current database cannot be checked`),
+    unless `--skip-schema-check` is added; before, those were warnings and the check was skipped.
+
+??? failure "`the backup taken before the upgrade (...) has no console database dump (it was taken with --skip-db-backup), and the database's schema is N now, M under syncd <old>`"
+    New in 0.5.5. The upgrade left the console's database out of its backup (`--skip-db-backup`,
+    or `SYNCD_SKIP_DB_BACKUP=1` for a package), and the newer release changed the database's
+    schema: the backup cannot put it back, and the older console would not start on it.
+    `syncdctl rollback` changes nothing. Restore the console's database from a backup of your own
+    taken before the upgrade, then run `syncdctl rollback` again, or stay on the newer release.
+    The same holds when such an upgrade fails: its own rollback leaves the new release in place
+    (`syncd <new> is not healthy, and the upgrade cannot be rolled back by itself: ...`). The
+    upgrade warns before it starts (`the console database is not backed up (--skip-db-backup):
+    ...`). `syncdctl restore` of a host-local backup without a dump keeps the database as it is,
+    and refuses (`... and the database would have to be restored ... Nothing was changed`) when
+    it would have to be restored.
 
 ??? failure "`not enough space in /var/lib/syncd to restore <backup> (... KiB needed, ... KiB free): nothing was changed`"
     New in 0.5.1. `syncdctl restore` and `rollback` copy the backup's engine store and console
@@ -226,10 +305,13 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
     [Rolling back 0.4.0 to 0.3.0](install.md#rolling-back-040-to-030).
 
 ??? failure "`Start request repeated too quickly` (systemd's `start-limit-hit`)"
-    systemd refuses to start a unit started more than 5 times in 10 seconds. `syncdctl` clears the
-    limit before each of its restarts, so if you see it, the service is in a crash loop: read why
-    in `journalctl -u syncd -e` (or `-u syncd-console`), fix it, then
-    `sudo systemctl reset-failed syncd` and start it.
+    Before 0.5.5: systemd refuses to start a unit started more than 5 times in 10 seconds.
+    `syncdctl` clears the limit before each of its restarts, so if you see it, the service is in a
+    crash loop: read why in `journalctl -u syncd -e` (or `-u syncd-console`), fix it, then
+    `sudo systemctl reset-failed syncd` and start it. From 0.5.5 the units have no start limit and
+    wait longer between restarts, from 10 seconds to 5 minutes (10 seconds each time before
+    systemd 254): a service that keeps failing shows `activating (auto-restart)` in `systemctl
+    status`; read why in the journal. Upgrades install the new units.
 
 ??? failure "`syncdctl renew-certs`: `no CA key in /etc/syncd/pki: the certificates were not issued by syncdctl`"
     `renew-certs` issues new certificates from the CA's key, which is missing. Certificates you
@@ -471,6 +553,20 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
     have not used here` (it is the current one). `the current password is wrong` means the one-time
     password was mistyped. From 0.5.1 wrong current passwords count toward the lockout, and an
     account with a temporary password gets an answer on the password change only.
+
+??? failure "`this one-time password has expired: ask an administrator for a new one` (403)"
+    New in 0.5.5. A one-time password an administrator issues (a new account, a reset on the
+    **Users** page or with `syncd-console admin reset-password`) is good for 7 days. Past that it
+    is refused, and recorded as a denied sign-in. An administrator resets the password again. The
+    `admin` account's initial password, from the first start, does not expire this way. See
+    [Password resets and lockouts](admin-guide.md#password-resets-and-lockouts).
+
+??? failure "After a password reset, the account's API tokens are refused (401)"
+    New in 0.5.5. A reset, on the **Users** page or with `syncd-console admin reset-password`,
+    revokes every API token the account created: a reset is how an account whose password was lost
+    or taken is given back, and what was made with the old password goes with it. The audit
+    record (`user.password_reset`) lists the tokens revoked. Create new ones once the account has
+    signed in again.
 
 ??? failure "A change is refused: `refused: a change made with the console's session must come from the console's own pages`"
     New in 0.5.1. A change made with the session cookie (not with an API token) must come from the
@@ -1003,9 +1099,27 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
     other files there as root. With 0.4.0, the upload of `/etc/syncd` to S3 and the console
     database's dump with `--local-database` failed too; 0.4.1 fixes both.
 
+??? failure "`syncdctl backup --to`: `... failed: backup <name> at <to> is INCOMPLETE (it has the engine's archive, not all of the console's parts): delete its files (<name>.*) there, and take another backup once the cause is fixed`"
+    New in 0.5.5. The engine's archive was stored, but adding the console's dump, `/etc/syncd`'s
+    archive or the master key beside it failed (a full destination, credentials that lost the
+    right to write). No older backup was removed: `--keep` prunes only once every part is stored.
+    Fix the cause, delete `<name>.*` at the destination, and back up again. A failure before
+    anything was written (`backing up the console database failed (above); nothing was written to
+    ...`, `archiving /etc/syncd failed; ...`) leaves the destination as it was.
+    `removing the oldest backups at <to> failed (above); backup <name> itself is complete`: the new
+    backup is good, and the older ones stay until the next run prunes them.
+
 ??? warning "`syncdctl restore --from`: `<name>.<part> was not fetched: ...`, or `the backup has no console master key`"
-    A part of the backup (the console's dump, `/etc/syncd`'s archive, the master key) could not be
-    fetched; the restore goes on without it, and keeps what the host has. Check the S3 options
+    Before 0.5.5: a part of the backup (the console's dump, `/etc/syncd`'s archive, the master key)
+    could not be fetched; the restore went on without it, and kept what the host had. From 0.5.5 a
+    part that cannot be fetched stops the restore there, after the engine store is restored:
+    `fetching <name>.<part> from ... failed: ... The engine store is restored; the console
+    database, /etc/syncd and the console's master key are not, and the services are stopped. Once
+    that is fixed: <the command to run again>`. A part the backup does not have (`<name>.<part> is
+    not in the backup: ...`, the dump of a backup taken with `--skip-db-backup`) is a warning, and
+    the restore goes on, keeping what the host has. When the engine's own restore fails before it
+    touched the store, nothing is changed and syncd is started again; after that, the services
+    stay stopped and the output says where the previous store went. Check the S3 options
     (`--endpoint`, `--region`, `--s3-ca`: the ones the backup was taken with) and the destination.
     A backup taken with 0.4.0 has no master key file: the console keeps its own key, which opens
     the restored database's secrets only if it is the same one; copy back the key that belongs
@@ -1105,6 +1219,10 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
 ??? warning "Both engines claim to be active (`syncd_ha_active` 1 on both)"
     Only for the moments before the old one notices: an engine checks the lease before every
     export batch (from 0.5.1, every 64 exports) and writes nothing within a second of its expiry.
+    From 0.5.5 a chunk still being written at that point is abandoned (`stopped writing: this
+    engine's lease runs out`), and writing back after an outage checks the lease before each
+    write, so the two do not write together; a write the target had already taken stays, and the
+    engine taking over reconciles it.
     If it lasts, the hosts' clocks disagree (the `file` lease is judged by them; keep them in NTP
     sync), or the lease file is not on a file system both hosts share. With 0.5.0, two engines
     with the same member name could both hold the lease; 0.5.1 refuses the second (above).
@@ -1133,6 +1251,15 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
     following the queue (above); the log says `password queue: what the old active engine wrote
     after the snapshot was applied`, or warns that its copy had a gap.
 
+??? warning "After a failover: `taking the pair over: changes the other engine took from Debezium after its last snapshot are not sent again; have Debezium send its tables again (an incremental snapshot through its signal table) to catch up`"
+    New in 0.5.5 (the warning; the behaviour is older). Debezium keeps its own position and moves
+    on once an engine answered, so the changes the old active engine took in after its last
+    snapshot are not sent to the engine that took over, unlike every other source, which reads
+    again from the snapshot's checkpoints. The warning names the `debezium` sources. Have Debezium
+    send their tables again with an incremental snapshot: insert an `execute-snapshot` signal
+    into its signal table (see Debezium's documentation for your connector). The engine skips
+    what it already has. Until then, entities changed in that window may be out of date.
+
 ## Webhooks, reports and Git sync
 
 ??? warning "Webhook deliveries fail or are retried"
@@ -1146,7 +1273,10 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
     - `<host> is not among the hosts webhooks may go to (CONSOLE_WEBHOOKS_ALLOWED_HOSTS)`: add it
       to the list.
     - `... which webhooks may never go to`: loopback, link-local and metadata addresses are
-      refused whatever the settings.
+      refused whatever the settings. From 0.5.5 so are reserved ones (`<host> resolves to <ip>, a
+      reserved address, ...`): 192.0.0.0/24, 198.18.0.0/15 (benchmarking, often routed inside a
+      network) and 240.0.0.0/4. A webhook saved before 0.5.5 to such an address fails at its next
+      send.
     - `the URL must start with https://`, `the URL must not carry credentials`.
     - `connection failed`, a TLS error: the console reaches receivers directly, never through
       `HTTPS_PROXY`. Open the firewall (on Kubernetes, `networkPolicy.egress.extra`), or set
@@ -1156,6 +1286,12 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
 
     A receiver that says the signature is wrong must check the HMAC over the raw body, with the
     secret shown when the webhook was created. See [Webhooks](webhooks.md).
+
+    From 0.5.5 a webhook's events go out in order across a retry: while one waits to be tried
+    again, the ones raised after it for the same webhook wait too, so a receiver that is down holds
+    its own queue back until it answers or the delivery is given up (after a day). Nothing is
+    lost; other webhooks are not held up. A webhook disabled for longer than 14 days loses the
+    deliveries waiting for it that are older than that.
 
 ??? warning "A scheduled report did not arrive (`report.failed`, **not sent** on the Reports page)"
     The reason is on the Reports page and in the audit trail (`report.sent`, failed):
@@ -1230,6 +1366,13 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
     published), a reconciliation, or the deletes a full read found. `syncd status` shows
     `busy: <activity> (for ...)`; alert `SyncdEngineBusy` fires after an hour. Commands wait 10 s,
     then are refused rather than queued.
+
+    From 0.5.5 the same goes for operations that used to hold commands in a queue behind them,
+    with their callers waiting: `exporting after the initial load`, `firing timers and releasing
+    held changes`, `writing back a target's changes after its outage` and `delivering password
+    changes`. The activity in the message says which. Scripts that send control commands (and the
+    console's buttons) meet the refusal more often than with 0.5.4: retry once the operation ends.
+    A command whose caller stopped waiting is not run later.
 
     From 0.5.0 source changes do not wait for a reconciliation, a full sync or a reload: the
     engine takes them in between the operation's pages (queued password changes too). During a
@@ -1311,6 +1454,19 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
     changes made in the target during its outage are written back`. When the target is back, the
     engine writes the changes made in it back to the source, then retries the held exports by
     itself. If the write-back keeps failing, the log says why; it is tried again every minute.
+    From 0.5.5 commands are refused while it writes back (`the engine is busy (writing back a
+    target's changes after its outage)`).
+
+    From 0.6.0 the line ends `(a DSML target keeps its exports for the next file it writes)`: for
+    a `dsml` target, see [DSML files across an air gap](#dsml-files-across-an-air-gap) below.
+
+??? warning "A CSV source deletes nothing: `the file has no rows: nothing was deleted (allow_empty: true lets an empty file empty the source)`"
+    New in 0.5.5. A file with a header and no rows is far more often a failed export than an
+    empty population, so it deletes nothing, with this warning under the source in `syncd status`
+    (and `the file has no rows; this read deletes nothing` in the log). If the source really is
+    empty, set `allow_empty: true` on the connection. Also from 0.5.5: without a done file, a file
+    is read once its modification time is 3 seconds old, and the done file is deleted once the
+    read is committed. See [Connectors](connectors.md).
 
 ??? warning "A published configuration rolled back: `the new configuration did not start; restoring the previous one`"
     The engine saved and reloaded the new configuration but could not start with it: an LDAP
@@ -1455,6 +1611,87 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
     [Unique sAMAccountName](change-safety.md#unique-samaccountname)). An initial password refused
     three times is a dead letter too (see [Passwords](#passwords)).
 
+## DSML files across an air gap
+
+New in 0.6.0. How the files move is in [Air-gapped synchronisation](air-gap.md), with its
+[Monitoring](air-gap.md#monitoring) and [Recovery](air-gap.md#recovery); the settings are in
+[Connectors](connectors.md#dsml-files-air-gap).
+
+??? warning "Connected side: `target <name> UNREACHABLE (...) (a DSML target keeps its exports for the next file it writes)`, `SyncdTargetDown`"
+    The `dsml` target could not write its file. Its exports stay in the engine's store, in order:
+    none goes to the dead-letter queue, no sequence number is used, and the write is tried again
+    within a minute (at the next interval, if that is sooner). Once a write succeeds the target is
+    up again and nothing is lost; `sudo syncd reconcile` writes what is waiting at once. The log
+    says `... could not be written`, with the error:
+
+    - `<dir>: no such directory`: the outbox is gone, or the transfer volume is not mounted. syncd
+      never creates the directory, so that an unmounted volume is not filled underneath. Mount it,
+      or create it for the engine's user.
+    - `<file>: Read-only file system (os error 30)`: the engine's systemd sandbox lets it write only
+      its own directories. Add a drop-in with `ReadWritePaths=<the directory>` (and
+      `RequiresMountsFor=` for a network file system) with `sudo systemctl edit syncd`, then
+      restart (see [What runs where](operator-guide.md#what-runs-where)). `Permission denied`: the
+      directory must be writable by the `syncd` user.
+    - `<host>:<port> presented ssh-ed25519 SHA256:..., which is not among sftp.host_keys: the server
+      is not trusted`: the SFTP server's key is not pinned. There is no trusting a key on first use.
+      Compare the key named with the server's own (`ssh-keygen -lf
+      /etc/ssh/ssh_host_ed25519_key.pub` there); if it is the server's, add it (or its `SHA256:`
+      fingerprint) to `host_keys` and publish. A key that changed without a reason is not to be
+      trusted.
+    - `sftp.private_key: ... (an OpenSSH Ed25519 or ECDSA key; RSA keys are not taken)`: the
+      client is built without RSA. Make an Ed25519 key (`ssh-keygen -t ed25519`) and authorise it
+      on the server.
+    - `<host>:<port> refused the sign-in of <user> (...)`, `sign-in timed out`, `no answer within
+      ...`: the account, the password or key, or the path to the server.
+    - `an sftp:// location cannot be used in FIPS mode: the SSH transport's ciphers are not
+      FIPS-validated`: use a mounted directory (NFS, SMB, the transfer appliance's share) instead.
+
+    `syncd test-connection <connector>` signs in and lists the directory, to check the fix.
+
+??? warning "Far side: `warning: file N of <prefix> not arrived: <file> and the files after it wait for it (a snapshot of <prefix> after it, or on_gap: continue, goes on without)`"
+    A file in the writer's sequence is missing (`files N to M of <prefix>` for several), and
+    `on_gap: wait` (the default) holds the ones after it: changes applied without the ones before
+    them would leave entries wrong. It goes on by itself when the file arrives. Look for it on
+    the way (the outbox on the connected side keeps it unless the transfer removes it, and the
+    transfer's own logs). If it is lost for good, run `sudo syncd reconcile` on the connected side,
+    whose target has `full_snapshots: true`, and carry the snapshot (`.full.dsml.xml`) across: a
+    snapshot of the same writer after the gap holds everything the missing file changed, so the
+    source goes on from it, with a warning in the log (`the snapshot after it supersedes them`).
+    `on_gap: continue` goes on without waiting, with a warning, and leaves the entries as the
+    files say until a snapshot puts them right.
+
+??? failure "Far side: `<file> does not match <file>.sha256 (SHA-256 ..., expected ...): the file is damaged or still arriving; replace it to go on`"
+    The file is damaged, or the transfer wrote it in place without a temporary name or done
+    marker. The source stops at that file, with the error in `syncd status`, until it is replaced
+    or removed. Copy it across again from the outbox. The same holds for a file whose XML is cut
+    short, a document type declaration, an `anyURI` value or a request a file cannot carry (a
+    search): each stops the source with an error naming the file. If the transfer software writes
+    files in place, set `done_files: true` on both sides, or `require_checksums: true` here
+    (`<file> has no <file>.sha256 (require_checksums): waiting for it` while its checksum is not
+    there yet).
+
+??? failure "Far side: `<file> is N bytes, larger than max_bytes (M): raise max_bytes or remove the file`"
+    The source reads no file larger than its `max_bytes`. Raise it on the far side's connection
+    (at least the connected side's `max_bytes`, which its files and snapshots never exceed), or
+    remove the file. On the connected side, a snapshot larger than `max_bytes` is not written (`the
+    snapshot is N bytes, more than the connector's max_bytes (M): a snapshot is one file`): raise
+    `max_bytes` on both sides.
+
+??? warning "Far side: `warning: <file>: N changes to entries the source does not hold were skipped (a snapshot carries them whole)`"
+    A file of changes can only change what the source holds. A modification that brings an entry
+    into an object's `filter`, whose other attributes the source never held, is skipped until a
+    snapshot carries the entry whole. Select the entries on the connected side and read everything
+    on the far side (`filter: (objectClass=*)`, or the object classes alone), and run `sudo syncd
+    reconcile` on the connected side to send a snapshot now.
+
+??? warning "Far side: a snapshot deletes nothing: `<file>: the snapshot holds none of the object's entries: nothing was deleted (allow_empty: true lets an empty snapshot empty the source)`"
+    A snapshot is read as a full read, but one with no entries for the object, or whose search
+    failed (`<file>: the search failed (result code N) ... nothing was deleted`), deletes nothing:
+    far more often it is a wrong `base` or `filter`, or a failed export, than an empty population.
+    Check the object's `base`, `scope` and `filter` against the DNs the files carry. If the
+    population really is empty, `allow_empty: true` lets the snapshot empty the source. Deletes a
+    snapshot does make are subject to the deletion thresholds.
+
 ## The command line
 
 ??? failure "`no configuration file found (looked for syncd.yaml or /etc/syncd/engine/engine.yaml)`"
@@ -1524,9 +1761,13 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
     comes from a ConfigMap or a Secret, not both. See [Single sign-on](install.md#single-sign-on).
 
 ??? failure "The pods do not start: `ImagePullBackOff`, or `exec format error`"
-    `ImagePullBackOff`: the tag is not in the registry the values name. The 0.5.4 images are on
-    `ghcr.io/winllc` (`syncd:0.5.4`, `syncd-console:0.5.4` and their `-fips` tags); there is no
-    `latest`. Check `image.engine.tag` and `image.console.tag` (the chart's `appVersion` by
+    `ImagePullBackOff`: the tag is not in the registry the values name. The newest published
+    images are 0.6.0's, on `ghcr.io/winllc` (`syncd:0.6.0`, `syncd-console:0.6.0` and their
+    `-fips` tags), signed with cosign; there is no `latest`. **There are no 0.6.1 images or
+    chart**: the tag's Container workflow failed building the amd64 binaries, so the job that
+    pushes and signs was skipped. A chart taken from the source repository at `v0.6.1`, or `image.*.tag: 0.6.1`, asks for tags that do not
+    exist: use chart 0.6.0 (`--version 0.6.0`), which loses nothing, since 0.6.1 changes only the
+    host installer. Check `image.engine.tag` and `image.console.tag` (the chart's `appVersion` by
     default), and on a cluster that cannot reach ghcr.io, mirror the images (see
     [Air-gapped clusters](install.md#air-gapped-clusters)) or build them (see
     [Getting the release](install.md#getting-the-release)), with `imagePullSecrets` if your
@@ -1548,6 +1789,10 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
     pods, `kubectl -n syncd delete statefulset syncd-engine --cascade=orphan` (the volume stays),
     and the `syncd-pki` Secret (certificates from an older chart don't name the pods), then
     upgrade again. See [An active/passive pair](install.md#an-active-passive-pair).
+
+    A changed `engine.persistence.size` is refused the same way: a StatefulSet's volume claims
+    cannot change. Grow the claims themselves first; see
+    [Growing the engine's volume](availability-and-sizing.md#growing-the-engines-volume).
 
 ??? failure "The console pod restarts: the master key does not open the stored secrets"
     The `syncd-console` Secret was deleted, or replaced, and the chart generated a new master key.
@@ -1580,8 +1825,9 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
 ??? failure "The engine pod restarts before it is ready"
     The startup probe gives the engine 10 minutes to open its store and listen on 7443. Look at
     `kubectl -n syncd logs syncd-engine-0 --previous`. A store migration or a very large store can
-    take longer; so can a memory limit the engine keeps hitting (`OOMKilled` in
-    `kubectl describe pod`): raise `engine.resources.limits.memory` (see
+    take longer: from chart 0.5.5 raise `engine.startupProbe.failureThreshold` (120 tries every
+    `periodSeconds`, 5) for that upgrade. So can a memory limit the engine keeps hitting
+    (`OOMKilled` in `kubectl describe pod`): raise `engine.resources.limits.memory` (see
     [Sizing on Kubernetes](availability-and-sizing.md#sizing-on-kubernetes)).
 
 ??? failure "`kubectl cp` fails to copy the support bundle out of the pod"

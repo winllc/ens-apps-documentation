@@ -12,6 +12,13 @@ configurations. The YAML keys are listed in
 [Configuration](configuration.md#views-views); where the values come from is in
 [Connectors](connectors.md).
 
+It describes syncd 0.6.1 (tag `v0.6.1`, commit `59cbf19`). 0.5.5 fixes rules: timestamps read
+ASCII digits only, the comprehensions take time in proportion to the list, `lookup()` gives its
+default for a key that is not set, and a publication's filter, mapping or group filter that
+fails keeps what is in the target. (Its cron fix concerns objects' schedules; see
+[Schedules](configuration.md#schedules).) 0.6.0 changes only the custom-function runtime's
+version, and 0.6.1 the example module's bytes; neither changes the rule language.
+
 ## Where expressions are used
 
 Each expression reads one root variable: `source`, the staged record of one source; `e`,
@@ -129,6 +136,9 @@ As in CEL, `exists` is true if any element is true even when others error, and `
 false if any is false; an error nothing decides, or one inside `map()`, fails the
 expression.
 
+Since 0.5.5 the macros take time in proportion to the list: a `map()` or `filter()` over 50,000
+values runs in a fraction of a second. 0.5.4 copied the list at every step and took minutes.
+
 ### Methods and calls
 
 Every function can be called either way: `e.sn.lower()` is `lower(e.sn)`, and
@@ -195,8 +205,8 @@ data is compiled at run time, limited to 1 000 characters.
 | Function | What it does | Example |
 |---|---|---|
 | `join(list, separator)` | Joins values into one text; absent (null) values are left out. | `join([e.givenName, e.sn], " ")` |
-| `size(x)` | Values in a list, characters in a text, or bytes in binary data. | `size(e.mail)` |
-| `first(x)` | The first value of a list; a single value as it is. | `first(e.mail)` |
+| `size(x)` | Values in a list, characters in a text, or bytes in binary data. An attribute with one value reads as that value unless it is in `attributes.multi_valued`: `size(e.member)` of a group with one member then counts that member's characters. | `size(e.mail)` |
+| `first(x)` | The first value of a list; a single value as it is. An attribute's values are kept sorted, not in the order the source sent them, so `first(e.mail)` is the smallest address: to pick one, `filter()` it or flow it from its own source field. | `first(e.mail)` |
 
 ### Conversion and choice
 
@@ -421,6 +431,14 @@ Every rule error counts in the `syncd_rule_errors_total` metric (alert `SyncdRul
 and is logged at debug level with the view, attribute and error. A failing flow is
 logged as a warning; flows have no error policy.
 
+**Publication expressions** have no error policy either. Since 0.5.5 an error in one keeps what
+is in the target: a publication `filter` that fails on an entity leaves its entry as it is
+(logged as `publication filter failed; the entry is left as it is`), a mapping that fails keeps
+the value exported before, and a computed group's `filter` that fails keeps the membership.
+0.5.4 deprovisioned the entry, cleared the value and moved the member, so one bad value could
+delete or disable an account. An absent attribute is still not an error: a filter that reads
+one leaves the entity out of scope.
+
 ```yaml
 - name: hireYear
   output: string(getFullYear(timestamp(e.hireDate)))
@@ -452,6 +470,9 @@ views:
   (`lookup("dept_codes", upper(trim(e.department)), "GEN")`) if the data varies.
 - A table the view does not have is a validation warning, and `lookup()` returns its
   default.
+- A key that is not set (an absent attribute, or `null`) is a key the table does not have:
+  since 0.5.5 `lookup()` returns its default. 0.5.4 read the absent key as missing input and
+  left the attribute without a value.
 - Tables are versioned with the configuration. The console's lookup table manager edits
   them, with search, CSV import (replacing or merging rows) and CSV export. Binding a table
   to a database table is not built.
@@ -711,7 +732,10 @@ What each part does:
    (a database table) match on that attribute instead: `match: employeeId`. Whatever the
    name, it must be set by a flow or computed attribute of the people's view.
 2. **The groups' view declares `member` as a reference** to the people's view, with `match`
-   naming that attribute. `case_insensitive: true` is what you want for DNs.
+   naming that attribute. `case_insensitive: true` is what you want for DNs. It compares the
+   text without case and does not unescape it, as the engine's own DN comparisons do since
+   0.5.5 (`\,` and `\2C` alike): a `member` value spelt with `\2C` matches only a `corpDn`
+   spelt the same way.
 3. **The rule** `referrers(e, "member")` gives the groups whose `member` points at the
    person, in the order of their ids; `.map(g, g.corpDn)` takes each group's DN. Any
    attribute of the groups' view works: `g.cn` for names, or a computed one.
@@ -811,6 +835,9 @@ Listing the attribute under the object's `timestamps` makes it arrive typed inst
 | MySQL, SQL Server | `2024-01-02 03:04:05`, `2024-01-02 03:04:05.1234567 +01:00` |
 | A date | `2024-01-02` (midnight) |
 | LDAP GeneralizedTime | `20240102030405Z`, `20240102030405.5+0100` |
+
+The digits must be ASCII: since 0.5.5 text with digits of another script (`２０２４-01-02`,
+`٢٠٢٤-01-02`) is an error under the rule's error policy, where 0.5.4 panicked on some of it.
 
 Any other form needs `parseTime(text, format, zone?)`. Durations take the units `d`,
 `h`, `m`, `s`, `ms`, `us` and `ns`, combined (`1h30m`) and optionally negative.
@@ -977,6 +1004,11 @@ views:
   versions is refused, so there is nothing to resolve.
 - A configuration read from its file carries the package's content and the file's
   `sha256` once loaded, so a loaded configuration travels without the file.
+- Since 0.5.5 a simulation asked for by a caller below the `configure` tier of
+  [`api.access`](configuration.md#who-may-do-what-apiaccess) reads package files only inside the
+  configuration's directory, and says of a file it cannot use only that, not its path, hash or
+  text. The engine's own configuration, and a simulation by a `configure` caller, may name a
+  file anywhere.
 
 ### The package file
 
@@ -1135,7 +1167,10 @@ views:
   in from the rule if it needs the time. A start function, threads, SIMD, several memories
   and 64-bit memory are refused, and no state is kept between calls.
 - **Pinned.** `wasm` needs `sha256`; a module whose bytes differ is refused when the
-  configuration is read (`syncd validate`, `syncd run`, the console's check and publish).
+  configuration is read (`syncd validate`, `syncd run`, the console's check and publish). The
+  example module's bytes follow syncd's version, so its pin changes with releases: the one above
+  is 0.6.1's (0.5.5 and 0.6.0 pinned `732b8651…`), and a package file of your own that pins the
+  example module needs the value of the release it was built with.
   `from` is relative to the package file (to the configuration for an inline package).
   Without `from`, the console fills the module in from its module store by its hash (see
   below). A module is at most **1 MiB**: it travels inside the configuration, base64, so a
@@ -1157,7 +1192,8 @@ views:
 | Module size | 1 MiB | Larger modules are refused |
 
 The runtime is **wasmi**, an interpreter (the product plan named Wasmtime, whose JIT cannot
-run under the units' `MemoryDenyWriteExecute=yes`). A call costs about 5 µs for the
+run under the units' `MemoryDenyWriteExecute=yes`): 2.0.2 since 0.6.0, after 2.0.1 was yanked
+upstream, with the same interface. A call costs about 5 µs for the
 example's check digit on a release build, against about 0.1 µs for a built-in such as
 `upper()`: keep the library's functions for what they do.
 

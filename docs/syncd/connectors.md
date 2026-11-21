@@ -5,7 +5,8 @@ MongoDB, LDAP directories, Active Directory, CSV and other delimited files, Micr
 Entra ID, and since 0.5.0 REST and OData services and the HR services Workday, SAP
 SuccessFactors and UKG Pro, plus any database that Debezium Server can capture or that has
 a JDBC driver. Targets are LDAP directories, Active Directory, SaaS applications that
-speak SCIM 2.0, and Entra ID.
+speak SCIM 2.0, and Entra ID. Since 0.6.0 a `dsml` connector carries changes across an air
+gap as DSML v2 files: a target on the connected side, a source on the far side.
 
 This page says how each connector reads, what it needs on the source side, and which
 settings matter. Every key is listed in [Configuration](configuration.md#connectors-connectors);
@@ -29,8 +30,10 @@ the rules that turn source records into entities are in
 | `rest` | Records of a REST or OData service, page by page | Not supported | An "updated since" parameter in the service's own time, or OData delta links | The service's time, or the delta link | Cloud and SaaS |
 | `workday`, `successfactors`, `ukg` | Workday (a RaaS report, or the staffing API's workers), SAP SuccessFactors (OData v2 entities), UKG Pro (personnel APIs), through the REST reader | Not supported | The service's "updated since" filter | As `rest` | Cloud and SaaS |
 | `scim` | Nothing: a target only | | | | Cloud and SaaS |
+| `dsml` | DSML v2 files in a directory or on an SFTP server: files of changes in order, snapshots as full reads (since 0.6.0) | Always streams: files are read as they arrive | | The name of the last file read, and each writer's sequence number | Core |
 
-Publication targets are `ldap`, `active_directory`, `scim` and `entra` connectors. One
+Publication targets are `ldap`, `active_directory`, `scim`, `entra` and (since 0.6.0)
+`dsml` connectors. One
 connector can be both a source and a target.
 
 From 0.5.0 each connector type belongs to a license pack: Core is in every license, the
@@ -160,6 +163,13 @@ ALTER PUBLICATION syncd_hr_pub SET (publish = 'insert, update, delete, truncate'
 **An idle stream.** Since 0.5.0 an idle stream reports its position regularly and is no
 longer restarted every five minutes; a dropped connection is noticed within about two
 minutes. A stream resumed with nothing to read shows `streaming` at once.
+
+**Since 0.5.5.** A delete whose old row lacks the anchor (a replica identity that leaves
+it out) has the table read in full, with a warning saying how to fix the identity; 0.5.4
+dropped such deletes. A slot that is gone, or has lost the WAL it needs, starts a full
+read, and so does the first start after `syncd restore` (the slot has moved past the
+backup's position). Partitioned tables stream (PostgreSQL 13 and later), `char(n)` values
+arrive without their padding, and idle replication slots are named in a warning.
 
 ### Streaming a query
 
@@ -484,6 +494,9 @@ one long-lived `refreshAndPersist` search per object.
   quiet session is probed every minute, so a dead connection is noticed within about a
   minute.
 
+Since 0.5.5 syncrepl against OpenLDAP reads the first time in pages and streams from the
+position taken before, rather than holding the whole directory in memory.
+
 ### Streaming from a change log
 
 For directories without syncrepl, or where it is not wanted, a streamed object can follow
@@ -543,7 +556,10 @@ Novell / NetIQ eDirectory's change cache is not supported.
   a cookie for "now", reads everything, then polls from that cookie. A cookie is only
   trusted on the domain controller that issued it. Since 0.5.1 a `base` written with spaces
   after its commas (`OU=Staff, DC=corp, DC=example, DC=com`) is compared as a DN with the
-  server's spelling; in 0.5.0 it turned every change into a delete.
+  server's spelling; in 0.5.0 it turned every change into a delete. Since 0.5.5 every
+  changed object is read again in the base with the object's `filter`, so an object that
+  stops matching is deleted, and delta reads keep their position per domain controller
+  (each reads in full once after the upgrade).
 - **Binary attributes** (`objectGUID`, `objectSid`, `thumbnailPhoto` and others) arrive as
   bytes; rules turn them into text with `guid()`, `sid()`, `hex()` or `base64()`.
 
@@ -622,6 +638,13 @@ Run Debezium Server with a restart policy. It keeps its own offsets; the checkpo
 stores is the source position of the last event, for the status. Rows deleted while
 Debezium re-snapshots from scratch (after lost offsets) are not swept: its snapshot
 carries no deletes.
+
+Since 0.5.5 Debezium events of up to 64 MiB are taken, and MongoDB and Debezium sources
+stop adding attribute names at 50,000. After an HA takeover a Debezium source resumes from
+Debezium's own position, not the snapshot's, so changes the old engine took in after its
+last snapshot are not sent again: have Debezium send the tables again with an incremental
+snapshot (its signal table, `execute-snapshot`); see
+[Sizing, availability and recovery](availability-and-sizing.md).
 
 ## JDBC bridge
 
@@ -733,8 +756,13 @@ read them. A `csv` connector reads such a file in full (keys in
   end. A file whose size changes between two looks a second apart is still being
   written: the read waits up to a minute, then gives up until next time. With
   `done_file` (`.done` for `<file>.done`, or an absolute path), the file is read only
-  once the done file exists, and the done file is deleted after the read. `max_bytes`
-  (1 GiB by default) refuses a larger file.
+  once the done file exists, and the done file is deleted once the read is committed
+  (since 0.5.5; before, straight after the read). Without a done file, a file is read once
+  its modification time is 3 s old (since 0.5.5). `max_bytes` (1 GiB by default) refuses a
+  larger file.
+- **An empty file.** Since 0.5.5 a file with a header and no rows deletes nothing unless
+  the connection sets `allow_empty: true`: far more often it is a failed export than
+  everyone leaving.
 - **Watch.** `watch: true` reads the file again two seconds after it stops changing, or
   when its done file appears, on top of the schedule. Fixed in 0.5.0: a done file that
   appeared just after a read had found it missing could be missed by the watch, leaving
@@ -833,6 +861,11 @@ connectors below, which fill in what their service fixes. Keys in
   answers that do not come. Throttled requests are counted (`throttled=` in
   `syncd status`, the metric `syncd_source_throttled_total`). A read that still fails
   ends where it is: nothing is deleted, and the source is restarted as any source is.
+- **Paging, since 0.5.5.** A source without a total count asks for one more page after a
+  short one and stops at an empty page, since a service may send fewer records than asked
+  for. An answer with nothing where the records are is an error, not an empty page; a page
+  answered again, or a next link that repeats, fails the read instead of looping; and a
+  next-page or delta link is followed only on the service's own origin.
 - **Probes.** `syncd test-connection <connector>` signs in and reads the first page of the
   first object; `syncd discover <connector>` lists the objects and samples one. In the
   console, the connector form has the connection fields, the object's path (or report,
@@ -953,7 +986,14 @@ targets too; see [SCIM targets](#scim-targets) and
   entry succeeds, and a value-level modify that no longer fits the live entry is retried
   as a replace.
 - **Failures.** Exports that keep failing go to the dead-letter queue (`syncd dlq`, and
-  the console), from where they are retried or discarded.
+  the console), from where they are retried or discarded. Since 0.5.5 a batch whose writes
+  all failed because the connection closed while idle is written again on a new
+  connection.
+- **Large changes, since 0.5.5.** A change of more than 1,000 values of an attribute goes
+  in modifies of 1,000, and a leaver is taken out of a group too large to list its members
+  (Active Directory's ranged `member`) by its DN. DNs compare unescaped (`\,` and `\2C`
+  are the same; a multi-valued RDN's values in any order), so a member the server spells in
+  hex is no longer taken for a manual member and removed by the group drift check.
 - **A target that is down at start.** Since 0.5.1 an LDAP or Active Directory target that
   cannot be reached when the engine starts or reloads (refused, unanswered, a name that does
   not resolve) is reported down (`the directory cannot be reached; starting with it down`) and
@@ -1349,10 +1389,19 @@ publications:
   `DELETE`. Disabling is `active: false`. An initial password goes into the `POST`.
 - **Resources that already exist.** A `409` on create looks the resource up by
   `externalId`, then `userName`, adopts it and brings it up to date.
-- **Throttling.** Requests are paced to `rate_limit` per second. A `429` waits for
-  `Retry-After` (a minute at most, three times). A `412` reads again and retries once. A
-  lost connection marks the target down until a probe of `/ServiceProviderConfig` finds
-  it again.
+- **Throttling.** Requests are paced to `rate_limit` per second. Since 0.5.5 a `429`
+  waits out a `Retry-After` of up to 5 s; a longer one stops requests to the provider
+  until it ends, and the exports meanwhile fail and are retried (0.5.4 waited up to a
+  minute, three times). A `412` reads again and retries once. A lost connection marks the
+  target down until a probe of `/ServiceProviderConfig` finds it again. After a transport
+  failure or a long throttle part way through a batch, the rest of the batch fails at once
+  instead of each export waiting its own timeout.
+- **Since 0.5.5.** A body that cannot be read whole, or a success that is not JSON, fails
+  the request; 0.5.4 took it for an empty list, which removed members and created
+  resources twice. A group an earlier try created, whose answer was lost, is found and
+  adopted. A resource deleted in the provider is found again by its name, or added again,
+  by the next change. A `401` with an OAuth token fetches a new token once. Uncached
+  members are looked up 50 a request.
 - **Authentication** is a bearer token, basic credentials, or an OAuth 2.0
   client-credentials token fetched from `token_url` and renewed before it expires.
   Since 0.5.0 the client can prove itself with `private_key_jwt` (RFC 7523: an assertion
@@ -1480,8 +1529,13 @@ The application needs Graph application permissions for what the publications do
   memberships, licences and app roles, which live in the cloud, are written. A password
   for such a user is refused. The count shows in `syncd status`, on the console's engine
   page and in the metric `syncd_entra_skipped_synced_users{target}`.
-- **Throttling.** A `429` waits for `Retry-After` (a minute at most, three times). A lost
-  connection marks the target down until a probe finds it again.
+- **Throttling.** Since 0.5.5 a `429` waits out a `Retry-After` of up to 5 s; a longer
+  one stops requests to Graph until it ends, and the exports meanwhile fail and are
+  retried (0.5.4 waited up to a minute, three times). A lost connection marks the target
+  down until a probe finds it again.
+- **Since 0.5.5.** An answer that cannot be read whole fails the request instead of
+  reading as an empty list, members are listed 999 a page, and a `404` on a member add
+  fails the export.
 - **Users nobody manages.** Since 0.5.0 the unmanaged-entries pass lists the tenant's
   users and reports those syncd did not export (tested against the fake Graph only).
   There are no privileged groups for Entra ID.
@@ -1508,6 +1562,236 @@ any other, so a view can tell synced users from cloud-only ones.
 `syncd test-connection` gets a token, lists the tenant's licence SKUs and repeats the
 guard on synced users. `syncd discover` lists `users` and `groups`, and for one, a few
 records as the engine reads them.
+
+## DSML files (air gap)
+
+New in 0.6.0. A `dsml` connector moves identities between networks that are not
+connected, through files of LDAP changes in [DSML v2](https://www.oasis-open.org/committees/dsml/)
+(OASIS, `urn:oasis:names:tc:DSML:2:0:core`). On the connected side it is a **target**:
+what a publication would write to a directory is gathered into a file every 15 minutes,
+with a SHA-256 checksum, for whatever carries files across (a data diode, a transfer
+appliance, removable media). On the far side it is a **source**: it reads the files in
+the order they were written, and the engine there publishes them to its own directories.
+The far side can also be any tool that applies DSML to a directory, and the connected side
+any tool that writes it: syncd writes nothing a DSML gateway would not take.
+
+This section is the connector reference. Setting up both sides, the transfer between
+them, monitoring and recovery are in [Air-gapped synchronisation](air-gap.md), and every
+key with its default is in [Configuration](configuration.md#connectors-connectors). The
+source repository's examples are `examples/airgap-export.yaml` and
+`examples/airgap-import.yaml`. It is in the Core pack.
+
+The files are in a directory on the engine's host (a mounted transfer volume, an
+appliance's share) or on an SFTP server.
+
+### The files
+
+A target writes one file per interval in which it exported something, named
+`<prefix>-<sequence>-<UTC time>.dsml.xml`:
+
+```
+hq-people-000000000041-20261119T101503Z.dsml.xml
+hq-people-000000000041-20261119T101503Z.dsml.xml.sha256
+hq-people-000000000041-20261119T101503Z.dsml.xml.done      (done_files: true)
+hq-people-000000000042-20261119T110002Z.full.dsml.xml      (a snapshot)
+```
+
+- The **sequence** (twelve digits) counts the files the target has written, so names sort
+  in the order they were written whatever the clocks say, and the reader can tell when
+  one is missing. It is kept in the engine's store, and in its backups.
+- The **`.sha256`** is written first, as `sha256sum` prints it (`sha256sum -c` checks it).
+- The file is written under a temporary name (`.<name>.part`) and renamed into place when
+  complete, so nothing sees half a file; a local write is flushed to disk before it
+  counts. With `done_files: true` an empty `.done` follows, for transfers that wait for
+  one.
+- A file of changes is a `batchRequest` with `processing="sequential"` and
+  `onError="exit"`, holding `addRequest`, `modifyRequest`, `modDNRequest` and
+  `delRequest`. Values that are not plain text (binary attributes, control characters) are
+  base64 (`xsi:type="xsd:base64Binary"`). An interval larger than `max_bytes` is split
+  over several files.
+- A **snapshot** is a `searchResponse` (alone, or in a `batchResponse` as a DSML gateway
+  answers a search) ending in its `searchResultDone`, named `.full.dsml.xml`. The reader
+  takes it as a full read of everything there is. A gateway, a directory's export or
+  `ldapsearch` output turned into DSML can make one too.
+- Every file a target writes is valid against the OASIS schema `DSMLv2.xsd`; CI validates
+  every kind with `xmllint`.
+
+### As a target
+
+```yaml
+connectors:
+  - name: outbox
+    type: dsml
+    connection:
+      location: /var/lib/syncd/airgap/out       # must exist
+      prefix: hq-people
+      batch_secs: 900                            # one file per 15 minutes (the default)
+      done_files: true
+      max_bytes: 104857600                       # 100 MiB (the default is 1 GiB)
+      full_snapshots: true                       # a snapshot at each full reconciliation
+      profile: openldap                          # how the far directory disables accounts
+```
+
+- **One file per interval.** Exports are gathered for `batch_secs` (900 by default;
+  intervals are counted from midnight UTC, so 15-minute files come at :00, :15, :30 and
+  :45) and written when the interval ends. Until then each export is kept in the engine's
+  store, in order, and counts as exported once it is there: a stop or a crash loses none,
+  and the next run writes them at the end of its first interval. They leave the store in
+  the same commit that records the file's sequence number. An interval with no changes
+  writes nothing. A file is written sooner when `max_bytes` of exports is waiting, and
+  every full reconciliation writes out what is waiting at once. `batch_secs: 0` writes
+  each batch as the engine makes it (a file per source transaction, which can be a file
+  per change).
+- A publication writes what it would write to a directory: adds, modifications, renames
+  and moves, deletes.
+- **Disabling** (`deprovision: disable`, staged `disable_after`) is a modification of the
+  attribute the `profile` names: `pwdAccountLockedTime` (`openldap`, ppolicy),
+  `nsAccountLock` (`389ds`) or `ds-pwp-account-disabled` (`unboundid`); enabling removes
+  it. Without a profile, validation refuses publications that disable.
+- **A file is not a directory**: nothing is read back. On a publication to a `dsml`
+  target, validation refuses `drift`, `unmanaged`, `writeback`, `adopt`,
+  `create_containers`, `remove_empty_containers`, `strip_unmanaged_groups` and
+  `passwords` (password delivery does not go into files; nor map `userPassword` as an attribute, which would be written in clear). The far side creates containers with its own
+  publication.
+- **A write that fails** (the directory gone or unmounted, a full disk, the SFTP server
+  down) leaves the exports in the store and uses no sequence number. It is tried again
+  within a minute (or at the next interval, if sooner), and the target shows as down
+  (`target outbox UNREACHABLE` in `syncd status`, `syncd_target_up` 0) until a write
+  succeeds. Nothing goes to the dead-letter queue. With `batch_secs: 0` a batch that cannot
+  be written fails its exports instead, and the engine tries them again.
+- **Snapshots** (`full_snapshots: true`): once every publication to the target has been
+  reconciled in full since the last snapshot, the target writes one, holding every entry
+  the publications exported (disabled ones with the profile's attribute), taken from the
+  exported state the store keeps. It takes the next sequence number like any file. Full
+  reconciliations happen at the end of the first start's initial load, after a
+  configuration change's full sync, at `syncd reconcile`, and on the engine's schedule
+  (`engine.reconcile_interval_secs`, by default `engine.scrape_interval_secs`: an hour).
+  So with the defaults a snapshot crosses every hour; set `reconcile_interval_secs` to
+  how often one should (see [Air-gapped synchronisation](air-gap.md#how-often-snapshots-cross)).
+  A snapshot larger than `max_bytes` is not written, with a warning.
+- **At least once.** An engine stopped between writing a file and recording its number
+  writes the next file with the same number (and a later time) and the same changes; the
+  reader takes it as the same position, not a gap. An export kept but not yet recorded is
+  planned again and may be in two files; it applies the same the second time.
+
+### As a source
+
+```yaml
+connectors:
+  - name: inbox
+    type: dsml
+    connection:
+      location: /var/lib/syncd/airgap/in
+      pattern: "*.dsml.xml"       # default *.xml
+      done_files: true            # read a file once its .done is there
+      require_checksums: true     # every file needs its .sha256, and must match it
+      on_gap: wait                # or continue
+      after_read: move            # keep (default), delete, or move into processed/
+      poll_secs: 30
+    deletion_threshold: { percent: 5, count: 500 }
+    objects:
+      - type: person
+        anchor: employeeNumber    # an attribute the files carry that never changes, or dn
+        mode: stream              # required
+        base: ou=People,dc=example,dc=com
+        scope: sub
+        filter: (objectClass=inetOrgPerson)
+```
+
+- Files are read **in the order of their names**, one at a time, each committed with its
+  name as the checkpoint; a restart goes on from the next. Names starting with `.` and
+  `.sha256`, `.done` and `.part` files are never read as data.
+- A file is read once it is **complete**: its `.done` is there (`done_files: true`), or it
+  has not changed for three seconds and is the size it was listed at. With a `.sha256`
+  beside it, it must match; `require_checksums: true` waits for one. A file that does not
+  match stops the source with an error naming it, and the source tries again on its
+  restart schedule until the file is replaced or removed.
+- A **gap** in a writer's sequence (file 41, then 43) holds file 43 and everything after
+  it until 42 arrives (`on_gap: wait`, the default), since changes applied without the
+  ones before them leave entries wrong. `syncd status` shows it on the source's line:
+  `warning: file 42 of hq-people not arrived: ... wait for it (a snapshot of hq-people
+  after it, or on_gap: continue, goes on without)`. A **snapshot of the same writer**
+  that arrives after the gap supersedes the missing file: the source goes on from the
+  snapshot, with a warning in the log. `on_gap: continue` goes on at once, with a warning.
+  Files not named by a syncd target have no sequence and are read in name order.
+- A **file of changes** is read whole before anything is sent (a file that fails half way
+  changes nothing), then applied to the entries the source holds: adds, modifications
+  (add, delete, replace, as a directory applies them), renames and moves (the entries
+  under a moved container move with it), deletes. Each file is one transaction.
+- A **snapshot** is a full read: entries it does not hold are deleted, within the
+  connector's `deletion_threshold`. A snapshot with no entries for an object deletes
+  nothing, with a warning (`allow_empty: true` lets it empty the source), and nor does one
+  whose search failed (`resultCode` other than 0).
+- An object reads what its search would have found in the directory the files describe:
+  entries under `base`, in `scope`, matching `filter`. The filter is matched without the
+  directory's schema: values compare without case, and `>=` and `<=` compare numbers as
+  numbers. Extensible matches (`:dn:`, matching rules) are refused. Objects must be
+  `mode: stream`.
+- A file of changes can only change what the source holds. An entry a modification
+  brings into an object's filter, whose other attributes the source never held, is
+  skipped with a warning until a snapshot carries it whole. **Select the entries on the
+  connected side and read everything here** (`filter: (objectClass=*)`, or the object
+  classes alone).
+- Each object reads every file on its own (people and groups both read every file), and
+  `after_read: delete` or `move` clears a file away, with its `.sha256` and `.done`, once
+  every object has read it. `processed/` is made when missing.
+- A **damaged file** (checksum, XML cut short), a document type declaration, an `anyURI`
+  value, a request a file cannot carry (a search) or a file over `max_bytes` stops the
+  source with an error naming the file, until it is replaced.
+- `syncd run --once` reads the files that are ready and stops.
+
+!!! warning "One writer per inbox, and numbers that only go forward"
+    The reader keeps the name of the last file it read and reads only names that sort
+    after it (as at 0.6.1's code). So a file that arrives late and sorts before that name is
+    passed over without a warning. Two consequences, explained with what to do in
+    [Air-gapped synchronisation](air-gap.md#recovery):
+
+    - Give each writer its own inbox and its own `dsml` source connector. Two writers'
+      files in one inbox are read correctly only while each writer's files arrive before
+      the other's later ones sort past them.
+    - Restoring the connected side's engine from a backup, or an HA takeover there, can
+      number files from an earlier point, and the far side passes over those. Start a new
+      generation of names after either (a `prefix` that sorts after the old one), and send
+      a snapshot.
+
+### SFTP
+
+```yaml
+    connection:
+      location: sftp://syncd@transfer.example.com/~/outbox    # /~/ is the login directory
+      sftp:
+        host_keys:
+          - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA...
+          # or SHA256:... as `ssh-keygen -lf` prints it
+        private_key: { file: /etc/syncd/airgap_ed25519 }
+        # private_key_passphrase: { env: AIRGAP_KEY_PASSPHRASE }
+        # password: { env: AIRGAP_SFTP_PASSWORD }               # instead of a key
+        timeout_secs: 30
+```
+
+- `location` is `sftp://user@host[:port]/path`; a path under the login directory is
+  written `/~/path`, anything else is absolute. IPv6 hosts go in brackets.
+- The server is trusted by its **pinned host key** only: `host_keys` lists keys (as
+  `ssh-keyscan`, a `known_hosts` line or a `.pub` file gives them) or their SHA-256
+  fingerprints. There is no trusting a key on first use. A server presenting another key
+  is refused, and the error names the key it presented, to compare with the server's own
+  (`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` there).
+- Sign-in is a password or an OpenSSH private key, **Ed25519 or ECDSA** (the client is
+  built without RSA), exactly one of the two. Every secret is a
+  [secret reference](configuration.md#secret-references).
+- One connection is kept and opened again after a failure. SFTP's rename does not
+  replace a file, so a target removes a file of the same name first (which happens only
+  when a file is written again).
+- **Not in FIPS mode**: the SSH transport's ciphers are not the validated module's, so an
+  `sftp://` location is refused there. Use a mounted directory (NFS, SMB, the appliance's
+  share).
+
+### Checking it
+
+`syncd test-connection outbox` lists the directory, signing in to an SFTP server, and
+prints `signed in to <host>:<port> as <user>, host key <key>` and how many files are
+there. In the console, **Browse the files** lists the files, newest first, and shows the
+entries one carries; an object's sample shows its entries as the newest files carry them.
 
 ## Checking a connector
 
@@ -1558,6 +1842,7 @@ Actions before the release's own pull request:
 | SCIM `private_key_jwt` | The fake Graph's token endpoint, standing in for the provider's authorization server | An assertion signed with the registered key buys a token; one signed with another key, or about another client, buys nothing |
 | REST source | syncd's fake HR service (`syncd-fakes rest`), whose clock runs an hour behind (`tests/e2e/rest-source.sh`) | A full read in pages, delta reads by the service's own time, a delete by tombstone, `429` and `503` with `Retry-After`, a full read that breaks off and deletes nothing, a restart resuming from the checkpoint |
 | Workday, SuccessFactors, UKG Pro | Fakes built from the vendors' published API shapes (`tests/e2e/hr-saas.sh`) | Workday's RaaS report with a refresh token and effective dates; SuccessFactors' OData entities joined into one person; UKG's personnel resources joined the same way |
+| DSML files, both sides (since 0.6.0) | Two engines (`tests/e2e/dsml-airgap.sh`): the connected side writing over SFTP to OpenSSH 9.6's `internal-sftp` (host key pinned, an Ed25519 key), the far side publishing to OpenLDAP 2.6 under another suffix. **The transfer is the test script copying files** (checksum, file, done marker), as a diode would: no DSML gateway or data diode product is tested | The first start (changes, then a snapshot); a modification, a rename, a leaver and group membership; two batches in one interval written as one file; a lost file holding the files after it until a reconciliation's snapshot supersedes it; a damaged file refused until a good copy arrives; a file without its done marker; the SFTP server down, the exports kept (none in the dead-letter queue) and written once it is back, with no gap in the numbering; the far side rebuilt from nothing, with an entry changed by hand put right from a snapshot; every file that crossed validated against `DSMLv2.xsd` |
 | Secrets from a vault | A double of HashiCorp Vault (`syncd-fakes vault`), with AppRole (`tests/e2e/secrets-vault.sh`) | Two OpenLDAP connections bound with passwords read from it, both passwords rotated, the connections cut and remade with the new ones without a restart, only references in the configuration, status and logs |
 | Active Directory conveniences | `syncd preview` against the running engine | The attributes computed from CSV records; `syncd validate` refusing the blocks on an LDAP target |
 | Initial passwords | OpenLDAP with PostgreSQL streaming (`tests/e2e/passwords.sh`) | A person provisioned with an initial password binds with it; a change captured later replaces it; `generate` creates every entry with a password; the counts in `syncd status`; no password in the engine's log; since 0.5.0 a directory on another host over `ldap://` refused unless `allow_cleartext` |
@@ -1608,8 +1893,11 @@ Not tested against a real server:
 - **Other source families**: Kafka and inbound SCIM are not planned until a customer
   needs them. HR and SaaS services are read through the REST reader since 0.5.0; Workday
   SOAP and SuccessFactors `$expand` are not built.
-- **Other targets**: databases, files, REST services, and applications that do not speak
-  SCIM 2.0.
+- **Other targets**: databases, files other than DSML, REST services, and applications
+  that do not speak SCIM 2.0.
+- **DSML over anything but a directory or SFTP**: a DSML gateway's SOAP or HTTP endpoint
+  is not called; files go through a directory or an SFTP server. Not tested against a
+  commercial DSML gateway or a data diode's transfer software.
 - **eDirectory's change cache** as a stream.
 - **Entra ID with EC keys, an `x5c` header or a PFX file**: a certificate's key must be
   RSA, in PEM.

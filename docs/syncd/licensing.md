@@ -85,6 +85,24 @@ directory, read every minute; it can't be changed through `ApplyConfig`). `syncd
 gives the state, and `syncd license verify FILE [--installation ID]` checks a file offline with
 the binary's keys.
 
+### Across an air gap
+
+From 0.6.0 the `dsml` connector carries identities between networks that are not connected, in
+files (see [Air-gapped synchronisation](air-gap.md)). It is in the Core pack. Licensing is offline
+and nothing about it crosses the gap, so **each side is licensed on its own, with its own file**:
+
+- The connected side and the far side are separate installations, each with its own installation
+  id, managed-identity count and state. A publication of people to a `dsml` target exports them,
+  so a person published on both sides counts on each.
+- A far side with a console of its own takes its license there, as above, bound to that console's
+  installation id or to none.
+- A far-side engine without a console takes its file in `engine.license_file`. It has an
+  installation id of its own (`syncd status`, `syncd license show`), but **a license bound to no
+  installation** suits it better: binding needs that id brought out to the portal, against the
+  way a data diode carries files, and an HA pair there has an id per engine, which needs an
+  unbound license anyway. Carry the `.lic` file across like any other file, and check it on the
+  far side with `syncd license verify FILE` before you install it.
+
 ## The states
 
 | State | When | Effect |
@@ -143,7 +161,7 @@ each connector's pack.
 
 | Pack | Connectors | Features |
 |---|---|---|
-| Core | Active Directory, LDAP (OpenLDAP, 389 DS, Ping), PostgreSQL, MySQL and MariaDB, CSV files | The rule engine and the console, rule packages, data-quality checks, unmanaged-entry reports, secrets from Vault, AWS or Azure, SAML and X.509 sign-in, scoped roles, drift checks |
+| Core | Active Directory, LDAP (OpenLDAP, 389 DS, Ping), PostgreSQL, MySQL and MariaDB, CSV files, DSML files (air gap; from 0.6.0) | The rule engine and the console, rule packages, data-quality checks, unmanaged-entry reports, secrets from Vault, AWS or Azure, SAML and X.509 sign-in, scoped roles, drift checks |
 | Enterprise Database | SQL Server, MongoDB, Debezium (Oracle, Db2 and others), the JDBC bridge | |
 | Cloud and SaaS | Microsoft Entra ID, SCIM 2.0, REST and OData, Workday, SAP SuccessFactors, UKG Pro | Entra ID certificate, federated and managed-identity sign-in |
 | Password Sync | | Capture agents, self-service, password delivery, initial passwords, password key and agent CA rotation |

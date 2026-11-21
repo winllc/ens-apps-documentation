@@ -8,9 +8,10 @@ technology, or with users, and no accessibility auditor has reviewed them. syncd
 claim conformance: the report lists several criteria as only partially supported (see
 [Known limits](#known-limits)).
 
-This page describes syncd 0.5.4 (tag `v0.5.4`, commit `14c6668`). The self-audit and the draft
-report in the source still describe 0.5.0's console; what 0.5.1 changes for accessibility is noted
-below. 0.5.2 and 0.5.4 change nothing for accessibility.
+This page describes syncd 0.6.1 (tag `v0.6.1`, commit `59cbf19`). The self-audit and the draft
+report in the source still describe 0.5.0's console; what 0.5.1, 0.5.5 and 0.6.0 change for
+accessibility is noted below. 0.5.2, 0.5.4 and 0.6.1 change nothing for accessibility, and the
+accessibility checks themselves are unchanged since 0.5.4.
 
 ## How it is checked
 
@@ -69,7 +70,9 @@ separate accessibility contact. Ask ENS Solutions when a procurement needs a rev
   and password fields carry `autocomplete` for password managers.
 - **Messages**: errors are announced as alerts (`role="alert"`), and other notices (success,
   information, warnings, the count of audit entries shown, a promotion's result) as status
-  messages.
+  messages. From 0.5.5 a request the console has not answered within ten minutes is given up,
+  and the page says so ("The console did not answer within 10 minutes ...") instead of waiting
+  for good.
 - **Keyboard**: everything is reached with standard links, buttons and form controls, and the
   keyboard focus has a visible outline, fields included. Dialogs are native modal dialogs, named by
   their title: focus moves in and stays inside while one is open, **Escape** closes it, and focus
@@ -106,7 +109,9 @@ separate accessibility contact. Ask ENS Solutions when a procurement needs a rev
   lineage as JSON or PDF. From 0.5.0 the PDFs are **tagged** (PDF 1.7 with a structure tree in
   reading order, headings, tables with header cells, the language and the title; page furniture
   marked as artifacts) and print Latin, Greek and Cyrillic text. They were checked with qpdf and
-  poppler, **not** with veraPDF, PAC, Acrobat or a screen reader, and make no PDF/UA claim.
+  poppler, **not** with veraPDF, PAC, Acrobat or a screen reader, and make no PDF/UA claim. From
+  0.5.5 a PDF report holds at most 20,000 rows: a larger one is refused as PDF (download CSV or
+  Excel, which have no such limit), and a scheduled one is cut there, saying so in its mail.
 - **Light and dark, and motion**: the console follows the operating system's light or dark setting
   and, from 0.5.0, its reduced-motion setting (spinners stand still, transitions are off).
 - **Banners**: the top and bottom [banners](admin-guide.md#banners) are text in landmarks that
@@ -123,6 +128,11 @@ separate accessibility contact. Ask ENS Solutions when a procurement needs a rev
   are text areas with one value per line instead of a comma-separated line.
 - **Dashboard** (from 0.5.0): the message of the day is plain text with its line breaks kept, and
   refused sign-in attempts since the previous sign-in are a warning with its count in words.
+- **The DSML connector's form** (from 0.6.0; see [Air-gapped synchronisation](air-gap.md)) is
+  built from the same labelled fields, hints and drop-downs as the other connectors' forms; its
+  SFTP fields appear only once the location starts with `sftp://`, and *Browse the files* is the
+  same dialog as for CSV files. No accessibility check opens it (none of the test fixtures has a
+  `dsml` connector), so it has not been scanned.
 
 ## Known limits
 
@@ -148,6 +158,10 @@ Also:
   JSON exports carry every character.
 - **Data quality**: a check's name is a button that lists its failing entities below the table; it
   does not say whether the list is open.
+- **The DSML connector's form** (from 0.6.0) has two fields with the same label, **Files read**:
+  the pattern of the files read (a text field with the placeholder `*.xml`), and what is done
+  with files once read (a drop-down with a hint). Their kinds tell them apart, but their names do
+  not.
 - **Target sizes**: native checkboxes are 13 pixels and the tabs of an expression editor about 16;
   WCAG 2.1 AA sets no minimum, but WCAG 2.2's 24-pixel rule (2.5.8) would not be met without
   spacing.

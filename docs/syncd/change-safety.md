@@ -4,12 +4,19 @@ A publication can say **when** its changes are applied, **how many** may go at o
 go first**. It can also run in a mode that writes nothing. Changes that wait are **held**. The
 engine can also act at a set time: an attribute that applies from a start date, a leaver who is
 disabled at once and deleted ninety days later, a group that expires. All of this is new in syncd
-0.4.0. This page describes syncd 0.5.4 (tag `v0.5.4`, commit `14c6668`). 0.5.0 added group
+0.4.0. This page describes syncd 0.6.1 (tag `v0.6.1`, commit `59cbf19`). 0.5.0 added group
 reviews that reach a person, `placeholder_member`, leavers stripped of groups syncd does not
 manage, unique `sAMAccountName`s, and held changes kept in the store; 0.5.1 checks deletion
 thresholds as strictly as the others, follows `effective()` dates in group filters and join
 rules, and has truncates in MySQL and Debezium sources go through the deletion threshold. Each
-is marked where it is described. 0.5.2 and 0.5.4 change nothing here.
+is marked where it is described. 0.5.2 and 0.5.4 change nothing here. 0.5.5 makes the guards
+hold more: a leaver's disable or move aside counts under the deletion threshold, drift reverts
+pass through the thresholds, the change window and the canary, a publication over its threshold
+holds only its own deprovisions, an overdue change no longer releases the rest of the window,
+groups follow their members' writes, and an entity added where a gone entity's entry is takes
+that entry over. 0.6.0 adds the `dsml` target (see [Air-gapped synchronisation](air-gap.md)),
+which takes the settings on this page except those that read the target back; 0.6.1 changes
+nothing here.
 
 Every setting on this page goes on a publication (or, for effective dates, in a rule).
 [Configuration](configuration.md) lists each key in one line; this page explains how they work
@@ -20,7 +27,7 @@ together. The rule functions `effective()` and `effective_until()` are in
 |---|---|---|
 | `change_window` | Changes are applied only at the times you allow | `window`, `overdue` |
 | `modification_threshold`, `add_threshold` | A pass that changes or adds too many entries waits for an approval | `modifications`, `additions` |
-| `deletion_threshold` | As before, for deletes. Its holds now show among the held changes | `deletions` |
+| `deletion_threshold` | As before, for deletes and (since 0.5.5) a leaver's disable or move aside. Its holds now show among the held changes | `deletions` |
 | `canary` | A few entities go first; the rest follows after a soak | `canary`, `canary_failed` |
 | `mode: report` | Nothing is written; every planned change is recorded | `report` |
 | `deprovision: { disable_after, ... }` | A leaver goes through stages, each at a set time | (timers) |
@@ -97,6 +104,10 @@ It is the same approval (`POST /api/v1/engines/{id}/approvals` with the scope
 `publication <name>`), and API tokens need `runs:run`. From 0.5.0 an operator's role may be
 limited to an environment or to engines: it approves only there.
 
+Since 0.5.5 an approval, like any other control command, waits at most ten seconds while the
+engine is busy (releasing held changes, a full sync, a drift check), then is refused with
+`the engine is busy (...); try again when it is done`; it was queued behind the work.
+
 !!! note "Approvals under the license"
     A license that blocks publishing (see [Licensing](licensing.md#what-publishing-is-blocked-blocks))
     never blocks approving or rejecting held changes, dead-letter retries and discards, or joins:
@@ -156,7 +167,9 @@ What happens outside the window:
 - When the window opens, the held entities are planned again and applied as one pass, through
   the thresholds and the canary.
 - A change held longer than `max_delay` is applied anyway (`on_overdue: apply`) or becomes
-  `overdue` and waits for an approval (`on_overdue: hold`).
+  `overdue` and waits for an approval (`on_overdue: hold`). Since 0.5.5 only the overdue changes
+  go through the closed window, each judged against `max_delay` on its own; 0.5.4's overdue
+  release let through every change the window held.
 
 The console's publication form has the window under **Change safety**, with the other settings
 on this page.
@@ -165,7 +178,7 @@ on this page.
 
 ```yaml
     deletion_threshold:     { percent: 5,  count: 50 }
-    modification_threshold: { percent: 20, count: 500 }   # modifies, moves, disables, strips
+    modification_threshold: { percent: 20, count: 500 }   # modifies, moves, strips
     add_threshold:          { percent: 50, count: 1000 }
 ```
 
@@ -184,7 +197,24 @@ configuration with `syncd validate` and the new binary before the upgrade.
   caught too.
 - Deletes still go through `deletion_threshold`. Its holds now also show among the held changes
   as `deletions` when a reconciliation finds them.
+- **Leavers count as deletes** (since 0.5.5). A leaver's entry disabled or moved aside
+  (`disable`, `move_to`, `disable_and_move_to`, and the stages of a staged policy that disable or
+  move) counts under `deletion_threshold`, not `modification_threshold`: a mass disable from a
+  bad read is the same mistake as a mass delete. 0.5.4 counted them as modifications.
+- **Each publication on its own** (since 0.5.5). A batch that crosses one publication's deletion
+  threshold holds that publication's deprovisions only; the batch's changes to other
+  publications go through. 0.5.4 held the whole batch.
+- **A pass with no deletes clears the hold** (since 0.5.5). A reconciliation of a held publication
+  that finds nothing to delete clears its deletion hold, and drops an approval given for it.
 - Writes to computed group entries are not counted and not held.
+
+**A mass delete put right at the source** (since 0.5.5). When a source came back empty and its
+deletes were held, fix the source: the next full read, or the next reconciliation of the held
+publication, clears the hold. Records restored at the source come back as new entities, and each
+takes over the entry its gone entity left at its DN (see
+[Staged leaver policy](#staged-leaver-policy)): the entry is updated, not added again, and the
+gone entity's record is never deleted over it. In 0.5.4, approving the hold after such a restore
+could delete the live entry the new entity had taken.
 
 **A source taken out of a view** (since 0.5.1). At the full sync that follows the publish,
 the view's entities lose their records of that source and are computed again without them; an
@@ -236,7 +266,8 @@ dead-letter queue and, when the publication has `drift`, none may have drifted w
   in the target, then fix the source or approve.
 
 A canary only runs while the change window is open. Outside it, the window holds the whole pass
-and the canary runs at the opening.
+and the canary runs at the opening. Since 0.5.5 a canary whose timer a stopped run had taken is
+armed again at the next start; it held every change of its publication until an approval.
 
 ## Report mode
 
@@ -265,10 +296,14 @@ would do for a week before it writes.
 
 For each batch or pass the engine applies report mode first, then the thresholds, then the
 canary, and the change window last: what the thresholds let through may still wait for the
-window.
+window. Since 0.5.5 the reverts a drift check writes go through the same guards; 0.5.4 wrote them
+at once.
 
 Writes to computed group entries are never held by a window or counted by a threshold; the
-entries of the people in them are.
+entries of the people in them are. Since 0.5.5 a member joins or leaves a group when its own
+change is written (at once when it has nothing of its own to write): a held delete, a change
+waiting for a window or a canary, a failed export or a quarantined entity no longer moves it in
+or out of groups meanwhile.
 
 `syncd simulate`, the console's preview and golden-file tests ([Configuration as
 code](config-as-code.md)) leave change safety out: they show what a configuration would do, not
@@ -302,8 +337,10 @@ Timers and held changes survive the upgrades. syncd 0.4.1 kept the 0.4.0 store f
 migrates the store to format 2 at its first start (each view keeps its own links from records to
 entities), and a 0.4.1 engine refuses the migrated store, so a rollback from 0.5.0 to 0.4.1
 restores the backup taken before the upgrade (`syncdctl rollback`): timers and held changes go
-back to what they were then. 0.5.1 keeps format 2, and a 0.5.0 engine opens a 0.5.1 store. See
-[Installation](install.md).
+back to what they were then. 0.5.1 keeps format 2, and a 0.5.0 engine opens a 0.5.1 store. 0.5.2
+to 0.6.1 keep it too. A `dsml` target (0.6.0) keeps the exports waiting for its next file beside
+the data, which 0.5.5 ignores: before rolling such an engine back to 0.5.5, run `syncd reconcile`,
+which writes them out. See [Installation](install.md).
 
 ## Effective dates
 
@@ -355,9 +392,9 @@ publications:
 
 | Key | What |
 |---|---|
-| `disable_after` | Disable the account the way the target does it: `userAccountControl` on Active Directory, the profile's lock on LDAP, `active: false` on SCIM, `accountEnabled: false` on Entra ID. Needs a target that can disable (an LDAP target needs a `profile`) |
+| `disable_after` | Disable the account the way the target does it: `userAccountControl` on Active Directory, the profile's lock on LDAP, `active: false` on SCIM, `accountEnabled: false` on Entra ID. Needs a target that can disable (an LDAP target needs a `profile`). Since 0.5.5 counted under the deletion threshold |
 | `strip_groups_after` | Take the entry out of the publication's computed groups, and out of the reference attributes of other publications that list it. The entry itself is not changed |
-| `move_to` | Move the entry under this fixed container, with the earliest of the disable and the strip, or at once when neither is set |
+| `move_to` | Move the entry under this fixed container, with the earliest of the disable and the strip, or at once when neither is set. Since 0.5.5 counted under the deletion threshold |
 | `delete_after` | Delete the entry. The deletion threshold still applies, and `remove_empty_containers` as for any delete |
 | `strip_unmanaged_groups` | New in 0.5.0. With the strip, also take the entry out of the groups in the target that syncd does not manage (made by hand or by another tool): every group of the entry's naming context that lists it as `member` or `uniqueMember`, except `keep_groups` and the computed groups of the publications to the same target. Needs `strip_groups_after`. LDAP and Active Directory targets. Off by default |
 | `keep_groups` | New in 0.5.0. Groups `strip_unmanaged_groups` never touches: a group's DN, or a container whose groups are all kept |
@@ -379,7 +416,10 @@ publications:
 - **An entry recreated under a new entity** (new in 0.5.0): an entity added at the DN of a leaver's
   disabled entry takes the entry over and enables it, and the log says `a leaver's disabled entry
   is taken over by the entity added at its DN, and enabled`. 0.4.1 converged onto the entry and
-  left it disabled. A leaver moved aside (`move_to`) is not taken over.
+  left it disabled. Since 0.5.5 this goes for the entry of any gone entity, not only a leaver's
+  (a record re-keyed, or restored at the source after a held mass delete): the new entity's plan
+  is made against the entry, and the gone entity's record goes without deleting it. A leaver
+  moved aside (`move_to`) is not taken over.
 - **Groups syncd does not manage** keep the leaver unless `strip_unmanaged_groups` is set. A
   group that cannot lose its last member (a `groupOfNames` must have one) is left as it is, with a
   warning.
@@ -468,7 +508,11 @@ The drift check now reads the group entries back too. A leaver being stripped of
 never taken for a manual member. Kept members survive a full write of the group. A kept member
 removed by hand is forgotten at the next check, and changing `keep` or `report` back to `revert`
 removes the recorded members at the next check. Members missing from the target and a changed
-owner follow the publication's `drift.default`.
+owner follow the publication's `drift.default`. Since 0.5.5 the check compares member DNs
+unescaped (`\,` and `\2C` alike, a multi-valued RDN's values in any order), so a member the
+directory spells in hex is no longer taken for a manual member and removed; manual members
+already recorded are re-keyed at the first start. It also skips a group with changes not yet
+written.
 
 An `owner_from` that depends on the members is evaluated again as members change. It cannot read
 lookup tables or other entities. One that gives nothing, or fails, writes no owner and is logged.

@@ -159,6 +159,7 @@ nav:
       - User guide: syncd/user-guide.md
       - Additional guidance:
           - Connectors: syncd/connectors.md
+          - Air-gapped synchronisation: syncd/air-gap.md
           - Computed attributes and rules: syncd/rules.md
           - Password synchronisation: syncd/password-sync.md
           - Licensing: syncd/licensing.md

@@ -11,13 +11,18 @@ console, and enrolment for capture agents. 0.4.1 added sealing of the engine's k
 metrics and alerts. **syncd 0.5.0** added the **capture points** inside the directories, with a
 packaged capture agent (`syncd-capture`); agents bound to the sources they speak for; rotation of
 the keys and a change of passphrase; queued changes that survive an HA failover; and a refusal to
-send passwords to a directory in clear text. This page describes **syncd 0.5.4** (tag `v0.5.4`,
-commit `14c6668`), which fixes delivery and access: delivery looks past changes it cannot deliver
-yet, a refusal is shown by its result code only, the HA fence is checked before every password
-written, `passwords.key_file` is a host setting, backups and snapshots of an engine with password
-keys need the passwords permission in strict mode, and the Windows filter checks who serves its
-pipe. Each is marked where it is described. 0.5.2 and 0.5.4 change nothing in password
-synchronisation.
+send passwords to a directory in clear text. This page describes **syncd 0.6.1** (tag `v0.6.1`,
+commit `59cbf19`). 0.5.1 fixed delivery and access: delivery looks past
+changes it cannot deliver yet, a refusal is shown by its result code only, the HA fence is checked
+before every password written, `passwords.key_file` is a host setting, backups and snapshots of an
+engine with password keys need the passwords permission in strict mode, and the Windows filter
+checks who serves its pipe. 0.5.2 and 0.5.4 change nothing in password synchronisation. 0.5.5
+fixes what a review found: an agent's revocation is never undone by a submission under way (a
+critical finding), a change throttled or failed by the service is kept and tried again, echo
+suppression remembers several passwords per account, self-service attempts count before the bind,
+and a capture agent backs off when its spool cannot be cleared. 0.6.0 adds DSML files for air
+gaps, which carry no passwords, and 0.6.1 changes nothing here. Each is marked where it is
+described.
 
 !!! warning "Not yet for production capture from Active Directory"
     The OpenLDAP overlay and the 389 Directory Server plugin were built and run end to end. The
@@ -33,7 +38,7 @@ running.
 
 ## What is built
 
-| Piece | In 0.5.4 |
+| Piece | In 0.6.1 |
 |---|---|
 | Delivery of captured changes to targets (the sealed queue, routing, retries, ordering, echo suppression) | Built |
 | Initial passwords: a password set as the account is created, read from the entity or generated | Built; from 0.5.0 a refused one is tried again, then held as a dead letter |
@@ -52,7 +57,7 @@ running.
 | A console page for agents | **Not built**: agents are managed with the command line |
 | The threat model sign-off and the third-party penetration test that the plan sets as release gates | **Not done**: the threat model is a draft |
 
-So in 0.5.4 a password reaches syncd in one of four ways: a person changes it in OpenLDAP or 389
+So in 0.6.1 a password reaches syncd in one of four ways: a person changes it in OpenLDAP or 389
 DS where a capture point is installed, a person changes it on the console's self-service page, a
 publication creates an account with an initial password, or a script submits it with `syncd
 password set`. A password changed directly in Active Directory is not captured in production
@@ -70,7 +75,10 @@ they can't be capture sources. Their users change their password on the self-ser
 | SCIM 2.0 | The resource's `password` attribute. The provider must advertise `changePassword` support: the engine refuses to connect to a SCIM target that doesn't when a publication has a `passwords` block for it |
 | Entra ID | The user's `passwordProfile`. Users that Entra Connect syncs from on-premises AD are refused: their password belongs to AD |
 
-A CSV connector is a source only. See [Connectors](connectors.md) for each connector.
+A CSV connector is a source only. A `dsml` target (from 0.6.0, for an air gap) takes no
+passwords: a DSML file carries none, and validation refuses `passwords` on a publication to one,
+so a password changed on the connected side does not cross the gap (see
+[Air-gapped synchronisation](air-gap.md)). See [Connectors](connectors.md) for each connector.
 
 ## How a change travels
 
@@ -125,15 +133,19 @@ flowchart LR
    that still wait to the back of the queue, so a head of changes for accounts not provisioned
    yet no longer holds back the changes behind it until it expires. A pass looks at 2,000 changes
    at most; the next passes take the rest. A change moved back keeps its time to live from when
-   it was received, and the status counts every change that waits.
+   it was received, and the status counts every change that waits. From 0.5.5 a change that
+   waits is not written again to the store on every pass.
 5. **Ordered.** Per account, only the newest change is delivered. Older ones still queued, and
-   any no newer than the last one delivered, are dropped.
+   any no newer than the last one delivered, are dropped. From 0.5.5 an older change found
+   behind a newer one for the same account is superseded, never written over it.
 6. **Delivered.** The password is written to each target, and the plaintext is zeroised.
 7. **Echo dropped.** A change captured in a directory just after syncd wrote the same password
    there is syncd's own write coming back, and is dropped. The agent drops what syncd's own
    account in the directory set (`ignore_actor`); where the hook cannot say who made a change,
    the engine keeps a keyed hash of each password it delivered for 10 minutes, with a key that is
-   random for each run of the engine, and drops a capture that matches.
+   random for each run of the engine, and drops a capture that matches. From 0.5.5 it keeps up to
+   eight per account (two changes delivered close together each have their echo recognised), and
+   keeps them across a reload of the configuration.
 
 A change for an account that is not provisioned or exported yet, or for a target that is
 unreachable or busy, waits in the queue, sealed, for up to `passwords.ttl_secs` (24 hours by
@@ -219,7 +231,8 @@ Validation refuses:
 - from 0.5.0, `passwords` or `initial` on any LDAP target, or a self-service source, on another
   host reached over `ldap://` without `starttls`, unless `passwords.allow_cleartext` is set;
 - from 0.5.1, `unique()` in `initial.from`: it claims values only in a computed attribute;
-- from 0.5.1, a configuration sent through the control API that changes `passwords.key_file`.
+- from 0.5.1, a configuration sent through the control API that changes `passwords.key_file`;
+- from 0.6.0, `passwords` on a publication to a `dsml` target (a DSML file carries no passwords).
 
 ### Clear text is refused
 
@@ -355,7 +368,8 @@ there to their other accounts like any captured change. It needs no agent.
    passwords from that source, and goes out at once.
 7. **Repeated failures hold a user name off.** After 5 failures in 15 minutes the user name is
    refused for the rest of that time, whatever the password, on top of the console's per-address
-   limit.
+   limit. From 0.5.5 each attempt counts before the bind, so guesses made in parallel cannot all
+   pass the check.
 
 | Answer on the page | HTTP status (`POST /api/v1/self-service/password`) | Why |
 |---|---|---|
@@ -400,6 +414,9 @@ inside the directory server, and the `syncd-capture` agent beside it on the same
   key, writes it to its spool, and only then tells the hook it has it. A sender takes the spool to
   the engine over mutual TLS with the agent's own certificate. The DN that made the change is used
   to drop syncd's own writes (`ignore_actor`) and stays in the agent's log; it is not sent on.
+  From 0.5.5 an agent whose spool files cannot be removed backs off, as after any failure,
+  instead of sending the same changes in a loop, and its `ping` says it is not ready
+  when its spool is full or cannot be written.
 - **The hooks ship as source.** The OpenLDAP overlay must be built against the source of the very
   slapd it is loaded into, the 389 plugin against the installed server's headers, and both again
   when the directory server is upgraded: that needs a C compiler and `make` on the host, or one
@@ -542,7 +559,9 @@ out of publications that take passwords from a less protected directory.
 ### Revoking and listing agents
 
 `syncd password agent revoke dc01` refuses the agent's certificate at once. The check is against
-the fingerprint the engine recorded, not a revocation list. A revoked name can't get a new token;
+the fingerprint the engine recorded, not a revocation list. From 0.5.5 a revocation, or a change
+of bindings, is never undone by a submission under way: before, an agent's submission running
+at the time could put the agent back as it was (one of 0.5.5's critical findings). A revoked name can't get a new token;
 a replacement agent takes another name.
 
 `syncd password agent list` shows each agent: what it is bound to, enrolled (and when), revoked,
@@ -604,7 +623,7 @@ options; on the engine's host the control socket needs none. See
 | Outcome | What happens | Counted as |
 |---|---|---|
 | Delivered | Written to the target | `delivered` |
-| Waiting | The account is not provisioned or exported yet, or the target is unreachable or busy. Tried again every 30 seconds | `queued` (waiting) |
+| Waiting | The account is not provisioned or exported yet, or the target is unreachable or busy. Tried again every 30 seconds. From 0.5.5 also a change the target throttled, refused for an expired token, or failed on its own side (HTTP 401, 408, 425, 429 and 5xx; LDAP `operationsError`, `timeLimitExceeded`, `referral`, `adminLimitExceeded` and `other`): before 0.5.5 those were taken for refusals and dropped | `queued` (waiting) |
 | Refused | The target refused it (its password policy, access rights, an Entra user synced from AD, a SCIM provider without `changePassword`). Reported and **not retried** | `failed` |
 | Not bound | From 0.5.0: an agent submitted it for a source it is not bound to. Refused at the listener, never queued | `syncd_password_changes_refused_total`, and per agent in `syncd password agent list` |
 | Expired | Waited longer than `ttl_secs` | `failed` |
@@ -759,7 +778,12 @@ API.
   older, and a compromised agent can block later changes for an account with a far-future
   sequence. There is no command that clears a stored sequence.
 - **Echo suppression** by the account syncd writes with (`ignore_actor`), and by a keyed hash whose
-  key is random for each run of the engine.
+  key is random for each run of the engine (from 0.5.5 several per account, kept across a reload).
+- **A revocation stands** (from 0.5.5): a revocation or a change of an agent's bindings is never
+  undone by a submission under way.
+- **No passwords in DSML files** (from 0.6.0): `passwords` on a publication to a `dsml` target
+  is refused. An attribute mapped like any other is written to the file as it is, so keep
+  password hashes out of such publications.
 - **Agents** enrol with a one-time token (one hour, kept as a hash, compared in constant time),
   get a client-only certificate named by the operator, are bound to the sources they speak for
   (from 0.5.0), and can be revoked one by one. Their keys never leave their hosts. There is no

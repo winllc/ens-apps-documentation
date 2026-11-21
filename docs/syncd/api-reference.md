@@ -1,7 +1,12 @@
 # API reference
 
-syncd has these programmable interfaces. This page describes syncd 0.5.4 (tag `v0.5.4`, commit
-`14c6668`).
+syncd has these programmable interfaces. This page describes syncd 0.6.1 (tag `v0.6.1`, commit
+`59cbf19`). 0.5.5 adds `GET /livez`, makes `GET /healthz` answer 503 naming a background task
+that cannot work, pages the configuration versions (`limit`, `before`), holds the rule preview to
+designers, revokes an account's API tokens when its password is reset, and on the engine's control
+API refuses more commands while the engine is busy, caps listings at 10,000 entries and leaves
+secret values out of what callers below the configure tier read. 0.6.0 and 0.6.1 change no
+interface: 0.6.0's `dsml` connector is configured like any other.
 
 | Interface | Served by | Used by | Authentication |
 |---|---|---|---|
@@ -247,7 +252,8 @@ assignments reach.
 | GET | `/api/v1/self-service` | Whether the self-service password page is on, and from 0.4.1 the engine's policy for a new password (`min_length`, `min_classes`; absent when the engine cannot be asked; read at most once a minute) |
 | POST | `/api/v1/self-service/password` | A person changes their own directory password: `{"login", "current_password", "new_password"}`. See [Self-service password change](#self-service-password-change) |
 | GET | `/api/openapi.json` | The OpenAPI document |
-| GET | `/healthz` | `ok` while the console runs |
+| GET | `/healthz` | `ok` while the console runs and its background tasks work. From 0.5.5, `503` with a plain-text body, `unwell` and a line per background task that is not working: `<task>: waiting to start again (<why>)`, `<task>: stopped N times in 10 minutes (<why>)`, or `<task>: <what keeps it from working>` (for example `webhook sender: its TLS configuration does not load: ...`). The tasks include `mail outbox`, `webhook sender`, `engine status watcher`, `scheduled reports`, `git sync`, `session purge`, `audit head log`, `audit retention` and `audit output <name>`. For monitoring |
+| GET | `/livez` | New in 0.5.5: `ok` while the console serves requests, whatever its background tasks do. For liveness and readiness probes and load balancers; the Helm chart's probes use it |
 
 ### Sign-in and accounts
 
@@ -272,7 +278,7 @@ Session only.
 | GET | `/api/v1/users` | admin | List accounts, each with its `assignments`, whether it is locked, and from 0.5.0 its last sign-in (`last_sign_in_at`, `last_sign_in_method`) |
 | POST | `/api/v1/users` | admin | Create a local account (`username`, `display_name`, and `assignments` (from 0.5.0: `[{"role": "operator", "scope": "environment", "name": "prod"}, ...]`) or `role`, short for one role on everything); returns its one-time password, shown once |
 | PATCH | `/api/v1/users/{id}` | admin | Change the display name, assignments (or `role`), disabled flag or break-glass flag, or from 0.5.0 `"unlock": true` to lift a lock from failed sign-ins. For an account that signs in through single sign-on or a certificate, assignments set here last until its next sign-in. From 0.5.1 taking break-glass off a local account while local sign-in is limited ends its sessions |
-| POST | `/api/v1/users/{id}/reset-password` | admin | Issue a new one-time password (local accounts only) |
+| POST | `/api/v1/users/{id}/reset-password` | admin | Issue a new one-time password (local accounts only), unlock the account and end its sessions. From 0.5.5 the password is good for 7 days (as is the one `POST /api/v1/users` answers with), and the API tokens the account created are revoked |
 
 ### Settings
 
@@ -337,7 +343,7 @@ See [Reports, lineage and data quality](reports-and-data-quality.md) for the sug
 | Method | Path | Role | Token | Purpose |
 |---|---|---|---|---|
 | POST | `/api/v1/configs/validate` | designer | `configs:write` | Compile a configuration (`yaml`, optional `environment` to render it for) with the engine's compiler and run its test cases, without saving |
-| GET | `/api/v1/engines/{id}/configs` | any | `configs:read` | The engine's versions, newest first, with their status (`draft`, `publishing`, `published`, `superseded`), source (`console`, `git`, `promotion`), ticket, note and hook decision, the environments that run the same text, and from 0.5.1 `accountable`: the person four eyes compares the approver with (who saved it, the creator of the API token that saved it, or the account of the Git commit's author; absent when no account has the commit's address) |
+| GET | `/api/v1/engines/{id}/configs` | any | `configs:read` | The engine's versions, newest first (from 0.5.5 a page of them with `limit`, 1 to 1000, and `before`, the last version of the page before; every one without `limit`), with their status (`draft`, `publishing`, `published`, `superseded`), source (`console`, `git`, `promotion`), ticket, note and hook decision, the environments that run the same text, and from 0.5.1 `accountable`: the person four eyes compares the approver with (who saved it, the creator of the API token that saved it, or the account of the Git commit's author; absent when no account has the commit's address) |
 | POST | `/api/v1/engines/{id}/configs` | designer | `configs:write` | Save a new version (`yaml`, `comment`, `latest_seen`). It must compile; 409 if a newer version was saved since `latest_seen` |
 | GET | `/api/v1/engines/{id}/configs/running` | any | `configs:read` | What the engine runs now, from 0.5.1 with its environment's secret values masked (`<secret name>`): those it has now, and those sent with the engine's publishes. **0.5.0 returned them in clear** |
 | POST | `/api/v1/engines/{id}/configs/import` | designer | `configs:write` | Save what the engine runs as a new version. From 0.5.1 its secret values go back to being placeholders (`{{ env.name }}`) and modules' bytes are left out (their pins stay); `409` when it holds a secret value but does not parse |
@@ -430,7 +436,7 @@ See [Reports, lineage and data quality](reports-and-data-quality.md).
 
 | Method | Path | Role | Token | Purpose |
 |---|---|---|---|---|
-| POST | `/api/v1/rules/preview` | any | — | Run a computed attribute's steps on given input, with the engine's own rules crate, and its test cases. Since 0.5.4 a rule that reads other entities (`ref()`, `refs()`, `reports()`, `referrers()`) is not run: the reply has `reads_other_entities: true` and nothing else set (before 0.5.4, a compile `error`); the configuration's check compiles such a rule |
+| POST | `/api/v1/rules/preview` | designer | — | Run a computed attribute's steps on given input, with the engine's own rules crate, and its test cases. From 0.5.5 designers only (any role before): the rule and its packages, custom functions in WebAssembly included, are the caller's, and run; it takes its turn with the console's compilations. Since 0.5.4 a rule that reads other entities (`ref()`, `refs()`, `reports()`, `referrers()`) is not run: the reply has `reads_other_entities: true` and nothing else set (before 0.5.4, a compile `error`); the configuration's check compiles such a rule |
 | GET | `/api/v1/rules/functions` | any | — | The function catalogue for the CEL editor, with the configuration's package functions |
 
 See [Computed attributes and rules](rules.md).
@@ -547,19 +553,19 @@ On top of the tier, each listener keeps its own limits:
 | RPC | Purpose |
 |---|---|
 | `GetStatus` | A snapshot: version, FIPS mode, start time, counters, sources, publications (held changes, report mode, leavers by stage, groups), targets, orphans, held deletes, configuration version and environment, views (unmatched records), timers, history, backups, HA, password delivery, rule packages, what the engine is busy with, quarantined entities per view, and the process's CPU and memory (Linux only). From 0.4.1 also `runs` (`RunsStatus`: runs ended since the engine started, and the last one's activity, start, end and source failures), `self_service` (the self-service policy, when it is on), and in `passwords` (`PasswordStatus`) `keys_sealed` and per-publication counts (`publications`: delivered, failed, dropped, waiting) |
-| `WatchStatus` | Snapshots every `interval_ms` (at least 100 ms; 0 means one second) until the client disconnects |
-| `ListDeadLetters` | Failed exports waiting to be retried |
-| `ListQuarantined` | Entities whose exports a failing rule (`on_error: quarantine`) holds back |
-| `ListQuality` | Entities failing a view's data-quality checks (`quality`), with the check's message |
+| `WatchStatus` | Snapshots every `interval_ms` (at least 100 ms; 0 means one second) until the client disconnects. From 0.5.5 the engine updates its status at most every 250 ms while source events keep coming, and at once when they stop |
+| `ListDeadLetters` | Failed exports waiting to be retried. From 0.5.5 at most 10,000 in one answer, whatever `limit` asks for (1,000 without one) |
+| `ListQuarantined` | Entities whose exports a failing rule (`on_error: quarantine`) holds back. From 0.5.5 at most 10,000 |
+| `ListQuality` | Entities failing a view's data-quality checks (`quality`), with the check's message. From 0.5.5 at most 10,000 |
 | `ListHeld` | Changes planned but not applied: held by a change window, a threshold or a canary, or what a report-mode publication would write (filters: kind, reason; cursor: the last entity id) |
 | `StartRun` | Run a reconciliation (`RUN_KIND_RECONCILE`, optionally one publication) or a full sync (`RUN_KIND_FULL_SYNC`) now; returns when done |
 | `ApproveDeletions` | For a scope as the status lists it: let deletes held by a deletion threshold through once, and for `publication <name>` release its held changes that need approval |
 | `CheckDrift` | Read a publication's entries (or every checked publication's) back from the target and act by policy |
 | `RetryDeadLetters`, `DiscardDeadLetter` | Export dead letters again now; remove one without retrying |
-| `GetConfig` | The running configuration (YAML) and its version label. Secrets the configuration reads from the host appear only as references, but values the console rendered into it from its environments (`{{ env.* }}`) are there as sent, secret ones included: give `read` only to whom may see them. The console masks them (from 0.5.1) |
+| `GetConfig` | The running configuration (YAML) and its version label. Secrets the configuration reads from the host appear only as references. Values the console rendered into it from its environments (`{{ env.* }}`) are there as sent to a caller with the `configure` tier; from 0.5.5 a caller below it gets the configuration without the values its environment marks secret (before, every caller got them: give `read` only to whom may see them). The console masks them too (from 0.5.1) |
 | `ApplyConfig` | Validate, save and reload with a new configuration, then run a full sync. The answer comes before the reload. From 0.5.0 it carries the console's `signature`, which an engine with `engine.require_signed_config` requires (see [Security](security.md#signed-configurations)), and the engine records who applied it. From 0.5.1 a configuration that changes `passwords.key_file` is refused ("can only be changed on the engine host") |
 | `SetLicense` | From 0.5.0: the console gives the engine its license; the engine verifies and keeps it, and leaves enforcement to the console from then on. From 0.5.1 only while the console gave a usable license: told there is none, the engine judges a publish by its own evaluation period (see [Licensing](licensing.md#with-a-console-the-usual-case)) |
-| `SimulateConfig` | Dry-run a configuration on a copy of the store: what each target would receive. One at a time |
+| `SimulateConfig` | Dry-run a configuration on a copy of the store: what each target would receive. One at a time. From 0.5.5 a caller below the `configure` tier simulates without the running configuration's secret values |
 | `TestConnector`, `DiscoverSchema` | Connect with one connector of a candidate configuration; list what it holds. Write nothing |
 | `PreviewConfig` | Run a candidate over a sample of records in a scratch store |
 | `SearchEntities`, `GetEntity`, `GetEntityHistory` | The read-only object explorer |
@@ -586,7 +592,10 @@ On top of the tier, each listener keeps its own limits:
 Errors are gRPC statuses: `PERMISSION_DENIED` for a call above the caller's tier, a password call
 (or, from 0.5.1, a key-carrying call on an engine with password keys) without
 `api.access.passwords`, or a command or reveal on a listener that does not allow it, `UNAVAILABLE` when the engine is busy with a long operation (a command waits up to 10
-seconds first), has too many commands waiting, is stopping, or is the passive engine of a pair,
+seconds first; from 0.5.5 also while it exports after the initial load, releases held changes,
+writes back a target's changes after an outage or delivers queued passwords, which used to queue
+commands behind them; the message names the activity), has too many commands waiting, is
+stopping, or is the passive engine of a pair,
 `FAILED_PRECONDITION` for password calls when no publication delivers passwords, `INVALID_ARGUMENT`,
 `NOT_FOUND`, and `INTERNAL` for a command that failed.
 

@@ -73,7 +73,7 @@ key is an error, not a silently ignored setting.
 | `attributes` | map | empty | Schema hints shared by every view and connector. |
 | `connectors` | list | empty | The systems syncd reads and writes, and the objects it reads from each. |
 | `views` | list | empty | Merged views: which sources feed them, how records join, attribute flows, precedence, computed attributes, correlation hints, data-quality checks. |
-| `publications` | list | empty | What each view writes to a directory, a SCIM application or Entra ID. |
+| `publications` | list | empty | What each view writes to a directory, a SCIM application, Entra ID or (since 0.6.0) DSML files. |
 | `passwords` | map | see [Passwords](#passwords-passwords) | The engine's password key, how long a captured change may wait, the capture agents' listener, self-service. |
 | `packages` | list | empty | Rule packages: shared functions and lookup tables; see [Packages](#packages-packages). |
 
@@ -338,11 +338,21 @@ directory is fixed whatever a configuration says.
   the order is never used or the hint scores nothing. A name that differs from a flow's only
   in case is the same attribute and is not warned about. Since 0.5.4 two more are warned
   about, both of which left a rule that reads other entities without values (see
-  [Validation rules](#validation-rules)). At start, a PostgreSQL stream whose
+  [Validation rules](#validation-rules)). Since 0.5.5 a computed group's `filter` is checked
+  as a publication's is, and an attribute listed only in `attributes.multi_valued` no longer
+  counts as set. At start, a PostgreSQL stream whose
   publication does not publish `TRUNCATE`, and since 0.5.1 a streamed query whose watched
   table's replica identity leaves out the watched column, are warned about in the log; see
   [Connectors](connectors.md#postgresql).
-- **Rolling back.** 0.5.2 and 0.5.4 add no settings and refuse nothing new: a configuration
+- **Rolling back.** 0.6.1 changes nothing in the configuration: a configuration it accepts
+  works on 0.6.0. 0.6.0 adds the `dsml` connector type and its settings, and renames or removes
+  nothing; 0.5.5 refuses a configuration with a `dsml` connector, so before rolling back to 0.5.5
+  with the store kept, publish a configuration without it (and run `syncd reconcile` first on an
+  engine with a `dsml` target, which writes out the exports it keeps waiting; see
+  [Air-gapped synchronisation](air-gap.md)). 0.5.5 adds one setting, `allow_empty` on a
+  [CSV connection](#csv-files-csv), and refuses a little more (the items marked "since 0.5.5" in
+  [Validation rules](#validation-rules)): publish a configuration without `allow_empty` before
+  rolling back to 0.5.4. 0.5.2 and 0.5.4 add no settings and refuse nothing new: a configuration
   0.5.4 accepts works on 0.5.2 and 0.5.1. 0.5.1 adds no settings either: a configuration 0.5.1
   accepts works on 0.5.0 (0.5.1 only refuses more; see [Validation rules](#validation-rules)). A rollback from
   0.5.0 to 0.4.1 cannot keep the store, which 0.5.0 migrates to a format 0.4.1 refuses:
@@ -615,7 +625,7 @@ settings that match the type, the objects it reads, and an optional deletion thr
 | Key | Type | Default | What |
 |---|---|---|---|
 | `name` | text | required | Unique; views and publications refer to it. |
-| `type` | enum | required | `postgres`, `mysql` (MySQL 8 and MariaDB 10.5+), `sql_server` (SQL Server 2016+ and Azure SQL Managed Instance), `mongodb`, `ldap`, `active_directory`, `debezium`, `jdbc`, `csv` (a delimited file), `scim` (a SCIM 2.0 application, as a target), `entra` (Microsoft Entra ID through Microsoft Graph); since 0.5.0, as sources, `rest` (a REST or OData service), `workday`, `successfactors` (SAP SuccessFactors) and `ukg` (UKG Pro). |
+| `type` | enum | required | `postgres`, `mysql` (MySQL 8 and MariaDB 10.5+), `sql_server` (SQL Server 2016+ and Azure SQL Managed Instance), `mongodb`, `ldap`, `active_directory`, `debezium`, `jdbc`, `csv` (a delimited file), `scim` (a SCIM 2.0 application, as a target), `entra` (Microsoft Entra ID through Microsoft Graph); since 0.5.0, as sources, `rest` (a REST or OData service), `workday`, `successfactors` (SAP SuccessFactors) and `ukg` (UKG Pro); since 0.6.0 `dsml` (DSML v2 files in a directory or on an SFTP server, across an air gap: a target on one side, a source on the other). |
 | `connection` | map | required | The settings for the type, below. Settings of another type are refused. |
 | `objects` | list | empty | The object types read from it. A connector used only as a target needs none; a `scim` connector takes none. |
 | `deletion_threshold` | map | unset | Safety limit for deletes detected in one import run: `percent` and/or `count`. A run that deletes more than either is held until an operator approves it. Since 0.5.1 one without either (`{}`), or with a `percent` outside 0 to 100, is refused. |
@@ -626,7 +636,8 @@ deletion_threshold:
   count: 500      # or more than 500 records
 ```
 
-Publication targets are `ldap`, `active_directory`, `scim` and `entra` connectors. See
+Publication targets are `ldap`, `active_directory`, `scim`, `entra` and (since 0.6.0) `dsml`
+connectors. See
 [Connectors](connectors.md) for what each does, and for which [license
 pack](licensing.md#packs) each type belongs to.
 
@@ -705,9 +716,93 @@ See [CSV and flat files](connectors.md#csv-and-flat-files).
 | `columns` | list | empty | Names, or `{ name, type }` with `string`, `int`, `bool`, `date`, `timestamp` or `multi:<separator>`. With `header`, the names must match the header's. |
 | `quote` | text | `"` | The quote character. |
 | `watch` | boolean | `false` | Read the file again two seconds after it stops changing, or when its done file appears, on top of the object's `interval_secs` or `schedule`. (0.4.1 could miss a done file that appeared just after a read had found it missing.) |
-| `done_file` | text | unset | Read only when this file exists (`.done` for `<file>.done`, or an absolute path), and delete it after the read. |
+| `done_file` | text | unset | Read only when this file exists (`.done` for `<file>.done`, or an absolute path), and delete it once the read is committed (since 0.5.5; before, as soon as the file was read). Without one, since 0.5.5 a file is read only once its modification time is 3 seconds old and its size and time stay the same for a second. |
 | `max_bytes` | integer | `1073741824` (1 GiB) | A larger file is refused. |
+| `allow_empty` | boolean | `false` | Since 0.5.5. A file with a header and no rows empties the source: every record it had is deleted. Off, such a read deletes nothing and says so (`the file has no rows: nothing was deleted`), since it is far more often a failed export than an empty population. 0.5.4 took it for every record gone. |
 | `on_error` | `fail`, `skip` | `fail` | What a bad row does: fail the whole read, or skip the row, counted and reported. Since 0.5.1 a skipped row whose key can still be read keeps its record as it was, and when any skipped row's key cannot be read, that read deletes nothing (0.5.0 deleted the records of skipped rows). |
+
+### DSML files (`dsml`)
+
+New in 0.6.0. A directory of DSML v2 files (OASIS, `urn:oasis:names:tc:DSML:2:0:core`) on the
+engine's host or on an SFTP server, for synchronisation between networks that are not connected.
+As a publication's target, the changes the engine exports are written as one file of LDAP
+changes per interval; as a source, such files are read in the order they were written. Each side
+has its own connector; settings marked *write* are for a target, *read* for a source, and the
+rest for both. [Air-gapped synchronisation](air-gap.md) shows the two sides together, and
+[DSML files](connectors.md#dsml-files-air-gap) what each side does with the files.
+
+| Key | Type | Default | What |
+|---|---|---|---|
+| `location` | text | required | The directory: a path on this host, which must exist (an unmounted transfer volume is an error, not a new directory), or `sftp://user@host[:port]/path` (port 22 by default; `/~/path` for a path under the login directory), with `sftp`. |
+| `sftp` | map | unset | How to sign in to an `sftp://` location and which server to trust; below. Required for an `sftp://` location, refused for a local one. |
+| `prefix` | text | `syncd` | Write: files are named `<prefix>-<sequence>-<UTC time>.dsml.xml` (a snapshot `<prefix>-<sequence>-<UTC time>.full.dsml.xml`), each with a `<file>.sha256` written before it. Letters, digits, `-`, `_` and `.`, not starting with `.`. |
+| `done_files` | boolean | `false` | Write: a `<file>.done` after each file, for a transfer that waits for one. Read: a file is read only once its `.done` is there; without this, once it has not changed for three seconds. |
+| `pattern` | glob | `*.xml` | Read: the file names read, a glob over names (no `/`). |
+| `after_read` | `keep`, `delete`, `move` | `keep` | Read: what becomes of a file, with its `.sha256` and `.done`, once every object of the connector has read it: left in place (the checkpoint records it), deleted, or moved into `processed/` beside it. |
+| `poll_secs` | integer | `30` | Read: seconds between looks for new files. At least 1. |
+| `require_checksums` | boolean | `false` | Read: every file needs its `.sha256` and must match it; the source waits for one. Without this a checksum is checked when there is one. |
+| `on_gap` | `wait`, `continue` | `wait` | Read: a file missing from a writer's sequence holds the files after it until it arrives, or until a snapshot of the same writer arrives after it (`wait`; the status names the missing file), or is passed over with a warning (`continue`). |
+| `allow_empty` | boolean | `false` | Read: a snapshot with no entries for an object empties it. Off, such a snapshot, or one whose search failed, deletes nothing, with a warning. |
+| `max_bytes` | integer | `1073741824` (1 GiB) | The largest file read or written. Write: an interval's changes larger than this are split over several files, a file is written before the interval ends once this much is waiting, and a snapshot larger than this is not written (a warning says so). Read: a larger file stops the source with an error naming it. At least 1. |
+| `batch_secs` | integer | `900` | Write: seconds of exports gathered into one file, the intervals counted from midnight UTC (so every 15 minutes, on the quarter hour, by default). Exports wait in the engine's store meanwhile and count as exported once there; a full reconciliation writes them out at once. `0` writes each batch of exports as soon as the engine makes it. |
+| `full_snapshots` | boolean | `false` | Write: once every publication to the target has been reconciled in full (the first start, `syncd reconcile`, a configuration change's full sync), also a snapshot of every entry exported, which the far side reads as a full read. |
+| `profile` | `generic`, `openldap`, `389ds` (alias `rhds`), `unboundid` (aliases `ping`, `pingdirectory`) | `generic` | Write: how the directory the files are for disables accounts, as a modification of `pwdAccountLockedTime` (`openldap`), `nsAccountLock` (`389ds`) or `ds-pwp-account-disabled` (`unboundid`). With `generic`, a publication that disables (`disable`, `disable_and_move_to`, `disable_after`) is refused. |
+
+`sftp`:
+
+| Key | Type | Default | What |
+|---|---|---|---|
+| `host_keys` | list | required | The server's host keys, as a `known_hosts` line or a `.pub` file holds them (`ssh-ed25519 AAAA...`, as `ssh-keyscan -t ed25519 <host>` prints them), or their SHA-256 fingerprints (`SHA256:...`, as `ssh-keygen -lf` prints them). The server must present one of them: no key is trusted on first use, and a refusal names the key the server presented. |
+| `password` | secret | unset | A password. Exactly one of `password` and `private_key` is set. |
+| `private_key` | secret | unset | A private key in OpenSSH format, Ed25519 or ECDSA (RSA keys are not taken). |
+| `private_key_passphrase` | secret | unset | The key's passphrase, when it has one. Only with `private_key`. |
+| `timeout_secs` | integer | `30` | Seconds a connection or an operation may take. At least 1. |
+
+- **Objects** (a source) are `mode: stream`, each with a `base`, and optionally `scope`
+  (`sub` by default), `filter` (`(objectClass=*)` by default) and `attributes`: an object
+  reads what that search would find in the directory the files describe. The filter is matched
+  without the directory's schema: values compare without case, `>=` and `<=` compare numbers as
+  numbers, and an extensible match (`:dn:`, a matching rule) is refused. A target needs no
+  objects.
+- **A publication to a `dsml` target** cannot read the directory back, so validation refuses
+  `drift`, `unmanaged`, `writeback`, `adopt`, `create_containers`, `remove_empty_containers`,
+  `strip_unmanaged_groups` and `passwords` on it.
+- **FIPS mode** refuses an `sftp://` location when the connector starts: the SSH transport's
+  ciphers are not the validated module's. Use a mounted directory there.
+- `dsml` belongs to the Core [license pack](licensing.md#packs).
+
+```yaml
+connectors:
+  - name: outbox                       # the connected side: a target
+    type: dsml
+    connection:
+      location: sftp://syncd@transfer.example.com/~/outbox
+      sftp:
+        host_keys: ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA..."]
+        private_key: { file: /etc/syncd/airgap_ed25519 }
+      prefix: hq-people
+      done_files: true
+      full_snapshots: true
+      profile: openldap
+  - name: inbox                        # the far side: a source
+    type: dsml
+    connection:
+      location: /var/lib/syncd/airgap/in
+      pattern: "*.dsml.xml"
+      done_files: true
+      require_checksums: true
+      after_read: move
+    objects:
+      - type: person
+        anchor: employeeNumber
+        mode: stream
+        base: ou=People,dc=example,dc=com
+        filter: (objectClass=inetOrgPerson)
+```
+
+The two connectors run on different engines, one on each side of the gap; the source
+repository's `examples/airgap-export.yaml` and `examples/airgap-import.yaml` are whole
+configurations for them.
 
 ### SCIM (`scim`)
 
@@ -837,10 +932,10 @@ on the connector type:
 | `table` | databases, Debezium, JDBC | | A table or view (`dbo.people`, `HR.EMPLOYEE`). For Debezium, the captured table whose events are this object's. |
 | `query` | databases, JDBC | | A SQL query instead of a table; its columns become attributes. |
 | `cdc` | `postgres`, `mysql`, `sql_server` | | Change capture for `mode: stream`; see [Change capture](#change-capture-cdc). |
-| `base` | LDAP, AD | | Search base DN. |
-| `filter` | LDAP, AD, MongoDB | `(objectClass=*)` for LDAP | LDAP: a search filter. MongoDB: a query document in extended JSON (`'{"status": "active"}'`). |
-| `scope` | LDAP, AD | `sub` | `base`, `one` or `sub`. |
-| `attributes` | LDAP, AD, MongoDB, Entra | empty (all user attributes, or whole documents) | Attributes or fields to read. For `entra`, the properties selected. |
+| `base` | LDAP, AD, DSML | | Search base DN. |
+| `filter` | LDAP, AD, DSML, MongoDB | `(objectClass=*)` for LDAP and DSML | LDAP and DSML: a search filter. MongoDB: a query document in extended JSON (`'{"status": "active"}'`). |
+| `scope` | LDAP, AD, DSML | `sub` | `base`, `one` or `sub`. |
+| `attributes` | LDAP, AD, DSML, MongoDB, Entra | empty (all user attributes, or whole documents) | Attributes or fields to read. For `entra`, the properties selected. |
 | `collection` | MongoDB | | The collection to read. |
 | `file` | `csv` | the connection's `path` | The file or glob this object reads, so one connector can read several files of one inbox. |
 | `rest` | `rest`, `workday`, `successfactors`, `ukg` | | What to read; see [REST and HR services](#rest-and-hr-services-rest-workday-successfactors-ukg). Required for `rest`. Since 0.5.0. |
@@ -856,7 +951,7 @@ on the connector type:
 | `timestamps` | all | empty | Attributes or columns to send as timestamps instead of text. Listed values are read as rules' `timestamp()` reads text, so rules get a timestamp and LDAP targets GeneralizedTime. A value that does not read as one stays text. |
 
 An object sets exactly one of `table`, `query` (databases, JDBC, Debezium `table` only),
-`base` (LDAP and Active Directory) or `collection` (MongoDB), and only the options that
+`base` (LDAP, Active Directory and, since 0.6.0, DSML) or `collection` (MongoDB), and only the options that
 belong to it. A `csv` object sets none of them (or `file`); an `entra` object sets only
 `type`, `anchor: id`, `mode: stream`, `attributes` and `poll_interval_secs`; an object of
 a REST connector sets none of them and has a `rest` block instead.
@@ -865,9 +960,9 @@ a REST connector sets none of them and has a `rest` block instead.
 
 | Mode | What it does | Allowed for |
 |---|---|---|
-| `scrape` | A full read every `interval_secs` (or on `schedule`), diffed against what is staged. Records not seen are deleted. | Every type except `debezium` and `entra`. The only mode for `csv`. |
-| `delta` | Every `interval_secs`, reads what changed since the last read by the `watermark` (REST connectors: by `rest.delta`); every `full_interval_secs` (or on `schedule`) reads everything, which finds deletes. | Every type except `debezium`, `csv` and `entra`. |
-| `stream` | Follows changes as they happen, from a checkpoint committed with the changes. | PostgreSQL, MySQL, SQL Server (with `cdc`), MongoDB, LDAP (syncrepl or `changelog`), Active Directory (DirSync), Debezium (required), Entra ID (delta queries, required). Not `jdbc`, `csv` or the REST connectors. |
+| `scrape` | A full read every `interval_secs` (or on `schedule`), diffed against what is staged. Records not seen are deleted. | Every type except `debezium`, `entra` and `dsml`. The only mode for `csv`. |
+| `delta` | Every `interval_secs`, reads what changed since the last read by the `watermark` (REST connectors: by `rest.delta`); every `full_interval_secs` (or on `schedule`) reads everything, which finds deletes. | Every type except `debezium`, `csv`, `entra` and `dsml`. |
+| `stream` | Follows changes as they happen, from a checkpoint committed with the changes. | PostgreSQL, MySQL, SQL Server (with `cdc`), MongoDB, LDAP (syncrepl or `changelog`), Active Directory (DirSync), Debezium (required), Entra ID (delta queries, required), DSML (the files as they arrive, required; a snapshot file is a full read). Not `jdbc`, `csv` or the REST connectors. |
 
 Anchor rules for streams, checked by validation:
 
@@ -1019,11 +1114,14 @@ in [Joins and first reads](availability-and-sizing.md#joins-and-first-reads).
 
 | Key | Type | What |
 |---|---|---|
-| `precedence.default` | list of connector names | Connector priority for attributes without their own entry. When empty, the order of `sources`. |
-| `precedence.attributes` | map | Attribute to its own list of connector names. |
+| `precedence.default` | list of sources | Source priority for attributes without their own entry: connector names, or (since 0.5.5) `connector/object`. When empty, the order of `sources`. |
+| `precedence.attributes` | map | Attribute to its own list of sources. Since 0.5.5 an attribute listed twice (names ignore case) is refused. |
 
 For each attribute, the highest-ranked source that has a value wins. Sources a list leaves
-out follow, in `sources` order. Every name must be a source of the view.
+out follow, in `sources` order. Every name must be a source of the view. Since 0.5.5 a
+connector's name ranks every object of it the view reads, in the order of `sources`, and
+`connector/object` names one; 0.5.4 ranked only the connector's first object and put its others
+behind every source listed.
 
 ```yaml
 precedence:
@@ -1143,21 +1241,22 @@ quality:
 ## Publications (`publications`)
 
 A publication writes a view's entities to a target: an LDAP directory, Active Directory, a
-SCIM application or Entra ID.
+SCIM application, Entra ID or, since 0.6.0, DSML files for a directory across an air gap (as
+to a directory, without what needs to read it back; see [DSML files](#dsml-files-dsml)).
 
 | Key | Type | Default | What |
 |---|---|---|---|
 | `name` | text | required | Unique. |
 | `view` | text | required | The view to publish. |
-| `target` | text | required | An `ldap`, `active_directory`, `scim` or `entra` connector. |
-| `filter` | CEL over `e` | all entities | Which entities are in scope. Entities leaving scope are deprovisioned. |
+| `target` | text | required | An `ldap`, `active_directory`, `scim`, `entra` or (since 0.6.0) `dsml` connector. |
+| `filter` | CEL over `e` | all entities | Which entities are in scope. Entities leaving scope are deprovisioned. Since 0.5.5 a filter that fails on an entity (an error, not an absent attribute) leaves its entry as it is; 0.5.4 deprovisioned it. |
 | `dn` | template | required for directories | The entry's DN; see [DN template](#dn-template). Not used for SCIM and Entra targets. |
 | `object_classes` | list | required for directories | The entry's object classes. Not used for SCIM and Entra targets. |
 | `resource` | text | `User` | SCIM and Entra targets: the resource type (`User`, `Group`, or for SCIM one of the provider's resource types). See [below](#scim-and-entra-id-publications). |
 | `external_id` | CEL over `e` | | SCIM and Entra targets, required: the value that names the resource, in place of `dn`. |
 | `key` | `userPrincipalName`, `employeeId` | `userPrincipalName` | Entra targets: the user property `external_id` gives. |
 | `licenses` | map | unset | Entra targets: the Microsoft 365 licences each user holds. |
-| `attributes` | map | required | Target attribute to a CEL expression over `e`. For SCIM, SCIM paths; for Entra, Graph property names. |
+| `attributes` | map | required | Target attribute to a CEL expression over `e`. For SCIM, SCIM paths; for Entra, Graph property names. Since 0.5.5 a mapping that fails keeps the value exported before; 0.5.4 cleared it in the target. |
 | `dn_attributes` | map | empty | Values only the DN template uses, not exported: name to CEL over `e`. |
 | `references` | map | empty | Target attribute to a reference attribute of the view. Each value is exported as the DN (or resource name) the referenced entity has in this target; values whose entity is not exported there are left out. |
 | `deprovision` | see below | `delete` | What happens to an entry whose entity leaves scope or is deleted; see [Deprovisioning](#deprovisioning) and the [staged leaver policy](change-safety.md#staged-leaver-policy). |
@@ -1189,7 +1288,9 @@ functions are for computed attributes. Values of attributes listed in
 ### DN template
 
 - `{attr}` is replaced by the value of an exported attribute or a `dn_attributes` entry,
-  escaped for an RDN (RFC 4514).
+  escaped for an RDN (RFC 4514). Since 0.5.5 a number or a time is written as text, as it
+  would be exported (0.5.4 took only text, and left such an entity without a DN, unexported
+  without a word), and a placeholder matches an attribute's name without case.
 - `{dn:attr}` is replaced by a value that is itself a DN, or the RDNs of one, as it is.
   The value is checked to be a DN; one that is not leaves the entity unexported and
   counts as a rule error. The `dn:` prefix ignores case.
@@ -1329,7 +1430,7 @@ a predicate as a member.
 | Key | Type | Default | What |
 |---|---|---|---|
 | `name` | text | required | Unique within the publication. |
-| `filter` | CEL over `e` | required | Who is a member: `e.department == "Engineering"`. |
+| `filter` | CEL over `e` | required | Who is a member: `e.department == "Engineering"`. Since 0.5.5 a filter that fails on an entity keeps its membership as it was, and an attribute it reads that the view never sets is warned about. |
 | `dn` | DN | required | The group entry's fixed DN (no placeholders). For SCIM and Entra targets, `displayName=<name>`. |
 | `object_classes` | list | `[groupOfNames]` | |
 | `member_attribute` | text | `member` | The attribute holding member DNs. `members` for SCIM and Entra targets. |
@@ -1656,7 +1757,9 @@ month, day of week.
 - Shorthands: `@hourly`, `@daily` (or `@midnight`), `@weekly`, `@monthly`, `@yearly`
   (or `@annually`).
 - When both the day of month and the day of week are restricted, a day matching either
-  matches, as in cron.
+  matches, as in cron; otherwise a day must match both. Since 0.5.5 a step in a day field
+  counts (`*/2` in the day of month is every other day); 0.5.4 read it as `*` and fired every
+  day.
 - Times are local to `schedule_zone` (UTC by default). A time a clock change skips does
   not happen that day; a time that happens twice happens once, the first time.
 - A schedule that never fires (`0 0 30 2 *`) is refused, and every mistake names its
@@ -1694,8 +1797,9 @@ Export reconciliations and drift checks run on intervals (`reconcile_interval_se
 `syncd validate` and the console report every problem at once. 0.5.1 refuses some
 configurations 0.5.0 accepted (the items marked "since 0.5.1" below): check yours with the new
 binary's `syncd validate` before the upgrade. 0.5.2 and 0.5.4 refuse nothing new; 0.5.4 adds two
-warnings (below). Beyond the per-key rules above, a configuration is
-refused when:
+warnings (below). 0.5.5 refuses a little more (marked "since 0.5.5") and warns about more; 0.6.0
+adds the rules of the `dsml` type; 0.6.1 changes nothing. Beyond the per-key rules above, a
+configuration is refused when:
 
 - `version` is not `1`;
 - since 0.5.1, two computed attributes of a view, two flows of one source, or two attributes
@@ -1716,6 +1820,14 @@ refused when:
 - a `csv` connector has no object, a typed column has an unknown type, an object's anchor
   is not one of `columns`, a file without a header has no `columns`, or an object is not
   `mode: scrape`;
+- since 0.6.0, a `dsml` connector has no `location`, an `sftp://` location without `sftp`
+  settings (or `sftp` settings on a local one), no `host_keys`, not exactly one of `password`
+  and `private_key`, a `private_key_passphrase` without a key, a `timeout_secs`, `poll_secs` or
+  `max_bytes` of `0`, a `prefix` that is not letters, digits, `-`, `_` and `.` (or starts with
+  `.`), a `pattern` that is not a glob over file names, or an object that is not `mode: stream`;
+  or a publication to a `dsml` target has `drift`, `unmanaged`, `writeback`, `adopt`,
+  `create_containers`, `remove_empty_containers`, `strip_unmanaged_groups` or `passwords`, or
+  disables accounts while the connector has no `profile`;
 - a `scim` connector has objects, or its `auth` does not have exactly one way, or its
   `oauth2` not exactly one of `client_secret` and `private_key_jwt`; an `entra`
   connector's `auth` does not have exactly one way of signing in, or a certificate
@@ -1741,8 +1853,9 @@ refused when:
 - `container_check_secs` is set on an object that is not an LDAP or Active Directory
   object read with `mode: stream` or `delta`;
 - a view has no source that projects, a source neither projects nor joins, a join rule
-  mixes `entity`/`source` with `all`, precedence names a connector that is not a source,
-  or a reference names an unknown view; `correlation.other_views` names the view
+  mixes `entity`/`source` with `all`, precedence names a connector (or, since 0.5.5, a
+  `connector/object`) that is not a source, or since 0.5.5 `precedence.attributes` lists an
+  attribute twice (names ignore case), or a reference names an unknown view; `correlation.other_views` names the view
   itself, an unknown view, or a view twice;
 - a computed attribute uses `on_error: default` without `default`, or has `permanent`
   without `mode: assign_once`, or with a key that is not another attribute of the view;
@@ -1750,7 +1863,8 @@ refused when:
   only report, or `skip_publication` names a publication of another view; a correlation
   hint's weight or `accept_at` is out of range;
 - a publication names an unknown view or a target that cannot be written to, its DN
-  template uses an unknown placeholder, `object_classes` is empty for a directory, a
+  template uses an unknown placeholder (since 0.5.5 matched without case, as the DN is
+  rendered), `object_classes` is empty for a directory, a
   group's DN is not fixed, a drift policy names an attribute it does not export,
   `adopt.match` names one it does not export, or `remove_empty_containers` is set without
   `create_containers`;
@@ -1815,6 +1929,13 @@ them concern rules that read other entities:
 
 Both left a computed `memberOf` empty without a word before 0.5.4; see
 [Computing memberOf from groups](rules.md#computing-memberof-from-groups).
+
+Since 0.5.5 a computed group's `filter` is checked as a publication's is: an attribute it reads
+that no flow or computed attribute of the view sets, or a lookup table the view does not have,
+is warned about (`publication P: group G filter: e.X is not set by any flow or computed attribute
+of view V; it reads as absent`), since such a group stays empty. An attribute listed only in
+`attributes.multi_valued` no longer counts as set, so a misspelt name there no longer hides the
+warning.
 
 ## Engine environment variables and options
 
@@ -2415,8 +2536,11 @@ The images (`ghcr.io/winllc/syncd` and `ghcr.io/winllc/syncd-console`) and the H
 (`oci://ghcr.io/winllc/charts/syncd`) run the same two programs with the settings on this
 page. This section is a reference for what differs; [Install](install.md) has the
 procedure. They are pushed to GHCR, signed, when a `v*` tag is built in the repository's
-`release` environment: the 0.5.4 images (and their `-fips` variants) and chart are published
-there, signed with cosign, with SBOM attestations.
+`release` environment. The latest published are the 0.6.0 images (and their `-fips` variants)
+and chart, signed with cosign, with SBOM attestations. The 0.6.1 images and chart were not
+published: the tag's `Container` run failed building the amd64 binaries, and its push-and-sign
+job was skipped. 0.6.1 changes only the host installer, so a Kubernetes install loses nothing
+by staying on chart 0.6.0.
 
 The images are built for `linux/amd64` and `linux/arm64` (unless a release was built with
 the arm64 jobs switched off). The `<version>-fips` images, for the same platforms since
@@ -2499,16 +2623,19 @@ of the file on its data volume.
 Every other [console setting](#console-settings) is an environment variable of the
 container. The image serves plain HTTP unless given `CONSOLE_TLS_CERT` and
 `CONSOLE_TLS_KEY`; with the chart, set `console.tls.existingSecret` instead and the
-probes follow. The image includes `git` and `ssh` for Git sync: `https://` and `ssh://`
-repositories work, `file://` ones do not (there is no shell in the image).
+probes follow. Since 0.5.5 the chart's probes ask `/livez`, which answers while the console
+serves; `/healthz` answers 503 naming a background task that keeps stopping or cannot work.
+The image includes `git` and `ssh` for Git sync: `https://` and `ssh://` repositories work,
+`file://` ones do not (there is no shell in the image).
 
 Both images run as uid and gid `65532`, need no root and work with a read-only root file
 system. Their base images are pinned by digest.
 
 ### Helm chart values
 
-The chart's `values.yaml`, by key. The chart's version is the release's (`0.5.4`; 0.5.2 and
-0.5.4 add no values).
+The chart's `values.yaml`, by key. The chart's version is the release's: use `0.6.0`, the latest
+published (see above). 0.5.5 adds `engine.startupProbe` and `engine.minReadySeconds`, and points
+the console's probes at `/livez`; 0.6.0 adds no values, and neither did 0.5.2 or 0.5.4.
 
 | Key | Default | What |
 |---|---|---|
@@ -2527,11 +2654,13 @@ The chart's `values.yaml`, by key. The chart's version is the release's (`0.5.4`
 | `engine.extraVolumes`, `engine.extraVolumeMounts` | `[]` | More volumes on the engine's pod: a CSV inbox, a Kerberos keytab, secrets from a vault. |
 | `engine.passwordKeyPassphrase.existingSecret`, `key` | empty, `passphrase` | A Secret holding the passphrase that seals the password key and the agent CA key, under `key`. Mounted read-only in `/run/secrets/syncd-password-key`, and named by `SYNCD_PASSWORD_KEY_PASSPHRASE_FILE`. Empty: the keys are plain files on the data volume. |
 | `engine.passwordKeyPassphrase.previousKey` | empty | Since 0.5.0. While the passphrase is being changed: the Secret's key holding the passphrase before the change, with which the engine opens a key file the new one does not, and seals it again. Remove it once every engine pod has started since. |
-| `engine.persistence.size` | `10Gi` | The store's volume; size it as [Availability and sizing](availability-and-sizing.md) says. |
+| `engine.persistence.size` | `10Gi` | The store's volume; size it as [Availability and sizing](availability-and-sizing.md) says. A StatefulSet's volume claims cannot be changed by `helm upgrade`: growing the volume later is done on the claims (the source repository's `docs/KUBERNETES.md`, "Growing the engine's volume"). |
 | `engine.persistence.storageClass` | the cluster's default | |
 | `engine.persistence.accessModes` | `[ReadWriteOnce]` | |
 | `engine.resources` | requests `250m` CPU, `512Mi`; limit `4Gi` | |
 | `engine.terminationGracePeriodSeconds` | `90` | Time to finish the batch and stop. |
+| `engine.startupProbe.periodSeconds`, `failureThreshold` | `5`, `120` | Since 0.5.5. How long the engine may take to start before Kubernetes restarts it: the control API's port is checked every `periodSeconds`, `failureThreshold` times (10 minutes). The port opens once the store is open, and after an upgrade that changes the store's format, once it is migrated: raise `failureThreshold` for such an upgrade of a large store. |
+| `engine.minReadySeconds` | `0` | Since 0.5.5. Seconds a new engine pod must stay ready before it counts as available; a rollout of an HA pair moves on to the other pod only then. `0`: as soon as it is ready. |
 | `engine.service.type` | `ClusterIP` | Ports `7443` and `9464`. |
 | `engine.passwordIngest.enabled` | `false` | Expose the password ingest listener (`passwords.ingest`): the pods' port and a Service of its own, `<fullname>-engine-ingest`. The configuration must listen on the same port. With `engine.ha`, the Service routes to both pods, and since 0.5.0 both answer once they are up (the passive engine forwards to the active one). |
 | `engine.passwordIngest.port` | `7445` | The ingest port. |
@@ -2632,9 +2761,10 @@ An HR database and a corporate directory merged into a people view and published
 OpenLDAP, from `examples/hr-to-openldap.yaml` in the source repository (comments
 shortened). The source repository has further examples for MySQL, SQL Server, MongoDB,
 Oracle through Debezium, Db2 through the JDBC bridge, a CSV inbox, Active Directory with
-the conveniences, a SCIM application, Entra ID, and (since 0.5.0) Workday with effective
-dates (`examples/workday-to-openldap.yaml`); [Connectors](connectors.md) shows their
-connector sections.
+the conveniences, a SCIM application, Entra ID, (since 0.5.0) Workday with effective
+dates (`examples/workday-to-openldap.yaml`), and (since 0.6.0) the two sides of an air gap
+(`examples/airgap-export.yaml`, `examples/airgap-import.yaml`); [Connectors](connectors.md)
+shows their connector sections.
 
 ```yaml
 version: 1

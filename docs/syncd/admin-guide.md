@@ -10,7 +10,7 @@ Installing, upgrading and backing up are in the [Install guide](install.md) and 
 [Operator guide](operator-guide.md); the screens designers and operators use every day are in the
 [User guide](user-guide.md).
 
-This page describes syncd 0.5.4 (tag `v0.5.4`, commit `14c6668`). The biggest change for
+This page describes syncd 0.6.1 (tag `v0.6.1`, commit `59cbf19`). The biggest change for
 administrators since 0.4.1: roles are held as **assignments** that can be limited to an environment or an engine,
 and role maps add up (see [Roles](#roles)); sign-in gains a policy of its own
 ([Sign-in policy](#sign-in-policy)) and the product a [license](#the-license). 0.5.0 also brought a
@@ -19,7 +19,11 @@ things 0.5.0 allowed: changes made with a session from another site, the API tok
 sign-on accounts that stopped signing in ([API tokens](#api-tokens)), and a version approved by the
 person who saved it through a token or wrote its Git commit
 ([Configuration approval](#configuration-approval-four-eyes)). See [Security](security.md). 0.5.2
-and 0.5.4 change nothing for administrators.
+and 0.5.4 change nothing for administrators. 0.5.5 changes two things: a password reset revokes
+the API tokens the account created, and a one-time password an administrator issues is refused
+after 7 days ([Password resets and lockouts](#password-resets-and-lockouts)). 0.6.0 and 0.6.1
+change nothing for administrators (0.6.0's `dsml` connector is configured like any other; see
+[Connectors](connectors.md#dsml-files-air-gap)).
 
 ## Becoming an administrator
 
@@ -46,7 +50,8 @@ When the console first starts on an empty database it creates `admin` (display n
 | Development mode (`SYNC_DEV_MODE=true`) | `admin` / `admin`, with a permanent warning banner on every page |
 
 The first sign-in must set a new password; the initial password file is then deleted (recorded
-in the audit trail as `bootstrap.password_file_removed`). Creating the account is recorded as
+in the audit trail as `bootstrap.password_file_removed`). Unlike a one-time password an
+administrator issues, the initial password does not expire after 7 days. Creating the account is recorded as
 `user.bootstrap`, with whether the password was generated, supplied or the development default.
 
 You can tell your roles from the header, which shows your name and your role (for example
@@ -253,7 +258,9 @@ Choose **New user** and fill in:
 | **Roles** | One row per assignment: a role, and **on everything**, **on an environment** or **on an engine** with its name (the field suggests the names). **Add a role** adds a row; an account needs at least one, and holds at most 100. One row, **viewer** on everything, is preselected |
 
 **Create** shows a 20-character **one-time password** once. Give it to the user over a trusted
-channel; they must choose their own at the first sign-in. The account and its record in the audit
+channel; they must choose their own at the first sign-in. From 0.5.5 it is good for 7 days: past
+that the sign-in is refused (`this one-time password has expired: ask an administrator for a new
+one`), and you reset the password to issue another. The account and its record in the audit
 trail (`user.create`, with the roles) are written together, so an account never exists without its
 record.
 
@@ -287,8 +294,12 @@ Accounts are never deleted; disable those that should no longer sign in.
 ### Password resets and lockouts
 
 The key button asks first (**Reset the password of &lt;user&gt;?**), then issues a new one-time
-password for a local account. It also clears the failed sign-in count, unlocks the account, and ends
-its sessions. Recorded as `user.password_reset`. On your own row the dialog offers **Change your
+password for a local account, good for 7 days (from 0.5.5; a sign-in with it after that is refused,
+and recorded as denied). It also clears the failed sign-in count, unlocks the account, and ends
+its sessions. From 0.5.5 it also revokes every [API token](#api-tokens) the account created: a
+reset is how an account whose password was lost or taken is given back, and what was made with the
+old password goes with it. Recorded as `user.password_reset`, with the tokens revoked
+(`tokens_revoked`). On your own row the dialog offers **Change your
 password** instead: a reset would end this session too, with the one-time password on the screen. An
 account that signs in through single sign-on or a certificate has no console password and cannot be
 reset here (nor from the command line, unless told to; see
@@ -707,7 +718,8 @@ To create one, choose **New token**:
 
 **Create** shows the token **once**, with a **Copy** button. The console keeps only its SHA-256; it
 is never written to a log or the audit trail. **Revoke** on a row asks for confirmation, then
-stops the token at once.
+stops the token at once. From 0.5.5 a reset of its creator's password revokes it too (see
+[Password resets and lockouts](#password-resets-and-lockouts)).
 
 | Scope | Needs the creator to be | Allows |
 |---|---|---|
@@ -1132,7 +1144,8 @@ syncd-console admin reset-password [--user NAME] [--allow-single-sign-on]
 ```
 
 Issues a new 24-character one-time password for the account (`admin` by default), prints it, and
-requires it to be changed at the next sign-in. It also unlocks the account and ends its sessions.
+requires it to be changed at the next sign-in. It also unlocks the account and ends its sessions,
+and from 0.5.5 revokes the API tokens the account created; the password is refused after 7 days.
 Recorded as `user.password_reset` by `system`, with `"via": "command line"` and whether the
 account signs in through single sign-on. Use it when every administrator is locked out, or when the
 identity provider and every break-glass password are unavailable.

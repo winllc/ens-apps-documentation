@@ -1,12 +1,17 @@
 # Reports, lineage and data quality
 
 This page covers the evidence syncd gives operators and auditors, and the tools that keep bad
-data out of the targets. All of it is new in syncd 0.4.0; this page describes syncd 0.5.4 (tag
-`v0.5.4`, commit `14c6668`). 0.5.0 added unmanaged entries, Excel exports, PDFs with an embedded
+data out of the targets. All of it is new in syncd 0.4.0; this page describes syncd 0.6.1 (tag
+`v0.6.1`, commit `59cbf19`). 0.5.0 added unmanaged entries, Excel exports, PDFs with an embedded
 font and tagging, an hourly quality trend and a wider correlation search; 0.5.1 changes little
 here (see [Correlation assistance](#correlation-assistance) and the console's pages below), and
 0.5.2 changes only how records waiting for review are retried (see
-[The unmatched queue](#the-unmatched-queue)); 0.5.4 changes nothing here.
+[The unmatched queue](#the-unmatched-queue)); 0.5.4 changes nothing here. 0.5.5 caps a PDF
+report at 20,000 rows, tries a scheduled report that failed for a passing reason again sooner,
+runs a quality check that reads other entities again when they change, and matches records
+waiting for review again in more cases. 0.6.0 adds the `dsml` target, which has no drift check
+or unmanaged-entries pass to report (see [Air-gapped synchronisation](air-gap.md)); 0.6.1
+changes nothing here.
 
 - **Reconciliation reports**: what each publication holds, what the last drift check found, what
   is held or dead-lettered, and (from 0.5.0) the target's unmanaged entries, as text, CSV, JSON,
@@ -94,7 +99,10 @@ same report: `POST /api/v1/engines/{id}/reports/reconciliation/export?format=csv
 - **Always a file**: CSV, an Excel workbook or a PDF, with `Content-Disposition: attachment` and
   `X-Content-Type-Options: nosniff`. The file is named `<engine>-<publication>-<date>.<ext>`.
 - **Capped** at `CONSOLE_EXPORTS_MAX_ROWS` (200,000) rows. A capped download carries
-  `X-Syncd-Truncated: true`.
+  `X-Syncd-Truncated: true`. Since 0.5.5 a PDF holds at most 20,000 rows: a PDF download of a
+  larger report is refused (`a PDF holds at most 20000 rows, and this report has N: download it
+  as CSV or Excel, or one publication at a time`). CSV and Excel have no such limit. Report files
+  are built off the console's request threads, so a large one holds up no other request.
 - **Formula-injection guard.** In the CSV, a text cell that starts with a tab or a carriage
   return, or whose first character after any white space is `=`, `+`, `-` or `@`, is written with
   a leading apostrophe.
@@ -129,13 +137,20 @@ reports.
 
 - A report names an engine, optionally one publication, the format (CSV, PDF, or from 0.5.0
   Excel), the schedule, up to 20 recipients, and/or a directory inside the share.
-- Every five minutes (`CONSOLE_REPORTS_POLL_SECONDS`) one console looks for reports that are due,
-  under a database lock, so a report goes out once however many consoles run.
+- Every five minutes (`CONSOLE_REPORTS_POLL_SECONDS`) the consoles look for reports that are due.
+  Since 0.5.5 each due report is claimed in the database for a quarter of an hour by the console
+  that runs it (0.5.4 held a lock for the whole pass), so a report goes out once however many
+  consoles run, and one a stopped console left is run at a later pass.
+- **A run that failed for a reason that may pass** (the engine, the share or the database did not
+  answer, the file could not be built) is tried again 15 minutes later, until its next slot (since
+  0.5.5; 0.5.4 waited for the next slot). `report.failed` is raised once for such a run that keeps
+  failing, and every time for one that will not succeed (a recipient not allowed, say). Writing to
+  the share gives up after 60 seconds, for a network mount that does not answer.
 - **Every run checks again** that the report's owner is still an active administrator or operator
   and that every recipient is inside the allowed domains. A run that fails a check sends nothing,
   and says why on the page and in the audit trail.
-- A file holds at most `CONSOLE_REPORTS_MAX_ROWS` (50,000) rows and 15 MB. The e-mail says when it
-  was cut.
+- A file holds at most `CONSOLE_REPORTS_MAX_ROWS` (50,000) rows and 15 MB, and since 0.5.5 a PDF
+  at most 20,000 rows. The e-mail says when it was cut.
 - **Writing to a share:** the directory is relative to `CONSOLE_REPORTS_SHARE_DIR`, with no `..`,
   and links are resolved so it cannot point out of the share. The file is written atomically as
   `<engine>-<publication>-<date>.<csv|pdf|xlsx>`. On Kubernetes, mount the share with
@@ -320,6 +335,10 @@ again exactly when the entity is recomputed: when any of its inputs changes, at 
 after a configuration change. A `unique` check keeps an index of values per view: every entity
 sharing an old or a new value is checked again when one changes or is deleted.
 
+Since 0.5.5 a check that reads other entities (`ref()`, `referrers()`) runs again when those
+entities change, as a computed attribute that reads them does; 0.5.4 ran it again only when the
+entity itself was recomputed.
+
 Failures are kept per entity in the store, with the message and since when. An entity that keeps
 failing keeps the time it began to. Checks removed from the configuration are dropped when the
 engine starts.
@@ -329,7 +348,7 @@ engine starts.
 | `on_error` | What happens |
 |---|---|
 | `report` (the default) | The failure is recorded. Nothing else changes |
-| `quarantine` | The entity's exports are held back until the check passes, as a rule with `on_error: quarantine` does. It shows in `syncd quarantine` as `quality <check>` |
+| `quarantine` | The entity's exports are held back until the check passes, as a rule with `on_error: quarantine` does. It shows in `syncd quarantine` as `quality <check>`. Since 0.5.5 an entity released with its attributes unchanged is planned again, so what was held goes out |
 | `skip_publication: [ad-users]` | The entity is kept out of those publications while it fails. They must publish this view |
 
 !!! warning "`skip_publication` applies the leaver policy"
@@ -347,7 +366,7 @@ check that reads other entities cannot quarantine.
 |---|---|
 | `syncd status` | A `quality <view> <check>: N entities fail (<severity>)` line per failing check |
 | `syncd quality [view] [--check C]` | Each check with its severity and failing count. **Exits 1 while a check of severity `error` fails**, so it can gate a script |
-| `syncd quality <view> --check C --list` | The failing entities: ids, the check, the severity, since when and the message. Never values |
+| `syncd quality <view> --check C --list` | The failing entities: ids, the check, the severity, since when and the message. Never values. Since 0.5.5 at most 10,000, whatever `--limit` asks for (as for `syncd dlq` and `syncd quarantine`) |
 | Prometheus | `syncd_quality_failing{view,check,severity}` |
 | Alert | `SyncdQualityErrors`: a check of severity `error` has failed for an hour |
 | Webhook | `quality.errors` (new in 0.5.0): a view's entities failing checks of severity `error` went from none to some, or rose by `CONSOLE_WEBHOOKS_QUALITY_ERRORS_RISE` (10; 0 tells only from none to some) since it was last told. An endpoint gets it once the event is added to its list (see [Webhooks](webhooks.md)) |
@@ -449,7 +468,10 @@ changed since it was last tried, so a re-read of many ambiguous records with not
 quick (17.2 s before, 0.21 s after, for 200,000 accounts joining by surname alone), and the
 `ambiguous` count (`syncd_ambiguous_joins_total`) grows more slowly. When two records of one
 source wait for the same entity and it appears, the first in order of source and record joins it
-and the other stays in the queue (in 0.5.1 either could).
+and the other stays in the queue (in 0.5.1 either could). Since 0.5.5 a waiting record is also
+matched again when an entity loses one of its keys, when a record of its source leaves the
+entity it was a candidate for, and when a candidate is deleted: each can leave the record one
+candidate where it had two. 0.5.4 tried again only when a key was gained.
 
 | Where | What |
 |---|---|

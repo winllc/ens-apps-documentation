@@ -2,15 +2,23 @@
 
 This page summarises syncd's security controls and the settings that affect them: the
 console's sign-in, sessions, roles and API tokens, its HTTPS, the engine's control API,
-secrets, password synchronisation, webhooks and other outbound connections, the audit trail,
-backups, high availability, the systemd hardening, the container images and Helm chart, and the
-supply chain. It describes syncd 0.5.4 (tag `v0.5.4`, commit `14c6668`). 0.5.1 fixes what a
-review of 0.5.0 found; for the console that includes one critical fix (0.5.0 showed the engine's
-environment secrets in the running configuration to every reader: see
-[Authorization](#authorization)) and several checks that refuse what 0.5.0 allowed (changes from
-another site, the API tokens of single sign-on accounts that stopped signing in, a version approved
-by its own author through a token or a Git commit). 0.5.2 and 0.5.4 change no security control;
-0.5.4 updates dependencies (see [Supply chain](#supply-chain)).
+secrets, password synchronisation, webhooks and other outbound connections, files carried across
+an air gap, the audit trail, backups, high availability, the systemd hardening, the container
+images and Helm chart, and the supply chain. It describes syncd 0.6.1 (tag `v0.6.1`, commit
+`59cbf19`). 0.5.1 fixes what a review of 0.5.0 found; for the console that includes one critical
+fix (0.5.0 showed the engine's environment secrets in the running configuration to every reader:
+see [Authorization](#authorization)) and several checks that refuse what 0.5.0 allowed (changes
+from another site, the API tokens of single sign-on accounts that stopped signing in, a version
+approved by its own author through a token or a Git commit). 0.5.2 and 0.5.4 change no security
+control; 0.5.4 updates dependencies (see [Supply chain](#supply-chain)). 0.5.5 fixes what an
+in-depth review of the engine, the console and the packaging found (3 critical, 34 high, 73 medium
+and 45 low findings, most of them fixed; its release notes list what is not). Among them: a
+password agent's submission could undo a revocation made while it ran; a password reset now
+revokes the account's API tokens, and a one-time password expires; read-only callers of the
+engine's control API no longer get its environment's secret values; and no audit output can be
+wedged. Each is marked where it is described. 0.6.0 adds the `dsml` connector, which carries
+identities across an air gap in files (see [DSML files across an air gap](#dsml-files-across-an-air-gap)),
+and moves `wasmi` to 2.0.2. 0.6.1 changes only the host installer.
 
 The source repository's `SECURITY.md` says how to report a vulnerability (GitHub's private
 vulnerability reporting) and that fixes go to the latest minor version only; its
@@ -65,13 +73,13 @@ lockout, the password rules and session limits are settings (the
 |---|---|
 | First sign-in | The first start creates `admin` with a random 24-character password, printed once and written to `$CONSOLE_DATA_DIR/initial-admin-password` (mode 0600). An installer can supply one with `CONSOLE_ADMIN_PASSWORD` or `CONSOLE_ADMIN_PASSWORD_FILE`; `admin`, empty, and passwords failing the policy are refused at startup. The first sign-in must set a new password, and the file is then deleted |
 | Notice and consent | With `ENS_CONSENT_BANNER_ENABLED=true` (from 0.5.0) every sign-in method refuses until the browser has acknowledged the notice (`POST /api/v1/auth/consent`) in the last 15 minutes; the server enforces it, not the page. See [Sign-in baseline](#sign-in-baseline) |
-| Forced password change | An account with a one-time password can call nothing but `POST /api/v1/auth/password` (and `GET /api/v1/auth/me` and sign-out) until it sets a new one; 0.5.0's message of the day and previous sign-in (`/api/v1/auth/message-of-the-day`, `/api/v1/auth/session`) answered it too, 0.5.1's do not. Every other call answers 403 `password_change_required`. From 0.5.0 an account whose password is older than `ENS_PASSWORD_MAX_AGE_DAYS` is held to the same (`user.password_expired` in the trail) |
+| Forced password change | An account with a one-time password can call nothing but `POST /api/v1/auth/password` (and `GET /api/v1/auth/me` and sign-out) until it sets a new one; 0.5.0's message of the day and previous sign-in (`/api/v1/auth/message-of-the-day`, `/api/v1/auth/session`) answered it too, 0.5.1's do not. Every other call answers 403 `password_change_required`. From 0.5.0 an account whose password is older than `ENS_PASSWORD_MAX_AGE_DAYS` is held to the same (`user.password_expired` in the trail). From 0.5.5 a one-time password an administrator issues (a new account, a reset on **Users** or on the host) is good for 7 days: past that, a sign-in with it is refused with 403, saying so, once the password has been checked, and an administrator issues a new one. The first admin's initial password has no such end |
 | Password policy | By default at least 12 characters; not the username and not `admin` (case-insensitive); not the current password. From 0.5.0 `ENS_PASSWORD_MIN_LENGTH`, the minimum of each character class, `ENS_PASSWORD_HISTORY`, `ENS_PASSWORD_MAX_AGE_DAYS` and `ENS_PASSWORD_REJECT_USERNAME` add to it. There is no minimum password lifetime |
 | Password hashing | Argon2id (the `argon2` crate's defaults), or PBKDF2-HMAC-SHA512 with 210 000 iterations and a 16-byte salt in FIPS mode, stored as PHC strings. Salts and generated passwords come from aws-lc-rs. In FIPS mode Argon2id hashes are not accepted, so those accounts need a reset |
-| Per-address throttle | 20 sign-in attempts per client address in 5 minutes, then 429 `too_many_requests`, audited as `auth.login` denied (`rate limited`). From 0.5.1 an IPv6 client counts by its /64, and changing the current password (`POST /api/v1/auth/password`) is held to the same limit. The counters are in memory, bounded in size, and reset when the console restarts. Not a setting |
+| Per-address throttle | 20 sign-in attempts per client address in 5 minutes, then 429 `too_many_requests`, audited as `auth.login` denied (`rate limited`). From 0.5.1 an IPv6 client counts by its /64, and changing the current password (`POST /api/v1/auth/password`) is held to the same limit. From 0.5.5 the OpenID Connect callback and the SAML assertion consumer service are held to it too, refusals past the limit are recorded once a minute per address, and a user name longer than 256 characters is refused, so callers without an account cannot fill the audit trail. The counters are in memory, bounded in size, and reset when the console restarts. Not a setting |
 | Account lockout | By default 5 failed password sign-ins lock a local account for 15 minutes, audited with `"locked": true` (an `alert` in the trail); a successful sign-in resets the count. From 0.5.0 `ENS_LOCKOUT_ATTEMPTS`, `ENS_LOCKOUT_WINDOW` and `ENS_LOCKOUT_DURATION` set them (`0` duration: until an administrator unlocks the account on **Users**, or resets its password). From 0.5.1 a wrong current password on the password change counts toward the lock too, and an account's password checks take turns, each taking one of its attempts before the password is checked: attempts made at the same time, through several consoles too, check no more passwords than the lockout allows, and a right password no longer lifts a lock set meanwhile |
 | Uniform refusals | Every failed sign-in gets the same 401 `sign_in_failed`, whether the account is unknown, disabled, locked, has no local password, or is outside break-glass. An unknown account spends as long as a real password check. The audit trail records the real reason |
-| Account recovery | `syncd-console admin reset-password [--user NAME]` on the host issues a one-time password. It needs the console's database settings (`console.env`). It refuses an account that signs in with single sign-on, as the **Users** page does, since a password would let it sign in without the identity provider (and its MFA). `--allow-single-sign-on` gives it one anyway, for recovery while the provider is down; the audit entry (`user.password_reset`) then records `"single_sign_on": true` |
+| Account recovery | `syncd-console admin reset-password [--user NAME]` on the host issues a one-time password. It needs the console's database settings (`console.env`). It refuses an account that signs in with single sign-on, as the **Users** page does, since a password would let it sign in without the identity provider (and its MFA). `--allow-single-sign-on` gives it one anyway, for recovery while the provider is down; the audit entry (`user.password_reset`) then records `"single_sign_on": true`. From 0.5.5 a reset, here or on **Users**, also signs the account out and revokes the API tokens it created (the **Users** reset lists them in its audit entry, `tokens_revoked`), and the one-time password lasts 7 days |
 | Single sign-on | OpenID Connect authorization code flow with PKCE, state and nonce; ID token signature (asymmetric algorithms only), issuer, audience and expiry checked. From 0.5.0, SAML 2.0 (the Web Browser SSO profile; signed responses only, with defences against signature wrapping, comment injection, DTDs and replay; tested against Keycloak only). Accounts are bound to the provider's subject or `NameID`, never taken over by username. Role assignments come from a claim or attribute at every sign-in. See [Single sign-on](single-sign-on.md) |
 | Certificate sign-in | From 0.5.0, an X.509 client certificate (a CAC or PIV card) on the console's own HTTPS or through a trusted proxy's header: path validation to `ENS_X509_CA_FILE`, then OCSP and the CRL in the configured order, **failing closed** when the status cannot be learned. Tested with test PKIs only, never a real card or the DoD PKI. See [Single sign-on](single-sign-on.md#certificate-sign-in-cacpiv) |
 | Break-glass | With OpenID Connect, SAML or certificate sign-in configured, an admin can limit local sign-in to accounts marked break-glass (**Users** → Local sign-in). At least one enabled break-glass console administrator with a password must remain; switching signs out the local accounts that can no longer sign in, and from 0.5.1 so does unmarking one account while the limit is on |
@@ -157,8 +165,9 @@ From 0.4.0, scripts, pipelines and SIEM collectors call the console's API with a
 Treat a token like a password: keep it in a secret store or a file readable by the job that uses
 it (`syncd config promote --token-file`), give each system its own with the narrowest scopes and
 an expiry, and revoke it when the system goes. A token's creator is an account: disabling the
-account disables its tokens, and a creator who signs in through single sign-on must keep signing
-in for them to work. What a token saves is the creator's for
+account disables its tokens, from 0.5.5 a reset of its password revokes them (so a recovery reset
+of an account that creates tokens for other systems means new tokens for them), and a creator who
+signs in through single sign-on must keep signing in for them to work. What a token saves is the creator's for
 [configuration approval](#configuration-approval-four-eyes): they cannot approve it.
 
 ## Sessions
@@ -292,6 +301,12 @@ running configuration that holds a secret value but does not parse is not import
 that ran 0.5.0, consider every secret environment value known to whoever could read
 configurations there.
 
+From 0.5.5 the engine does the same for callers of its own control API below the `configure`
+tier: they get the running configuration without the values its environment marks secret, and
+their simulations run without those values, reading rule packages only inside the configuration's
+directory (see [Access tiers](#access-tiers)). Before, a `read` certificate (a monitoring system's,
+say) got the rendered text whole.
+
 Revealing sensitive values is separate: see [Sensitive attributes](#sensitive-attributes-and-reveal).
 The per-route roles and token scopes are in the [API reference](api-reference.md#console-rest-api).
 
@@ -364,6 +379,9 @@ on the process's TLS provider (the FIPS module in a FIPS build) and without a ve
   connection made with it fails, so a rotated credential is picked up without a restart. Open
   database connections keep their credential until the database closes them; SCIM's bearer
   token and basic password are not read again on a `401`.
+- From 0.5.5 a store that cannot be read once a value's `cache_secs` have passed leaves the last
+  value read in use, with a warning, rather than failing a reload or a reconnect. A value dropped
+  because a connection made with it failed is read for real, and the store's error shows.
 - An engine that cannot read a reference at start does not start. Values are never logged.
 - **Tested against doubles of Vault, AWS and Azure only**, never against the services
   themselves. Google Secret Manager is not built; Vault's dynamic secrets and certificate auth
@@ -500,7 +518,7 @@ missing from the table is refused to everyone):
 
 | Tier | What it allows |
 |---|---|
-| `read` | The status, the lists (dead letters, held changes, quarantine, data quality, unjoined records, queued password changes), the running configuration, simulations, the reconciliation report |
+| `read` | The status, the lists (dead letters, held changes, quarantine, data quality, unjoined records, queued password changes), the running configuration, simulations, the reconciliation report. From 0.5.5 the running configuration comes without its environment's secret values, and simulations run without them, below `configure` |
 | `operate` | Runs, approvals, drift and unmanaged-entry checks, adopting an entry, dead-letter actions, joins, group reviews, a person's own password change (the self-service page), revoking a capture agent, backups and HA snapshots, connector checks, schema discovery and previews, and sensitive values (`reveal`) |
 | `operate` and `passwords` | Setting a password of the caller's choosing, and deciding who else can: `SubmitPasswords`, adding or binding a capture agent, rotating the password key or the agent CA, and `ForwardPasswordIngest` (the passive engine of a pair speaking for agents). From 0.5.1, on an engine that holds password key material, also the calls that hand the keys out with the store: `Backup`, `PullSnapshot`, `PullSnapshotFiles` and `FollowPasswordQueue` |
 | `configure` | `ApplyConfig` (the console's publish, `syncd apply-config`) and `SetLicense` |
@@ -695,11 +713,11 @@ synchronisation has been done; the plan makes both release gates for it.
 | The agent CA | A P-256 key and a ten-year self-signed certificate (`password-agent-ca.key`, mode 0600, and `.crt` beside the password key), made with `rcgen` on aws-lc-rs. Its key is sealed like the password key. It issues each agent's client certificate (client authentication only, the subject is the agent's name whatever the request asked, `passwords.ingest.agent_cert_days`, 365 by default) and, at every start, the ingest listener's own server certificate. From 0.5.0 `syncd password rotate-agent-ca` makes a new one; the previous CA stays trusted for the overlap, and agents renew their certificates with the one they hold (`Renew`), keeping their key |
 | The keys at rest | From 0.4.1, with `SYNCD_PASSWORD_KEY_PASSPHRASE_FILE` (a file holding the passphrase; `SYNCD_PASSWORD_KEY_PASSPHRASE`, the passphrase itself, is read when the file variable is unset), the key files are **sealed**: PBKDF2-HMAC-SHA256 (600,000 iterations, a random 16-byte salt) derives an AES-256-GCM key from the passphrase, both through aws-lc-rs, so a FIPS build uses its FIPS module. The file's format line and derivation parameters are the additional data. A sealed file without the passphrase, or with the wrong one, stops the engine with an error naming the variable. From 0.5.0 `syncd password rekey` changes the passphrase (the previous one keeps opening files until they are sealed again), and the passphrase file can be wrapped by a KMS key (`SYNCD_PASSWORD_KEY_PASSPHRASE_KMS`). **Without a passphrase the keys are stored in the clear** (the password key as hex, the CA key as PEM), protected by the file mode only: the engine warns at start and `syncd status` says `password keys: stored in the clear`. The status API's `keys_sealed` and the console's engine page say which |
 | Enrollment tokens | `syncd password agent add <name> --source <connector>` prints a one-time token, good for an hour. The engine keeps only its SHA-256 and compares in constant time. The agent makes its own key, which never leaves its host, and sends a signing request with the token; the token is then spent, and an earlier certificate of the same agent stops working |
-| Agent access | The ingest listener is mutual TLS with the agent CA. Every call but `Enroll` needs a certificate whose fingerprint the engine recorded and has not revoked. `syncd password agent revoke` refuses it at once; the check is the fingerprint, not a CRL. A revoked name cannot be enrolled again. From 0.5.0 **an agent speaks for the sources it is bound to only**: the engine opens each change an agent submits, in memory, and refuses one for another source before it is queued (`syncd_password_changes_refused_total`). An agent enrolled before 0.5.0 is bound to no source and may submit for any until it is bound (`syncd password agent bind`); the engine warns about it at every start |
+| Agent access | The ingest listener is mutual TLS with the agent CA. Every call but `Enroll` needs a certificate whose fingerprint the engine recorded and has not revoked. `syncd password agent revoke` refuses it at once; the check is the fingerprint, not a CRL. A revoked name cannot be enrolled again. From 0.5.0 **an agent speaks for the sources it is bound to only**: the engine opens each change an agent submits, in memory, and refuses one for another source before it is queued (`syncd_password_changes_refused_total`). An agent enrolled before 0.5.0 is bound to no source and may submit for any until it is bound (`syncd password agent bind`); the engine warns about it at every start. From 0.5.5 a revocation or a change of bindings is never undone by a submission under way: before, an agent's submission could put back a revocation made while it ran (one of 0.5.5's critical findings) |
 | Who submitted it | From 0.5.0 each queued change records its submitter: the agent, the person and control API caller of a self-service change, or the control API's caller. `syncd password queue`, the delivery log lines (`submitted_by=`), the entity's history and lineage show it. The DN that made the change in the source directory stays in the agent's own log |
 | Setting passwords through the control API | `SubmitPasswords` (`syncd password set`), adding and binding agents and the rotations: in strict mode a certificate must be listed under `api.access.passwords`, or the caller be on the control socket. In compatible mode, any control certificate can (see [The engine control API](#the-engine-control-api)) |
 | Passwords in memory | Opened in memory only, just before delivery, and zeroized when dropped. Never logged, never in `Debug` output, status, metrics, lineage or history. The LDAP library's encoding buffers are not zeroized, and there is no locked memory or core-dump suppression in the engine (the agent's sample unit sets `LimitCORE=0`) |
-| Echo suppression | A change captured right after syncd wrote the same password is dropped, recognised by a keyed hash kept for 10 minutes, with a random key per process; the agent also drops what the account named in its `ignore_actor` set |
+| Echo suppression | A change captured right after syncd wrote the same password is dropped, recognised by a keyed hash kept for 10 minutes, with a random key per process; from 0.5.5 up to eight per account, kept across a configuration reload. The agent also drops what the account named in its `ignore_actor` set |
 | Writing to targets | Password Modify (RFC 3062), `userPassword` replace, or Active Directory's `unicodePwd`, which is refused unless the connection is LDAPS or StartTLS. From 0.5.0 **clear text to any LDAP directory is refused**: a configuration that delivers passwords, initial passwords or self-service changes to an LDAP directory on another host over `ldap://` without `starttls` no longer validates, unless `passwords: { allow_cleartext: true }` (with a warning at every start and in `syncd status`); loopback and `ldapi://` are exempt, and Active Directory never takes passwords without TLS. SCIM targets get `password` over HTTPS |
 
 - **Seal the keys, and keep the passphrase apart.** Whoever reads the key files and the queued
@@ -748,7 +766,8 @@ own directory password without a console account.
   and `min_classes` (0.4.0 showed a fixed 12).
 - A wrong user name, several matches and a wrong password all get the same answer (`401
   wrong_credentials`). After 5 failures in 15 minutes a user name is refused for the rest of that
-  time, whatever the password, on top of the per-address limit.
+  time, whatever the password, on top of the per-address limit. From 0.5.5 each attempt counts
+  before the bind, so guesses made in parallel cannot all pass the check.
 - The page is public: put it behind the same TLS as the console, and consider who may reach it.
   There is no reset of a forgotten password.
 - From 0.5.1 a user name holding control characters is refused (`400`) before anything is asked,
@@ -802,8 +821,9 @@ scheme and host.
 So that an administrator cannot turn the console into a proxy onto its own network, a webhook's
 host is resolved before it is saved and again at every send, and every address is checked:
 loopback, link-local and cloud metadata addresses (169.254.0.0/16, fe80::/10, fd00:ec2::254,
-100.100.100.200, 168.63.129.16), unspecified, multicast and broadcast addresses, and IPv6 forms
-that embed or translate them, are always refused. Private ranges are refused for new webhooks
+100.100.100.200, 168.63.129.16), unspecified, multicast and broadcast addresses, from 0.5.5
+reserved ranges (192.0.0.0/24, 198.18.0.0/15, 240.0.0.0/4), and IPv6 forms that embed or
+translate them, are always refused. Private ranges are refused for new webhooks
 unless `CONSOLE_WEBHOOKS_ALLOWED_HOSTS` lists the host, or `CONSOLE_WEBHOOKS_BLOCK_PRIVATE_NETWORKS`
 is `false`. The post goes to the address that was checked (no DNS rebinding), through no proxy
 (from 0.5.1), verifies the certificate against the URL's host, and never follows a redirect. See
@@ -819,6 +839,7 @@ is `false`. The post goes to the address that was checked (no DNS rebinding), th
 | REST/OData sources, Workday, SuccessFactors, UKG Pro | From 0.5.0: HTTPS through rustls on the process provider, with a bearer token, basic credentials, an API key header, OAuth 2.0 (client credentials, `private_key_jwt`, refresh token, JWT and SAML bearer) or a client certificate. Tested against fakes only, never a real tenant |
 | Secret stores and KMS | From 0.5.0: Vault, AWS Secrets Manager and KMS (SigV4), Azure Key Vault, over HTTPS through rustls on the process provider; the engine's and the console's own clients, no vendor SDK. Tested against doubles only |
 | CSV sources | Files on the engine's host or a mounted share; nothing on the network |
+| DSML files (from 0.6.0) | A directory on the engine's host or a mounted share, or an SFTP server trusted by its pinned host key only, signed in to with a password or an Ed25519 or ECDSA key; SFTP is refused in FIPS mode. See [DSML files across an air gap](#dsml-files-across-an-air-gap) |
 | JDBC bridge | A token (`--token-file` on the bridge) is required unless the bridge is on loopback; beyond loopback it must be `https://` |
 | Debezium Server sidecar | The engine listens for its HTTP sink. Beyond loopback a token, which the sink puts in its URL path, is required |
 | Password ingest listener | Mutual TLS with the engine's agent CA (see [Password synchronisation](#password-synchronisation)) |
@@ -832,6 +853,30 @@ is `false`. The post goes to the address that was checked (no DNS rebinding), th
 | syslog | `ENS_AUDIT_SYSLOG_PROTOCOL`: `tls` (checked against the public roots), or `tcp` and `udp` in plain text |
 | SMTP (scheduled reports, group review mail) | STARTTLS by default, or from 0.5.0 TLS from the first byte (`CONSOLE_SMTP_IMPLICIT_TLS`, SMTPS), checked against the public roots or `CONSOLE_SMTP_CA_FILE`; AUTH PLAIN or, from 0.5.0, AUTH LOGIN (`CONSOLE_SMTP_AUTH`), only over TLS. `CONSOLE_SMTP_STARTTLS=false` sends in plain text: a relay on the host or a private network only. Mail goes only to `CONSOLE_REPORTS_RECIPIENT_DOMAINS`, checked again at every run |
 | Git sync | `https://` or `ssh://` through the `git` and `ssh` programs (not syncd's crypto module) |
+
+## DSML files across an air gap
+
+From 0.6.0 a `dsml` connector carries identities between networks that are not connected. On the
+connected side it is a target: the changes the engine exports are written as DSML v2 files, which
+whatever carries files across (a data diode, a transfer appliance, removable media) takes to the
+far side. There a `dsml` source reads them, and that side's engine publishes them to its own
+directories. [Air-gapped synchronisation](air-gap.md) is the guide, with a security section of its
+own; the settings are in [Connectors](connectors.md#dsml-files-air-gap).
+
+| Control | Implementation |
+|---|---|
+| Where the files are | A directory on the engine's host (a mounted transfer volume, an appliance's inbox), or an SFTP server. A file is written under a temporary name and renamed into place when complete, so nothing sees half a file |
+| The SFTP server | Trusted by its **pinned host key only** (`host_keys`: a `.pub` or `known_hosts` line, or the `SHA256:` fingerprint `ssh-keygen -lf` prints). There is no trusting a key on first use, and a host certificate is not taken; a server that presents another key is refused, and the refusal names the key it presented |
+| Signing in to it | A password, or an OpenSSH **Ed25519 or ECDSA** key (with its passphrase). RSA keys are not taken: the SSH client is built without RSA. Every secret is a secret reference (a file, an environment variable, a vault), as for other connectors. In FIPS mode an `sftp://` location is refused: see [FIPS 140-3 and DISA STIG](fips-and-stig.md) |
+| Integrity | Each file has a `.sha256` beside it, written first, as `sha256sum` prints it. The source checks it (`require_checksums: true` waits for one), and a file that does not match stops the source, with an error naming it, until it is replaced. **A checksum detects damage, not tampering**: a DSML file carries no signature, and whoever can write a file can write its checksum. Integrity across the gap rests on the transfer path: the diode or appliance, the media, and who can write to the outbox and the inbox |
+| Order | A file's name carries the target's sequence number. A missing file holds the ones after it (`on_gap: wait`, the default) until it arrives, or until a snapshot from the same target supersedes it |
+| What the reader refuses | A document type declaration (so no entity expansion and no external entities), an `anyURI` value, a request a file cannot carry (a search), and a file over `max_bytes`: each stops the source with an error naming the file. A file of changes is read whole before anything in it is applied |
+| Passwords | The files carry no passwords: validation refuses `passwords` on a publication to a `dsml` target. An attribute mapped like any other is written as it is, so keep password hashes and other secrets out of those publications |
+| Confidentiality | **The files hold the exported attributes in clear text** (XML, binary values in base64); syncd does not encrypt them. Protect the outbox, the inbox (the directory's permissions, the SFTP account), the transfer media and the appliance as you would the target directory's data. A source keeps the files it has read unless `after_read` is `delete` or `move` (into `processed/`) |
+| Exports waiting for the next file | Kept in the engine's store until the interval's file is written, so they are in its backups and HA snapshots like the rest of the store |
+
+The DSML support was tested against OpenSSH 9.6 and OpenLDAP 2.6, with a script carrying the files
+across; not against a commercial DSML gateway or a data diode's transfer software.
 
 ## Sensitive attributes and reveal
 
@@ -917,6 +962,20 @@ cursor: at least once, in order, never lost while a receiver is down. After 15 m
 the console records `audit.delivery-failed` (an `alert`), and `audit.delivery-recovered` when the
 output catches up.
 
+From 0.5.5:
+
+- **No output is wedged** by one event or a receiver that stalls. What a caller sends is cut when
+  it is recorded (a name, a path or a user agent to 256 characters, each text in the details to
+  8,192), Splunk gets requests of at most 512 KB, and a syslog connection, its TLS handshake and
+  each write have 30 seconds. An event an output still cannot take (larger than a UDP datagram, or
+  refused by Splunk as too large) is passed over, so the events after it go out, and recorded as
+  an `audit.delivery-failed` alert naming it (`details.skippedSeq`).
+- **One console at a time sends each output**, with several consoles on one database: it holds
+  the output's turn, renewed while it runs, and another takes over within two minutes of it
+  stopping. So the stdout and file outputs hold the whole trail on whichever console sends them,
+  not a part of it on each, and Splunk and syslog get each event once (at least once across a
+  takeover). Before, every console sent every output from the one cursor.
+
 | Output | Setting |
 |---|---|
 | Standard output (the journal, the pod log) | On by default (`ENS_AUDIT_STDOUT`) |
@@ -930,7 +989,9 @@ events every enabled output has delivered, never the newest; each run is recorde
 `audit.pruned` (from 0.5.1 in the same transaction as the delete, so events never go without the
 record), and the chain still verifies from the oldest kept event. From 0.5.1 verification also
 flags events missing from the start of the trail that no `audit.pruned` accounts for: deleted
-around retention, not by it.
+around retention, not by it. From 0.5.5 retention removes events only up to the first one that is
+not old enough: a prefix of the chain, never a hole. Before, with consoles whose clocks differed,
+an event could go while an earlier one stayed, a hole that verification takes for tampering.
 
 The engine itself does not write an audit trail: its control requests, refusals by access tier,
 reveals, backups and password deliveries go to its journal with their caller (a delivery with who
@@ -952,7 +1013,8 @@ submitted the change). From 0.5.0 its status also says who applied the configura
   policy, and prefer an IAM role (IRSA, EKS Pod Identity) to static keys. S3 credentials come
   from the engine's environment (`AWS_*` in `/etc/syncd/engine.env`), the shared credentials
   file or, from 0.5.0, last, the EC2 instance's role (`AWS_EC2_METADATA_DISABLED=true` skips
-  it).
+  it). From 0.5.5 a backup written to a directory (the archive and every file beside it) is
+  readable by its owner only.
 - **The console's master key** is in an off-host backup from 0.4.1 (#141): `syncdctl backup
   --to` writes it as `<name>.console-master.key` beside the database dump, or, when it is set as
   `CONSOLE_MASTER_KEY` in `/etc/syncd/console.env`, says it is in the `/etc/syncd` archive. A
@@ -971,7 +1033,9 @@ submitted the change). From 0.5.0 its status also says who applied the configura
 - **Integrity.** Every file of a backup is listed in its manifest with its SHA-256; a restore
   refuses a backup whose files do not match, or whose store format is newer than it reads. The
   manifest is not signed: it catches damage, not a deliberate change by someone who can write
-  the destination.
+  the destination. From 0.5.5 a restore checks an archive's files against the manifest before it
+  writes them, and `syncd restore --replace` fetches and checks the backup before it moves the
+  store in place aside.
 - **A restore of sealed keys needs the passphrase** of the engine they came from: without it the
   restored engine does not start. 0.4.0's documentation said the key files were already
   encrypted; they were not, and an unsealed engine's backups still hold them in the clear.
@@ -1065,7 +1129,13 @@ the sign-in limit see client addresses.
   yanked crates denied, crates only from crates.io, no git or unknown registries, no wildcard
   versions. `cargo-audit` checks advisories; the few advisories ignored are each justified in
   `deny.toml` or `.cargo/audit.toml`, and CI checks that the code they concern stays unbuilt.
-  In 0.5.4:
+  From 0.5.5 the advisory checks (cargo-deny's `advisories` and `cargo-audit`) run in a workflow
+  of their own, `.github/workflows/advisories.yml`: every day on `main`, where a failure opens an
+  issue (or comments on the open one), and on every pull request that changes the dependencies
+  (`Cargo.lock`, a `Cargo.toml`, `deny.toml`, `.cargo/audit.toml`), which they gate. CI's
+  `cargo-deny` job still checks licences, bans and sources on every pull request that changes
+  code. Before, the advisories ran on every pull request and weekly. In 0.5.4, and still at
+  0.6.1:
     - `libz-sys` is 1.1.33 in the lock file, for RUSTSEC-2026-0544 (a heap overflow). syncd does
       not build it: the RocksDB build leaves zlib out;
     - `chrono` and `chrono-tz` are reported unmaintained (RUSTSEC-2026-0543, RUSTSEC-2026-0555),
@@ -1073,27 +1143,40 @@ the sign-in limit see client addresses.
       rules, schedules, change windows and licence dates use them, and the CEL parser (`cel`
       0.15) depends on both. `chrono-tz`'s time zone rules stay as in its 0.10.4, so a zone whose
       rules change later is computed by the old ones until the planned move to `jiff`;
-    - `wasmi`, which runs rule packages' WebAssembly functions, is 2.0.1: 2.0.0 was withdrawn
-      from crates.io.
+    - `wasmi`, which runs rule packages' WebAssembly functions, was 2.0.1 in 0.5.4 and 0.5.5
+      (2.0.0 was withdrawn from crates.io). From 0.6.0 it is 2.0.2: 2.0.1 was yanked upstream on
+      2026-11-17, and the advisory check refuses a yanked crate.
+
+  From 0.6.0 the SFTP client of the `dsml` connector (`russh`) is built without RSA, so the `rsa`
+  crate, whose timing advisory (RUSTSEC-2023-0071) has no fixed release, stays out of the build;
+  it is in `Cargo.lock` only through an optional driver nothing enables, its advisory is ignored
+  in `.cargo/audit.toml` for that reason, and the advisory workflow checks that it is not built.
 - **Fuzzing.** The decoders of what sources send (`pgoutput`, DirSync, syncrepl) and, from
   0.5.0, of what WebAssembly modules return are fuzzed in CI.
 - **Releases.** A release is built in CI from a `v*` tag (Rocky Linux 9, and Rocky Linux 8 for
   the RHEL 8 `.rpm`), after the package lifecycle tests and the upgrade test from the previous
-  release pass. Releases are tagged from 0.5.0 on (`v0.5.0`, `v0.5.1`, `v0.5.2`, `v0.5.4`). For
-  0.5.4 the release job succeeded (on its second attempt): it uploaded the files to the ENS
-  licensing portal's release bucket (the **Downloads** page), then to the source repository's
-  GitHub release, which holds every file (marked pre-release, with no notes text); the images and
-  chart were pushed to GHCR and signed with cosign. The files are still **not GPG-signed** (no
-  release key was set), so there is no `SHA256SUMS.asc` and no apt or dnf repository yet. 0.5.2
-  was published as images and a chart only, its packages having failed to build; there is no
-  0.5.3. For 0.5.1 the GitHub release held only the images' SBOMs. A release carries the x86_64
+  release pass. Releases are tagged from 0.5.0 on (`v0.5.0`, `v0.5.1`, `v0.5.2`, `v0.5.4`,
+  `v0.5.5`, `v0.6.0`, `v0.6.1`). For 0.5.4 the release job succeeded (on its second attempt): it
+  uploaded the files to the ENS licensing portal's release bucket (the **Downloads** page), then
+  to the source repository's GitHub release, which holds every file (marked pre-release, with no
+  notes text); the images and chart were pushed to GHCR and signed with cosign. 0.5.5, 0.6.0 and
+  0.6.1 were published the same way, as final releases with their notes: the bundles, `.deb` and
+  `.rpm` files are on the GitHub release and the portal. The files of every release so far are
+  **not GPG-signed** (no release key was set), so there is no `SHA256SUMS.asc` and no apt or dnf
+  repository yet. From 0.5.5 the release job refuses to publish without the signing key, before
+  it publishes anything, unless the repository variable `ALLOW_UNSIGNED_RELEASE` is `true`: 0.5.5,
+  0.6.0 and 0.6.1 were published unsigned that way. 0.6.1's images and chart were not published
+  (see below). 0.5.2 was published as images and a chart only, its packages having failed to
+  build; there is no 0.5.3. For 0.5.1 the GitHub release held only the images' SBOMs. A release carries the x86_64
   and aarch64 bundles, `.deb` and `.rpm` (aarch64 only when the repository's arm64 runners are
   enabled, which from 0.5.0 is the default), the RHEL 8 `.rpm`, x86_64 and (from 0.5.0) aarch64 FIPS bundles, and from 0.5.0 the
   `syncd-capture` packages, with:
     - `SHA256SUMS` over every file as published, and its **GPG signature** `SHA256SUMS.asc`, made
       in a protected `release` environment that holds the key. From 0.5.0 the `.rpm` files are
-      signed with the same key. Without the key the workflow warns and publishes unsigned, and
-      its summary says so. Verify the signature and the checksums before installing (see
+      signed with the same key. Without the key the release job fails before it publishes
+      anything (from 0.5.5; before, it warned and published unsigned), unless
+      `ALLOW_UNSIGNED_RELEASE` is `true`: it then publishes unsigned, and its summary says so in
+      bold. Verify the signature, where there is one, and the checksums before installing (see
       [Installation](install.md));
     - **CycloneDX SBOMs** of the engine, the console and (from 0.5.0) the capture agent, and from
       0.5.0 the images' SPDX SBOMs as release files too;
@@ -1106,7 +1189,10 @@ the sign-in limit see client addresses.
     the pinned nfpm and check its SHA-256.
 - **Container images and chart.** A `v*` tag also pushes `ghcr.io/winllc/syncd:<version>`,
   `ghcr.io/winllc/syncd-console:<version>`, their `<version>-fips` variants and the chart
-  (`oci://ghcr.io/winllc/charts/syncd`).
+  (`oci://ghcr.io/winllc/charts/syncd`). The newest published are **0.6.0's**, signed with
+  cosign. 0.6.1's were not published: the tag's Container workflow failed building the amd64
+  binaries, so its push-and-sign job was skipped. 0.6.1 changes only the host installer, so
+  0.6.0's images and chart are the ones to run on Kubernetes.
     - **Multi-arch:** `linux/amd64` and `linux/arm64` (amd64 alone when the arm64 runners are
       off); from 0.5.0 the FIPS images too. Tagged by version only (no `latest`).
     - **Signed:** each image and the chart are signed with cosign (keyless, the release
@@ -1117,8 +1203,9 @@ the sign-in limit see client addresses.
     - **Scanned:** on every pull request CI builds the standard and FIPS images, amd64 and (with
       arm64 runners) arm64, and scans the amd64 ones, standard and FIPS, with Trivy; a fixable
       HIGH or CRITICAL finding fails the build. Accepted risks are listed in `.trivyignore`, each with its reason, who accepted
-      it and until when. At 0.5.4 it holds one: CVE-2026-84782 (OpenSSL's DTLS, in the
-      distroless base's `libssl3`, which syncd does not link), accepted until 2026-12-08.
+      it and until when. At 0.5.4, and still at 0.6.1, it holds one: CVE-2026-84782 (OpenSSL's
+      DTLS, in the distroless base's `libssl3`, which syncd does not link), accepted until
+      2026-12-08; the fix is not in the distroless image yet.
     - **Pinned:** the base images are referenced by digest, and Dependabot proposes updates.
 
     CI also checks that the images run as uid 65532 and that only the FIPS images accept
@@ -1173,11 +1260,15 @@ is not validated, and the settings a STIG deployment needs.
       bucket policy; they hold entity data, the password keys, the engine's secrets and the
       console's master key
 - [ ] Source and target connections with `tls: verify_full`, `ldaps://` or `starttls: true`
+- [ ] With DSML files across an air gap: SFTP host keys pinned, the outbox, the inbox and the
+      transfer media protected (the files hold the exported attributes in clear text, with a
+      checksum but no signature), `require_checksums: true` on the far side, and no secret
+      attributes in publications to a `dsml` target
 - [ ] `api.metrics_listen` on loopback or a management network
 - [ ] The console database reached over TLS when it is on another host
       (`sslmode=require` or stricter in `CONSOLE_DATABASE_URL`), and its owner role kept private
-- [ ] Release signatures and checksums verified before every install and upgrade; image and chart
-      signatures verified with cosign
+- [ ] Release signatures (once releases carry them) and checksums verified before every install
+      and upgrade; image and chart signatures verified with cosign
 - [ ] The control API certificates renewed before they expire (`syncdctl status` shows when)
 - [ ] The audit trail sent off the host (a file collected, Splunk or syslog over TLS, or the pull
       API), and the chain verified regularly

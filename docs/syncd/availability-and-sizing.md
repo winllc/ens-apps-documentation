@@ -6,6 +6,15 @@ losing the host or the cluster's volume, and how to go back to the previous rele
 commands themselves are in the [Operator guide](operator-guide.md#backups). For the suite-wide
 picture, see [Sizing, availability and recovery](../availability-and-sizing.md).
 
+It describes syncd 0.6.1 (tag `v0.6.1`, commit `59cbf19`). For this page, 0.5.5 changes how an
+HA pair fences its writes and what a takeover means for Debezium sources
+([High availability](#high-availability)), makes the engine's startup budget a Helm value and
+documents growing its volume ([Sizing on Kubernetes](#sizing-on-kubernetes)), and changes the
+console's schema (30 to 33), which a rollback to 0.5.4 restores
+([Rolling back an upgrade](#rolling-back-an-upgrade)). 0.6.0 adds the `dsml` connector, whose
+sequence number and waiting exports are kept in the store; 0.6.1 changes only the host installer.
+Neither changes the store's format or the console's schema.
+
 ## Sizing
 
 !!! note "Measured by the project's own benchmarks"
@@ -22,8 +31,9 @@ picture, see [Sizing, availability and recovery](../availability-and-sizing.md).
     each (release build, 4 vCPU); entities with many attributes take longer. 0.5.1 measured
     nothing new; the extra work of its first full sync (claiming `unique()` values) was not
     measured. 0.5.2 measured its faster joins in release builds on 4 vCPU, at 200,000 people and
-    some at 1,000,000 (see [Joins and first reads](#joins-and-first-reads)); 0.5.4 measured
-    nothing new. Start with these figures, watch the signals named here, and adjust.
+    some at 1,000,000 (see [Joins and first reads](#joins-and-first-reads)); 0.5.4, 0.5.5, 0.6.0
+    and 0.6.1 measured nothing new. Start with these figures, watch the signals named here, and
+    adjust.
 
 ### What drives the size
 
@@ -219,13 +229,47 @@ The [Helm chart](install.md#install-with-helm) gives the engine's pod:
 | `engine.resources.limits.memory` | `4Gi` | The memory limit above: at least the initial-load peak, about 2.3 GiB per million entities, plus room for simulations. 4Gi covers about 1.5 million entities |
 | `engine.resources.requests` | 250m CPU, `512Mi` | Raise the memory request towards the steady figure, so the scheduler places the pod where that memory is |
 | `engine.persistence.size` | `10Gi` | The store and its history; the volume also holds the configuration file. Allow about half the store's size again for a simulation's copy. For a pair, each engine has a volume of this size, and needs room for snapshots as well: about the store's size again on the passive one |
+| `engine.startupProbe` | `periodSeconds: 5`, `failureThreshold: 120` | New in chart 0.5.5: how long the engine may take to start (10 minutes by default) before Kubernetes restarts it. The control API listens once the store is open, and after a release that changes the store's format, once it is migrated: raise `failureThreshold` for such an upgrade of a large store |
+| `engine.minReadySeconds` | `0` | New in chart 0.5.5: how long a new engine pod must stay ready before it counts as available. A rollout of a pair moves on to the other pod only then |
 | `console.resources` | 100m CPU, `128Mi` requested; `512Mi` limit | Enough for the console alone |
 
 The memory limit acts as `MemoryMax` does on a host: past it the kernel stops the engine, and
 Kubernetes restarts the pod from its last commit. The engine reports the limit as
-`syncd_memory_limit_bytes`. To grow the volume, resize the PersistentVolumeClaim itself, where
-its StorageClass allows expansion. Changing `engine.persistence.size` on an installed release
-fails, since a StatefulSet's volume claim template cannot be changed.
+`syncd_memory_limit_bytes`.
+
+#### Growing the engine's volume
+
+`engine.persistence.size` is the size of the claim the StatefulSet makes for each engine
+(`data-syncd-engine-0`, and `data-syncd-engine-1` with `engine.ha`). Kubernetes does not let a
+StatefulSet's volume claims change, so `helm upgrade` with another size is refused (`updates to
+statefulset spec for fields other than ... are forbidden`). With a storage class that allows
+expansion (`kubectl get storageclass <class> -o jsonpath='{.allowVolumeExpansion}'` prints
+`true`):
+
+1. Grow each claim:
+
+    ```bash
+    kubectl patch pvc -n syncd data-syncd-engine-0 -p '{"spec":{"resources":{"requests":{"storage":"50Gi"}}}}'
+    ```
+
+    (and `data-syncd-engine-1` for a pair). `kubectl get pvc -n syncd` shows the new capacity
+    once the volume and its file system have grown; some drivers grow the file system only when
+    the pod starts again (`kubectl delete pod -n syncd syncd-engine-0`).
+
+2. Make the chart say the same, for the claims it makes later: delete the StatefulSet but not its
+   pods, and upgrade with the new size, which makes it again and adopts them:
+
+    ```bash
+    kubectl delete statefulset -n syncd syncd-engine --cascade=orphan
+    helm upgrade syncd oci://ghcr.io/winllc/charts/syncd -n syncd --reuse-values \
+      --set engine.persistence.size=50Gi
+    ```
+
+Without volume expansion, the store moves to a new volume through a backup: back the engine up,
+delete the StatefulSet and the engine's claims, run `helm upgrade` with the new size, scale the
+engine to zero at once (`kubectl scale statefulset -n syncd syncd-engine --replicas=0`), restore
+the backup into the new volume as [Backups on Kubernetes](#backups-on-kubernetes) says, and scale
+it up again. The source repository's KUBERNETES.md documents this from 0.5.5.
 
 ## High availability
 
@@ -275,7 +319,11 @@ engine: it runs the sources and the exports. The other is passive:
   delivery checks first that this engine holds the lease and that it is not within a second of
   expiring, measured from 0.5.1 on a clock NTP cannot step. An engine cut off from the lease
   stops writing before the other may take over, and steps down to passive when it finds the lease
-  gone.
+  gone. From 0.5.5 a chunk of exports still being written when the lease reaches that margin is
+  abandoned, not written on beside the engine taking over (a write the target had already taken
+  stays, and the takeover's reconciliation finds it), and writing back a target's changes after
+  an outage checks the fence before each write. A Kubernetes lease's version is stamped when the
+  API server's answer arrives.
 - **Member names.** Each engine needs its own (`engine.ha.member` or `SYNCD_HA_MEMBER`, the host
   name by default). From 0.5.1 two engines with the same name no longer both hold the lease: the
   second waits, with `LEASE ERROR` in its status.
@@ -312,10 +360,21 @@ again:
   cookie, a change-log number, a binlog position, a resume token, a CSV file;
 - a PostgreSQL logical replication stream cannot go back past what its slot confirmed, so after a
   takeover it reads its tables in full first (the slot stays; unchanged rows cost nothing);
+- **Debezium sources are the exception:** Debezium keeps its own position and moves on once an
+  engine answered, so what the old engine took in after its last snapshot is not sent again.
+  After a takeover, have Debezium send the tables again with an incremental snapshot (an
+  `execute-snapshot` signal through its signal table); the engine skips what it already has. From
+  0.5.5 the engine that takes over logs a warning naming those sources (`taking the pair over:
+  changes the other engine took from Debezium after its last snapshot are not sent again; ...`);
+- a `dsml` target (from 0.6.0) numbers its files from the snapshot's sequence number, so its next
+  files carry numbers the far side has already read past: start a new generation of file names
+  and send a snapshot, as [When the connected side's numbers go back](air-gap.md#when-the-connected-sides-numbers-go-back)
+  says;
 - the reconciliation finds what is already in the targets: an LDAP entry already there is updated
   in place, a SCIM or Entra ID resource is adopted.
 
-So nothing is lost, but a takeover after a long interval has more to read and reconcile. From 0.5.0
+So nothing is lost, Debezium sources and `dsml` targets aside, but a takeover after a long
+interval has more to read and reconcile. From 0.5.0
 queued password changes are not lost either while the passive engine follows the queue
 (`syncd_ha_password_follower_connected` is 1 on the active engine); a change the old engine had
 delivered just before it was lost may be delivered once more (the same password, set twice).
@@ -349,8 +408,11 @@ to the active engine is enough. When they differ, it runs its own: publish to bo
   [Installation](install.md#an-activepassive-pair-on-hosts)).
 - **Tested on Kubernetes in kind only.** From 0.5.0 a `kind-ha` CI job installs a pair, fails it
   over and hands it over, once with a PostgreSQL lease and once with a Kubernetes Lease; it passed
-  in the run that published the 0.5.4 images and chart. No cloud cluster was used. The pair is
+  in the run that published the 0.6.0 images and chart, whose publishing waits for it. 0.6.1's run
+  failed before it, and published no images or chart. No cloud cluster was used. The pair is
   tested end to end on hosts.
+- **Debezium sources after a takeover** resume from Debezium's own position, not the snapshot's:
+  catch up with an incremental snapshot (above).
 - **The lease's store is a dependency.** Without the lease's database (or, with a Kubernetes
   lease, the API server) neither engine can hold the lease, and nothing is exported
   (`SyncdHaNoActive`). Run the database with your own replication or failover. A freshly
@@ -370,9 +432,14 @@ Deployment can be rescheduled anywhere, as it keeps nothing in its pod.
 
 ### What else keeps syncd running
 
-- **Automatic restart.** Both systemd units restart on failure after 5 seconds; on Kubernetes,
-  the pods restart, and the engine's liveness probe restarts an engine that stops answering
-  `/metrics`. The engine starts again from its last commit; a full sync that was interrupted
+- **Automatic restart.** Both systemd units restart on failure, from 0.5.5 after 10 seconds,
+  growing to 5 minutes over six failures in a row (5 seconds every time before; 10 seconds every
+  time with systemd older than 254), with no start limit; on Kubernetes, the pods restart, and
+  the engine's liveness probe restarts an engine that stops answering `/metrics`. From 0.5.5 the
+  console's background tasks (the mail and webhook senders, the engine status watcher, the audit
+  outputs) are started again when they stop, and its `/healthz` names one that keeps stopping;
+  the chart's probes use `/livez`, so such a task does not take the console's pages out of
+  service. The engine starts again from its last commit; a full sync that was interrupted
   resumes where it stopped.
 - **Supervised sources.** A source that fails is restarted from its last committed checkpoint,
   with waits that double from 1 second up to `engine.source_retry_max_secs` (60). Other sources
@@ -386,7 +453,9 @@ Deployment can be rescheduled anywhere, as it keeps nothing in its pod.
   Active Directory target that is down when the engine starts or reloads is reported down and
   connected later, instead of failing the start (or rolling a published configuration back); a
   restored previous configuration that does not start either is tried again every 5 seconds,
-  doubling up to a minute, instead of the engine exiting.
+  doubling up to a minute, instead of the engine exiting. A `dsml` target (from 0.6.0) that
+  cannot write its file keeps its exports in the store and tries again within a minute; none goes
+  to the dead-letter queue.
 - **Timers survive restarts.** Effective dates, leaver stages, change windows, canaries and group
   expiry are kept in the store, and acted on at their time whether the engine ran throughout or
   was restarted (or, in a pair, failed over).
@@ -417,7 +486,8 @@ still be running, or both engines export.
 | The password-key passphrase (the file `SYNCD_PASSWORD_KEY_PASSPHRASE_FILE` names), when the password keys are sealed | Opens the sealed password keys and agents' CA key, in the store and in every backup and snapshot. With `SYNCD_PASSWORD_KEY_PASSPHRASE_KMS` (new in 0.5.0) the file holds it wrapped, and the KMS key is needed to open it | A copy kept apart from the backups: a restore needs it. Keep the file outside `/etc/syncd`, for example in `/etc/syncd-keys/`: from 0.5.0 `syncdctl backup --to` leaves a passphrase file inside `/etc/syncd` out of its archive, with a warning |
 | `/etc/syncd` | `console.env`, `engine.env` (secrets, S3 keys, how to reach a vault), `engine/engine.yaml`, and the control API's CA and certificates; from 0.5.0, a license installed with `syncdctl license install` (`license.lic`) and the console's signing key for signed configurations (`pki/console-signing.pub`) | `syncdctl backup --to` (`<name>.etc.tar.gz`), `syncdctl backup`, or your configuration management. It holds secrets |
 | nginx's configuration and certificate, or the console's own (`CONSOLE_TLS_CERT`) | HTTPS for the console | Your configuration management |
-| The release | The bundle or package you installed | Keep the download, with `SHA256SUMS` (and `SHA256SUMS.asc` for a signed release; 0.5.0, 0.5.1 and 0.5.4 are unsigned). The portal's **Downloads** page keeps earlier versions too |
+| The release | The bundle or package you installed | Keep the download, with `SHA256SUMS` (and `SHA256SUMS.asc` for a signed release; 0.5.0, 0.5.1, 0.5.4, 0.5.5, 0.6.0 and 0.6.1 are unsigned). The portal's **Downloads** page keeps earlier versions too, as does the GitHub release. On Kubernetes, the newest published images and chart are 0.6.0's, signed with cosign; 0.6.1 published none |
+| A `dsml` connector's files (from 0.6.0) | On the connected side, the target's sequence number and the exports waiting for its next file, which are in the store; the files written, in the outbox and on their way. On the far side, the source's checkpoint (the last file read, each writer's last sequence number), in its store | The store's backups carry the sequence number, the waiting exports and the checkpoint. A store restored from a backup carries on from them as they were then: read [Recovery](air-gap.md#recovery) in the air-gap guide (on the connected side, [When the connected side's numbers go back](air-gap.md#when-the-connected-sides-numbers-go-back)) before restoring either side |
 | People, accounts, groups | The source systems and the target directories | Their own backups. The engine reads the sources again |
 | The audit trail | Also in your SIEM, when the console sends it there (the journal, `ENS_AUDIT_*`) | The SIEM's own retention |
 | A WebAssembly module next to a configuration written by hand on the engine's host (from 0.5.0) | A rule package's custom functions | Your configuration management: such a module is in neither backups nor HA snapshots. Modules uploaded in the console are in its database |
@@ -520,7 +590,10 @@ backup are not sent again.
    update your identity provider's redirect URI if the address changed.
 5. Check: `sudo syncdctl status`; `sudo syncd status` shows every source running and no
    unreachable target; sign in to the console; **Audit log** → **Verify chain** reports the chain
-   intact.
+   intact. From 0.5.5 a host installed with `--no-start` counts as an installation that has not
+   finished, and `syncdctl status` says `install:   NOT FINISHED`: once the restore (and the
+   `renew-certs` above) is done, `sudo syncdctl register` finishes it (the engine is registered
+   already, which it accepts).
 6. Let the engine catch up: each source carries on from its checkpoint in the restored store, and
    full reads pick up what changed since. `sudo syncd reconcile` compares every target with what
    should be there now.
@@ -640,16 +713,57 @@ sudo syncdctl rollback
 - The previous release runs again, and the engine store and `/etc/syncd` are restored from the
   backup taken before the upgrade. The engine picks up changes made since when it next reads its
   sources.
-- The console's database is restored only if the newer release changed its schema. Otherwise its
-  contents are kept: configuration versions, accounts and audit events written since the upgrade,
-  and so are the control API's certificates, which the console's stored credentials match.
+- The console's database is restored only if the newer release changed its schema (from 0.5.5,
+  or its schema is not known: the database did not answer when the backup was taken, or does not
+  answer now). Otherwise its contents are kept: configuration versions, accounts and audit events
+  written since the upgrade, and so are the control API's certificates, which the console's
+  stored credentials match.
 - `--keep-data` switches the programs back and restores nothing. It is refused when the newer
   release migrated the store to a format the previous one cannot read, and from 0.5.1 when the
-  console's schema is not the one the previous release's console had.
+  console's schema is not the one the previous release's console had; from 0.5.5 also when that
+  cannot be checked, unless `--skip-schema-check` is added.
+- **An upgrade taken with `--skip-db-backup`** (or `SYNCD_SKIP_DB_BACKUP=1`) has no copy of the
+  database. From 0.5.5 its rollback keeps the database when its schema is the one the previous
+  release had, and is refused, before anything is stopped, when it is not or is not known:
+  restore the database from a backup of your own first. Back it up yourself before such an
+  upgrade if you may want to go back across a schema change, as from 0.5.5 to 0.5.4.
 - From 0.5.1 `rollback` checks first that `/var/lib/syncd` has room to copy the backup's store and
   console files in beside the live ones, and restores the data before it switches the programs
   back, so a rollback whose restore fails can be run again. The automatic rollback of a failed
   upgrade removes the failed release's store first, and needs no more room than the backup took.
+
+**From 0.6.1 to 0.6.0**, nothing changes: the store's format (2), the console's schema (33) and
+the configuration are the same, so the console's database is kept, and `--keep-data`, a package
+downgrade or `helm rollback` can keep the store too. 0.6.1 changed only the host installer:
+0.6.0's cannot finish an installation that stopped while it issued the certificates (see
+[Finishing an installation](operator-guide.md#finishing-an-installation)). On Kubernetes there is
+nothing to roll back: no 0.6.1 chart or images were published.
+
+**From 0.6.0 to 0.5.5**, neither the store's format nor the console's schema changed, and the
+store is kept. Two things first:
+
+- **A `dsml` target with exports waiting.** A `dsml` target keeps its files' sequence number, and
+  the exports waiting for the end of the interval, as settings beside the data, which 0.5.5
+  ignores. Run `sudo syncd reconcile` before rolling back: it writes out what is waiting.
+- **A configuration with a `dsml` connector** is refused by 0.5.5. Before rolling back with the
+  store kept (`--keep-data`, a package downgrade or `helm rollback`), publish a configuration
+  without it. A full `syncdctl rollback` restores the configuration file from the backup taken
+  before the upgrade, which had none.
+
+**From 0.5.5 to 0.5.4**, the console's schema changed (30 to 33: publish leases, the published
+flag of engine configurations, the expiry of one-time passwords), so the rollback restores the
+console's database from the backup taken before the upgrade, and loses everything recorded in the
+console since; `--keep-data` is refused, as 0.5.4's console would not start on the newer database.
+The store's format is the same (2), and the store comes back from the same backup. On Kubernetes,
+restore the console's database into an empty database before `helm rollback`. What 0.5.5 fixed
+comes back with 0.5.4, its three critical fixes included: prefer fixing forward. The upgrade
+section is [Upgrading from 0.5.4 to 0.6.1](install.md#upgrading-from-054-to-061).
+
+**From 0.6.1 or 0.6.0 straight back to 0.5.4**, after an upgrade that went past 0.5.5, both of
+the above apply: run `syncd reconcile` first when a `dsml` target has exports waiting; the
+rollback restores the console's database and the store from the backup taken before the upgrade,
+with the configuration file that had no `dsml` connector. The steps are in
+[Rolling back 0.6.1, 0.6.0 or 0.5.5](install.md#rolling-back-061-060-or-055).
 
 **From 0.5.4 to 0.5.2 or 0.5.1**, neither the store's format nor the console's schema changed, so
 the console's database is kept, and `--keep-data`, a package downgrade or `helm rollback` can keep
@@ -694,7 +808,11 @@ the engine's volume nor the console's database, nor any Secret. A rollback to a 
 cannot read the store's format leaves the engine refusing to start (`the store has format N,
 written by a newer syncd`), and a console older than its database's schema may not start either:
 restore the backups taken before the upgrade (see [Backups on Kubernetes](#backups-on-kubernetes)),
-then roll back. From chart 0.5.4 to 0.5.2 or 0.5.1, nothing needs restoring. From chart 0.5.1 to
+then roll back. From chart 0.6.0 to 0.5.5, nothing needs restoring, but run `syncd reconcile` in
+the engine's pod first when a `dsml` target has exports waiting, and publish a configuration
+without a `dsml` connector (there is no chart 0.6.1 to roll back from). From chart 0.5.5 to 0.5.4,
+restore the console's database into an empty database, and the engine's store from the same
+time. From chart 0.5.4 to 0.5.2 or 0.5.1, nothing needs restoring. From chart 0.5.1 to
 0.5.0, restore the console's database into an empty
 database, and the engine's store from the same time. From chart 0.5.0 to 0.4.1, restore both the
 console's database into an empty database and the engine's store (0.4.1 refuses the format-2

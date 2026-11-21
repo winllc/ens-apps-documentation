@@ -9,8 +9,12 @@ be used together, and local accounts keep working alongside them; an admin can t
 sign-in to [break-glass accounts](#break-glass-accounts). The sign-in page shows a "Sign in with
 &lt;label&gt;" button for each method that is configured.
 
-This page describes the code at syncd 0.5.4 (tag `v0.5.4`, commit `14c6668`). Single sign-on is
-for people in a browser: other systems call the API with [API tokens](#api-tokens-and-single-sign-on).
+This page describes the code at syncd 0.6.1 (tag `v0.6.1`, commit `59cbf19`). 0.5.5 reads SAML
+responses in linear time with a deadline, holds the sign-in callbacks to the per-address limit,
+fetches CRLs once for every sign-in waiting on them, and revokes an account's API tokens when its
+password is reset; each is marked where it is described. 0.6.0 and 0.6.1 change nothing in
+single sign-on. Single sign-on is for people in a browser: other systems call the API with
+[API tokens](#api-tokens-and-single-sign-on).
 
 !!! warning "What SAML and certificate sign-in were tested with"
     SAML was tested against **Keycloak only** (26.4.2) and against responses signed by an
@@ -89,7 +93,9 @@ use the access token, so the role claim must be in the ID token.
   `syncd-console admin reset-password` on the host refuses them too, since a password would let
   the account sign in without the provider (and its MFA). With `--allow-single-sign-on` it gives
   one anyway, for recovery while the provider is down; the audit log records that it did. Before
-  0.3.0 the command line gave such an account a password without asking.
+  0.3.0 the command line gave such an account a password without asking. From 0.5.5 such a reset
+  also signs the account out and revokes the API tokens it created, and the one-time password
+  it prints is refused after 7 days.
 
 ## What is checked
 
@@ -117,6 +123,10 @@ use the access token, so the role claim must be in the ID token.
 
 A refusal sends the browser back to the sign-in page with the reason (`/login?sso_error=...`);
 internal errors say only "single sign-on failed on the console; see its log".
+
+From 0.5.5 the OpenID Connect callback and the SAML assertion consumer service are held to the
+same per-address limit as a password sign-in (20 attempts in 5 minutes), and refusals past it are
+recorded once a minute per address, so callers without an account cannot fill the audit trail.
 
 ## Signing out
 
@@ -413,7 +423,11 @@ Each refusal has a test with a fixed response.
 - **The console's own XML reader**, strict: no DOCTYPE (so no entity expansion and no external
   entities), no processing instructions, UTF-8 only, limits on depth and size. The same tree is
   what the signature is checked over and what the account is read from. There is no C XML
-  library; the signature arithmetic is aws-lc-rs's (the FIPS module in a FIPS build).
+  library; the signature arithmetic is aws-lc-rs's (the FIPS module in a FIPS build). From 0.5.5
+  a response, which is unauthenticated until it is checked, is read and canonicalized in linear
+  time (at most 1 MiB, 64 levels deep, 100,000 nodes, 256 attributes on an element, and 2
+  seconds to read), and checked off the request threads, four at a time, within 10 seconds: a
+  console too busy to check one answers to try again.
 - **Signed, always**: the response or its assertion must carry a signature that verifies with a
   certificate from the provider's metadata; with both signed, both must verify. The certificate
   inside the message (`KeyInfo`) is never used.
@@ -480,7 +494,7 @@ Either way the console checks the certificate itself, at the sign-in endpoint:
 | `ENS_X509_OCSP_URL` | | A responder to ask instead of the one each certificate names |
 | `ENS_X509_OCSP_NONCE` | `send` | `send` a nonce and accept an answer without one, `require` one, or `off` |
 | `ENS_X509_CRL_URL` | | A CRL address to use instead of the certificates' distribution points |
-| `ENS_X509_CRL_CACHE` | `1h` | The longest a fetched CRL is used, never past its next update |
+| `ENS_X509_CRL_CACHE` | `1h` | The longest a fetched CRL is used, never past its next update. From 0.5.5 one fetch serves every sign-in waiting for it, off the request threads, and a CRL that could not be fetched or verified is not asked for again for a minute (at most this long): with revocation failing closed, sign-ins that need it are refused meanwhile |
 | `ENS_X509_CRL_MAX_BYTES` | `67108864` | The largest CRL read |
 | `ENS_X509_REVOCATION_TIMEOUT` | `10s` | How long a responder or CRL server may take |
 | `ENS_X509_LABEL` | `a certificate (CAC/PIV)` | The button says "Sign in with &lt;label&gt;" |
