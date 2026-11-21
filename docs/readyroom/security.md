@@ -266,8 +266,10 @@ All settings are listed in [Configuration](configuration.md#windows-kerberos-sig
   been removed. A sub-group is a separate group with its own managers.
 - **Direct reports:** `/api/users/reports` and **My Reports** always use the signed-in user as the
   manager, so they cannot be used to read someone else's team.
-- **Notifications:** an absence alert opens only for the manager it was sent to, and for `ADMIN`.
-  Only a recipient can record a response. Anyone else gets an access-denied error.
+- **Notifications:** an absence alert goes to the person's directory manager, their delegates and
+  the managers of their groups. It opens only for the one it was sent to, and for `ADMIN`. Only the
+  directory manager, a delegate or `ADMIN` can record a response; a group manager sees the alert
+  and the response. Anyone else gets an access-denied error.
 - **Metrics** show aggregates only, never names.
 
 A refused page is logged at `info` as `Access denied for <METHOD> <URI>`, and the user sees the
