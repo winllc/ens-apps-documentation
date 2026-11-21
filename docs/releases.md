@@ -13,13 +13,14 @@ ways to install it:
 !!! note "syncd"
     syncd's pipeline differs from the others'. On a version tag it uploads the release to the same
     bucket, under `syncd/<version>/`, so syncd appears on the **Downloads** page like the other products
-    (from 0.5.0; the latest is 0.5.4): offline bundles (`.tar.gz`, x86_64 and aarch64, each also as
+    (from 0.5.0; the latest is 0.6.1): offline bundles (`.tar.gz`, x86_64 and aarch64, each also as
     a FIPS build), `.deb` and `.rpm` packages for a Linux host with systemd, the `syncd-capture` package
     for directory servers, CycloneDX SBOMs (`.cdx.json`), and `SHA256SUMS`. With the release key set it
     also signs `SHA256SUMS` (`SHA256SUMS.asc`) and the `.rpm` files and publishes apt and dnf
-    repositories; every release so far (0.5.0 to 0.5.4) was built without it, so they are **unsigned**
+    repositories; every release so far (0.5.0 to 0.6.1) was built without it, so they are **unsigned**
     and there are no repositories yet. From 0.5.4 the GitHub release carries the same files.
-    (0.5.2 was published as container images and a Helm chart only; nothing was published as 0.5.3.) Check a download as in
+    (0.5.2 was published as container images and a Helm chart only; nothing was published as 0.5.3;
+    0.6.1's images and chart were not published, so the newest on ghcr.io are 0.6.0's.) Check a download as in
     [syncd's install guide](syncd/install.md#verifying-a-release). The container images `ghcr.io/winllc/syncd` and `ghcr.io/winllc/syncd-console` (amd64 and arm64,
     with `-fips` tags) and the Helm chart `oci://ghcr.io/winllc/charts/syncd` are signed
     with cosign as below, from the repository `winllc/ldap-sync-merge-view`. See

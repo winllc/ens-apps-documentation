@@ -18,19 +18,44 @@ It has two parts:
 
 !!! info "Source of truth"
     Everything in this section comes from the `ldap-sync-merge-view` source repository
-    (version 0.5.4, the tag `v0.5.4` at commit `14c6668`): the engine and console code, the packaging under `deploy/packaging/`, the
+    (version 0.6.1, the tag `v0.6.1` at commit `59cbf19`): the engine and console code, the packaging under `deploy/packaging/`, the
     container images and Helm chart under `deploy/container/` and `deploy/helm/`, and
     the repository's `docs/`. Where the code and a README disagree, these pages follow the
     code and say so.
 
 !!! info "Releases"
-    The latest release is 0.5.4 (18 November 2026). Its bundles and packages, with their SBOMs
+    The latest release is 0.6.1 (20 November 2026). Its bundles and packages, with their SBOMs
     and `SHA256SUMS`, are on the ENS licensing portal's **Downloads** page and on the GitHub
-    release; the container images and Helm chart are on `ghcr.io`, signed with cosign. 0.5.2
-    was published as images and a chart only (its packages failed to build), and nothing was
-    published as 0.5.3 (its tag holds 0.5.2's version and an empty GitHub release). The release files are not yet GPG-signed (no `SHA256SUMS.asc`), so the
-    signed apt and dnf repositories are not published yet: install from the files. See
+    release. **0.6.1's container images and Helm chart were not published** (the tag's image build
+    failed): on Kubernetes use chart and images 0.6.0, which lose nothing, since 0.6.1 changes only
+    the host installer. 0.6.0 and 0.5.5 are published in full, images and charts included, signed
+    with cosign. 0.5.2 was published as images and a chart only, and nothing was published as
+    0.5.3. The release files are not yet GPG-signed (no `SHA256SUMS.asc`), so the signed apt and
+    dnf repositories are not published yet: install from the files. See
     [Getting the release](install.md#getting-the-release).
+
+!!! tip "New in 0.6.0: synchronising across an air gap"
+    A new connector type, `dsml`, moves identities between networks that are not connected,
+    through DSML v2 files in a directory or on an SFTP server. On the connected side the changes
+    the engine exports are gathered into a file of LDAP changes every 15 minutes, with a
+    checksum, for whatever carries files across (a data diode, a transfer appliance, removable
+    media); on the far side the files are read in the order they were written, held back when one
+    is missing, and published to the directories there. Snapshots put the far side right after a
+    lost file. Tested end to end in CI over SFTP to OpenLDAP, but not yet with a commercial data
+    diode or DSML gateway. See [Air-gapped synchronisation](air-gap.md) and
+    [DSML files](connectors.md#dsml-files-air-gap).
+
+!!! warning "0.5.5 fixes three critical issues in 0.5.4"
+    An in-depth review of the engine, the console and the packaging found 3 critical, 34 high, 73
+    medium and 45 low issues, most fixed in 0.5.5: a gone entity's exported record could delete the
+    live entry another entity had taken over; an answer from a SCIM provider or Microsoft Graph
+    that could not be read whole was taken for an empty list, removing members and creating
+    resources twice; and a password agent's submission could undo a revocation made while it ran.
+    0.5.5 also changes behaviour (safety gates count disables, errors keep state, CSV files with no
+    rows delete nothing, control commands are refused while the engine is busy) and the console's
+    database schema (30 to 33). Read
+    [Upgrading from 0.5.4 to 0.6.1](install.md#upgrading-from-054-to-061) first. 0.6.1 fixes an
+    installer that could stop without saying why on a first install.
 
 !!! tip "New in 0.5.2 and 0.5.4"
     Faster joins (0.5.2): a source's first read recomputes entities in batches on every core,
@@ -72,6 +97,7 @@ It has two parts:
 |---|---|
 | **Sources** | PostgreSQL, MySQL and MariaDB, Microsoft SQL Server, MongoDB, CSV and flat files, OpenLDAP and other LDAP directories, Active Directory, Entra ID, REST and OData services with presets for Workday, SAP SuccessFactors and UKG Pro, plus Oracle, Db2 and other databases through a Debezium Server sidecar or the JDBC bridge. See [Connectors](connectors.md). |
 | **Targets** | OpenLDAP, 389 Directory Server / Red Hat Directory Server, Ping / UnboundID and other LDAP directories, Active Directory (with Exchange addresses, account control, home paths, UPN and `sAMAccountName` helpers), Entra ID through Microsoft Graph (users, groups, licences, app roles), and SaaS applications through SCIM 2.0. |
+| **Air gaps** | Since 0.6.0, DSML v2 files carry the changes across a gap between networks: written on the connected side in order, numbered and checksummed, read on the far side in order with gaps held and snapshots to resynchronise, in a directory or over SFTP with pinned host keys. See [Air-gapped synchronisation](air-gap.md). |
 | **Full reads and live streams** | Each source object is read in full on a schedule (scrape), read incrementally (delta), or streamed from the source's change log: PostgreSQL logical replication, the MySQL binlog, SQL Server change data capture or change tracking, MongoDB change streams, LDAP syncrepl or a changelog, Active Directory DirSync, Entra ID delta queries. A stream resumes from its checkpoint after a restart. |
 | **Correlation and merge** | Join rules link the records from each source that describe one entity. Attribute precedence decides which source wins for each attribute, and the console's correlation review shows the links and the records left unjoined. |
 | **Computed attributes** | Rules written in CEL, compiled to native code, with a function library, multi-step transforms, lookup tables, cross-entity references and computed groups. Effective dates, versioned rule packages shared between configurations, custom functions in WebAssembly, and data-quality checks. Each rule carries its own test cases, golden-file tests cover whole publications, and a configuration whose tests fail cannot be published. See [Computed attributes and rules](rules.md). |
@@ -97,6 +123,7 @@ flowchart LR
         DBZ["Debezium Server<br/>or JDBC bridge<br/>(Oracle, Db2, ...)"]
         CSV[(CSV files)]
         ENS[(Entra ID)]
+        IN[/DSML inbox<br/>from an air gap/]
     end
 
     subgraph Host["syncd host (systemd) or Kubernetes"]
@@ -107,6 +134,7 @@ flowchart LR
 
     PG[(PostgreSQL<br/>console database)]
     T[(Targets<br/>LDAP, Active Directory,<br/>Entra ID, SCIM apps)]
+    OUT[/DSML outbox<br/>to an air gap/]
     P[Prometheus]
     W[SIEM, chat,<br/>paging, S3]
     B[Browser]
@@ -118,6 +146,8 @@ flowchart LR
     CSV -->|inbox| E
     ENS -->|Graph delta| E
     E -->|LDAP, Graph, SCIM writes| T
+    IN -->|files in order| E
+    E -->|DSML files| OUT
     C -->|"gRPC control API, mTLS"| E
     C --> PG
     B -->|HTTPS| N --> C
@@ -150,7 +180,7 @@ flowchart LR
 | Console UI | React 19, TypeScript, Vite, TanStack Router and Query, Tailwind CSS, Monaco editor |
 | Cryptography | rustls with aws-lc-rs; the AWS-LC FIPS module in a FIPS build |
 | JDBC bridge (optional) | Java 17+, run separately, with your databases' JDBC drivers |
-| Delivery | Bundles for x86_64 and aarch64, each also as a FIPS bundle, `.deb` and `.rpm` packages (RHEL 8 and 9+) and, once releases are signed, apt and dnf repositories, the `syncd-capture` agent package for directory servers, CycloneDX SBOMs, and `SHA256SUMS` (GPG-signed once the release key is set); systemd units `syncd` and `syncd-console`. arm64 builds need the release workflow's arm64 runners, on by default. Container images `ghcr.io/winllc/syncd` and `ghcr.io/winllc/syncd-console` (amd64 and arm64, with `-fips` variants; distroless, Trivy-scanned, cosign-signed with SPDX attestations) and the Helm chart `oci://ghcr.io/winllc/charts/syncd`. Published on a release tag: the files to the ENS licensing portal's release bucket, the images and chart to `ghcr.io`. From 0.5.4 the GitHub release carries the same files. The GPG signature and the apt and dnf repositories need the release key, which every release so far (0.5.0 to 0.5.4) was built without |
+| Delivery | Bundles for x86_64 and aarch64, each also as a FIPS bundle, `.deb` and `.rpm` packages (RHEL 8 and 9+) and, once releases are signed, apt and dnf repositories, the `syncd-capture` agent package for directory servers, CycloneDX SBOMs, and `SHA256SUMS` (GPG-signed once the release key is set); systemd units `syncd` and `syncd-console`. arm64 builds need the release workflow's arm64 runners, on by default. Container images `ghcr.io/winllc/syncd` and `ghcr.io/winllc/syncd-console` (amd64 and arm64, with `-fips` variants; distroless, Trivy-scanned, cosign-signed with SPDX attestations) and the Helm chart `oci://ghcr.io/winllc/charts/syncd`. Published on a release tag: the files to the ENS licensing portal's release bucket, the images and chart to `ghcr.io`. From 0.5.4 the GitHub release carries the same files. The GPG signature and the apt and dnf repositories need the release key, which every release so far (0.5.0 to 0.6.1) was built without |
 
 ## Roles
 

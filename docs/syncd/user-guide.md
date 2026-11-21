@@ -8,7 +8,7 @@ the [Admin guide](admin-guide.md); the license and the **License** page are in
 [Licensing](licensing.md). People who only want to change their own directory password use the
 [self-service page](#changing-your-directory-password-password), which needs no console account.
 
-It describes syncd 0.5.4 (tag `v0.5.4`, commit `14c6668`). New screens since 0.4.1 are
+It describes syncd 0.6.1 (tag `v0.6.1`, commit `59cbf19`). New screens since 0.4.1 are
 [Unmanaged entries](#unmanaged-entries-enginesidunmanaged),
 [Custom functions](#custom-functions-enginesidfunctions), the **Promote** dialog and the
 **License** page; 0.5.0 also added a message of the day and your previous sign-in on the
@@ -16,7 +16,13 @@ It describes syncd 0.5.4 (tag `v0.5.4`, commit `14c6668`). New screens since 0.4
 changes, **Disable** and **Reset password** ask first, the Studio checks for a newer version before
 it saves, lists of DNs and change windows take one value per line, and the **Engines** page polls
 instead of streaming. 0.5.4 stops calling a rule that reads other entities broken (see
-[Rules that read other entities](#rules-that-read-other-entities)).
+[Rules that read other entities](#rules-that-read-other-entities)). 0.5.5 gives up a request
+after ten minutes, with a message, refuses a one-time password after seven days, refuses a PDF
+report of more than 20,000 rows, and refuses a second publish to an engine at once rather than
+waiting for the first (see [Errors you may see](#errors-you-may-see)). 0.6.0 adds the
+**DSML files (air gap)** connector type, with its form and **Browse the files** (see
+[Visual: forms](#visual-forms) and [Air-gapped synchronisation](air-gap.md)). 0.6.1 changes
+nothing on screen.
 
 ## Roles at a glance
 
@@ -55,7 +61,9 @@ recorded in the audit trail with the session it led to.
     Enter the **Username** and **Password** your administrator gave you, and choose **Sign in**.
 
     - A new account, or one whose password was reset, has a **one-time password**: the console
-      then asks you to choose your own (**Choose a new password**) before anything else. The hint
+      then asks you to choose your own (**Choose a new password**) before anything else. Since
+      0.5.5 a one-time password not used within seven days is refused ("this one-time password
+      has expired: ask an administrator for a new one"). The hint
       under the new password gives your organisation's rules: by default at least 12 characters
       and not your username. The same page comes up when your password is older than your
       organisation allows.
@@ -247,8 +255,9 @@ trail, and its end raises the `run.completed` or `run.failed` [webhook](webhooks
 
 ### Deletes held back by a deletion threshold
 
-When a change would delete more of a target than a publication's threshold allows, the engine holds
-those deletes and the page lists them: the scope, how many deletes of how many objects, and since
+When a change would delete more of a target than a publication's threshold allows (since 0.5.5,
+counting leavers it would disable or move aside), the engine holds those deletes and the page
+lists them: the scope, how many deletes of how many objects, and since
 when. Check the source first: a mass delete is often a source that came back empty.
 
 Operators can choose **Approve once**, then **Approve and apply**: the held deletes are applied
@@ -538,7 +547,7 @@ auditors every field is read-only.
 | Item | The form covers |
 |---|---|
 | **Engine and attributes** | Multi-valued and sensitive attributes, seconds between full reads and between reconciliations, the longest retry wait, entity history (days and entries per entity), worker shards, store cache, data directory. The control API (`api`) is set on each engine host and is not edited here |
-| **Connector** | **Connection** settings for its type (PostgreSQL, MySQL / MariaDB, SQL Server, MongoDB, LDAP directory, Active Directory, Debezium Server, JDBC bridge, CSV / flat file, SCIM 2.0, Entra ID, and, new in 0.5.0, the REST / OData API, Workday, SAP SuccessFactors and UKG Pro sources, whose fields, paging and delta settings are edited in the YAML), its **Objects** (what is read and how: scrape, delta or stream; for directory objects read by delta or stream, **Renamed container check (s)**, default 60, 0 off; for a CSV file, its columns, delimiter, encoding, done file and what a bad row does) and **Deletion safety** |
+| **Connector** | **Connection** settings for its type (PostgreSQL, MySQL / MariaDB, SQL Server, MongoDB, LDAP directory, Active Directory, Debezium Server, JDBC bridge, CSV / flat file, SCIM 2.0, Entra ID, new in 0.5.0 the REST / OData API, Workday, SAP SuccessFactors and UKG Pro sources, whose fields, paging and delta settings are edited in the YAML, and new in 0.6.0 **DSML files (air gap)**), its **Objects** (what is read and how: scrape, delta or stream; for directory objects read by delta or stream, **Renamed container check (s)**, default 60, 0 off; for a CSV file, its columns, delimiter, encoding, done file and what a bad row does; for DSML files, **Base DN**, **Scope**, **Filter** and **Attributes**, read as the files arrive) and **Deletion safety**. A DSML connector's **Connection** has the **Location** (a directory on the engine's host, or `sftp://`, which brings up **Host keys**, **Password**, **Private key (Ed25519, ECDSA)**, **Key passphrase** and **Timeout (seconds)**), the **File name prefix**, the **Directory server the files are for**, **Seconds of changes per file**, **Done files**, **Snapshots at full reconciliations** and **Largest file (bytes)**, and under **Reading** the two **Files read** settings (which names are read, and what becomes of a file once read), **Seconds between looks**, **A file missing from the sequence**, **Require checksums** and **An empty snapshot empties the source** |
 | **View** | **Sources** (each with its join rules and attribute flows), **Computed attributes** (steps, value mode, error policy and test cases; for **assign once**, **Keep for good, by key**), **References**, **Lookup tables**, **Precedence**, and a **Dependency graph** |
 | **Publication** | Target directory, view, which entities (a CEL filter), DN and container, object classes and attributes, DN attributes, references, **Create missing containers** (and, with it, **Remove containers left empty**), **Leaving scope** (delete, disable, move, disown, or deprovision in stages, and the deletion thresholds), **Groups** and their **Group policy** (manual members, owner, expiry, review), **Active Directory** (account control, home folder, UPN, sAMAccountName, Exchange addresses), **Existing entries**, **Drift** and **Change safety** (change window, modification and add thresholds, canary, report mode). For SCIM and Entra ID targets: the resource type, how resources are matched, and licences |
 
@@ -570,8 +579,13 @@ and writes nothing.
   holds, with fields (types, keys) and sample records. Picking a table, collection or entry with
   **Read this table** (or **Read this collection**, **Read entries below this one**) fills in an
   object, with the key it found as the anchor.
+- **Browse the files**, for a CSV or (since 0.6.0) a DSML connector: lists the files in its
+  directory. For DSML they come newest first, and a file shows the entries it carries whole (a
+  snapshot's entries, a file of changes' adds). **Test connection** on a DSML connector signs in
+  to the SFTP server, if there is one, lists the directory and says how many files are there.
 - **Read sample records** on an object (optionally **at random**): reads records exactly as the
   engine would. Their fields are then offered in the attribute flows of the views that read it.
+  A DSML object's sample shows its entries as the newest files carry them.
 
 In a view:
 
@@ -962,7 +976,8 @@ groups, the last reconciliation, the last unmanaged-entries pass), then one row 
 difference, the unmanaged entries among them. Nothing is read from the targets for it: it is what
 the engine found at its last checks. Sensitive attributes are named, never shown.
 
-- A download holds at most 200,000 rows by default; a cut one says so.
+- A download holds at most 200,000 rows by default; a cut one says so. Since 0.5.5 a **PDF** of
+  more than 20,000 rows is refused: download the CSV or Excel file, or one publication at a time.
 - The CSV opens in a spreadsheet as UTF-8. Cells that would start a formula get a leading `'`.
   Since 0.5.0 it has seven more columns at the end: six for the unmanaged-entries pass, and
   `adopted` last.
@@ -1001,7 +1016,9 @@ Operators and administrators choose **New scheduled report**:
 On your own reports (administrators: on anyone's) the row has **Send now**, **Edit** and **Delete**
 (after a confirmation). Each run checks again that the owner is still an administrator or operator
 and that every recipient is allowed; a run that fails a check sends nothing. A scheduled report's file
-holds at most 50,000 rows by default; the mail says when it was cut.
+holds at most 50,000 rows by default (a PDF, since 0.5.5, at most 20,000); the mail says when it
+was cut. Since 0.5.5 a run that failed because the engine or the share did not answer is tried
+again 15 minutes later, until the next scheduled run.
 
 ## Errors you may see
 
@@ -1019,8 +1036,11 @@ holds at most 50,000 rows by default; the mail says when it was cut.
 | "not published: publishing configuration changes is blocked by the license (…)" | The license's grace period is over. Sync keeps running, and a version published to the engine before can still be published again; ask an administrator to install a license |
 | "promoting to environment X publishes to every engine in it, and your roles (…) do not allow publishing to …" | **Promote** needs the right to publish on every engine of the target environment. Since 0.5.1 engines your roles do not reach are counted ("1 other engine"), not named |
 | "a version is approved by someone other than its author (who saved it, created the API token that saved it, or wrote its Git commit)" | You are accountable for this version (since 0.5.1); ask another designer or an admin |
+| "a PDF holds at most 20000 rows, and this report has N: download it as CSV or Excel, or one publication at a time" | Since 0.5.5 a PDF report holds at most 20,000 rows |
+| "The console did not answer within 10 minutes. What was asked may still be under way: look again before trying it once more." | Since 0.5.5 a request from a console page is given up after ten minutes. A long one (a promotion to many engines) may still finish: check its outcome before you repeat it |
 | "golden tests: cannot be read from Git, so not run: …" (among the failures of "not published: N of M test cases fail") | The version's golden tests could not be read (its commit is gone from the console's clone, or Git did not answer): the publish is refused until they can be |
-| "not published: another publish to X is still under way; try again once it has finished" | Another publish to the engine took more than 150 seconds to finish |
+| "not published: another publish to X is still under way; try again once it has finished" | Another publish to the engine had not finished within two seconds (since 0.5.5; 0.5.4 waited up to 150). Try again once its outcome shows |
+| "this version's author is not known to the console, so nobody can approve it as someone else: save it again in the console, and have another person approve that version" | Since 0.5.5: the version came from a Git commit whose author matches no account, or from an API token whose creator is gone, so four eyes cannot be checked |
 | "refused: a change made with the console's session must come from the console's own pages" | Since 0.5.1 a change made with your session from another site (a link or form elsewhere) is refused; use the console's own pages |
 | "a publish needs a change ticket reference matching …", "the ticket reference … does not match …" | Your administrator requires a change ticket in that form |
 | "not published: the change hook refused version N: …" | The change-management system said no; the reason follows |

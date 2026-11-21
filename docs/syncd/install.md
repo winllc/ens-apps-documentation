@@ -75,31 +75,36 @@ files, with `SHA256SUMS`, to the portal's release bucket (`syncd/<version>/`), f
 **Downloads** page serves them. With the release signing key set, it also signs `SHA256SUMS` and
 the `.rpm` files and publishes the apt and dnf repositories.
 
-!!! warning "0.5.0 to 0.5.4: unsigned, and no package repositories yet"
-    0.5.0, 0.5.1 and 0.5.4 are tagged (14, 15 and 18 November 2026), and their files are on the
-    portal's **Downloads** page. They were built without the release signing key: there is no
+!!! warning "0.5.0 to 0.6.1: unsigned, and no package repositories yet"
+    0.5.0, 0.5.1, 0.5.4, 0.5.5, 0.6.0 and 0.6.1 are tagged (14, 15, 18, 19, 20 and 20
+    November 2026), and their files are on the portal's **Downloads** page and on the source
+    repository's GitHub releases. They were built without the release signing key: there is no
     `SHA256SUMS.asc`, the `.rpm` files are not signed, and the apt and dnf repositories were not
     published (`https://winllc.github.io/ldap-sync-merge-view` has none). Install and upgrade
     from the downloaded files, and check them against `SHA256SUMS` (see
     [Verifying a release](#verifying-a-release)), which shows that a file is complete, not who
-    built it.
+    built it. From 0.5.5 the release job refuses to publish without the signing key unless the
+    maintainers set the repository variable `ALLOW_UNSIGNED_RELEASE`; they did, for 0.5.5, 0.6.0
+    and 0.6.1.
 
-    - **0.5.4** is the first release with packages since 0.5.1. Its `Package` run succeeded (on
-      its second attempt): it uploaded the files to the portal's release bucket, then to the
-      source repository's GitHub release of `v0.5.4`, which holds every file (the bundles for
-      x86_64 and aarch64 and their FIPS variants, the `.deb` and `.rpm` files of `syncd` and
-      `syncd-capture` with the RHEL 8 `.rpm`, the CycloneDX SBOMs, `SHA256SUMS`,
-      `TESTED-0.5.4.md` and the images' SPDX SBOMs). That GitHub release is marked pre-release
-      and carries no notes text: the notes are in the source repository.
+    - **0.6.1** (20 November) fixes the installer only. Its bundles, packages, SBOMs,
+      `SHA256SUMS` and `TESTED-0.6.1.md` are published, with its notes on the GitHub release.
+      **Its container images and Helm chart were not published**: the tag's `Container` run
+      failed building the amd64 binaries, so it pushed and signed nothing. On Kubernetes, stay
+      on chart and images 0.6.0, which lose nothing (0.6.1 changes only the host installer).
+    - **0.6.0** (20 November) and **0.5.5** (19 November) are complete: bundles, packages,
+      SBOMs, notes on the GitHub release, and images and charts on ghcr.io.
+    - **0.5.4** is the first release with packages since 0.5.1. Its GitHub release was marked
+      pre-release and carries no notes text: the notes are in the source repository.
     - **0.5.2** (17 November) was published as container images and a Helm chart only: its
-      bundles and packages failed to build, so the portal has no files for it, and its GitHub
-      release holds only the images' SPDX SBOMs.
+      bundles and packages failed to build, so the portal has no files for it.
     - **There is no 0.5.3.** Its tag was made on a commit still at version 0.5.2, and nothing was
       published under it.
     - **0.5.0 and 0.5.1.** Their GitHub releases, marked pre-release, were made by hand; 0.5.1's
       holds only the images' SPDX SBOMs, not the bundles or the packages.
 
-    The 0.5.4, 0.5.2 and 0.5.1 images and charts are on ghcr.io, signed with cosign.
+    The 0.6.0, 0.5.5, 0.5.4, 0.5.2 and 0.5.1 images and charts are on ghcr.io, signed with
+    cosign.
 
 | File | For |
 |---|---|
@@ -111,8 +116,8 @@ the `.rpm` files and publishes the apt and dnf repositories.
 | `syncd-capture_<version>_amd64.deb`, `syncd-capture_<version>_arm64.deb`, `syncd-capture-<version>-1.x86_64.rpm`, `syncd-capture-<version>-1.aarch64.rpm`, `syncd-capture-<version>-1.el8.x86_64.rpm` | The password capture agent alone, for the directory servers' hosts (see [The capture agent's package](#the-capture-agents-package)). New in 0.5.0 |
 | `syncd-<version>.cdx.json`, `syncd-console-<version>.cdx.json`, `syncd-capture-<version>.cdx.json` | The software bill of materials of the engine, of the console and of the capture agent (CycloneDX JSON) |
 | `SHA256SUMS` | The checksums of every file above |
-| `SHA256SUMS.asc` | The release signing key's GPG signature over `SHA256SUMS`. Not in 0.5.0, 0.5.1 or 0.5.4, which are unsigned |
-| `sbom-syncd-<version>[-fips]-<arch>.spdx.json`, `sbom-syncd-console-<version>[-fips]-<arch>.spdx.json` | The SPDX bill of materials of each container image and platform, attached to the source repository's GitHub release (not on the **Downloads** page). Not in `SHA256SUMS`: each is also a signed attestation on its image. New in 0.5.0 |
+| `SHA256SUMS.asc` | The release signing key's GPG signature over `SHA256SUMS`. Not in 0.5.0 to 0.6.1, which are unsigned |
+| `sbom-syncd-<version>[-fips]-<arch>.spdx.json`, `sbom-syncd-console-<version>[-fips]-<arch>.spdx.json` | The SPDX bill of materials of each container image and platform, attached to the source repository's GitHub release (not on the **Downloads** page). Not in `SHA256SUMS`: each is also a signed attestation on its image. New in 0.5.0; none for 0.6.1, whose images were not published |
 | `TESTED-<version>.md` | What CI ran the release against, row by row with the results. On the source repository's GitHub release only, not in `SHA256SUMS` |
 
 - **aarch64.** From 0.5.0 the aarch64 bundles and packages, and the arm64 images, are built by
@@ -124,14 +129,15 @@ the `.rpm` files and publishes the apt and dnf repositories.
   `.deb` and `.rpm` files in signed apt and dnf repositories (see
   [From the package repositories](#from-the-package-repositories)). None has been published so
   far.
-- The release notes are in the source repository, `docs/releases/<version>.md` (the GitHub
-  releases of 0.5.1, 0.5.2 and 0.5.4 carry none; 0.5.4's notes also cover 0.5.2). Which versions
+- The release notes are in the source repository, `docs/releases/<version>.md`, and from 0.5.5
+  on the GitHub release too (those of 0.5.1, 0.5.2 and 0.5.4 carry none; 0.5.4's notes also
+  cover 0.5.2). Which versions
   get fixes (the latest minor version only) and what a version number promises are in the source
   repository's `docs/SUPPORT.md`.
 
 ### Verifying a release
 
-New in 0.4.0. Check what you downloaded before you install it. For 0.5.0, 0.5.1 and 0.5.4, which
+New in 0.4.0. Check what you downloaded before you install it. For 0.5.0 to 0.6.1, which
 are unsigned, only step 2 applies: it shows that each file is complete and matches the `SHA256SUMS`
 you downloaded with it, and the **Downloads** page shows each file's SHA-256 as well.
 
@@ -154,11 +160,11 @@ sha256sum -c SHA256SUMS --ignore-missing
 - **`.rpm` signatures.** From 0.5.0 the `.rpm` files of a signed release carry the same key's
   signature, which `dnf` checks when it installs from the repository. To check a downloaded
   file: `sudo rpm --import syncd-release.asc && rpm -K syncd-*.rpm` (`digests signatures OK`).
-  The `.rpm` files of 0.5.0, 0.5.1 and 0.5.4 carry no signature.
+  The `.rpm` files of 0.5.0 to 0.6.1 carry no signature.
 - **A release without `SHA256SUMS.asc`** was published without the signing key (the release
-  workflow's summary says so), as 0.5.0, 0.5.1 and 0.5.4 were. Its checksums still show that a file is
+  workflow's summary says so), as 0.5.0 to 0.6.1 were. Its checksums still show that a file is
   complete, not who built it.
-- **The bundle alone:** `sha256sum -c syncd-0.5.4-linux-x86_64.tar.gz.sha256`. Inside the bundle,
+- **The bundle alone:** `sha256sum -c syncd-0.6.1-linux-x86_64.tar.gz.sha256`. Inside the bundle,
   every file is listed in `MANIFEST.sha256`, and the installer checks the release against it
   before it copies anything, so a damaged archive is refused even without these steps.
 - **SBOMs.** The two CycloneDX files list the crates and the web console's packages each
@@ -171,8 +177,10 @@ sha256sum -c SHA256SUMS --ignore-missing
 A second workflow (`Container`) builds the images and the Helm chart on every push, scans the
 images, installs them in a kind cluster (one release, and an HA pair failed over on each lease
 kind), and, on a `v*` tag only and once those have passed, pushes them to the GitHub container
-registry and signs them. Its runs for the `v0.5.4`, `v0.5.2` and `v0.5.1` tags pushed and signed
-those releases' images, their FIPS variants and the chart:
+registry and signs them. Its runs for the `v0.6.0`, `v0.5.5`, `v0.5.4`, `v0.5.2` and `v0.5.1`
+tags pushed and signed those releases' images, their FIPS variants and the chart. Its run for
+`v0.6.1` failed building the amd64 binaries and published nothing, so the newest images and
+chart are 0.6.0's (0.6.1 changes only the host installer):
 
 | What | Where |
 |---|---|
@@ -180,8 +188,8 @@ those releases' images, their FIPS variants and the chart:
 | The console's image | `ghcr.io/winllc/syncd-console:<version>` (with the web UI, `git` and `ssh`), and `<version>-fips` |
 | The Helm chart | `oci://ghcr.io/winllc/charts/syncd`, version `<version>` |
 
-- **Tags.** Each release is tagged with its version, for example `0.5.4`, and its FIPS variant
-  `0.5.4-fips`. There is no `latest`. The chart's version and `appVersion` are the release's.
+- **Tags.** Each release is tagged with its version, for example `0.6.0`, and its FIPS variant
+  `0.6.0-fips`. There is no `latest`. The chart's version and `appVersion` are the release's.
 - **Platforms.** A tag holds `linux/amd64` and `linux/arm64`, unless the release was built with
   `ARM64_RUNNERS` set to `false`. `docker buildx imagetools inspect
   ghcr.io/winllc/syncd:<version>` lists a tag's platforms. From 0.5.0 the `-fips` tags are built
@@ -205,7 +213,7 @@ those releases' images, their FIPS variants and the chart:
 
 ```bash
 # A tag's digest (the image index: every platform)
-docker buildx imagetools inspect ghcr.io/winllc/syncd:0.5.4
+docker buildx imagetools inspect ghcr.io/winllc/syncd:0.6.0
 
 # The image's signature, and its SBOM attestations
 cosign verify ghcr.io/winllc/syncd@<digest> \
@@ -229,10 +237,10 @@ the images (see [Air-gapped clusters](#air-gapped-clusters)).
 **Images you build yourself**, from the source repository:
 
 ```bash
-docker build -f deploy/container/Dockerfile --target engine -t registry.example.com/syncd:0.5.4 .
-docker build -f deploy/container/Dockerfile --target console -t registry.example.com/syncd-console:0.5.4 .
+docker build -f deploy/container/Dockerfile --target engine -t registry.example.com/syncd:0.6.1 .
+docker build -f deploy/container/Dockerfile --target console -t registry.example.com/syncd-console:0.6.1 .
 # The FIPS variant
-docker build -f deploy/container/Dockerfile --target engine -t registry.example.com/syncd:0.5.4-fips \
+docker build -f deploy/container/Dockerfile --target engine -t registry.example.com/syncd:0.6.1-fips \
   --build-arg FEATURES=syncd/fips,syncd-console/fips .
 ```
 
@@ -263,13 +271,13 @@ production.
 ## Install from the bundle
 
 ```bash
-sha256sum -c syncd-0.5.4-linux-x86_64.tar.gz.sha256
-tar -xzf syncd-0.5.4-linux-x86_64.tar.gz
-sudo ./syncd-0.5.4-linux-x86_64/install.sh --local-database
+sha256sum -c syncd-0.6.1-linux-x86_64.tar.gz.sha256
+tar -xzf syncd-0.6.1-linux-x86_64.tar.gz
+sudo ./syncd-0.6.1-linux-x86_64/install.sh --local-database
 ```
 
-On aarch64, use `syncd-0.5.4-linux-aarch64.tar.gz`. For FIPS mode, use
-`syncd-0.5.4-linux-x86_64-fips.tar.gz` (or, from 0.5.0, `syncd-0.5.4-linux-aarch64-fips.tar.gz`)
+On aarch64, use `syncd-0.6.1-linux-aarch64.tar.gz`. For FIPS mode, use
+`syncd-0.6.1-linux-x86_64-fips.tar.gz` (or, from 0.5.0, `syncd-0.6.1-linux-aarch64-fips.tar.gz`)
 and add `--fips`.
 
 `install.sh` runs `bin/syncdctl install` with the options you give it. On a host where syncd is
@@ -286,12 +294,21 @@ Choose one:
       stored;
     - it runs `psql` as the `postgres` system account against `/var/run/postgresql`, port 5432.
       Set `SYNCD_PG_SOCKET` and `SYNCD_PG_PORT` for another socket directory or port.
-- **`--database-url`** uses a database server elsewhere. Create the database and its account
-  first, then pass its URL:
+- **`--database-url-file FILE`** (since 0.5.5) uses a database server elsewhere. Create the
+  database and its account first, then pass its URL in a file, on its first line. A URL with
+  a password does not belong on the command line: every account on the host can read a
+  running command's arguments (`ps`), and the shell's history keeps them.
 
     ```bash
-    sudo ./install.sh --database-url 'postgres://syncd:secret@db.example.com/syncd_console?sslmode=require'
+    sudo sh -c 'umask 077 && cat >/root/syncd-database.url'    # paste the URL, then Ctrl-D:
+    # postgres://syncd:secret@db.example.com/syncd_console?sslmode=require
+    sudo ./install.sh --database-url-file /root/syncd-database.url
+    sudo rm /root/syncd-database.url
     ```
+
+- **`--database-url URL`** takes the URL itself, for one without a password. syncdctl gives
+  PostgreSQL's tools (`pg_dump` for backups, `psql`) the URL without its password, and the
+  password in their environment.
 
 The URL is written to `CONSOLE_DATABASE_URL` in `/etc/syncd/console.env`, which only root and the
 `syncd-console` account can read.
@@ -301,12 +318,13 @@ The URL is written to `CONSOLE_DATABASE_URL` in `/etc/syncd/console.env`, which 
 | Option | Effect |
 |---|---|
 | `--local-database` | Creates the console's role and database on this host's PostgreSQL (above) |
-| `--database-url URL` | Uses this PostgreSQL database for the console |
+| `--database-url-file FILE` | Uses the PostgreSQL database whose URL is on the file's first line (since 0.5.5; keeps a password off the command line) |
+| `--database-url URL` | Uses this PostgreSQL database for the console; for a URL without a password |
 | `--listen ADDR` | The console's address. Default `127.0.0.1:8080`. For other machines, give the console a certificate or put nginx in front (see [HTTPS in front of the console](#https-in-front-of-the-console)) |
 | `--fips` | Runs both services with the FIPS 140-3 module (`SYNCD_FIPS_MODE=true` in both environment files). Refused unless the release is a FIPS build (the FIPS bundle) |
-| `--no-start` | Installs everything but starts nothing. Start later with `systemctl enable --now syncd syncd-console` |
+| `--no-start` | Installs everything but starts nothing. `syncdctl register` then starts the services and registers the engine in the console (running the installer again does the same) |
 
-One of `--local-database` and `--database-url` is required. `install` is refused on a host that
+One of `--local-database`, `--database-url-file` and `--database-url` is required. `install` is refused on a host that
 already has syncd; use `syncdctl upgrade` there.
 
 ### What the installer does
@@ -330,12 +348,27 @@ already has syncd; use `syncdctl upgrade` there.
 At the end it prints the console's address and the `admin` account's one-time password (see
 [First sign-in](#first-sign-in)).
 
+**An installation that did not finish.** When the services do not start, the installer stops
+there and says so: once the cause is fixed, `sudo syncdctl register` (or the installer run
+again) finishes steps 7 and 8. Until then `syncdctl status` says the installation is not
+finished. From 0.6.1 an installation that stopped earlier, at step 6 (`openssl` failing while
+it issued the certificates), is finished the same way: that run issues the certificates that
+are missing and installs the systemd units the first run did not, with the configuration the
+first run wrote. `openssl`'s error is now shown, naming which certificate it was making;
+0.6.0 and 0.5.5 sent it to `/dev/null` and ended with nothing but `==> installing syncd
+<version>`, and running the installer again only tried to start services that had no keys or
+units. The installer finishes an installation with its own release, a newer one's included
+(syncd never ran there, so there is nothing to upgrade), and a FIPS installation with a FIPS
+build only. Under the CA `syncdctl` made (`/etc/syncd/pki/ca.key`) only missing certificates
+are issued; certificates you put there yourself (a `ca.crt` without `syncdctl`'s `ca.key`) are
+left as they are.
+
 ## Install from a package
 
 ```bash
-sudo apt install ./syncd_0.5.4_amd64.deb            # Debian, Ubuntu (arm64: syncd_0.5.4_arm64.deb)
-sudo dnf install ./syncd-0.5.4-1.x86_64.rpm         # RHEL, Rocky, Alma 9+, Fedora (aarch64: syncd-0.5.4-1.aarch64.rpm)
-sudo dnf install ./syncd-0.5.4-1.el8.x86_64.rpm     # RHEL, Rocky, Alma 8
+sudo apt install ./syncd_0.6.1_amd64.deb            # Debian, Ubuntu (arm64: syncd_0.6.1_arm64.deb)
+sudo dnf install ./syncd-0.6.1-1.x86_64.rpm         # RHEL, Rocky, Alma 9+, Fedora (aarch64: syncd-0.6.1-1.aarch64.rpm)
+sudo dnf install ./syncd-0.6.1-1.el8.x86_64.rpm     # RHEL, Rocky, Alma 8
 sudo syncdctl install --local-database              # or --database-url ...
 ```
 
@@ -361,7 +394,7 @@ release published with the signing key and with GitHub Pages set up; until then 
 answers 404 (see [Getting the release](#getting-the-release)).
 
 !!! warning "Not published yet"
-    0.5.0, 0.5.1 and 0.5.4 were released without the signing key, so no repository has been published
+    0.5.0 to 0.6.1 were released without the signing key, so no repository has been published
     and the commands below do not work yet. Install and upgrade from the files on the portal's
     **Downloads** page, as in [Install from a package](#install-from-a-package).
 
@@ -404,9 +437,9 @@ servers people change their passwords in (OpenLDAP, 389 Directory Server). It is
 engine's host, and the bundle's `install.sh` is not for a directory server:
 
 ```bash
-sudo apt install ./syncd-capture_0.5.4_amd64.deb       # from the repositories, once published: apt install syncd-capture
-sudo dnf install ./syncd-capture-0.5.4-1.x86_64.rpm    # from the repositories, once published: dnf install syncd-capture
-                                                       # RHEL 8: ./syncd-capture-0.5.4-1.el8.x86_64.rpm
+sudo apt install ./syncd-capture_0.6.1_amd64.deb       # from the repositories, once published: apt install syncd-capture
+sudo dnf install ./syncd-capture-0.6.1-1.x86_64.rpm    # from the repositories, once published: dnf install syncd-capture
+                                                       # RHEL 8: ./syncd-capture-0.6.1-1.el8.x86_64.rpm
 ```
 
 It installs the agent (`/usr/bin/syncd-capture`), a sample `/etc/syncd-capture/capture.conf`
@@ -481,6 +514,11 @@ sudo systemctl restart syncd-console
   upgrade, a rollback, a restore or another command restarts it. It does not check the
   certificate, which names the public address: the check sends nothing but the request, to this
   host. 0.5.0's `syncdctl` asked over plain HTTP, which a console serving HTTPS does not answer.
+- **Health.** Since 0.5.5 `/healthz` answers `ok`, or 503 naming each background task (the mail
+  sender, the webhook sender, the audit outputs, the engine watcher, ...) that keeps stopping,
+  waits to start again or says it cannot work: point monitoring at it. `/livez` answers `ok`
+  while the console serves requests, whatever its tasks do; the Helm chart's probes use it, so
+  a setting the console cannot use does not take its pages out of service.
 - **`CONSOLE_TRUSTED_PROXIES`** is not needed: clients connect to the console directly, and the
   audit trail records their addresses.
 - **HSTS.** From 0.5.0 the console sends `Strict-Transport-Security` when it serves HTTPS
@@ -909,7 +947,8 @@ changes it. On Kubernetes, `engine.ha.enabled` does all of this (see
 ## Install with Helm
 
 The chart (`deploy/helm/syncd` in the source repository, published as
-`oci://ghcr.io/winllc/charts/syncd`; 0.5.4 is there) runs the two
+`oci://ghcr.io/winllc/charts/syncd`; 0.6.0 is the newest there, as 0.6.1's was not
+published) runs the two
 [container images](#container-images-and-the-helm-chart):
 
 - **The engine** is a StatefulSet with **one replica**, or two with `engine.ha.enabled` (an
@@ -975,7 +1014,7 @@ console:
 Then install:
 
 ```bash
-helm install syncd oci://ghcr.io/winllc/charts/syncd --version 0.5.4 \
+helm install syncd oci://ghcr.io/winllc/charts/syncd --version 0.6.0 \
   --namespace syncd -f syncd-values.yaml --wait
 ```
 
@@ -1093,7 +1132,7 @@ CI renders the values new in 0.5.0 and 0.5.1 and checks which pods use what
 (`tests/helm/check-values.py`: the service accounts, the signing key, CA certificates and the
 Secrets of your own), and installs, upgrades and restarts a release in a kind cluster; the
 Kubernetes Lease and its RBAC are installed by the `kind-ha` job. All of these passed in the
-`Container` workflow's run for the `v0.5.4` tag, which publishes nothing otherwise. The license
+`Container` workflow's run for the `v0.6.0` tag, which publishes nothing otherwise. The license
 Secret and `previousKey` are not in those checks. No cloud cluster was used: try the values you
 need on a test cluster first.
 
@@ -1445,7 +1484,7 @@ the passive engine of a pair pulls snapshots with).
     ```bash
     kubectl -n syncd exec deploy/syncd-console -- syncd-console admin config-signing-key |
       sed -n '/BEGIN PUBLIC KEY/,/END PUBLIC KEY/p' > console-signing.pub
-    helm upgrade syncd oci://ghcr.io/winllc/charts/syncd --version 0.5.4 -n syncd --reuse-values \
+    helm upgrade syncd oci://ghcr.io/winllc/charts/syncd --version 0.6.0 -n syncd --reuse-values \
       --set-file engine.configSigning.publicKey=console-signing.pub
     ```
 
@@ -1463,7 +1502,7 @@ suits GitOps:
 
 ```bash
 kubectl -n syncd create secret generic syncd-license --from-file=license.lic=L-0001.lic
-helm upgrade syncd oci://ghcr.io/winllc/charts/syncd --version 0.5.4 -n syncd --reuse-values \
+helm upgrade syncd oci://ghcr.io/winllc/charts/syncd --version 0.6.0 -n syncd --reuse-values \
   --set console.license.existingSecret=syncd-license
 ```
 
@@ -1668,7 +1707,7 @@ kubectl -n syncd get lease syncd -o yaml     # holderIdentity, renewTime, leaseT
     New in 0.5.0, a `kind-ha` CI job installs a pair in kind, turns HA on for an existing
     release, and fails it over by lease expiry and by deleting the active pod, once with the
     PostgreSQL lease and once with the Kubernetes lease. It passed in the `Container` workflow's
-    run for the `v0.5.4` tag, whose publishing waits for it, so the Kubernetes Lease backend has
+    run for the `v0.6.0` tag, whose publishing waits for it, so the Kubernetes Lease backend has
     met a real API server (kind's). No cloud cluster (EKS, AKS, GKE, OpenShift) was used. The
     pair itself is tested end to end on hosts. Try a failover on a test cluster before you rely on
     it.
@@ -1677,8 +1716,8 @@ kubectl -n syncd get lease syncd -o yaml     # holderIdentity, renewTime, leaseT
 
 ```yaml
 image:
-  engine: { tag: 0.5.4-fips }
-  console: { tag: 0.5.4-fips }
+  engine: { tag: 0.6.0-fips }
+  console: { tag: 0.6.0-fips }
 engine:
   env:
     - { name: SYNCD_FIPS_MODE, value: "true" }
@@ -1716,8 +1755,11 @@ through the control socket, as every `kubectl exec` command does, so it keeps wo
 On upgrade, the engine migrates its store if the new release changed its format (see
 [Store format](#store-format)), the console migrates its database, and the registration Job runs
 again. The engine pod has 10 minutes to open its store and listen (its startup probe) before
-Kubernetes restarts it. `helm rollback` and its limits are in [Rollback](#rollback). What changes
-from chart 0.5.1 or 0.5.2 to 0.5.4 is in
+Kubernetes restarts it (from 0.5.5 `engine.startupProbe` sets this: raise `failureThreshold` for
+a large store and a release whose notes say it migrates the store; `engine.minReadySeconds` makes
+a new engine pod stay ready that long before it counts as available). `helm rollback` and its limits are in [Rollback](#rollback). What changes
+from chart 0.5.4 to 0.6.0 (0.6.1's chart was not published) is in
+[Upgrading from 0.5.4 to 0.6.1](#upgrading-from-054-to-061), from chart 0.5.1 or 0.5.2 to 0.5.4 in
 [Upgrading from 0.5.1 or 0.5.2 to 0.5.4](#upgrading-from-051-or-052-to-054), from 0.5.0 to 0.5.1 in
 [Upgrading from 0.5.0 to 0.5.1](#upgrading-from-050-to-051), from
 0.4.1 to 0.5.0 in [Upgrading from 0.4.1 to 0.5.0](#upgrading-from-041-to-050), from
@@ -1751,20 +1793,24 @@ the console Secret alone loses the master key (see
 ### Air-gapped clusters
 
 1. On a connected host, get the chart: `helm pull oci://ghcr.io/winllc/charts/syncd --version
-   0.5.4` gives `syncd-0.5.4.tgz`. Verify it and the images with cosign there (see
+   0.6.0` gives `syncd-0.6.0.tgz`. Verify it and the images with cosign there (see
    [Verifying the images and the chart](#verifying-the-images-and-the-chart)).
-2. Copy `ghcr.io/winllc/syncd:0.5.4` and `ghcr.io/winllc/syncd-console:0.5.4` (or the `-fips`
+2. Copy `ghcr.io/winllc/syncd:0.6.0` and `ghcr.io/winllc/syncd-console:0.6.0` (or the `-fips`
    tags) into your registry, for example with `skopeo copy --all` (every platform) or `docker
    pull`, `docker tag` and `docker push`. The chart uses no other image.
 3. Install from the file, with your registry:
 
 ```bash
-helm install syncd ./syncd-0.5.4.tgz --namespace syncd -f syncd-values.yaml \
+helm install syncd ./syncd-0.6.0.tgz --namespace syncd -f syncd-values.yaml \
   --set image.engine.repository=registry.example.gov/winllc/syncd \
   --set image.console.repository=registry.example.gov/winllc/syncd-console
 ```
 
 Add `imagePullSecrets` if your registry needs them.
+
+This is installing syncd on a disconnected cluster. Synchronising identities *between* two
+networks that are not connected (DSML files carried across a data diode or on media) is
+[Air-gapped synchronisation](air-gap.md).
 
 ### What the chart does not do yet
 
@@ -1833,6 +1879,102 @@ Run it with a restart policy (systemd `Restart=always`, or a container with
 On Kubernetes, upgrade with `helm upgrade` (see [Upgrade with Helm](#helm-upgrade)). On a host,
 upgrade as in [Bundle installs](#bundle-installs) or [Package installs](#package-installs). Read
 what changes first.
+
+### Upgrading from 0.5.4 to 0.6.1
+
+Upgrade as usual, with `syncdctl upgrade`, `apt` or `dnf` (with the downloaded files: the
+repositories are not published). Three releases since 0.5.4, and one step: upgrade straight to
+0.6.1.
+
+- **0.5.5** (19 November) is a release of fixes from an in-depth review of the engine, the
+  console and the packaging: 3 critical, 34 high, 73 medium and 45 low findings, most fixed.
+  The critical ones: a gone entity's exported record could delete the live entry another
+  entity had taken over; an answer from a SCIM provider or Microsoft Graph that could not be
+  read whole was taken for an empty list (members removed, resources created twice); and a
+  password agent's submission could undo a revocation made while it ran.
+- **0.6.0** (20 November) adds synchronisation across an air gap: the `dsml` connector type
+  (see [Air-gapped synchronisation](air-gap.md)).
+- **0.6.1** (20 November) fixes the installer: a first install whose `openssl` failed stopped
+  without saying why, and could not be finished (see [What the installer does](#what-the-installer-does)).
+  Upgrades were not affected.
+
+**On Kubernetes**, upgrade with chart **0.6.0**: 0.6.1's images and chart were not published
+(see [Getting the release](#getting-the-release)), and 0.6.1 changes nothing that runs in them.
+
+- **The console's database: schema 30 to 33** (0.5.5: publish leases, the published flag of
+  engine configurations, the expiry of one-time passwords; 0.6.0 and 0.6.1 add nothing). A
+  rollback to 0.5.4 restores the database backup taken before the upgrade: what was done in
+  the console since is lost.
+- **The store's format stays 2.** A DSML target keeps its files' sequence number, and the
+  exports waiting for the end of their interval, as settings beside the data, which 0.5.5 and
+  older ignore.
+- **The configuration** gains the `dsml` connector type and its settings, and a CSV
+  connection's `allow_empty`; nothing is renamed or removed. 0.5.5 adds checks: group filters
+  are checked for attributes no flow sets, an attribute listed twice in precedence is refused,
+  and `attributes.multi_valued` no longer counts as setting an attribute. Run the new
+  release's `syncd validate` on your configuration before upgrading.
+- **Behaviour changes (0.5.5):**
+    - **Safety gates.** Disables and moves aside of leavers count under a publication's
+      deletion threshold, as deletes do. Drift reverts pass through the thresholds, the change
+      window and the canary. A publication over its threshold holds only its own deprovisions,
+      not the batch's other publications'. A change window's overdue release lets through only
+      the overdue changes. See [Change safety](change-safety.md).
+    - **Errors keep state.** A publication filter that fails on an entity leaves its entry as
+      it is (it used to deprovision it); a mapping that fails keeps the exported value (it
+      cleared it); a group filter that fails keeps the membership.
+    - **Groups follow their members' writes.** A member leaves or joins a group when its own
+      export is written: a held delete, a change waiting for a window or a canary, a failed
+      export or a quarantined entity no longer moves it meanwhile.
+    - **CSV.** A file with a header and no rows deletes nothing unless the connection sets
+      `allow_empty: true`. Without a done file, a file is read once its modification time is
+      3 s old. The done file is deleted once the read is committed.
+    - **REST sources** without a total count ask for one more page after a short one, and
+      stop at an empty page.
+    - **DirSync** reads each changed object again in the base with the object's filter, so an
+      object that stops matching is deleted. **Active Directory delta reads** keep their
+      position per domain controller: each reads in full once after the upgrade.
+    - **SCIM and Entra ID targets** wait out a `Retry-After` of up to 5 s; a longer one stops
+      requests to the provider until it ends (the exports fail and are retried).
+    - **Precedence** naming a connector ranks every object of it the view reads; a
+      `connector/object` names one.
+    - **Read-only API callers** (below the configure tier) get the running configuration
+      without the values its environment marks secret, and their simulations run without them.
+    - **Control commands** are refused while the engine exports after the initial load,
+      releases held changes, writes back a target's changes after an outage, or delivers queued
+      passwords, saying what it is busy with; they used to queue behind it. A command whose
+      caller stopped waiting is not run.
+    - **The status** is published at most every 250 ms while source events keep coming.
+    - **Listings** of dead letters, quarantined entities and quality failures return at most
+      10,000 entries.
+    - **The console.** A password reset revokes the API tokens the account created, and a
+      one-time password an administrator issues is refused after 7 days. `/healthz` answers 503
+      naming a background task that keeps stopping or cannot work; the new `/livez` answers
+      `ok` while the console serves, and the Helm chart's probes use it. A UI request is given
+      up after ten minutes, with a message. A PDF report has at most 20,000 rows (CSV and
+      Excel have no limit).
+    - **systemd.** A failing service is restarted after 10 s, growing to 5 minutes, instead
+      of every 5 s for ever.
+    - **Backups.** `syncdctl backup --to ... --keep N` removes the oldest backups only once
+      every part of the new one is stored (`syncd backup-prune`, new, does it).
+- **`syncd status`** (0.6.0): the line of an unreachable target goes on to say that a DSML
+  target keeps its exports for the next file it writes. A script matching
+  `target <name> UNREACHABLE` is unaffected.
+- **Helm** (0.5.5): `engine.startupProbe` (`periodSeconds` 5, `failureThreshold` 120: ten
+  minutes to open the store) and `engine.minReadySeconds` (0) are values. A StatefulSet's
+  volume size cannot be changed by `helm upgrade`; see
+  [Growing the engine's volume](availability-and-sizing.md).
+- **Files.** Nothing new on the host; `/etc/syncd` stays as you left it. The custom-functions
+  example module's bytes follow the version: 0.6.1 pins `66671f41…`, the same as 0.5.4, so a
+  package of your own that pins the example module needs a change only if you updated it to
+  0.5.5's or 0.6.0's `732b8651…`.
+- **Known limitations** (0.5.5 and 0.6.0): a throttling SCIM or Entra target still holds the
+  engine for up to 5 s per request; after an HA takeover, Debezium sources resume from
+  Debezium's own position, so have Debezium send the tables again with an incremental
+  snapshot; MySQL and SQL Server sources look up changed keys one at a time; DSML's are in
+  [Air-gapped synchronisation](air-gap.md#limitations-as-of-061).
+
+**From 0.5.1 or 0.5.2**, read [Upgrading from 0.5.1 or 0.5.2 to 0.5.4](#upgrading-from-051-or-052-to-054)
+too; **from 0.5.0**, also [Upgrading from 0.5.0 to 0.5.1](#upgrading-from-050-to-051).
 
 ### Upgrading from 0.5.1 or 0.5.2 to 0.5.4
 
@@ -2271,8 +2413,8 @@ Upgrade as below, with `syncdctl upgrade`, `apt` or `dnf`. What to know first:
 Either command upgrades:
 
 ```bash
-sudo syncdctl upgrade syncd-0.5.4-linux-x86_64.tar.gz
-sudo ./syncd-0.5.4-linux-x86_64/install.sh        # on a host that runs syncd
+sudo syncdctl upgrade syncd-0.6.1-linux-x86_64.tar.gz
+sudo ./syncd-0.6.1-linux-x86_64/install.sh        # on a host that runs syncd
 ```
 
 The new release's own `syncdctl` runs the upgrade:
@@ -2294,18 +2436,31 @@ The new release's own `syncdctl` runs the upgrade:
    than the backup took; if the restore still fails, the failed release stays current and
    `syncdctl rollback` finishes the job once the cause is fixed.
 
-The services are down from step 4 until the health checks pass, typically less than a minute.
-Afterwards, the engine catches up with its sources from its checkpoints.
+The services are down from step 4 until the health checks pass. Since 0.5.5 the engine store's
+table files (`*.sst`, almost all of it) are hard-linked into the backup rather than copied when
+the backups are on the store's file system (the default, `/var/lib/syncd/backups`), so a large
+store adds little; with the backups on another file system the whole store is copied, and the
+stop grows with the store. Then the new release starts, and migrates the store first when its
+format changed. Afterwards, the engine catches up with its sources from its checkpoints. Since
+0.5.5 only the services that were running before are started again and checked: a console
+stopped on purpose stays stopped (the same holds for `backup`, `restore`, `rollback` and the
+package upgrades).
+
+A backup's linked table files are the store's own until the engine compacts them away, after
+which the backup keeps them: in time a backup takes as much room as the store. The upgrade's
+check counts on that much room in `/var/lib/syncd/backups`, and a tenth more.
 
 | Option | Effect |
 |---|---|
 | `--no-rollback` | Leaves a failed upgrade in place for investigation |
-| `--skip-db-backup` | Leaves the console's database out of the backup: when `pg_dump` is not installed, or cannot dump the server. From 0.5.1 it always leaves it out (0.5.0 only when `pg_dump` was missing). Without the dump, a rollback cannot restore the database |
+| `--skip-db-backup` | Leaves the console's database out of the backup: when `pg_dump` is not installed, or cannot dump the server. From 0.5.1 it always leaves it out (0.5.0 only when `pg_dump` was missing). Without the dump, a schema change by the new release cannot be undone: since 0.5.5 the upgrade says so before it starts, its own rollback then leaves the new release in place, and `syncdctl rollback` refuses until the database is back at its old schema (restore it from a backup of your own first). Upgrading from 0.5.4 changes the schema (30 to 33) |
 | `--reinstall` | Installs the same version again |
 | `--yes` | Asks no questions |
 
-Only one `syncdctl` runs at a time. The last three backups are kept (`SYNCD_KEEP_BACKUPS` changes
-this), and so are the current and the previous release; older releases are removed.
+Only one `syncdctl` runs at a time; since 0.5.5 an interrupted run starts syncd again and leaves
+no half backup. The last three backups are kept (`SYNCD_KEEP_BACKUPS` changes this; the newest,
+taken by the upgrade itself, is always kept, so 0 counts as 1), and so are the current and the
+previous release; older releases are removed.
 
 **A pair on hosts.** Upgrade the passive engine's host first, then the active one's: stopping the
 active engine hands the lease to the upgraded one at once. Both engines should run the same
@@ -2319,8 +2474,8 @@ strict pair that delivers passwords to 0.5.1, list the passive engine's certific
 Upgrade with the package manager:
 
 ```bash
-sudo apt install ./syncd_0.5.4_amd64.deb
-sudo dnf upgrade ./syncd-0.5.4-1.x86_64.rpm          # RHEL 8: ./syncd-0.5.4-1.el8.x86_64.rpm
+sudo apt install ./syncd_0.6.1_amd64.deb
+sudo dnf upgrade ./syncd-0.6.1-1.x86_64.rpm          # RHEL 8: ./syncd-0.6.1-1.el8.x86_64.rpm
 # From the package repositories, once they are published:
 sudo apt update && sudo apt install syncd
 sudo dnf upgrade syncd
@@ -2337,7 +2492,7 @@ itself: a failed health check fails the package's configuration step and names t
   package's script does this, whatever the installed release).
 - **Without a working `pg_dump`**, leave the database out of the backup with
   `SYNCD_SKIP_DB_BACKUP=1` in the package manager's environment:
-  `sudo SYNCD_SKIP_DB_BACKUP=1 apt install ./syncd_0.5.4_amd64.deb`, or the same with `dnf`.
+  `sudo SYNCD_SKIP_DB_BACKUP=1 apt install ./syncd_0.6.1_amd64.deb`, or the same with `dnf`.
   0.5.0's `syncdctl`, which takes the backup when you upgrade from 0.5.0, honours it only when
   `pg_dump` is not installed at all.
 - **To go back,** install the previous package version (`sudo apt install syncd=<version>`,
@@ -2363,8 +2518,9 @@ This goes back to the previous release (bundle installs only):
 
 - The engine store and `/etc/syncd` are restored from the backup taken before the upgrade. The
   engine picks up changes made since then when it next reads its sources.
-- The console's database is restored only if the newer release changed its schema. Otherwise its
-  contents are kept: configuration versions, accounts and the audit trail written since the
+- The console's database is restored only if the newer release changed its schema, or (since
+  0.5.5) the schema is not known because the database did not answer when the backup was taken,
+  or does not answer now. Otherwise its contents are kept: configuration versions, accounts and the audit trail written since the
   upgrade, and so are the control API's certificates in `/etc/syncd/pki`, which the console's
   stored credentials for the engine match. From 0.4.0, a restore first drops the tables the newer
   release added, so the database comes back as it was when it was dumped.
@@ -2372,7 +2528,12 @@ This goes back to the previous release (bundle installs only):
   release cannot read the engine store, because the newer release migrated it to a newer format,
   and from 0.5.1 also when the console's database schema is not the one the previous release's
   console had (recorded in the backup taken before the upgrade): that console would not start on
-  it.
+  it. Since 0.5.5, when that cannot be checked (no backup records the schema, or the database does
+  not answer), it is refused too, unless `--skip-schema-check` is added.
+- **A backup without the database** (taken with `--skip-db-backup` or `SYNCD_SKIP_DB_BACKUP=1`):
+  since 0.5.5 the rollback keeps the database when its schema is the one the previous release
+  had, and is refused, before anything is stopped, when it is not or is not known. Restore the
+  database from a backup of your own first.
 - **Room.** A restore copies the backup's engine store and console files in beside the live ones
   before replacing them. From 0.5.1 `rollback` and `restore` check first that `/var/lib/syncd`
   has room for that copy, and change nothing when it has not. The data is restored before the
@@ -2383,6 +2544,20 @@ After a rollback there is no previous release to go back to again. On a package 
 is refused: install the older package, then `syncdctl restore` the backup named
 `<time>-upgrade-<old>-to-<new>`. More on recovery is in
 [Sizing, availability and recovery](availability-and-sizing.md#rolling-back-an-upgrade).
+
+### Rolling back 0.6.1, 0.6.0 or 0.5.5
+
+- **0.6.1 to 0.6.0**: nothing to restore. The schema (33), the store's format (2) and the
+  configuration are the same; `syncdctl rollback --keep-data` keeps everything.
+- **0.6.0 to 0.5.5**: the schema and the store's format are the same, but 0.5.5 has no `dsml`
+  connector. Before rolling back with the store kept, run `syncd reconcile` on an engine with a
+  DSML target, which writes out the exports waiting for the end of their interval (0.5.5 ignores
+  them), then publish a configuration without the `dsml` connector: 0.5.5 refuses one with it.
+- **To 0.5.4**: the console's schema went from 30 to 33, so `syncdctl rollback` restores the
+  database backup taken before the upgrade, and what was done in the console since is lost;
+  `--keep-data` is refused. The store's format is the same, so a package downgrade followed by
+  `syncdctl restore` of that backup, or `helm rollback` after restoring the database, works the
+  same way. 0.5.5's fixes go with it.
 
 ### Rolling back 0.5.4 to 0.5.2 or 0.5.1
 
@@ -2553,7 +2728,7 @@ That stops and disables the services; `/etc/syncd` and `/var/lib/syncd` stay.
 
 - [ ] You verified the download: `sha256sum -c SHA256SUMS --ignore-missing`, and for a signed
       release `gpg --verify SHA256SUMS.asc SHA256SUMS` against the release key's fingerprint
-      (0.5.0, 0.5.1 and 0.5.4 are unsigned).
+      (0.5.0 to 0.6.1 are unsigned).
 - [ ] `sudo syncdctl status` shows the engine `active, control API answers` and the console
       `active, http://127.0.0.1:8080 answers`.
 - [ ] The console is served over HTTPS (its own certificate, or nginx with
