@@ -51,8 +51,8 @@ Day-to-day operation of the RSA Operations Portal, installed from the release pa
 | Liveness | `/actuator/health/liveness` | The Portal itself is running |
 | Readiness | `/actuator/health/readiness` | The Portal can serve: the database (`db`) and the Connector (`connector`) answer. `connector` is `DOWN` when the Connector can't be reached over HTTPS (address, certificate, shared secret) or can't open an AM session |
 | Connector | `docker compose exec connector curl -s http://localhost:8080/app/health` | `UP` or `DOWN`, checked against AM at most every 30 seconds. The reason for `DOWN` is in the Connector's log |
-| Scheduled jobs | Sign in as PMO, then **Admin → Manual Run Cron Jobs** | Shows each job's enabled and debug flags and its last-run message (in the memory of the Portal replica serving the page, cleared on restart). Each run is also audited as `job.completed` or `job.failed` |
-| Email | Look for `Could not send email` or `Email not sent to:` in the Portal log | SMTP failures. Sending is asynchronous, so the UI may still report success. |
+| Scheduled jobs | Sign in as PMO, then **Admin → Manual Run Cron Jobs** | Shows each job's enabled and debug flags and its last-run message (in the memory of the Portal replica serving the page, cleared on restart). Each run is also audited as `job.completed` or `job.failed`. From 0.0.3 a run that could not do its work is `job.failed`: see [Scheduled jobs](#scheduled-jobs) |
+| Email | Look for `Could not send email` or `Email not sent to:` in the Portal log | SMTP failures. E-mail that a page sends is queued, so the page may still report success. From 0.0.3 the scheduled jobs send their e-mail themselves and count only what the relay took; a job that sent none of the e-mail it had to send is `job.failed` |
 
 The health endpoints need no sign-in; their details (database, Connector, disk) are shown to PMO users only. Without `MANAGEMENT_SERVER_PORT` they are on the Portal's port 8080 (Helm: through `kubectl port-forward`).
 
@@ -70,7 +70,7 @@ The health endpoints need no sign-in; their details (database, Connector, disk) 
 | `ens_rsa_pin_resets_total{method}` | PINs reset: `agent`, `reset_link`, `certificate`, `windows_password` |
 | `ens_rsa_emergency_codes_total` | Emergency access codes issued |
 
-Suggested alerts: readiness failing; `ens_rsa_am_call_seconds_count{outcome="error"}` rising; `ens_license_mode{mode="full"}` at 0 or `ens_license_days_remaining` under 30; `ens_audit_forward_failures_total` rising; no new database backup in a day.
+Suggested alerts: readiness failing; a `job.failed` audit event; `ens_rsa_am_call_seconds_count{outcome="error"}` rising; `ens_license_mode{mode="full"}` at 0 or `ens_license_days_remaining` under 30; `ens_audit_forward_failures_total` rising; no new database backup in a day.
 
 ## Logs
 
@@ -80,7 +80,7 @@ Suggested alerts: readiness failing; `ens_rsa_am_call_seconds_count{outcome="err
     |---|---|---|
     | Portal (Log4j2) | `./logs/rsaapp-portal.log` in the install folder (container `/var/log`) | Rolled daily or at 10 MB into `./logs/rsaapp-portal-YYYY-MM/app-MM-dd-yyyy-N.log.gz`. Configured by `default_build/portal/log4j2.xml`. |
     | Portal console | `docker compose logs -f portal` | Same events, with the date, time, thread, level, logger and the request id. `LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs` writes JSON lines instead. With `ENS_AUDIT_STDOUT=true` (the default) the audit events appear here too, as raw `ens-audit/1` JSON lines |
-    | Connector | `docker compose logs -f connector` | Packaged Log4j 1.x configuration logs to stderr at `DEBUG`; from the next release each line starts with its own date and time (`2026-10-25T14:03:07.123Z WARN, ...`), or, with `LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs` in `connector.env`, is one ECS JSON object. `default_build/log4j.xml` (rolling `/var/log/connector.log`, so `./logs/connector.log` on the host) applies only if you select it through the Connector's `JAVA_OPTS` in `connector.env`. A configuration of your own should keep the layout `CrlfSafePatternLayout` ([Configuration → Logging](configuration.md#logging)). |
+    | Connector | `docker compose logs -f connector` | Packaged Log4j 1.x configuration logs to stderr at `DEBUG`; from 0.0.2 each line starts with its own date and time (`2026-10-25T14:03:07.123Z WARN, ...`), or, with `LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs` in `connector.env`, is one ECS JSON object. `default_build/log4j.xml` (rolling `/var/log/connector.log`, so `./logs/connector.log` on the host) applies only if you select it through the Connector's `JAVA_OPTS` in `connector.env`. A configuration of your own should keep the layout `CrlfSafePatternLayout` ([Configuration → Logging](configuration.md#logging)). |
     | MySQL | `docker compose logs mysql` | |
     | All services | `docker compose logs -f` | Ctrl+C to exit |
 
@@ -105,15 +105,28 @@ The Connector warns at every start while one of its protections is off. Each war
 | `RSA_TLS_VERIFY_HOSTNAME=false` | AM's certificate is checked against the CA only, not the host name | Use a name AM's certificate has in the AM URLs and remove the setting |
 | `CONNECTOR_SERIAL_FILTER=off` | AM's replies are read without the deserialization filter | Add the class from the refusal warning to `CONNECTOR_SERIAL_FILTER_ALLOW` and remove the setting |
 
-`Refused a reply from Authentication Manager: ...` at WARN means the Connector refused a reply from AM, and the command failed: see [What the Connector accepts](rsa-integration.md#what-the-connector-accepts). On the Portal, `rsa.helpdesk.code-key is not set` at start means the help desk's e-mailed codes do not survive a restart ([The e-mailed code's key](help-desk.md#the-e-mailed-codes-key)).
+`Refused a reply from Authentication Manager: ...` at WARN means the Connector refused a reply from AM, and the command failed: see [What the Connector accepts](rsa-integration.md#what-the-connector-accepts). From 0.0.3, `Could not open the admin session on Auth Manager; trying again in 5 s at the earliest: ...` (or `the read session`) at WARN means a connect to AM failed: the Connector waits before the next one, 5 seconds doubling up to 30 while it keeps failing, and answers requests and its health check with that failure meanwhile ([Sessions](rsa-integration.md#sessions)). On the Portal, `rsa.helpdesk.code-key is not set` at start means the help desk's e-mailed codes do not survive a restart ([The e-mailed code's key](help-desk.md#the-e-mailed-codes-key)).
 
 The request id in each Portal log line is the caller's `X-Request-Id` (from a proxy or load balancer, if it is a plain token) or a new one. It is returned in the response's `X-Request-Id` and recorded in the request's audit events, so a log line, a user's report and an audit event can be matched.
+
+## Scheduled jobs
+
+What each nightly job does is in [Architecture → Scheduled jobs](architecture.md#scheduled-jobs), and its settings in [Configuration → Scheduled jobs](configuration.md#scheduled-jobs). What to watch, from 0.0.3:
+
+| Behaviour | Detail |
+|---|---|
+| A run that could not do its work fails | A job that cannot reach the Connector or AM, or that had e-mail to send and sent none of it, is shown as `Failed: ...` on **Admin → Manual Run Cron Jobs** and audited as `job.failed`. Before 0.0.3 such a run was `job.completed` with a message such as *Sent 0 emails*. This applies to `tokenPinCheck`, `expiring`, `appointmentupcoming`, `sendDelayedTokenRegistrationEmails` and `resyncta`; `lostTokenThresholdMonitor` fails when its report could not be sent. A run in which only some items failed still completes, and its message has the counts (*Sent 12 emails, 1 failed*) |
+| The jobs send their e-mail themselves | A job waits for the SMTP relay to take each message and records a reminder only then, so a reminder the relay refused is sent again on the next run. A relay that does not answer fails the send after the [SMTP timeouts](configuration.md#mail) (10 seconds to connect, 30 to read or write) instead of holding the job |
+| A missed night is caught up | `expiring` and `appointmentupcoming` record each notice, reminder and overview they send (table `SentNotice`). After a night the job missed or failed, the next run sends the expiry notice of the last milestone passed, and the reminder of an appointment up to its day. **Run** on the Manual Cron page after the nightly run sends nothing twice |
+| Registration reminders stop | `sendDelayedTokenRegistrationEmails` reminds for `maxDaysOfReminders` (30) days after the date the token may be registered, looks up 100 users per Connector call, and stops the run at the first look-up that fails. A user AM no longer has is skipped and counted as failed; the other users still get their reminders |
+| Days are counted in `cron.timezone` | The appointment reminders ("tomorrow") and the lost-token report ("the last 30 days") use the zone the schedule runs in, not the server's |
+| Data retention | `dataRetention` (00:45) deletes closed records past their retention, from 0.0.3 including the webhook delivery log: see [Configuration → Data retention](configuration.md#data-retention) |
 
 ## Database backups
 
 === "Release package"
 
-    `upgrade.sh` backs up the database before every upgrade, to `backups/RSAAPP-before-<version>-<time>.sql.gz` in the install folder.
+    `upgrade.sh` backs up the database before every upgrade, to `backups/RSAAPP-before-<version>-<time>.sql.gz` in the install folder. From 0.0.3 it starts a stopped MySQL container first, on the image it has, so the backup is not skipped when the installation is stopped; it writes the dump as `.part`, readable by its owner only, and keeps it only once the dump is complete. If MySQL has no container at all (after `docker compose down`), `upgrade.sh` stops before changing anything: run `docker compose up -d mysql` in the install folder, then `upgrade.sh` again.
 
     For regular backups, schedule `util/backupdb.sh`:
 
@@ -239,7 +252,7 @@ and `ApiClientToken`, `WebhookEndpoint`, `WebhookDelivery`).
 | The Connector's log lines | Start with `[request=<id> for=<service:identity or user:id>]` during a call from the Portal |
 | New audit actions | `auth.sso-verified`; `api.token-created`, `api.token-revoked`, `api.disable-cap-exceeded`; `webhook.created`, `webhook.deleted`, `webhook.secret-rotated`, `webhook.delivery-failed`; `user.enabled`, `user.disabled` |
 
-### Upgrading to the next release
+### Upgrading to 0.0.2
 
 Nothing needs doing to keep signing in and serving. What changes:
 
@@ -250,10 +263,38 @@ Nothing needs doing to keep signing in and serving. What changes:
 | Site details (`/sites/details/<id>`) need the trusted agent role | Like the site list and the shipment pages that link there |
 | The audit CSV export guards against spreadsheet formulas | A value starting with `=`, `+`, `-`, `@`, a tab or a carriage return gets a leading `'`. NDJSON is unchanged |
 | The lost-token report (`cron.lostTokenThresholdMonitor`) is on by default (`debug=false` built in) | An installation with `mfa.group.email` set, upgraded ones included, starts getting the nightly report of users newly over the lost-token threshold. Check that `mfa.group.email` (Helm `mail.mfaGroupEmail`) is the MFA team's address before upgrading, or set `cron.lostTokenThresholdMonitor.debug=true` (Helm: under `config`) to keep it off, with a warning at every start |
-| No vendor or test address is built in | Up to this release `mfa.group.email` defaulted to a vendor test mailbox, and `mail.default.from`, the database and SMTP hosts, the Active Directory example and the Connector's Authentication Manager URLs to vendor test hosts. Now: `mfa.group.email` unset sends the lost-token report to nobody (the users are logged) and e-mails to users name "your help desk"; `mail.default.from` unset sends from `noreply@<the host of application.dns.name>` (Helm `mail.from`, default `""`, gets this too); `spring.datasource.url`, `spring.mail.host` and `mail.smtp.host` default to `localhost`; the `active-directory.properties[0]` example is empty; the Connector's `java.naming.provider.url` and `ims.*.provider.url` default to `am-primary.invalid`, which never resolves. A warning at every start for each of the two addresses. A working installation sets all of these, so nothing changes for it |
-| SAML single logout: `ENS_SSO_SAML_SINGLE_LOGOUT` (Helm `sso.samlSingleLogout`) is new | Off for an existing installation; the `env.template` of new installations turns it on. It needs the Portal's signing key (`..._SIGNING_CREDENTIALS_0_*`, Helm `sso.saml[].signingSecret`) and an asserting party with a SingleLogoutService by HTTP-Redirect (Helm `sso.saml[].singleLogoutUrl` without metadata); refresh the relying party at the asserting party so it learns `<APPLICATION_DNS_NAME>/logout/saml2/slo`. Flyway `V9` adds `SsoSamlLogoutRequest`. See [SAML single logout](single-sign-on.md#saml-single-logout-next-release) |
+| No vendor or test address is built in | Up to 0.0.1 `mfa.group.email` defaulted to a vendor test mailbox, and `mail.default.from`, the database and SMTP hosts, the Active Directory example and the Connector's Authentication Manager URLs to vendor test hosts. Now: `mfa.group.email` unset sends the lost-token report to nobody (the users are logged) and e-mails to users name "your help desk"; `mail.default.from` unset sends from `noreply@<the host of application.dns.name>` (Helm `mail.from`, default `""`, gets this too); `spring.datasource.url`, `spring.mail.host` and `mail.smtp.host` default to `localhost`; the `active-directory.properties[0]` example is empty; the Connector's `java.naming.provider.url` and `ims.*.provider.url` default to `am-primary.invalid`, which never resolves. A warning at every start for each of the two addresses. A working installation sets all of these, so nothing changes for it |
+| SAML single logout: `ENS_SSO_SAML_SINGLE_LOGOUT` (Helm `sso.samlSingleLogout`) is new | Off for an existing installation; the `env.template` of new installations turns it on. It needs the Portal's signing key (`..._SIGNING_CREDENTIALS_0_*`, Helm `sso.saml[].signingSecret`) and an asserting party with a SingleLogoutService by HTTP-Redirect (Helm `sso.saml[].singleLogoutUrl` without metadata); refresh the relying party at the asserting party so it learns `<APPLICATION_DNS_NAME>/logout/saml2/slo`. Flyway `V9` adds `SsoSamlLogoutRequest`. See [SAML single logout](single-sign-on.md#saml-single-logout) |
 | The Connector can write JSON lines | `LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs` in `connector.env` (Helm `connector.logFormat: json`); the timestamped text lines stay the default. See [Configuration → Logging](configuration.md#logging) |
 | The Connector's console lines start with a timestamp | `default_build/log4j.xml`, which `upgrade.sh` replaces, and the packaged configuration. A log shipper that parsed the old `LEVEL, message` lines needs the new leading field |
+
+### Upgrading to 0.0.3
+
+!!! warning "Upgrade the Portal and the Connector together"
+    The Portal of 0.0.3 calls two Connector methods that an older Connector does not have (`getTokensOfUsers` for the registration reminders, `countTokensInSerialRanges` for the site report). The release package and the Helm chart upgrade both; never keep one of the two images on an older tag (Helm `image.tag`, `connector.image.tag`). With Helm the two Deployments roll at the same time: until the new Connector pod is ready, a site report opened on a new Portal pod can fail.
+
+Nothing needs setting to keep signing in and serving. The first start runs Flyway `V10`, `V11`, `V13`, `V14`, `V16` and `V18` (there is no `V12`, `V15` or `V17`); each is safe to run again.
+
+| Change | What to do |
+|---|---|
+| Flyway `V10`: the secret codes in links (`PinSetTracker.uniqueCode`, `UserExemptionRequest.confirmationCode`, `Appointment.appointmentId`) get a binary collation. `V11`: `Shipment.version`. `V13`: indexes on `PinSetTracker`, `CertTokenMapping`, `UserTokenEnrollment`, `Appointment` and `AuditEvent (type, timestamp)`. `V14`: table `SentNotice`. `V16`: `AuditChainHead.prunedThroughSeq` and `prunedThroughHash`. `V18`: `ens_license_installation.latest_seen_ms` | Back up first. The migration user needs `CREATE`, `ALTER` and `INDEX`, as before. On a large `AuditEvent` table the new index makes the first start longer; MySQL builds it in place |
+| Scheduled jobs that could not do their work are `job.failed`, and they send their e-mail themselves, with SMTP timeouts | Alert on `job.failed`. For a slow relay, raise `spring.mail.properties.mail.smtp.timeout` and `.writetimeout` (30000 ms). See [Scheduled jobs](#scheduled-jobs) |
+| Registration reminders stop 30 days after the date the token may be registered: `cron.sendDelayedTokenRegistrationEmails.maxDaysOfReminders` is new | Users whose token has waited longer get no more reminders after the upgrade. `0` (Helm: under `config`) keeps reminding without limit, as before |
+| Expiry notices and appointment reminders are recorded and caught up (`SentNotice`) | Nothing. Only what becomes due after the upgrade is caught up, so the first run sends nothing the jobs may have sent before it |
+| The webhook delivery log is purged: `ENS_RETENTION_WEBHOOK_DELIVERIES_DAYS` (Helm `retention.webhookDeliveriesDays`), 90 days | The first `dataRetention` run after the upgrade deletes delivered, given-up and cancelled deliveries older than that. Set the value first (`0` keeps them) if you keep the log longer. A delivered event's payload is no longer kept at all |
+| A token for a privileged user or the agent's own account, and **Remove From Group** for such an account, are [help-desk requests](help-desk.md#tokens-and-the-rsa-enabled-group) (`token-assign`, `rsa-group-remove`) | Tell your Trusted Agents and Help Desk staff: these two wait for a second operator. Ordinary accounts keep the one-click paths |
+| PMO can approve or deny an exemption request only once its account owner has confirmed it, and only once | Nothing. The *All* list marks the others **Not confirmed** |
+| Appointment booking takes only the times the schedule page offers, a deactivated Trusted Agent is no longer shown or booked on the public pages, and whoever has the appointment's link can cancel it | Nothing. See [User Guide → Schedule an appointment](user-guide.md#schedule-an-appointment) |
+| Shipments carry a version: the second of two changes made at the same time is refused with HTTP 409 | Nothing. The operator opens the shipment again and repeats the change if it is still needed |
+| Site serial ranges are checked (digits, first no higher than last) and get `token.serial.prefix` | Nothing. A malformed range stored earlier is skipped with a warning in the Portal log (`Skipping malformed token serial range of site ...`) instead of breaking the site's pages: delete it on the site's page and add it again |
+| Calls to `/api/v1` without a valid token are limited per client address (`rsa.rate-limit.sign-in.per-ip`, 120 in 10 minutes): past it, `429` | An integration that keeps calling with an expired or revoked token is refused with `429` until the window ends: give it a new token |
+| Audit: **Verify integrity** anchors on what retention pruned; a wrong or revoked audit pull-API token is recorded as a failed `auth.login` (`details.method` `api-token`); an anonymous caller's `access.denied` events are collapsed by address; syslog over `tcp` and `tls` reconnects and resends its last batch | Run **Verify integrity** after the upgrade: events deleted from the start of the trail by other means than retention are now reported as missing ([Troubleshooting](troubleshooting.md#audit)). A SIEM rule on failed `auth.login` now also sees wrong pull-API tokens. A syslog collector may get up to one batch twice after it restarts: de-duplicate on `id` |
+| A sign-in that fails because the Connector or AM could not answer is audited with the reason `service_error` and no longer counts towards the user ID's backoff | Nothing. Before 0.0.3 it was recorded as `bad_credentials` |
+| License: an upload that is not yet valid, or already expired, is refused while the installed license is in full effect; a clock set back more than a day no longer brings an expired license back; nothing is installed while the audit log cannot be written | Upload next term's license on or after its start date. Keep the server's clock right ([Troubleshooting](troubleshooting.md#license)) |
+| The notice-and-consent banner works on a Portal without a valid license | Nothing. Before 0.0.3, `ENS_CONSENT_BANNER_ENABLED=true` without a license left nobody able to acknowledge the banner, sign in or install the license |
+| The Connector no longer signs an operator out when AM cannot be reached, reports an AM failure as an error and not as a wrong tokencode, and backs off after a failed connect | Nothing. See [RSA AM integration → Sessions](rsa-integration.md#sessions) |
+| Group e-mail to `USERS_WITH_TOKEN` goes only to users with a registered token that has not expired, and reports *Could not send email* when nothing could be sent | Nothing. See [Admin Guide → Group email](admin-guide.md#group-email) |
+| `upgrade.sh` starts a stopped MySQL for its backup and its checks; `util/connector-tls.sh` leaves a CA file it did not put at `default_build/ssl/connector-ca.crt` or `default_build/connector-tls/ca.crt` alone, and makes no Connector certificate or key password while `connector.env` names a certificate or key of its own; `util/move-connector-secrets.sh` moves a password out of a quoted `JAVA_OPTS` unchanged | Nothing. See [Installation → Upgrade with upgrade.sh](install.md#upgrade-with-upgradesh) |
 
 ## Certificate renewal
 

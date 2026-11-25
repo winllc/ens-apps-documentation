@@ -7,17 +7,17 @@ release implements them, and the settings that change them.
 
 * **Form login** at `/login`, which posts to `/perform_login`. On success the user goes to `/home`. On any failure the user is redirected to `/login?error=true`, which shows one message whatever the cause: *Sign-in failed. Check your user ID and passcode (PIN + tokencode).* The page no longer says that an account is locked or disabled; the cause is in the audit trail.
 * Credentials are the user's **RSA AM User ID and SecurID passcode**. `CustomAuthenticationProvider` sends them to AM through the Connector. If AM asks for more input (next tokencode, new PIN, new PIN confirmation, passcode, principal ID, new static passcode), the user is redirected to `/additionalParameterLoginHandler` to answer each prompt.
-* The Portal keeps no passwords. AM's own lockout policy applies to every passcode. In front of it, the Portal [rate-limits sign-in and backs off](#rate-limits-and-uniform-answers) per client address and per user ID. Each sign-in is audited as `auth.login` with its reason, and a locked account is recorded as an alert.
+* The Portal keeps no passwords. AM's own lockout policy applies to every passcode. In front of it, the Portal [rate-limits sign-in and backs off](#rate-limits-and-uniform-answers) per client address and per user ID. Each sign-in is audited as `auth.login` with its reason, and a locked account is recorded as an alert. From 0.0.3 a sign-in that fails because the Connector or AM could not answer is audited with the reason `service_error`, not `bad_credentials`, and does not count towards the user ID's backoff; the page the user sees is the same.
 * The authenticated principal is an `RSAAuthenticationToken` that carries the AM **session ID** and **principal GUID**. The Connector uses them to run the operator's changes in the operator's own AM session, so AM enforces that user's permissions and its audit log names them (see [RSA AM integration](rsa-integration.md#who-runs-each-command)).
 * **Logout** is `/perform_logout`. It deletes `JSESSIONID` and also logs the AM session out (`CustomLogoutSuccessHandler`).
 * If AM reports the user's session has ended during an operation, `GlobalControllerExceptionHandler` logs the user out and redirects to `/login`.
 * **Rate limits on public self-service**, and the feature caps of Test My Token, the PIN reset link and the token swap: see [Rate limits and uniform answers](#rate-limits-and-uniform-answers).
-* **Single sign-on** for operators (OIDC with PKCE and a nonce, or SAML 2.0 with signed answers to a request this Portal sent, used once; IdP-initiated sign-in refused), off until an identity provider is configured. The provider's groups decide the Portal roles through `ENS_SSO_ROLES_*` only, and the operator must then enter the SecurID passcode of the same user ID, which opens their own AM session. Every URL given to the provider is built from `APPLICATION_DNS_NAME`. No single logout up to the current release. With a provider configured, a passcode-only sign-in still gets the roles AM grants unless `ENS_SSO_REQUIRE_FOR_ADMIN_ROLES=true`. From the next release, with that setting unset (the new default), a role that `ENS_SSO_ROLES_*` maps a group to comes only through the identity provider, so its conditional access cannot be bypassed with a passcode alone; and `ENS_SSO_OIDC_END_SESSION=true` signs the operator out of an OpenID Connect provider too, and `ENS_SSO_SAML_SINGLE_LOGOUT=true` does SAML single logout, both ways, with signed messages (a LogoutRequest from the asserting party ends only a session that came from it with that NameID). See [Single sign-on](single-sign-on.md).
-* **Integration API tokens** (`ensapi_...`, SHA-256 hashed, shown once, scoped, expiring, rate-limited across replicas, limited to named security domains or identity sources) authenticate `/api/v1` only, with no session. Every change they ask for is a [help-desk request](help-desk.md) under the same rules as an operator's, and runs on the Connector's service account. See [API and HTTP route reference](api-reference.md#integration-api).
+* **Single sign-on** for operators (OIDC with PKCE and a nonce, or SAML 2.0 with signed answers to a request this Portal sent, used once; IdP-initiated sign-in refused), off until an identity provider is configured. The provider's groups decide the Portal roles through `ENS_SSO_ROLES_*` only, and the operator must then enter the SecurID passcode of the same user ID, which opens their own AM session. Every URL given to the provider is built from `APPLICATION_DNS_NAME`. No single logout up to 0.0.1. With a provider configured, a passcode-only sign-in still gets the roles AM grants unless `ENS_SSO_REQUIRE_FOR_ADMIN_ROLES=true`. From 0.0.2, with that setting unset (the new default), a role that `ENS_SSO_ROLES_*` maps a group to comes only through the identity provider, so its conditional access cannot be bypassed with a passcode alone; and `ENS_SSO_OIDC_END_SESSION=true` signs the operator out of an OpenID Connect provider too, and `ENS_SSO_SAML_SINGLE_LOGOUT=true` does SAML single logout, both ways, with signed messages (a LogoutRequest from the asserting party ends only a session that came from it with that NameID). See [Single sign-on](single-sign-on.md).
+* **Integration API tokens** (`ensapi_...`, SHA-256 hashed, shown once, scoped, expiring, rate-limited across replicas, limited to named security domains or identity sources) authenticate `/api/v1` only, with no session. Every change they ask for is a [help-desk request](help-desk.md) under the same rules as an operator's, and runs on the Connector's service account. From 0.0.3, calls refused for want of a valid token are limited per client address ([Rate limits](#rate-limits-and-uniform-answers)). See [API and HTTP route reference](api-reference.md#integration-api).
 
 ### Notice and consent banner
 
-`ENS_CONSENT_BANNER_ENABLED=true` shows the DoD notice-and-consent banner before anything else in each browser session. Until the user clicks **I agree**, the session reaches only the banner: no page, no sign-in and no self-service (Test My Token, PIN reset, registration, exemption requests). The server enforces it: forms sent before it go back to the banner, and AJAX calls get 403. The acknowledgement lasts for the browser session and is audited as `auth.consent-acknowledged`. Exempt, because they are not browser sessions: the actuator health and Prometheus endpoints, and the audit pull API (`/api/audit/events`). See [Configuration](configuration.md#security-headers-banner-and-sessions).
+`ENS_CONSENT_BANNER_ENABLED=true` shows the DoD notice-and-consent banner before anything else in each browser session. Until the user clicks **I agree**, the session reaches only the banner: no page, no sign-in and no self-service (Test My Token, PIN reset, registration, exemption requests). The server enforces it: forms sent before it go back to the banner, and AJAX calls get 403. The acknowledgement lasts for the browser session and is audited as `auth.consent-acknowledged`. Exempt, because they are not browser sessions: the actuator health and Prometheus endpoints, and the audit pull API (`/api/audit/events`). The banner comes before the license check, like the sign-in page: from 0.0.3 it can be acknowledged on a Portal without a valid license, which then offers sign-in and the License screen as usual (before, such a Portal sent the banner to the License screen and back, and nobody could sign in or install the license). See [Configuration](configuration.md#security-headers-banner-and-sessions).
 
 ### Sessions
 
@@ -49,8 +49,8 @@ A user can hold several roles. Roles are evaluated at sign-in. After a role chan
 
 * **Method security is on** (`@EnableMethodSecurity`), so every `@PreAuthorize` rule on a controller is enforced by the server, not only by hiding menu entries.
 * **URL rules** in `WebSecurityConfig` back them up: `/rest/admin/**` and the system-notification list, save and delete need `PMO`; `/appointment/confirm` and `/appointment/updateNotes` need `TRUSTED_AGENT`; everything not listed as public needs a signed-in user.
-* **Public pages** (no sign-in): the home page, the Trusted Agent directory and details (`/data/tas/active` lists active agents only), scheduling an appointment and its details and cancel link, Test My Token, PIN reset, token registration, exemption request and confirmation, the current system notifications (`GET /systemNotification/notExpired`), the login pages and the consent banner.
-* **Every 403** is audited as `access.denied` with its reason: role, `license_required`, `license_read_only`, `feature_not_licensed`, `csrf_failure` or `demo_read_only`.
+* **Public pages** (no sign-in): the home page, the Trusted Agent directory and details (`/data/tas/active` lists active agents only; from 0.0.3 the details page of a deactivated agent is answered like an agent ID that does not exist, for everyone but Trusted Agents and PMO, and so are the booking pages, for everybody), scheduling an appointment and its details and cancel link, Test My Token, PIN reset, token registration, exemption request and confirmation, the current system notifications (`GET /systemNotification/notExpired`), the login pages and the consent banner.
+* **Every 403** is audited as `access.denied` with its reason: role, `license_required`, `license_read_only`, `feature_not_licensed`, `csrf_failure` or `demo_read_only`. Repeats by the same user on the same path within a minute are one event with `details.count`. From 0.0.3 an anonymous caller's repeats are collapsed by client address and reason, whatever the path, so a client walking made-up paths no longer writes an event per request; at most 10,000 such windows are open at once, and beyond that a new denial is collapsed per actor and reason (`details.anyPath`).
 
 ### Feature access matrix
 
@@ -61,19 +61,21 @@ From the `@PreAuthorize` annotations on the controllers. "Public" means the URL 
 | Home, Trusted Agent directory and details, schedule an appointment, appointment details and cancel | ✔ | ✔ | ✔ | ✔ | ✔ |
 | Test My Token, Reset My PIN, token registration, exemption request and confirmation | ✔ | ✔ | ✔ | ✔ | ✔ |
 | Swap to a replacement token | | ✔ | ✔ | ✔ | ✔ |
-| User Search and User Details (unlock, AD group toggle) | | | ✔ | ✔ | |
+| User Search and User Details (unlock, AD group toggle²) | | | ✔ | ✔ | |
 | Open and run [help-desk requests](help-desk.md): reset a user's PIN, emergency access code, mark a token lost, deprovision an assigned token, clear the cached Windows password | | | ✔ | ✔ | |
 | Deprovision a token assigned to nobody | | | ✔ | ✔ | |
 | See **Help-Desk Requests**; approve or reject a request (an approver role from `rsa.helpdesk.dual-control.approver-roles`, never one's own request or account) | | | ✔ | ✔ | ✔¹ |
-| Assign (distribute) a token | | | | ✔ | |
-| Site list, site details (from the next release; before, any signed-in user) and add; shipments (list, details, request, receive, cancel, not received, print label, modify); site report; My TA Profile; confirm appointments and edit their notes | | | | ✔ | |
+| Assign (distribute) a token² | | | | ✔ | |
+| Site list, site details (from 0.0.2; before, any signed-in user) and add; shipments (list, details, request, receive, cancel, not received, print label, modify); site report; My TA Profile; confirm appointments and edit their notes | | | | ✔ | |
 | Edit a site, change its status, delete it, add or remove serial ranges | | | | | ✔ |
 | Work shipments (status) and send them; delete shipments | | | | | ✔ |
 | Register, edit, (de)activate and delete Trusted Agents; bulk CSV upload; TA report; overview report | | | | | ✔ |
 | Admin page: system notifications, group email, run scheduled jobs, role management, license, audit log | | | | | ✔ |
-| Review, approve, deny and delete exemption requests | | | | | ✔ |
+| Review, approve, deny and delete exemption requests (approve or deny only once the account owner has confirmed the request, from 0.0.3) | | | | | ✔ |
 
 ¹ PMO users can open the list and decide a request only once `PMO` is added to `rsa.helpdesk.dual-control.approver-roles`; the menu entry is shown to Trusted Agents and Help Desk users.
+
+² From 0.0.3, a token for a privileged user or the agent's own account, and removing such an account from the RSA-enabled AD group, are [help-desk requests](help-desk.md#tokens-and-the-rsa-enabled-group) that a second operator approves. Registration needs only the user ID and the new token's code, so the agent holding the token could otherwise set its PIN. Ordinary accounts keep the one-click paths, and adding to the group stays one click.
 
 !!! note
     `PMO` does not include `TRUSTED_AGENT`. A PMO user who also needs the Trusted Agent pages must also hold the Trusted Agent role.
@@ -96,7 +98,10 @@ and give one answer whatever went wrong. The server enforces all of it.
 **What is limited.** POSTs to sign-in (`/perform_login` and the follow-up prompts), Test My Token,
 the three PIN resets (Windows password, certificate, and the e-mailed link's tokencode check and
 reset), registration (both steps), exemption requests, and appointment booking and cancelling. The
-help desk's e-mailed codes and tokencode checks are limited per operator and per user.
+help desk's e-mailed codes and tokencode checks are limited per operator and per user. From 0.0.3,
+calls to the integration API (`/api/v1`) that are refused for want of a valid token count against
+the sign-in limit per client address (`rsa.rate-limit.sign-in.per-ip`), separately from sign-ins:
+past it the answer is 429 and the refusals are no longer recorded one by one as `access.denied`.
 
 **How it is counted.** Each attempt counts against two limits: one for the client address, and one
 for each user ID or token serial it names. The counts are kept in fixed windows in the Portal
@@ -121,7 +126,8 @@ window is audited as `auth.rate-limited` with `details.flow`, `details.limit` an
 
 **Backoff**, per user ID and per token serial, in every flow: the first three failures are free.
 After that, each failure makes the next attempt wait 30 seconds, then twice as long each time, up to
-15 minutes. A success clears it. The count starts again only after an hour
+15 minutes. A success clears it, and a sign-in that failed because the Connector or Authentication
+Manager could not answer (`service_error`) adds nothing to it. The count starts again only after an hour
 (`rsa.rate-limit.backoff.forget-after`) with no failure: this is not a rolling hour, so failures
 keep adding up as long as each comes within an hour of the one before. Someone who fails on
 purpose can make a user ID wait, but never for more than 15 minutes at a time. Authentication
@@ -133,7 +139,9 @@ hold even with `rsa.rate-limit.enabled=false`:
 - Test My Token: `user.token.test.maxAttempts` (5) attempts per user ID per
   `user.token.test.windowMinutes` (15), in fixed windows;
 - the PIN reset link: `cron.tokenPinCheck.resetLinkMaxAttempts` (5) tokencodes per link, over the
-  link's whole life from its issue;
+  link's whole life from its issue. From 0.0.3 the link's code must match exactly as it was issued,
+  so another spelling of it (a different case, an accented letter) finds no link and gets no
+  attempts of its own;
 - the token swap: 5 tokencodes per user per 15 minutes, in fixed windows, each counted before the
   code is checked;
   the right code clears the count.
@@ -150,13 +158,14 @@ writes, these caps are counted in each node's memory and the other limits are of
 | Windows-password PIN reset | One message for an unknown user, a wrong password, a serial that is not the user's, and a user with no tokens |
 | Registration | One message for an unknown user, no token waiting for a PIN, a PIN already set, a wrong code, and a locked or disabled account. PIN rules and directory messages are still shown once the code has been accepted. The second step looks up nothing unless that browser proved the user ID with a tokencode in the first |
 | Exemption request | *Your request has been received*, whether the request was saved and its confirmation e-mail sent, the user ID is unknown, or the account has no e-mail address. A certificate whose request was already reviewed is still told so |
-| Appointment booking | *Your request has been received* in every case. The details and the link to change or cancel go by e-mail to the address Authentication Manager has for the user, so only that user learns whether a booking was made |
+| Appointment booking | *Your request has been received* in every case. The details and the link to change or cancel go by e-mail to the address Authentication Manager has for the user, so only that user learns whether a booking was made. From 0.0.3 the form itself refuses a time the page does not offer (in the past, outside the agent's working hours, not on a quarter hour, or already booked): that depends on the agent's calendar only, not on the user ID, so the form says so |
 
 The cause is recorded only in the audit trail: `auth.login` with its `reason`;
 `auth.self-service-failed` with `details.flow` and the reason (for example `bad_password`,
 `no_tokens`, `serial_not_users`, `wrong_tokencode`, `no_token_waiting`, `pin_already_set`,
 `account_locked`, `unknown_user` or `no_email`); and `appointment.request-refused` with
-`unknown_user`, `user_has_token`, `too_many_open` or `authmanager_error`.
+`unknown_user`, `user_has_token`, `too_many_open`, `authmanager_error` and, from 0.0.3,
+`slot_not_available` (someone else booked the time at the same moment) or `error`.
 
 A failed step answers no sooner than `rsa.rate-limit.uniform-response-time` (1 second) after it
 began, plus up to a tenth of that at random, so an unknown user and a wrong value take as long as
@@ -233,7 +242,7 @@ Never publish the management port to users. The release package's `docker-compos
     | PIN reset with certificate (`/user/pinReset/certReset`) | Must match the DN recorded at the user's last enrollment, or an existing certificate-to-user mapping (`CertTokenMapping`). Required. |
     | PIN-check link (`/user/pinReset/start/{code}`) | Not required, and no certificate mapping is recorded; a DN, if presented, goes only into the audit record. The reset needs the emailed link and the code the link's token shows now (no PIN). One link accepts at most `cron.tokenPinCheck.resetLinkMaxAttempts` (5) codes; reaching the limit is audited as an `auth.lockout` alert with `details.feature=pin-reset-link`. A reset is audited as `token.pin-reset-by-user` with the token serial and `details.method=reset-link`. |
     | Exemption request (`/user/exemption/request`) | Required. The request is tied to the DN. |
-    | Appointment cancel by the requester | Allowed only when the DN matches the DN recorded when the appointment was booked |
+    | Appointment booking | A DN, if presented, is stored with the appointment. From 0.0.3 it is not needed to cancel: whoever has the appointment's link can cancel it, as the e-mail to the requester says (before, an anonymous requester could cancel only with the certificate used when booking) |
 
   These features need TLS terminated **by the Portal** with client-certificate negotiation enabled (for example, `server.ssl.client-auth=want` and a trust store holding the user PKI CAs). The Portal reads no certificate header, so a TLS-terminating proxy in front of it hides the certificate. The Portal does not check client certificates for revocation; the platform baseline's X.509 revocation settings apply to CertAlert, the Directory Services Portal and ReadyRoom only.
 
@@ -285,14 +294,21 @@ only, and every address the host resolves to must be public unless the host or r
 refused whatever that says. The host is checked again at every delivery and the connection goes to
 the address that was checked, with no redirects and a 15-second deadline. Bodies hold identifiers
 only, and are signed with HMAC-SHA256 over a timestamp and the body. Signing secrets are AES-GCM
-encrypted under a key derived from `rsa.helpdesk.code-key`. See [Webhooks](webhooks.md).
+encrypted under a key derived from `rsa.helpdesk.code-key`. From 0.0.3 a delivered event's body is
+removed from the delivery log at once, and the log itself is purged after
+`ENS_RETENTION_WEBHOOK_DELIVERIES_DAYS` (90 days). See [Webhooks](webhooks.md).
 
 ## Other controls
 
 * **Active Directory over LDAPS** verifies the domain controller's certificate against the trust store in `active-directory.properties[n].trust-store`, or the JVM's default, and JNDI checks the host name. Earlier releases trusted any certificate.
 * **Audit trail.** Every sign-in, denial, change and export is recorded in the `ens-audit/1` format in the database, hash-chained. A sign-in, role, settings or license change that cannot be audited does not happen.
 * **Every Authentication Manager change is recorded before it is made.** One service wraps the Connector client: it commits `am.change-attempt` before each change, and if that write fails the change is not made (fail closed). A change asked for inside a database transaction that has already recorded an audit event is refused too (`AuditOrderException`): that transaction holds the audit chain until it ends, so the attempt could not be committed first, and recording it with that transaction would lose it if the transaction rolled back after the change. No flow in the Portal does this; the check guards future code. After the change it writes `am.change-outcome`. Both carry the actor (the operator; the user, for their own token; or the system and service account for jobs), the target user, the token serial, the operation, which AM account made it, the help-desk ticket, reason and verification, the client address, and an attempt id linking the two. Tests keep this the only path: every method of the Connector client must be classified as a read, a sign-in or a change, and no other class may call the client. See [Audit logging](../audit-logging.md).
+* **The audit trail's integrity check** (**Audit Log → Verify integrity**) reports the first broken `seq`, or that the chain is intact from its anchor. From 0.0.3 retention records on the chain head the last `seq` it deleted and that event's hash, and the anchor must be `seq` 1 or the event right after it, chained to that hash: events deleted from the start of the trail by any other means are reported as missing.
+* **Audit pull-API tokens.** From 0.0.3 a wrong or revoked token presented to `/api/audit/events` is recorded as a failed `auth.login` with `details.method` `api-token` and the source address (never the token). Repeats from the same address within a minute are collapsed into one more event with `details.count`.
 * **Help-desk changes** need a ticket, a verified user, a second operator for privileged users, and notify the user. See [Help-desk requests](help-desk.md).
+* **Secret links.** The codes in e-mailed links (the PIN reset link, the exemption confirmation link, the appointment link) are random and, from 0.0.3, compared exactly as stored: Flyway `V10` gives their columns a binary collation, so a code in another case or with an accented letter matches nothing.
+* **PIN and passcode fields** tell the browser not to save or offer them (`autocomplete` `new-password`, `one-time-code` or `off`), which matters on a shared enrollment workstation.
+* **Shipments** carry a version from 0.0.3: when two people change one shipment from the same state (a cancel and a send, say), the second change is refused with HTTP 409 before anyone is e-mailed, and two simultaneous requests for one site cannot both be saved.
 * **Logging.** User IDs and token serials that people type are escaped before they are logged. In the Portal's and the Connector's text logs, CR and LF in a message are written as `\r` and `\n`, so request data in a message cannot start a line that looks like another entry; a stack trace keeps its own lines. JSON logs escape them anyway. A log configuration of your own should keep this: `%enc{%m}{CRLF}` in the Portal's `log4j2.xml`, and the layout `com.winllc.rsaapp.connector.logging.CrlfSafePatternLayout` in the Connector's `log4j.xml`.
 * **Containers.** The Helm chart runs the Portal, the Connector and the embedded MySQL with all capabilities dropped, no privilege escalation, a read-only root file system and the `RuntimeDefault` seccomp profile.
 * Email bodies include absolute links built from `application.dns.name`. Set it to the HTTPS URL.

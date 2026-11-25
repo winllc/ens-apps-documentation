@@ -64,7 +64,11 @@ auditors can see the list.
   the live directory: an entry that is gone, disabled or locked, or a directory that cannot be read,
   refuses the token (`401`); otherwise the token does no more than the creator's roles allow today.
   A good answer is reused for at most `cert-alert.api.creator-roles-cache-for` (a minute); a refusal
-  never is.
+  never is. From 0.0.4 a directory that cannot be read is asked again after 10 seconds rather than
+  on every request, with one read per entry at a time and no database connection held while it
+  waits. The creator's next sign-in narrows their tokens too, never widens them: from 0.0.4 to
+  the roles the live directory gives them then, and never because that sign-in could not read
+  their groups.
 - **Disabled or locked** means `nsAccountLock: true`; Active Directory's ACCOUNTDISABLE flag in
   `userAccountControl`; or a lockout (AD `msDS-User-Account-Control-Computed` or `lockoutTime`,
   password-policy `pwdAccountLockedTime`, 389 `accountUnlockTime`). Lockouts **fail closed**: a lockout
@@ -84,7 +88,8 @@ auditors can see the list.
   token, whatever its scopes, can create or revoke tokens, configure webhooks, read a person's
   notifications or use the DataTables endpoints: those stay with people.
 - **Rate-limited** per token, **per replica**: `cert-alert.api.requests-per-minute` (300); beyond it,
-  `429` with `Retry-After`.
+  `429` with `Retry-After`. From 0.0.4 the limit applies before the creator's entry is read, so a
+  client over it costs the directory nothing.
 - **No session, no CSRF.** A request with `Authorization: Bearer` on `/api/v1/**` goes through a
   filter chain of its own that keeps and reads no session, and has no CSRF check. The same endpoints
   called with a session cookie still need the CSRF token. A proxy or WAF that strips
@@ -92,7 +97,11 @@ auditors can see the list.
 - **Audited**: `api.token-created`, `api.token-revoked`, `api.token-refused` (at most once a minute
   per token, or per client address for a value that is no token at all), `api.request` for every
   request that changes something, and `api.token-used` once per token per
-  `cert-alert.api.use-audit-interval` (an hour) for its reads. The actor is `api-token:<id>`.
+  `cert-alert.api.use-audit-interval` (an hour) for its reads. The actor is `api-token:<id>`. From
+  0.0.4 a write refused for scope is recorded as `api.request` with outcome `denied` and status
+  `403`, and its `access.denied` event names the token; earlier releases recorded it as a success.
+  The client address is the one described in
+  [Security → The client's address behind a proxy](security.md#the-clients-address-behind-a-proxy).
 
 ### Scopes
 
@@ -115,7 +124,7 @@ The full list of which method and path needs which scope is in the OpenAPI docum
 | `requests-per-minute` | `CERT_ALERT_API_REQUESTS_PER_MINUTE` | `api.requestsPerMinute` | `300` | Per token, per replica; `0` turns the limit off |
 | `max-lifetime` | `CERT_ALERT_API_MAX_LIFETIME` | `api.maxLifetime` | `365d` | The longest a token lives; `0` removes the limit |
 | `use-audit-interval` | | | `1h` | A token's reads are audited once per interval |
-| `max-page-size` | | | `500` | The largest `size` a list returns |
+| `max-page-size` | | | `500` | The largest `size` a list returns, and from 0.0.4 the largest page of a [DataTables endpoint](#datatables-endpoints) |
 | `creator-roles-cache-for` | | | `1m` | How long a creator's directory check is reused |
 
 ### Token administration
@@ -136,8 +145,8 @@ The full list of which method and path needs which scope is in the OpenAPI docum
 - **CSRF**: with a session, `POST`, `PUT` and `DELETE` require Spring Security's CSRF token in the
   header named by the page's `_csrf_header` meta tag (value in `_csrf`). Token calls need none.
 - **Auditors**: a session with `ROLE_AUDITOR` is refused (`403`) on every `POST`, `PUT` and `DELETE`
-  except the DataTables queries, audit-chain verification and their own saved views (and, from the
-  next release, the inventory export). See
+  except the DataTables queries, audit-chain verification and their own saved views (and, from
+  0.0.3, the inventory export). See
   [Single sign-on and roles](single-sign-on.md#the-auditor-changes-nothing).
 - **Unauthenticated** API calls get `401`; **forbidden** ones get `403`.
 - **Errors** are RFC 7807 problem details (`application/problem+json`) with a `detail` message.
@@ -152,7 +161,7 @@ The full list of which method and path needs which scope is in the OpenAPI docum
 | Method | Path | Access | Purpose |
 |---|---|---|---|
 | `GET` | `/api/v1/certificates`, `/api/v1/certificates/{id}` | user | The inventory, filtered and paged, or one certificate |
-| `POST` | `/api/v1/certificates/export?format=csv\|xlsx` | user (auditors from the next release) | Download the filtered inventory; audited as `inventory.exported` |
+| `POST` | `/api/v1/certificates/export?format=csv\|xlsx` | user (auditors from 0.0.3) | Download the filtered inventory; audited as `inventory.exported` |
 | `GET` | `/api/v1/summary/expiry` | user | Counts over the same filters |
 | `GET` | `/api/v1/servers`, `/api/v1/servers/{id}` | user | Servers with their certificate state |
 | `GET` | `/api/v1/people`, `/api/v1/people/{id}` | user | People with their certificate state |
@@ -174,7 +183,7 @@ See [Exports, saved views and scheduled reports](exports-and-reports.md).
 | `GET` | `/api/v1/admin/webhooks` | admin, auditor | Webhooks (auditors see each URL's scheme and host only) |
 | `GET` | `/api/v1/admin/webhooks/events` | admin, auditor | The events a webhook can subscribe to |
 | `POST` | `/api/v1/admin/webhooks` | admin (session only) | Add one; the answer holds its signing secret, once |
-| `PUT` | `/api/v1/admin/webhooks/{id}` | admin (session only) | Change one |
+| `PUT` | `/api/v1/admin/webhooks/{id}` | admin (session only) | Change one, or disable or enable it (`"enabled"`). From 0.0.4 a save that keeps the URL does not resolve the host again; a changed URL is checked as a new one |
 | `POST` | `/api/v1/admin/webhooks/{id}/secret` | admin (session only) | New signing secret, shown once |
 | `POST` | `/api/v1/admin/webhooks/{id}/test` | admin (session only) | Queue a `webhook.test` event |
 | `DELETE` | `/api/v1/admin/webhooks/{id}` | admin (session only) | Delete |
@@ -190,12 +199,12 @@ See [Webhooks](webhooks.md) for events, signatures and the address rules.
 | `POST` | `/api/v1/sync/users` | admin | Sweep IC Persons |
 | `POST` | `/api/v1/sync/servers` | admin | Sweep IC Non-Person Entities |
 | `POST` | `/api/v1/sync/refresh` | admin | Re-evaluate cached expiry (no LDAP) |
-| `POST` | `/api/v1/sync/prune` | admin | Remove entries unseen past `prune.after` (**not** gated by `prune.enabled`) |
-| `GET` | `/api/v1/sync/prune/preview` | user | `{"prunable": N}` |
+| `POST` | `/api/v1/sync/prune` | admin | Remove entries unseen past `prune.after` (**not** gated by `prune.enabled`). From 0.0.4 a kind of entry is left in place unless a clean sweep has missed its unseen entries and they are at most `prune.max-share` of it; see [Operator guide](operator-guide.md#what-a-prune-will-not-delete) |
+| `GET` | `/api/v1/sync/prune/preview` | admin, auditor (user before 0.0.4) | `{"prunable": N}`: entries unseen past `prune.after`, whether or not a prune would delete them now |
 | `POST` | `/api/v1/sync/certificate-cleanup` | admin | Delete finished certificates from the directory (no-op unless enabled) |
-| `GET` | `/api/v1/sync/certificate-cleanup/preview` | user | What that would delete |
-| `GET` | `/api/v1/sync/runs?limit=20` | user | Run log, newest first (`limit` 1–100) |
-| `GET` | `/api/v1/changelog` | user | Connector status |
+| `GET` | `/api/v1/sync/certificate-cleanup/preview` | admin, auditor (user before 0.0.4) | What that would delete |
+| `GET` | `/api/v1/sync/runs?limit=20` | admin, auditor (user before 0.0.4) | Run log, newest first (`limit` 1–100). A run's `message` can carry the directory's own error text |
+| `GET` | `/api/v1/changelog` | user | Connector status. From 0.0.4 `lastError` is left out unless the caller is an administrator or auditor |
 | `POST` | `/api/v1/changelog/poll` | admin | Read one changelog batch now; the run's `result` is the status |
 | `GET` | `/api/v1/jobs/{id}` | admin, auditor | A job started by hand: `state` and, once finished, `result` or `error` |
 | `GET` | `/api/v1/jobs` | admin, auditor | Recent runs started by hand |
@@ -232,6 +241,12 @@ Run log rows add `id`, `status` (`RUNNING`, `COMPLETED`, `COMPLETED_WITH_ERRORS`
 `startedAt`, `finishedAt` and `message`. `job` is one of `USERS`, `SERVERS`, `REFRESH`, `PRUNE`,
 `REVOCATION`, `CERTIFICATE_CLEANUP`.
 
+From 0.0.4, a sweep's `errors` counts the entries that could not be written (batches before); a
+sweep the directory cut short at its size limit is `FAILED`; and a `PRUNE` run has one error, and
+so reads `COMPLETED_WITH_ERRORS`, for each kind of entry (people, servers) it left in place.
+
+With an API token, the run log needs `jobs:read` and the two previews `admin`.
+
 Changelog status fields: `enabled`, `running`, `lastChangeNumber`, `firstAvailableNumber`,
 `lastAvailableNumber`, `lag`, `changesApplied`, `changesIgnored`, `gapsDetected`, `errors`,
 `startedAt`, `lastPolledAt`, `lastChangeAt`, `lastError`.
@@ -251,7 +266,15 @@ Changelog status fields: `enabled`, `running`, `lastChangeNumber`, `firstAvailab
 ### DataTables endpoints
 
 `POST /api/v1/datatables/users` and `POST /api/v1/datatables/servers` take a DataTables request
-body (paging, ordering, global and column search) and these query parameters:
+body (paging, ordering, global and column search) and the query parameters below. They are for the
+pages' own tables and take a session, not an API token.
+
+From 0.0.4 (this applies to `/api/v1/datatables/audit` as well):
+
+- `length` must be at least 1 and is cut to `cert-alert.api.max-page-size` (500). `length=-1`,
+  DataTables' "all rows", is refused with `400`, as is a request that uses SearchPanes;
+- a query that cannot be run (a search on an unknown column, a database fault) answers a plain
+  `500` and is logged. Earlier releases answered `200` with the failure's text in `error`.
 
 | Parameter | Users | Servers | Meaning |
 |---|:-:|:-:|---|
@@ -351,7 +374,10 @@ Settings response: `leadDays`, `configuredLeadDays`, `fromConfiguration`, `minim
 
 The round-up (real or dry run) returns `certificates`, `peopleTold`, `emailsSent`, `dryRun`,
 `emailEnabled`, `note` (why nothing would be sent, where that applies), `failures` (messages that
-could not be built) and `messages` (rendered messages, up to 25 on a dry run).
+could not be built) and `messages` (rendered messages, up to 25 on a dry run). From 0.0.4 it also
+returns `notMailed`: the messages held back because the run reached
+`cert-alert.notifications.email.max-per-run`. When that is above `0`, `note` says so even though
+other messages were sent.
 
 ## Audit
 
@@ -373,10 +399,10 @@ The `ens-audit/1` trail, behind the **Audit log** page:
 | `GET` | `/api/v1/admin/audit/events` | admin, auditor | Search the trail (paged, filtered) |
 | `GET` | `/api/v1/admin/audit/events/{seq}` | admin, auditor | One event in full |
 | `GET` | `/api/v1/admin/audit/export` | admin, auditor | The current filter as CSV or NDJSON, up to 100,000 events; recorded as `audit.exported` |
-| `POST` | `/api/v1/admin/audit/verify` | admin, auditor | Recompute the hash chain |
+| `POST` | `/api/v1/admin/audit/verify` | admin, auditor | Recompute the hash chain. From 0.0.4 it also checks that the first retained event is the one right after the last event retention pruned, and that the walk ends at the chain head, so events deleted from either end by other means are reported |
 | `GET` | `/api/v1/admin/audit/delivery` | admin, auditor | Each output's delivery position, backlog and last error |
 | `GET`, `POST`, `DELETE` | `/api/v1/admin/audit/tokens`, `/api/v1/admin/audit/tokens/{id}` | admin (auditors may list) | List, create and revoke SIEM pull-API tokens (`ensat_`), which are separate from API tokens |
-| `GET` | `/api/audit/events?after=<seq>&limit=<1-1000>` | bearer token | The SIEM pull API: NDJSON, or `{"events":[…],"next":<seq>}` with `Accept: application/json`. Works while unlicensed. See [Audit logging](../audit-logging.md#the-pull-api) |
+| `GET` | `/api/audit/events?after=<seq>&limit=<1-1000>` | bearer token | The SIEM pull API: NDJSON, or `{"events":[…],"next":<seq>}` with `Accept: application/json`. Works while unlicensed. From 0.0.4 a wrong or revoked token (`401`) is recorded as a failed `auth.login` with `details.method` `api-token`, collapsed per client address. See [Audit logging](../audit-logging.md#the-pull-api) |
 
 ## Sign-in, consent and health
 
@@ -385,9 +411,9 @@ The `ens-audit/1` trail, behind the **Audit log** page:
 | `/login` (`GET`, `POST`) | public: the password form |
 | `/oauth2/authorization/oidc`, `/login/oauth2/code/oidc` | public, when OIDC is on: start a single sign-on and its redirect URI |
 | `/saml2/authenticate/saml`, `/login/saml2/sso/saml`, `/saml2/service-provider-metadata/saml` | public, when SAML is on: start a single sign-on, the assertion consumer and the service provider's metadata |
-| `/logout/saml2/slo` (next release) | when SAML single logout is on: the identity provider's `LogoutResponse` and `LogoutRequest` (HTTP-Redirect), checked as in [SAML single logout](single-sign-on.md#saml-single-logout-next-release) |
+| `/logout/saml2/slo` (from 0.0.3) | when SAML single logout is on: the identity provider's `LogoutResponse` and `LogoutRequest` (HTTP-Redirect), checked as in [SAML single logout](single-sign-on.md#saml-single-logout) |
 | `/api/v1/openapi.yaml` | public: the OpenAPI document |
-| `/consent` (`GET`, `POST`) | public: the notice-and-consent banner and **I agree**, when it is on |
+| `/consent` (`GET`, `POST`) | public: the notice-and-consent banner and **I agree**, when it is on. From 0.0.4 the `POST` answers `429` after 10 agreements in a minute from one client address |
 | `/livez`, `/readyz` | public, always on the application's port |
 | `/actuator/health`, `/actuator/health/liveness`, `/actuator/health/readiness`, `/actuator/info` | public (health details only for admins) |
 | `/actuator/metrics`, `/actuator/loggers` | admin |

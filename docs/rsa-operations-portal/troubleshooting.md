@@ -82,7 +82,13 @@ Start with `docker compose ps`, `docker compose logs -f` and `logs/rsaapp-portal
     Until then, in an emergency, `CONNECTOR_SERIAL_FILTER=off` reads the replies without the filter, with a warning at every start; remove it once the class is allowed. See [What the Connector accepts](rsa-integration.md#what-the-connector-accepts).
 
 ??? failure "Operations fail and the user is suddenly sent to the login page"
-    The connector runs operator actions **as the signed-in user's AM session**. When that AM session has expired, the connector raises `RsaUserSessionEndedException`, and the portal logs the user out. Sign in again. If it happens often, compare the AM session lifetime with the portal's `ENS_SESSION_IDLE_TIMEOUT` and `ENS_SESSION_ABSOLUTE_TIMEOUT`.
+    The connector runs operator actions **as the signed-in user's AM session**. When that AM session has expired, the connector raises `RsaUserSessionEndedException`, and the portal logs the user out. Sign in again. If it happens often, compare the AM session lifetime with the portal's `ENS_SESSION_IDLE_TIMEOUT` and `ENS_SESSION_ABSOLUTE_TIMEOUT`. From 0.0.3 this happens only when AM answers that the session no longer exists; before, an unreachable AM or a locked service account signed operators out too, and now shows an error instead.
+
+??? failure "Connector log: `Could not open the admin session on Auth Manager; trying again in ... s at the earliest`"
+    From 0.0.3. A connect to AM failed: AM is unreachable, or the service account's (`RSA_ADMIN_USER_ID`) or the read-only account's password is wrong, or the account is locked or expired; the cause follows in the line. The Connector waits 5 seconds before the next attempt, doubling up to 30 while it keeps failing, and until then answers every request and its health check with that failure, so readiness is `DOWN`. Fix the cause; the next successful connect ends the wait. A wrong password is no longer tried on every request, so it does not lock the account by itself.
+
+??? failure "A user enrolling a token or testing it gets an error instead of *wrong code* while AM is down"
+    Intended from 0.0.3: the Connector reports a check that AM could not answer as a failure. Before, the user was told the code was wrong.
 
 ??? failure "An operator's role change, emergency code or *Clear cached Windows password* fails with a permission error"
     These run in the operator's own AM session. The operator's AM administrative role needs the matching permission: see [Least-privilege AM roles](rsa-integration.md#least-privilege-am-roles).
@@ -99,7 +105,7 @@ Start with `docker compose ps`, `docker compose logs -f` and `logs/rsaapp-portal
     Roles come from AM administrative roles mapped by `role.mapped.N.rsaSecurityGuid`. Check that the GUIDs are correct ([how to find them](install.md#find-the-administrative-role-guids)) and that the user holds the AM admin role. The user must sign in again after any change.
 
 ??? failure "*Sign-in failed. Check your user ID and passcode*, and the user is sure the passcode is right"
-    The page gives one message whatever the cause. The audit log has the cause: open **Audit Log**, filter on `auth.login` with outcome `failure` and the user ID, and read the `reason`. A locked AM account is recorded as an alert; a Trusted Agent or Help Desk user can **Unlock** it from **User Search → User Details**. Re-enable a disabled account in AM. After three failures for one user ID, the next attempts must also wait (30 seconds, doubling up to 15 minutes).
+    The page gives one message whatever the cause. The audit log has the cause: open **Audit Log**, filter on `auth.login` with outcome `failure` and the user ID, and read the `reason`. A locked AM account is recorded as an alert; a Trusted Agent or Help Desk user can **Unlock** it from **User Search → User Details**. Re-enable a disabled account in AM. After three failures for one user ID, the next attempts must also wait (30 seconds, doubling up to 15 minutes). From 0.0.3 the reason `service_error` means the Connector or AM could not answer: check [RSA Authentication Manager connectivity](#rsa-authentication-manager-connectivity). Such a failure adds no wait for the user ID; before 0.0.3 it was recorded as `bad_credentials` and counted.
 
 ??? failure "*Too many attempts. Wait ... and try again* (HTTP 429)"
     A rate limit or the backoff refused the request. The first refusal is audited as `auth.rate-limited`, with `details.flow`, `details.limit` and `details.retryAfterSeconds`. If many users are refused at once, check that the Portal sees each client's own address: behind a TLS-terminating proxy it needs `SERVER_FORWARD_HEADERS_STRATEGY=native` and the right `SERVER_TOMCAT_REMOTEIP_INTERNAL_PROXIES` (see [Security → Behind a proxy](security.md#behind-a-proxy)), and with TLS passthrough all clients share one address. Raise `rsa.rate-limit.*.per-ip` if your users really share an address.
@@ -108,18 +114,24 @@ Start with `docker compose ps`, `docker compose logs -f` and `logs/rsaapp-portal
     The Portal sees the proxy's address. Set `SERVER_FORWARD_HEADERS_STRATEGY=native` (not `framework`) and `ENS_COOKIE_SECURE=true`, make the proxy replace `X-Forwarded-For`, and check that `SERVER_TOMCAT_REMOTEIP_INTERNAL_PROXIES` covers the proxy, as CIDR ranges with a prefix length (`10.0.0.5/32`, not `10.0.0.5`).
 
 ??? failure "Self-service says *Your request has been received*, but no e-mail arrives"
-    Appointment booking and exemption requests answer the same whatever the outcome. The audit trail says what happened: `appointment.request-refused` (`unknown_user`, `user_has_token`, `too_many_open`, `authmanager_error`) or `auth.self-service-failed` with `details.flow` and the reason (for example `unknown_user` or `no_email`).
+    Appointment booking and exemption requests answer the same whatever the outcome. The audit trail says what happened: `appointment.request-refused` (`unknown_user`, `user_has_token`, `too_many_open`, `authmanager_error`, and from 0.0.3 `slot_not_available`, when someone else booked the time at the same moment, or `error`, with the cause in the Portal log) or `auth.self-service-failed` with `details.flow` and the reason (for example `unknown_user` or `no_email`).
 
-??? warning "After the upgrade to the next release, an operator signing in with the passcode alone has no PMO, trusted agent or help-desk menu"
+??? failure "An integration gets `429` (`rate_limited`) from `/api/v1` although its token's limit is not reached"
+    From 0.0.3, calls without a valid token are counted per client address against `rsa.rate-limit.sign-in.per-ip` (120 in 10 minutes). The integration, or something else behind the same address, keeps calling with a missing, expired or revoked token: the audit trail has `access.denied` with `api_token_expired`, `api_token_revoked` or `api_token_invalid` and that address, then `auth.rate-limited` with `details.flow` `api`. Give the integration a new token on *Admin → Integrations*; calls with a valid token are not counted and work at once.
+
+??? warning "After the upgrade to 0.0.2, an operator signing in with the passcode alone has no PMO, trusted agent or help-desk menu"
     With single sign-on configured, a role that `ENS_SSO_ROLES_*` maps a group to now comes only through the identity provider. The operator signs in with the provider's button on the sign-in page, then the passcode. To keep the old behaviour, set `ENS_SSO_REQUIRE_FOR_ADMIN_ROLES=false` (Helm `sso.requireForAdminRoles: false`); the Portal then warns at every start. See [Single sign-on](single-sign-on.md#how-a-sign-in-goes).
 
-??? warning "Signing out ends at the identity provider with an error about the redirect URI (next release)"
+??? warning "Signing out ends at the identity provider with an error about the redirect URI (from 0.0.2)"
     `ENS_SSO_OIDC_END_SESSION=true`, but the provider does not allow `<APPLICATION_DNS_NAME>/` as a post-logout redirect URI, or it requires `id_token_hint`, which the Portal cannot send (Okta). Allow the URI at the provider, or set `ENS_SSO_OIDC_END_SESSION=false`. The Portal session and the Authentication Manager session have already ended at that point. See [Signing out](single-sign-on.md#signing-out).
 
-??? warning "With SAML, signing out ends only the Portal session although `ENS_SSO_SAML_SINGLE_LOGOUT=true` (next release)"
-    The Portal says at every start which part is missing: its signing key (`SPRING_SECURITY_SAML2_RELYINGPARTY_REGISTRATION_<ID>_SIGNING_CREDENTIALS_0_*`, Helm `sso.saml[].signingSecret`), or the asserting party's SingleLogoutService by HTTP-Redirect (in its metadata, or `..._ASSERTINGPARTY_SINGLELOGOUT_URL` with `_BINDING=REDIRECT`, Helm `sso.saml[].singleLogoutUrl`). A POST-only SingleLogoutService is not used. Once both are there, refresh the relying party at the asserting party so it knows `<APPLICATION_DNS_NAME>/logout/saml2/slo`. See [SAML single logout](single-sign-on.md#saml-single-logout-next-release).
+??? warning "With SAML, signing out ends only the Portal session although `ENS_SSO_SAML_SINGLE_LOGOUT=true` (from 0.0.2)"
+    The Portal says at every start which part is missing: its signing key (`SPRING_SECURITY_SAML2_RELYINGPARTY_REGISTRATION_<ID>_SIGNING_CREDENTIALS_0_*`, Helm `sso.saml[].signingSecret`), or the asserting party's SingleLogoutService by HTTP-Redirect (in its metadata, or `..._ASSERTINGPARTY_SINGLELOGOUT_URL` with `_BINDING=REDIRECT`, Helm `sso.saml[].singleLogoutUrl`). A POST-only SingleLogoutService is not used. Once both are there, refresh the relying party at the asserting party so it knows `<APPLICATION_DNS_NAME>/logout/saml2/slo`. See [SAML single logout](single-sign-on.md#saml-single-logout).
 
 ## Help-desk requests
+
+??? note "**Assign Token** or **Remove From Group** opens a help-desk request instead of making the change"
+    Intended from 0.0.3 when the user is privileged (`rsa.helpdesk.dual-control.privileged-roles`) or is the operator's own account: the change needs a ticket, a verified user and a second operator's approval. See [Help-desk requests → Tokens and the RSA-enabled group](help-desk.md#tokens-and-the-rsa-enabled-group). A Help Desk user without the Trusted Agent role cannot open a `token-assign` request.
 
 ??? failure "*None of the verification methods set for this Portal can verify the user for this change*"
     For a PIN reset, an emergency access code or a lost token, a tokencode does not count, and the e-mail code is offered only while the Portal can send mail and the user has an address. Add `in-person` or `email-code` to `rsa.helpdesk.verification.methods`, or verify the user in person.
@@ -150,13 +162,32 @@ Start with `docker compose ps`, `docker compose logs -f` and `logs/rsaapp-portal
 ??? failure "*We were unable to match your previous RSA Enrollment with your PKI Credentials…*"
     The certificate DN must match the DN stored at the user's last enrollment, or an existing certificate-to-user mapping (`CertTokenMapping`). A PIN-check email link records none. Enrollments done over plain HTTP were stored as `NOCERT`. Use the Windows-password option or ask a Trusted Agent or Help Desk user to reset the PIN.
 
+## Appointments, exemptions, shipments and sites
+
+??? failure "The booking form refuses the time: *Choose one of the times offered...*, *That time has passed...* or *That time has just been booked...*"
+    From 0.0.3 the server takes only a time the schedule page offers: in the future (by the server's clock and time zone), on a quarter hour within the Trusted Agent's working hours, and not already booked. A hand-made request, or a page left open while someone else took the time, gets these messages. If the hours offered are wrong, the agent corrects them on **My TA Profile**.
+
+??? failure "The Trusted Agent's details or booking page shows an error for an agent who exists"
+    The agent is deactivated. From 0.0.3 the public pages neither show nor book a deactivated agent; Trusted Agents and PMO users still see the details. PMO reactivates the agent on **Edit TA**, or the nightly `resyncta` job does once the agent holds the Trusted Agent role in AM again.
+
+??? failure "PMO cannot approve an exemption request: *The account owner has not confirmed this request yet*"
+    From 0.0.3 a request can be approved or denied only after its account owner has opened the confirmation link e-mailed to the address AM has for the user ID. The *All* list marks such requests **Not confirmed**. If the e-mail never arrived or its link has expired, the user submits the request again, which sends a new link; an unconfirmed request is deleted by data retention after `ENS_RETENTION_EXEMPTION_REQUESTS_DAYS`.
+
+??? failure "*Someone else changed this at the same time, so nothing was saved* (HTTP 409) on a shipment"
+    From 0.0.3 a shipment changed by someone else since the page was opened is not overwritten. Nothing was saved and nobody was e-mailed. Open the shipment again and repeat the change if it still applies.
+
+??? failure "*Enter the first and last serial numbers of the range as digits, the first no higher than the last.*"
+    From 0.0.3 a site's serial range is checked before it is stored. A range stored by an earlier release with other characters is skipped with `Skipping malformed token serial range of site ...` in the Portal log, so the site's pages and report work without it: delete it on the site's page and add it again.
+
 ## Email
 
 ??? failure "No emails arrive"
     * Look for `Could not send email`, `Email not sent to:` or `Could not send … email` in the portal log.
     * Check `spring.mail.host` and `spring.mail.port` and the relay's acceptance of `mail.default.from`.
-    * For job emails, check that the job's `cron.<name>.debug` is `false`. `lostTokenThresholdMonitor` ships with **debug on** (from the next release with debug off, and the startup log warns while it is on). From the next release, check also that `mfa.group.email` is set: without it the report goes to nobody, and the startup log says so.
+    * For job emails, check that the job's `cron.<name>.debug` is `false`. `lostTokenThresholdMonitor` ships with **debug on** (from 0.0.2 with debug off, and the startup log warns while it is on). From 0.0.2, check also that `mfa.group.email` is set: without it the report goes to nobody, and the startup log says so.
     * Users without an email address in AM are skipped.
+    * From 0.0.3 a job that had e-mail to send and sent none ends as `Failed: ...` on **Admin → Manual Run Cron Jobs** and `job.failed` in the audit trail. A relay that accepts the connection and then stalls fails each send after `spring.mail.properties.mail.smtp.timeout` (30 seconds).
+    * A group e-mail that answers *Could not send email.* had no recipients, could not look its recipients up, or was held back by the license; nothing was sent or recorded.
 
 ??? failure "Links in emails point to `http://localhost:8080`"
     Set `application.dns.name` to the external portal URL and recreate the portal (`docker compose up -d`). With Helm, set `publicUrl` and run `helm upgrade`.
@@ -166,6 +197,15 @@ Start with `docker compose ps`, `docker compose logs -f` and `logs/rsaapp-portal
 
 ## Scheduled jobs
 
+??? failure "A job shows `Failed: ...` on the Manual Cron page, or the audit trail has `job.failed`"
+    From 0.0.3 a job fails when it could not do its work: the Connector or AM could not be reached (`Could not run: ...`), or it had items to do and none was done (the message is its summary, for example `Sent 0 emails, 5 failed`). Check the Connector's health and the SMTP relay, then **Run** the job again: `expiring` and `appointmentupcoming` catch up what the missed night left and send nothing twice, and the other jobs record a reminder only when it was sent.
+
+??? failure "`sendDelayedTokenRegistrationEmails` fails with `Stopped after N emails: could not ask Authentication Manager about ... users`"
+    A look-up of a batch of users failed, and the job stops rather than wait out the Connector's timeout for each batch. The reminders already sent are recorded; the rest go out on the next run. If the Connector is older than the Portal, the call does not exist there: upgrade both to the same release.
+
+??? failure "A user no longer gets registration reminders"
+    From 0.0.3 the reminders stop `cron.sendDelayedTokenRegistrationEmails.maxDaysOfReminders` (30) days after the date the token may be registered; `0` removes the limit. A user AM no longer has is skipped, with `No registration reminder for <user>: Authentication Manager does not have the user` in the Portal log, and counted as failed in the job's message.
+
 ??? failure "A job never runs, or **Run** on the Manual Cron page does nothing"
     `cron.<name>.enabled` must be `true`. A disabled job is skipped even when run by hand. Last-run details are kept in the memory of each Portal replica and reset on restart.
 
@@ -174,6 +214,34 @@ Start with `docker compose ps`, `docker compose logs -f` and `logs/rsaapp-portal
 
 ??? failure "A job is skipped"
     The jobs need the `scheduled-jobs` license feature and are skipped while the license is read-only. A job still running when its next time comes is skipped too, and so is an occurrence another Portal node has claimed in `CronLock`.
+
+## License
+
+??? failure "*That license was not installed. This license starts on ...; the license installed now is still in force.*"
+    From 0.0.3 a license that is not yet valid, or has already expired, is refused while the installed license is in full effect, so that it cannot replace a working one. Upload next term's license on or after its start date. The refusal is audited as `license.rejected`.
+
+??? failure "*The license was not installed: the audit log cannot be written.*"
+    From 0.0.3 the upload checks the audit log before it changes anything. Check the database, and the Portal log for the cause, then upload again. *License installed, but the audit log could not record it* means the license is in place and only its audit event is missing.
+
+??? failure "The license message ends with *This server's clock is behind a time this installation has already seen...*"
+    From 0.0.3 the Portal records the latest time it has seen (at most hourly) and checks the license no earlier than a day before it, so setting the clock back does not bring an expired license back. Correct the server's clock (NTP). If the clock ran ahead for a while and was corrected since, the message stays until the clock passes the recorded time; contact ENS Solutions if a valid license is refused because of it.
+
+??? failure "With `ENS_CONSENT_BANNER_ENABLED=true` and no valid license, the browser loops between the banner and the License screen"
+    Fixed in 0.0.3: the banner can be acknowledged on an unlicensed Portal. On an earlier release, give the license as `ENS_LICENSE` (Helm `license.file`), or turn the banner off until the license is installed.
+
+??? failure "A license in `ENS_LICENSE` was not installed at start: `ENS_LICENSE could not be written to ...`"
+    The database could not be read or written at that moment. From 0.0.3 the Portal tries again on a license check at least 30 seconds later, and the log line says so; before, it needed a restart.
+
+## Audit
+
+??? failure "**Verify integrity** reports `Broken at seq N: missing (seq ... to ...; retention has pruned nothing)` after the upgrade to 0.0.3"
+    From 0.0.3 the oldest event kept must be `seq` 1, or the event right after the last one retention deleted. The trail starts later than that: events were deleted from the start of `AuditEvent` by other means than the Portal's retention (by hand, or by a partial restore). Earlier releases accepted any oldest event as the anchor and reported such a trail as intact. The events are gone from the database; look for them in your SIEM or in a backup, and record the finding.
+
+??? note "Failed `auth.login` events with `details.method` `api-token`"
+    From 0.0.3 a wrong or revoked token presented to the audit pull API (`/api/audit/events`) is recorded, with the source address and never the token. A SIEM still configured with a revoked token shows up like this: give it a new token on the Audit Log page.
+
+??? note "The syslog collector received a batch of audit events twice"
+    Syslog over `tcp` and `tls` has no acknowledgement. From 0.0.3 the Portal checks the connection before each batch, opens a new one after 30 seconds unused, and sends the last batch again when a connection turns out broken, so a collector restart can repeat up to one batch: de-duplicate on `id`. A batch the collector does not take within 30 seconds fails and is retried. Where no event may be missing, use Splunk HEC or the pull API.
 
 ## Backups and restore
 
@@ -187,6 +255,15 @@ Start with `docker compose ps`, `docker compose logs -f` and `logs/rsaapp-portal
     Run `mysql` inside the container with the container's own root password, as shown in [Operator Guide → Restore](operator-guide.md#restore).
 
 ## Upgrades
+
+??? failure "`upgrade.sh` stops: `MySQL is not running and has no container to start ... nothing was changed`"
+    From 0.0.3 `upgrade.sh` needs MySQL running for the backup and its checks, and starts a stopped container itself. After `./util/compose.sh down` there is no container: in the install folder run `./util/compose.sh up -d mysql`, wait until it is healthy, and run `upgrade.sh` again.
+
+??? failure "`upgrade.sh` stops: `MySQL did not become healthy`, `the database backup failed` or `the database backup is incomplete`, each with `nothing was changed`"
+    The installation is as it was. Check the MySQL container's log (`docker logs mysql`), the free space under `backups/` in the install folder, and that `MYSQL_ROOT_PASSWORD` in `mysql.env` is still the root password. Then run `upgrade.sh` again.
+
+??? failure "After the upgrade the site report fails, or `sendDelayedTokenRegistrationEmails` fails every night"
+    The Portal is 0.0.3 and the Connector is older: these two call Connector methods that 0.0.3 added. Run both on the same release (release package: `./util/compose.sh ps` shows the images; Helm: remove an `image.tag` or `connector.image.tag` override).
 
 ??? failure "Upgrade finished but the portal is not running"
     If `util/check-env.sh` found a problem in the settings, `upgrade.sh` stopped **before restarting**. Fix the settings it names, then run `./upgrade.sh` again. `upgrade.sh` also lists the settings that are new in each template; add the ones you need to the file it names. If the Portal did not become healthy in time, check `docker compose logs portal connector`.

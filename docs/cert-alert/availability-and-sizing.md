@@ -17,10 +17,11 @@ Backups themselves are in the [Operator guide](operator-guide.md#backups).
 | Driver | How the code handles it | Settings |
 |---|---|---|
 | Directory entries and certificates | Sweeps read the directory in pages (`page-size`, 500), stream the entries and write them in batches (`batch-size`, 200), so memory does not grow with the directory. Time does: a sweep's duration grows with the number of entries | `cert-alert.ldap.page-size`, `.batch-size`, `.search-timeout` (10m) |
-| Revocation checks | Up to `workers` (8) OCSP requests at once. CRLs are fetched up to `max-crl-bytes` (16 MB) each and kept for `crl-cache-ttl` (6h), so memory grows with the number of issuing CAs whose CRLs are cached | `cert-alert.revocation.*` |
-| The expiry round-up | Reads at most `digest.scan-limit` (10,000) certificates per run, and sends at most `email.max-per-run` (500) emails | `cert-alert.notifications.digest.scan-limit`, `.email.max-per-run` |
+| Revocation checks | Up to `workers` (8) OCSP requests at once. CRLs are fetched up to `max-crl-bytes` (16 MB) each and kept for `crl-cache-ttl` (6h), so memory grows with the number of issuing CAs whose CRLs are cached. From 0.0.4 a distribution point that fails is asked again no sooner than two minutes later, not once per certificate | `cert-alert.revocation.*` |
+| The expiry round-up | Reads at most `digest.scan-limit` (10,000) certificates per run, and sends at most `email.max-per-run` (500) emails, one per address. From 0.0.4 the soonest expiries go first when the cap binds, and the run reports how many messages it held back | `cert-alert.notifications.digest.scan-limit`, `.email.max-per-run` |
+| Scheduled jobs | From 0.0.4 the jobs, the outboxes, the audit flush and the session sweep share eight scheduler threads per replica; before, one thread ran them all, so a long sweep delayed mail, webhooks and the hourly refresh | `CERT_ALERT_SCHEDULER_THREADS` (8) |
 | Database rows | One `cached_certificate` row per certificate (parsed fields, not the certificate itself), plus people, servers, identifiers and contacts. The audit trail grows with every sign-in, change and job until retention removes it | `ENS_AUDIT_RETENTION_DAYS` |
-| Database connections | One pool per replica, for its web requests, jobs and changelog polls | `CERT_ALERT_DB_POOL_SIZE` (10) |
+| Database connections | One pool per replica, for its web requests, jobs and changelog polls. Several jobs can run at once on the scheduler threads, each using connections from it. From 0.0.4 a slow OCSP responder, CRL host or directory no longer holds a connection while a certificate sign-in or an API token waits on it | `CERT_ALERT_DB_POOL_SIZE` (10) |
 | Interactive users | Tables are paged on the server; a page is a few database queries | |
 
 ### Starting figures
@@ -31,6 +32,7 @@ Backups themselves are in the [Operator guide](operator-guide.md#backups).
 | CertAlert CPU | Helm: request `250m`, no limit | Request `1`, no limit: sweeps and revocation runs are bursts |
 | PostgreSQL | Helm embedded (evaluation only): request `100m` / `256Mi`, limit `1Gi`, `8Gi` volume | 2 vCPU, 4 GiB memory, 20 GiB disk with room for the audit trail to grow |
 | Database pool | `CERT_ALERT_DB_POOL_SIZE=10` | 10; raise it only if requests wait for connections while jobs run |
+| Scheduler threads | `CERT_ALERT_SCHEDULER_THREADS=8` (from 0.0.4) | 8; if you raise it, check the database pool as well |
 
 How to check and adjust:
 
@@ -75,7 +77,10 @@ picture, see [Sizing, availability and recovery](../availability-and-sizing.md).
 | State | Effect with two replicas |
 |---|---|
 | Repeated sign-in failures for one name (the `alert` after five) | Up to five per replica before the alert |
-| Collapsed `access.denied` and certificate sign-in failures | Up to one event a minute per replica |
+| Collapsed `access.denied` and certificate sign-in failures | Up to one event a minute per replica. From 0.0.4 for `access.denied` and wrong pull-API tokens: the first at once and one collapsed event a minute, per replica |
+| Consent acknowledgments per client address (10 a minute, from 0.0.4) | Counted per replica |
+| API token rate limit, and the short memory of a directory that cannot be read (10 seconds) | Per replica |
+| Scheduler threads | Eight per replica; each job still runs on one replica at a time |
 | License mode changes (`license.mode-changed`) | Recorded once by each replica that notices |
 | `ens_certalert_job_last_success_seconds` | Set where the job ran; the PrometheusRule takes the `max` |
 | Directory groups, CRLs, sign-in revocation answers | Each replica fills its own cache |
@@ -102,7 +107,7 @@ was down run at their next scheduled time, or on demand from the Admin page.
 
 | Item | Holds | Back it up with |
 |---|---|---|
-| The PostgreSQL database | Everything CertAlert owns that the directory doesn't ([list](operator-guide.md#backups)), including the audit trail, the license and **this installation's id** | `pg_dump`, or your database's backups. From the next release, `./backup.sh` in the release package, and the chart's optional `upgradeBackup` hook before upgrades |
+| The PostgreSQL database | Everything CertAlert owns that the directory doesn't ([list](operator-guide.md#backups)), including the audit trail, the license and **this installation's id** | `pg_dump`, or your database's backups. From 0.0.3, `./backup.sh` in the release package, and the chart's optional `upgradeBackup` hook before upgrades |
 | The license volume (`cert-alert_ens-license`, or the license PVC) | The license state of a release that kept it in files, imported into the database on the first start after upgrading, and not read after that | Keep it until that import is done. Keep the `.lic` file you received as well |
 | Settings | `.env`, `tls/`, `email-templates/`, `license/` (release package); your values file and the Secrets it names (Helm). This includes the webhook secret key (`CERT_ALERT_WEBHOOKS_SECRET_KEY`, `webhooks.secretKey`), without which the webhooks' stored secrets and URLs cannot be read | Your configuration management. They hold secrets |
 | The release | The package you installed, or the image digests and chart version | Keep the download, or mirror the images |
@@ -136,7 +141,9 @@ installation id), then set `replicaCount` back to what you ran. Above one replic
 ### The audit trail after a restore
 
 The trail (`audit_event`) and its chain head (`audit_chain_head`) are restored together from the
-same dump, so the chain is intact, but it ends at the backup. Events recorded afterwards continue
+same dump, so the chain is intact, but it ends at the backup. From 0.0.4 **Verify integrity**
+compares the two: restoring `audit_event` without the chain head that belongs to it, or the other
+way round, is reported as events missing. Events recorded afterwards continue
 from the restored sequence number, reusing numbers your SIEM may already have from the lost period:
 
 - de-duplicate on `id`, never on `seq`;
@@ -171,7 +178,8 @@ A rollback therefore always restores the database backup taken before the upgrad
     The old images must still be loaded (`docker image ls`); if they were removed, load them from
     the old release's `images/` directory first.
 
-    When the release you go back to has `restore.sh` (the next release and later), use it
+    When the release you go back to has `restore.sh` (0.0.3 and later; as a release package,
+    0.0.5 and later), use it
     instead: from that release's directory, `./restore.sh ../cert-alert-<new>/backups/cert-alert-before-<new>-<time>.sql.gz`
     stops CertAlert, loads the dump in one transaction and starts it again, then run
     `./install.sh` there.
@@ -189,7 +197,7 @@ A rollback therefore always restores the database backup taken before the upgrad
     ```
 
     `helm rollback` restores the previous chart's manifests and values, not the database. The
-    license PVC is kept. From the next release, with `upgradeBackup.enabled`, the dump taken
+    license PVC is kept. From 0.0.3, with `upgradeBackup.enabled`, the dump taken
     before the upgrade is on the backup volume; the chart's `README.md` ("Backups and upgrades")
     shows how to restore it from a pod that mounts that volume.
 

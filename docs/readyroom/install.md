@@ -26,7 +26,7 @@ workstation. Every setting mentioned here is described in [Configuration](config
 | Requirement | Notes |
 |---|---|
 | PostgreSQL | ReadyRoom keeps its own records in PostgreSQL; it is the only database supported. The release package includes PostgreSQL 16. With Helm, use your own server (an embedded one is available for evaluation only). |
-| LDAP directory | Must hold the people (by default `objectclass=inetOrgPerson`) and the groups (`groupOfUniqueNames` with `uniqueMember`; an optional `owner` is treated as the group's manager). Needs a read-only bind account that can search users and groups. The paged results control is used if it is available. Active Directory works: referrals it returns are ignored by default (`spring.ldap.referral`), so a base DN at the domain root (`DC=corp,DC=com`) works too, though one below it (`OU=People,DC=corp,DC=com`) avoids the referrals altogether. See [Configuration → LDAP connection](configuration.md#ldap-connection). |
+| LDAP directory | Must hold the people (by default `objectclass=inetOrgPerson`) and the groups (by default `groupOfUniqueNames` with `uniqueMember`; an optional `owner` is treated as the group's manager). Needs a read-only bind account that can search users and groups. The paged results control is used if it is available. Active Directory works: set the groups' object class and member attribute to `group` and `member` (from 0.0.11; see [Connect the LDAP directory](#connect-the-ldap-directory)). Referrals it returns are ignored by default (`spring.ldap.referral`), so a base DN at the domain root (`DC=corp,DC=com`) works too, though one below it (`OU=People,DC=corp,DC=com`) avoids the referrals altogether. See [Configuration → LDAP connection](configuration.md#ldap-connection). |
 | SMTP server | Used to email absence alerts. Optional: see [Configure email](#configure-email). |
 | License | An ENS Solutions license file (`.lic`) from your account on the ENS licensing portal: an evaluation, or the license issued for your order. See [Licensing](../licensing.md). Without one, ReadyRoom offers only sign-in and its license screen. |
 | Server certificate | A PKCS#12 keystore for the HTTPS listener, if ReadyRoom terminates TLS itself. Needed for client certificates and the Windows client. |
@@ -117,10 +117,14 @@ The template also lists optional blocks, commented out: the consent banner, sess
 reverse-proxy settings, client certificates (`ENS_X509_*`), audit outputs (`ENS_AUDIT_*`), JSON
 logs, the management port, statuses that need approval, the calendars' employee-type choices
 (`APPLICATION_CALENDAR_EMPLOYEETYPEFILTERS_n_LABEL` and `_VALUES`), privacy and retention, reports,
-the public API and webhooks. From the next release it also has a *Single sign-on* block (`ENS_SSO_*`, OpenID
+the public API and webhooks. From 0.0.3 it also has a *Single sign-on* block (`ENS_SSO_*`, OpenID
 Connect and SAML 2.0): the issuer and the SAML metadata must be `https://` (or the metadata a file in
 `tls/`), and SAML needs an `https://` `APPLICATION_BASE_URL`; see
-[Single sign-on](single-sign-on.md). See [Configuration](configuration.md).
+[Single sign-on](single-sign-on.md). From 0.0.11 it also lists, commented out with their defaults,
+the database timeouts and pool size (`DB_SOCKET_TIMEOUT`, `DB_STATEMENT_TIMEOUT`, `DB_LOCK_TIMEOUT`,
+`DB_POOL_SIZE`), the groups' object class and member attribute, the password sign-in limits
+(`APPLICATION_LOGIN_*`), `APPLICATION_EVENTS_MAXVIEWDAYS`, `APPLICATION_HA_MAXCHECKOUTPOSTPONEMENT`
+and the end-of-day check-out (`APPLICATION_ENDOFDAY_*`). See [Configuration](configuration.md).
 
 `.env` holds the database, directory and mail passwords. `install.sh` makes it mode 600; keep it
 private. List settings are numbered (`APPLICATION_SUPERUSERDNS_0`, `_1`, ...). Any other setting
@@ -187,7 +191,10 @@ After a change, run `./compose.sh up -d`.
 Supply the license in one of these ways. See [Licensing](../licensing.md) for the rest.
 
 - **Upload it** on the license screen after the first start: `<APPLICATION_BASE_URL>/app/admin/license`,
-  signed in as an administrator.
+  signed in as an administrator. From 0.0.11, a license that has not started yet, or has already
+  expired, is refused while the installed license is in full effect, and the installed one stays
+  (*That license was not installed. This license starts on ...*): upload next term's license on or
+  after its start date. With no license in full effect, such a file is installed as before.
 - **`ENS_LICENSE` in `.env`:** the license itself, either the token between its `BEGIN` and `END`
   lines or the whole file base64-encoded (`base64 -w0 license.lic`). It is installed at start if no
   license is installed yet, or if it is a newer revision of the installed one.
@@ -278,14 +285,44 @@ If `.env` has `SSL_ENABLED=true`, `COMPOSE_FILE` must include `docker-compose.tl
 `tls/keystore.p12` and `tls/truststore.p12` must be your own: the image contains neither, and
 `upgrade.sh` stops otherwise.
 
-!!! note "Upgrading to the next release"
+!!! note "Upgrading to 0.0.11"
+    Nothing to change in `.env`: every new setting has a default, and `upgrade.sh` lists them. The
+    schema changes (Flyway `V22`, `V23`, `V30`, `V32` and `V33`) are applied at the first start.
+
+    - **Sessions left open are checked out at the end of the day.** Someone whose last event is a
+      check-in or an unlock now reads `OUT` once their day is over, where they stayed `IN` until
+      their next event. `APPLICATION_ENDOFDAY_CHECKOUT=false` keeps the earlier behaviour;
+      `APPLICATION_ENDOFDAY_AT` sets an earlier cut-off.
+    - **Database timeouts.** Connections now give up on an answer after `DB_SOCKET_TIMEOUT` (600 s),
+      and PostgreSQL cancels a statement after `DB_STATEMENT_TIMEOUT` (570 s) or a lock wait after
+      `DB_LOCK_TIMEOUT` (120 s). Migrations are not held to the last two, but the socket timeout
+      applies to them: raise `DB_SOCKET_TIMEOUT` for the upgrade if one statement may run longer
+      on a very large database. A `.env` that sets `SPRING_DATASOURCE_URL` whole gets no socket
+      timeout unless you add `tcpKeepAlive=true&socketTimeout=600` to it.
+    - **Connection pool.** ReadyRoom opens up to `DB_POOL_SIZE` (20) database connections, 10
+      before. The bundled PostgreSQL allows 100.
+    - **Password sign-in is throttled** (`APPLICATION_LOGIN_*`). Behind a reverse proxy, set
+      `SERVER_FORWARD_HEADERS_STRATEGY=framework`, or every browser counts as the proxy's address.
+    - **Active Directory groups.** Set `APPLICATION_LDAP_GROUPOBJECTCLASS=group` and
+      `APPLICATION_LDAP_GROUPMEMBERATTRIBUTE=member` for ReadyRoom to read them. Unset, groups are
+      read as before.
+    - **Windows client.** Re-run the installer on every workstation (below). The new client sends
+      the workstation's name with each event. It no longer has a built-in server address, so the
+      installer stops when no `BaseUrl` is configured or given.
+    - **`backup.sh` and `restore.sh`.** `backup.sh` no longer changes the permissions of a backup
+      directory that already exists. `restore.sh` reads the license archive through before it
+      changes anything.
+
+    The full list is in [Operations → Upgrading to 0.0.11](operator-guide.md#upgrading-to-0011).
+
+!!! note "Upgrading to 0.0.3"
     - **Revocation.** Client certificates are checked at sign-in when `.env` does not set
       `ENS_X509_REVOCATION`: OCSP, then the CRL, soft-fail (a revoked certificate is refused; one no
       responder answers for still signs in, with a warning). A `.env` that sets
       `ENS_X509_REVOCATION` keeps it, `off` included. If your `.env` sets
       `ENS_X509_REVOCATION_FAIL=closed` without a mode, that is honoured: make sure ReadyRoom reaches
       your OCSP responders and CRLs, or set `ENS_X509_CRL_DIR`, or `ENS_X509_REVOCATION=off`. See
-      [Revocation from the next release](#revocation-from-the-next-release).
+      [Revocation checking by default](#revocation-checking-by-default).
     - **Single sign-on.** An `http://` `ENS_SSO_SAML_IDP_METADATA` or `ENS_SSO_OIDC_ISSUER_URI`, and
       SAML with an `http://` `APPLICATION_BASE_URL`, stop startup.
     - **`env.template`** has a *Single sign-on* block with the `ENS_SSO_*` settings; copy it into
@@ -301,7 +338,7 @@ If `.env` has `SSL_ENABLED=true`, `COMPOSE_FILE` must include `docker-compose.tl
       or `_PROXYCREDENTIALSFILE`) is new; unset, webhooks connect directly as before. See
       [Webhooks → Through an egress proxy](webhooks.md#through-an-egress-proxy).
 
-!!! note "Upgrading to the release with Docker and Podman support"
+!!! note "Upgrading to 0.0.2: Docker and Podman support"
     - `.env` is copied as it is, so an existing installation keeps its `READYROOM_BIND_ADDRESS` and
       `READYROOM_PORT`: one published on `127.0.0.1` stays so. A `.env` without
       `READYROOM_BIND_ADDRESS` publishes on `0.0.0.0`, as earlier releases did. `upgrade.sh` prints
@@ -310,12 +347,12 @@ If `.env` has `SSL_ENABLED=true`, `COMPOSE_FILE` must include `docker-compose.tl
       container and volume names are the same. The PostgreSQL image is now named
       `docker.io/library/postgres:16`, the same image as `postgres:16`.
 
-!!! note "Upgrading to the release with the license in the database"
+!!! note "Upgrading to 0.0.2: the license in the database"
     Keep the license volume mounted for the first start (the package's compose file always mounts
     it): that start imports the license and the installation id into the database. Everyone signs
     in again once.
 
-!!! note "The first upgrade to a release with Flyway"
+!!! note "The first upgrade to a release with Flyway (0.0.1 or later)"
     Flyway finds tables but no `flyway_schema_history`, records the existing schema as version 0, and
     runs `V1`. `V1` adds the missing indexes and constraints and the audit trail's append-only
     trigger, merges user rows whose DNs differ only by letter case, and rebuilds an index an
@@ -370,6 +407,8 @@ ldap:
   userFilter: (&(objectCategory=person)(objectClass=user))   # Active Directory
   groupBaseDns:
     - OU=Groups,DC=example,DC=com
+  groupObjectClass: group          # Active Directory; leave both out for groupOfUniqueNames
+  groupMemberAttribute: member     # and uniqueMember
 
 superUserDns:
   - CN=Jane Admin,OU=Users,DC=example,DC=com
@@ -391,8 +430,10 @@ commas.
 |---|---|
 | `publicUrl` | `APPLICATION_BASE_URL` (defaults to the ingress or route host) |
 | `database.*` | `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USERNAME`, `DB_PASSWORD`, `DB_OPTIONS` (`database.options`; `-` sends none, for a pooler that refuses startup options) |
+| `database.socketTimeout` (`600`), `database.statementTimeout` (`570`), `database.lockTimeout` (`120`), `database.poolSize` (`20`) | `DB_SOCKET_TIMEOUT`, `DB_STATEMENT_TIMEOUT`, `DB_LOCK_TIMEOUT`, `DB_POOL_SIZE` (from 0.0.11). Keep `replicaCount` times `poolSize` under PostgreSQL's `max_connections`. See [Configuration → Database](configuration.md#database) |
 | `ldap.scheme` (`ldaps`), `ldap.host`, `ldap.port`, `ldap.url`, `ldap.bindDn` | `SPRING_LDAP_URLS`, `LDAP_USERNAME`. The port follows the scheme (636 or 389). `ldap.port: 389` with the default `ldaps` scheme fails the render: set `ldap.scheme: ldap` deliberately for plain LDAP |
 | `ldap.userBaseDn`, `ldap.userFilter`, `ldap.groupBaseDns` | `APPLICATION_USERBASEDN`, `APPLICATION_USERLDAPFILTER`, `APPLICATION_GROUPS_n_GROUPSBASEDN` |
+| `ldap.groupObjectClass`, `ldap.groupMemberAttribute` (empty: `groupOfUniqueNames` and `uniqueMember`) | `APPLICATION_LDAP_GROUPOBJECTCLASS`, `APPLICATION_LDAP_GROUPMEMBERATTRIBUTE` (from 0.0.11). Active Directory: `group` and `member` |
 | `ldap.attributes.*` | `APPLICATION_USERLDAP*ATTRIBUTE`, `APPLICATION_MANAGERLDAPIDATTRIBUTE` |
 | `superUserDns` | `APPLICATION_SUPERUSERDNS_n` |
 | `orgChart.groupsBaseDn` | `APPLICATION_DUTYSUBORGGROUPSBASEDN` |
@@ -401,17 +442,19 @@ commas.
 | `windowsAuth.*` | `APPLICATION_WINDOWSAUTH_*` |
 | `audit.*` | `ENS_AUDIT_*` (see [Audit logging](../audit-logging.md)) |
 | `csp.reportOnly`, `consentBanner.*`, `session.*` | `ENS_CSP_REPORT_ONLY`, `ENS_CONSENT_BANNER_*`, `ENS_SESSION_*` |
+| `login.addressFailuresPerMinute` (`30`), `login.usernameFailuresPerMinute` (`5`) | `APPLICATION_LOGIN_ADDRESSFAILURESPERMINUTE`, `APPLICATION_LOGIN_USERNAMEFAILURESPERMINUTE` (from 0.0.11): failed password sign-ins a minute before sign-in is refused for the rest of that minute; `0` is no limit |
 | `x509.*` | `ENS_X509_*` (see [Client certificates](#client-certificates-cacpiv)) |
 | `database.migration.*` | `SPRING_FLYWAY_USER`, `SPRING_FLYWAY_PASSWORD` |
 | `metrics.enabled` (`true`), `metrics.port` (`9090`), `metrics.serviceMonitor.*`, `metrics.allowFrom` | `MANAGEMENT_SERVER_PORT`: Prometheus and the probes on a port of their own |
 | `logFormat` (`json`) | `LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs`; `text` for plain lines |
 | `backup.*` | A database backup CronJob (off by default; see [Operations](operator-guide.md#backups)) |
-| `events.requestStatuses`, `events.maxRangeDays` | `APPLICATION_EVENTS_REQUESTSTATUSES` (empty list: the default), `APPLICATION_EVENTS_MAXRANGEDAYS` |
+| `events.requestStatuses`, `events.maxRangeDays`, `events.maxViewDays` (`400`) | `APPLICATION_EVENTS_REQUESTSTATUSES` (empty list: the default), `APPLICATION_EVENTS_MAXRANGEDAYS`, `APPLICATION_EVENTS_MAXVIEWDAYS` (from 0.0.11) |
 | `calendar.employeeTypeFilters` (`[]`: Gov, CTR, MIL) | `APPLICATION_CALENDAR_EMPLOYEETYPEFILTERS_n_LABEL` and `_VALUES`: the Team and Group Calendars' **Show** choices. See [Configuration](configuration.md#mapping-your-directorys-employee-types) |
 | `privacy.coworkerVisibility` (`full`) | `APPLICATION_PRIVACY_COWORKERVISIBILITY`; the chart's schema refuses other values |
 | `retention.eventsDays` (`0`), `retention.schedule` | `APPLICATION_RETENTION_EVENTSDAYS`, `APPLICATION_RETENTION_CRON`; the schema refuses an `eventsDays` between 1 and 30 |
 | `bannerText`, `timezone`, `checkOutAfterMinutes`, `updateProfileUrl`, `logLevel`, `javaOpts` | The settings under "Other" |
 | `dayStart` (`00:00`), `siteDayStarts` | `APPLICATION_DAYSTART`, `APPLICATION_SITEDAYSTARTS`: when people's days start. See [Configuration](configuration.md#time-zone-and-day-start) |
+| `endOfDay.checkOut` (`true`), `endOfDay.at` (`""`), `maxCheckOutPostponement` (`24h`) | `APPLICATION_ENDOFDAY_CHECKOUT`, `APPLICATION_ENDOFDAY_AT`, `APPLICATION_HA_MAXCHECKOUTPOSTPONEMENT` (from 0.0.11). See [Configuration](configuration.md#attendance-and-scheduled-jobs) |
 
 Anything else from [Configuration](configuration.md) goes in `extraEnv`, as an environment variable
 named the same way as in `.env`.
@@ -467,12 +510,24 @@ Choose how users and the Windows client reach ReadyRoom:
 
 | Setup | Browsers | Client certificates and the Windows client |
 |---|---|---|
-| Ingress or route with edge TLS, `tls.enabled: false` | Username and password | No |
+| Ingress or route with edge TLS, `tls.enabled: false` | Username and password | No, unless the ingress forwards the certificate in a header (`x509.source: header`) |
 | TLS passthrough (ingress-nginx or route), `tls.enabled: true` | Certificate or password | Yes |
 | `service.type: LoadBalancer`, `tls.enabled: true` | Certificate or password | Yes |
 
-ReadyRoom does not accept a client certificate forwarded in an HTTP header. To use client
-certificates, ReadyRoom must terminate TLS itself, so traffic must reach the pod unchanged.
+A client certificate reaches ReadyRoom in one of two ways:
+
+- ReadyRoom terminates TLS itself and reads the certificate from the handshake (`x509.source:
+  servlet`, the default), so traffic must reach the pod unchanged: TLS passthrough or a
+  `LoadBalancer` Service. The tabs below set that up.
+- Header mode (`x509.source: header`): an edge-terminating ingress verifies the client certificate
+  and forwards it in a header. ReadyRoom takes it only from `x509.trustedProxies` that also send
+  `x509.proxySecret`, and checks that it chains to `x509.trustedCa`. See
+  [Certificates from a TLS-terminating proxy](#client-certificates-cacpiv); the comments on `x509`
+  in the chart's `values.yaml` give the ingress-nginx annotations, and its `ci/ingress-values.yaml`
+  is a complete example.
+
+The Windows client needs no change for either: it speaks HTTPS with its certificate to whatever
+answers `BaseUrl`.
 
 === "Ingress (browsers only)"
 
@@ -574,15 +629,38 @@ The license claim and the database are kept. The new pod migrates the schema as 
 see the release package's [Upgrade](#6-upgrade) for the first upgrade to a release with Flyway). The
 migration Job and the `migrations.enabled` value are gone.
 
+!!! note "Upgrading to 0.0.11"
+    - **The embedded database needs a password.** With `database.embedded.enabled`, set
+      `database.password` or `database.existingSecret`: the chart no longer generates one, and a
+      render without one fails. A release whose earlier chart generated the password keeps it
+      across `helm upgrade`. Under `helm template`, Argo CD or `--dry-run=client`, where the chart
+      cannot read the release's Secret, set the password that release already uses (`db-password`
+      in the release's Secret).
+    - **Connection pool.** Each replica opens up to `database.poolSize` (20) connections, 10
+      before: keep `replicaCount` times `poolSize` under your PostgreSQL's `max_connections`.
+    - **Database timeouts.** `database.socketTimeout` (600 s), `database.statementTimeout` (570 s)
+      and `database.lockTimeout` (120 s) are new. Raise `socketTimeout` for the upgrade if one
+      statement of a migration may run longer on a very large database.
+    - **`pg_trgm`.** Flyway `V33` creates the `pg_trgm` extension and two indexes. Where the
+      database account may not create it, the migration logs a `WARNING`, adds nothing and
+      succeeds; see [Prepare PostgreSQL](#prepare-postgresql).
+    - **Active Directory groups** are read once `ldap.groupObjectClass: group` and
+      `ldap.groupMemberAttribute: member` are set; empty, groups are read as before.
+    - **Password sign-in is throttled** (`login.*`), counted for all replicas together.
+    - **Sessions left open** (a check-in or unlock last) are checked out at the end of the
+      person's day; `endOfDay.checkOut: false` keeps them open as before.
+
+    The full list is in [Operations → Upgrading to 0.0.11](operator-guide.md#upgrading-to-0011).
+
 !!! note "Notes for upgrades"
-    - **To the release with the license in the database:** keep your values. The first start
+    - **To 0.0.2 (the license in the database):** keep your values. The first start
       imports the license claim; then see [License](#helm-license) to turn it off. Everyone signs in
       again once.
     - **With `tls.enabled`:** set `tls.truststore.secretName` (or `tls.clientAuth: none`); the chart
       does not render without it.
     - **With `metrics.enabled`** (`true` by default): the probes move to the management port, 9090,
       and the log lines become JSON unless `logFormat: text`.
-    - **To the next release:** client-certificate revocation is checked unless
+    - **To 0.0.3:** client-certificate revocation is checked unless
       `x509.revocation.mode` is set. Empty, the new default, is `ocsp-then-crl`, soft-fail; values
       that set `mode` (including `"off"`) keep it, and a release that relied on the chart's old
       default `"off"` moves to checking. If your values set `x509.revocation.fail: closed` without a
@@ -635,11 +713,16 @@ imagePullSecrets:
 
 ```yaml
 database:
+  password: "<a long random password>"
   embedded:
     enabled: true
 ```
 
-This runs PostgreSQL 16 in the release, with a generated password and a volume of its own.
+This runs PostgreSQL 16 in the release, with a volume of its own. From 0.0.11 `database.password`
+(or `database.existingSecret`) is required here too. The chart does not make one up: PostgreSQL
+keeps the password of its first start, and one generated at render time would change at every
+`helm template` or Argo CD sync. A release installed by an earlier chart, which generated the
+password, keeps it across `helm upgrade`.
 
 !!! warning "Evaluation only"
     The embedded database is one pod with no backups. Use your own PostgreSQL server for
@@ -656,7 +739,7 @@ role.
     The demo's credentials are on its login page, so anything those accounts can see is readable by
     anyone who reaches it. Keep only the mock data in it.
 
-From the next release, demo mode (`demo.enabled`) does not run the scheduled jobs that write
+From 0.0.3, demo mode (`demo.enabled`) does not run the scheduled jobs that write
 attendance data: the directory sync, auto check-out, absence alerts and scheduled reports (each logs
 once that it is skipping), and the retention purge. Webhooks have nothing to send. The jobs that
 look after the server's own state keep running: the audit trail (and its retention), the clean-up
@@ -715,6 +798,24 @@ With the release package, PostgreSQL (16) is already set up. With Helm, use your
     CREATE DATABASE readyroom OWNER readyroom;
     ```
 
+    Each replica opens up to `DB_POOL_SIZE` (Helm `database.poolSize`, default 20) connections:
+    keep the number of replicas times that under the server's `max_connections`.
+
+    From 0.0.11 a migration (`V33`) creates the `pg_trgm` extension, which ships with PostgreSQL
+    and which the database's owner may create (PostgreSQL 13 and later), for two indexes that
+    speed up finding whose delegate or which groups' alternate manager a person is. Where it
+    cannot be created (the extension is not installed, or a managed service does not allow it),
+    the migration logs a `WARNING`, adds nothing and succeeds, and those lookups read the whole
+    table as before. To add the indexes later, as an account that may create the extension:
+
+    ```sql
+    CREATE EXTENSION IF NOT EXISTS pg_trgm;
+    CREATE INDEX IF NOT EXISTS ix_user_records_alt_managers_trgm
+        ON user_records USING gin (lower(alternate_managers) gin_trgm_ops);
+    CREATE INDEX IF NOT EXISTS ix_group_records_alt_managers_trgm
+        ON group_records USING gin (lower(alternate_managers) gin_trgm_ops);
+    ```
+
 2. **Start ReadyRoom.** It creates and migrates its own schema with Flyway when it starts, before it
    serves anything. The migrations ship inside the application and run in version order, each once
    per database, recorded in `flyway_schema_history`. Hibernate only checks the result
@@ -723,7 +824,7 @@ With the release package, PostgreSQL (16) is already set up. With Helm, use your
 
     | Table | Holds |
     |---|---|
-    | `check_in_out_records` | Every check-in, lock, unlock and check-out event, with the session id (which no page or API shows, apart from the check-in's own answer) and the user's organization attributes at that moment |
+    | `check_in_out_records` | Every check-in, lock, unlock and check-out event, with the session id (which no page or API shows, apart from the check-in's own answer), the user's organization attributes at that moment and, from 0.0.11, the workstation's name when the client sends it |
     | `user_records` | One row per user DN, unique regardless of letter case: role, notes, favorite groups, delegates (and whether they await review), preferred and average login time, and directory metadata |
     | `user_event_records` | Per-day statuses (work from home, leave, late arrival, and so on) |
     | `status_requests` | Requests for statuses that need approval, with their notes and decisions |
@@ -768,6 +869,7 @@ Set the connection and describe your directory:
 | Bind account | `LDAP_USERNAME`, `LDAP_PASSWORD` | `ldap.bindDn`, `ldap.bindPassword` or `ldap.existingSecret` |
 | Users | `APPLICATION_USERBASEDN`, `APPLICATION_USERLDAPFILTER` | `ldap.userBaseDn`, `ldap.userFilter` |
 | Group trees | `APPLICATION_GROUPS_0_GROUPSBASEDN`, `_1_`, ... | `ldap.groupBaseDns` |
+| Groups' object class and member attribute (from 0.0.11) | `APPLICATION_LDAP_GROUPOBJECTCLASS` (`groupOfUniqueNames`), `APPLICATION_LDAP_GROUPMEMBERATTRIBUTE` (`uniqueMember`) | `ldap.groupObjectClass`, `ldap.groupMemberAttribute` |
 | Administrators | `APPLICATION_SUPERUSERDNS_0`, `_1`, ... | `superUserDns` |
 | Attributes | `APPLICATION_USERLDAPORGANIZATIONATTRIBUTE` (`o`), `...LOCATIONATTRIBUTE` (`l`), `...EMPLOYEETYPEATTRIBUTE` (`employeeType`), `...DUTYSUBORGANIZATIONATTRIBUTE` (`departmentNumber`), `APPLICATION_USERLDAPMANAGERIDATTRIBUTE` (`title`), `APPLICATION_MANAGERLDAPIDATTRIBUTE` (`street`) | `ldap.attributes.*` |
 | Org chart | `APPLICATION_DUTYSUBORGGROUPSBASEDN` | `orgChart.groupsBaseDn` |
@@ -789,8 +891,14 @@ Things to check in the directory:
   Helm, in `extraEnv`). ReadyRoom then searches for that attribute under the user base DN instead.
 - **Form login** finds the user under the user base DN by `uid`, `cn` or `mail` (the filter is
   `(|(uid={0})(cn={0})(mail={0}))`) and then binds with the password the user typed.
-- **Groups** are found under each group base DN as `groupOfUniqueNames` entries. Members come from
-  `uniqueMember`, and the group's directory manager comes from `owner`.
+- **Groups** are found under each group base DN as entries of the groups' object class
+  (`groupOfUniqueNames` by default). Members come from the member attribute (`uniqueMember` by
+  default), and the group's directory manager comes from `owner`. For Active Directory set the
+  object class to `group` and the member attribute to `member`; for a directory that uses
+  `groupOfNames`, `groupOfNames` and `member`. Up to 0.0.10 both were fixed, so on Active
+  Directory nobody had groups: group trees and reports were empty and group managers got no
+  absence alerts. A large Active Directory group's members are read in ranges. The manager
+  attribute is still `owner`; Active Directory's `managedBy` is not read.
 - **Reporting lines.** A user reports to the manager whose manager-id attribute (`street`) equals
   the user's own manager-id attribute (`title`).
 - **The org chart** is built from the distinct values of the duty sub-organization attribute,
@@ -887,15 +995,15 @@ For example `(userPrincipalName={upn})` for Active Directory and CAC, or
 |---|---|---|---|
 | `ENS_X509_USER_FILTER` | none: the subject DN is the directory DN | `x509.userFilter` | The LDAP filter template that finds the user |
 | `ENS_X509_ALLOWED_ISSUERS` | none: any trusted CA | `x509.allowedIssuers` | Issuer DNs whose certificates may sign in, `;` separated; others are refused even when a trusted CA chains to them |
-| `ENS_X509_REVOCATION` | `off`; from the next release unset, meaning `ocsp-then-crl`, soft-fail | `x509.revocation.mode` (`"off"`; from the next release `""`) | `off`, `ocsp`, `crl` or `ocsp-then-crl`. With certificates in use and revocation `off`, startup logs that DISA STIG requires it. See [Revocation from the next release](#revocation-from-the-next-release) |
+| `ENS_X509_REVOCATION` | unset, meaning `ocsp-then-crl`, soft-fail (`off` before 0.0.3) | `x509.revocation.mode` (`""`; `"off"` before 0.0.3) | `off`, `ocsp`, `crl` or `ocsp-then-crl`. With certificates in use and revocation `off`, startup logs that DISA STIG requires it. See [Revocation checking by default](#revocation-checking-by-default) |
 | `ENS_X509_OCSP_RESPONDER_URL` | the certificate's AIA | `x509.revocation.ocspResponderUrl` | A responder to ask instead, for example a local OCSP relay |
 | `ENS_X509_CRL_DIR` | none | `x509.revocation.crlConfigMap` | A directory of CRL files (DER or PEM), re-read when they change. With it set, distribution points are never fetched: the air-gapped option |
-| `ENS_X509_REVOCATION_FAIL` | `closed`; from the next release unset: `open` while `ENS_X509_REVOCATION` is unset, `closed` once a mode is set | `x509.revocation.fail` (`closed`; from the next release `""`) | `closed` refuses a certificate whose status can't be determined; `open` allows it with a warning |
+| `ENS_X509_REVOCATION_FAIL` | unset: `open` while `ENS_X509_REVOCATION` is unset, `closed` once a mode is set (`closed` before 0.0.3) | `x509.revocation.fail` (`""`; `closed` before 0.0.3) | `closed` refuses a certificate whose status can't be determined; `open` allows it with a warning |
 | `ENS_X509_REVOCATION_CACHE` | `10m` | `x509.revocation.cache` | How long a good or revoked answer is kept, per issuer and serial |
 
-#### Revocation from the next release
+#### Revocation checking by default
 
-From the next release, revocation is checked by default. With `ENS_X509_REVOCATION` unset (the Helm
+From 0.0.3, revocation is checked by default. With `ENS_X509_REVOCATION` unset (the Helm
 chart's `x509.revocation.mode` defaults to `""`, and the package's `env.template` leaves it commented
 out), ReadyRoom asks OCSP and then the CRL (`ocsp-then-crl`) for every certificate sign-in,
 **soft-fail**:
@@ -913,7 +1021,9 @@ that STIG requires it), and a chosen mode **fails closed** unless `ENS_X509_REVO
     Without a reachable responder or `ENS_X509_CRL_DIR`, the soft-fail default lets certificates
     sign in unchecked, with a WARN each time. Where a firewall silently drops the traffic, a
     certificate sign-in can also wait up to the 5 s connect timeout per responder and distribution
-    point before it is allowed (an unknown answer is not cached). Drop the CAs' CRLs into
+    point before it is allowed. From 0.0.11 a responder or distribution point that could not be
+    reached is not asked again for 60 seconds, so only the first sign-in in each minute waits; up
+    to 0.0.10 every sign-in did. Drop the CAs' CRLs into
     `ENS_X509_CRL_DIR` (Helm `x509.revocation.crlConfigMap`), point `ENS_X509_OCSP_RESPONDER_URL`
     at a local responder, or set `ENS_X509_REVOCATION=off` to avoid that.
 
@@ -922,7 +1032,10 @@ opened for OCSP and CRLs unless the mode is `off` (or `crl` with `crlConfigMap`)
 
 Network fetches for revocation time out after 5 s (connect) and 10 s (response), follow no
 redirects, are capped at 1 MB (OCSP) and 20 MB (CRL), and never go to a link-local or cloud metadata
-address. The JDK's PKIX validator judges every answer, configured for that one check. The issuer's
+address. From 0.0.11, a responder or distribution point that could not be reached is not asked
+again for 60 seconds: meanwhile its answer is unknown at once, and `ENS_X509_REVOCATION_FAIL`
+decides as before. A CRL that cannot be fetched again is still used until its own next update. The
+JDK's PKIX validator judges every answer, configured for that one check. The issuer's
 certificate must be known: in the chain the client sent, in `ENS_X509_TRUSTED_CA_FILE`, or in the TLS
 trust store.
 
@@ -1046,13 +1159,16 @@ The release package contains the client in `windows-client/`. Copy that folder t
 
 `BaseUrl` is ReadyRoom's HTTPS address with TLS on: port 8181 with the release package or a Helm
 `LoadBalancer` Service, or the passthrough ingress or route host (`https://readyroom.example.com/api/check`).
-Its host name must match the server certificate, and the SPN for Windows sign-in.
+Its host name must match the server certificate, and the SPN for Windows sign-in. `BaseUrl` is
+required on the first install: from 0.0.11 the client has no built-in server address, and the
+installer stops, changing nothing, when none is given or already configured.
 
 The installer:
 
 1. copies `Update-WorkStatus.ps1` to `C:\Program Files\InOutWorker`, writes
-   `inoutworker.config.json` there (only if you passed settings), and makes the folder writable by
-   SYSTEM and Administrators only;
+   `inoutworker.config.json` there (only if you passed settings; from 0.0.11 it keeps the settings
+   already in the file that you did not pass), and makes the folder writable by SYSTEM and
+   Administrators only;
 2. prepares `%ProgramData%\InOutWorker` with its `logs\` and `sessions\` folders, writable by SYSTEM
    and Administrators only, except that each user may add and rewrite their own session file;
 3. registers six hidden tasks under `\InOutWork\`: **Login**, **Lock**, **Unlock**, **Logout**,

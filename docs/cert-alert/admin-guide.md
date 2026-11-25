@@ -48,7 +48,9 @@ The full matrix of who may do what is in [Security → Permissions](security.md#
 The **Sync directory** button sits in the page header of the **People**, **Servers** and
 **Admin** pages, for administrators only. It runs both sweeps (people, then servers) and shows a
 badge per job, for example `users: 104 seen, 3 new` (red if the job had errors). Tables refresh
-automatically.
+automatically. From 0.0.4 a job's errors are the entries that could not be stored (each is named
+in the log), and a sweep the directory cut short at its size limit fails rather than showing a
+partial count; see [Troubleshooting → Syncing](troubleshooting.md#syncing).
 
 Sweeps also run nightly on a schedule. A sweep you trigger is recorded in the audit trail as
 yours. For prune, refresh, certificate clean-up and changelog polls, use the
@@ -77,11 +79,13 @@ while running and reports how long it took.
 |---|---|
 | **Revoked** | The authority lists this serial |
 | **Not revoked** | The authority was asked and does not list it |
-| **Unknown** | Asked, no usable answer (unreachable, unparseable, or nowhere to ask) |
+| **Unknown** | Asked, no usable answer (unreachable, unparseable, or nowhere to ask). From 0.0.4 also when the only CRL available is past its next update and does not list the certificate, or is not the certificate's issuer's |
 | **Not checked** | Never asked |
 
 A certificate found revoked is recorded in its entry's audit trail and its contacts are notified
-once. Configuration (`issuer-directory`, `default-crl-url`, `default-ocsp-url`, …) is described
+once. From 0.0.4 it stays **Revoked**, with its date and reason, through a later check that gets
+no answer (its detail then says *Still revoked; the last check got no answer*); earlier releases
+turned it **Unknown** and announced it again when the authority answered. Configuration (`issuer-directory`, `default-crl-url`, `default-ocsp-url`, …) is described
 in [Configuration → Revocation](configuration.md#revocation-cert-alertrevocation).
 
 ### 3. Editable directory attributes
@@ -156,7 +160,9 @@ off by default (see [Configuration → Audit trail](configuration.md#audit-trail
 
 The full `ens-audit/1` trail, with sign-ins, refusals, settings, the license and job runs as well
 as entry changes, is on the **Audit log** page, `/admin/audit`: search, export, **Verify
-integrity**, delivery status and SIEM API tokens. See [Audit logging](../audit-logging.md).
+integrity**, delivery status and SIEM API tokens. From 0.0.4 **Verify integrity** also reports
+events missing from the start or the end of the trail that retention did not remove (*Broken at
+seq N: seq N to M are missing …*). See [Audit logging](../audit-logging.md).
 
 ## Integrations: API tokens and webhooks
 
@@ -170,7 +176,9 @@ events. Administrators manage it; auditors can look.
 - **Webhooks**: add an `https://` URL, choose events (`certificate.expiring`,
   `certificate.expired`, `job.completed`, `job.failed`) and a format (CertAlert JSON, Slack or
   Microsoft Teams); the signing secret is shown once. **Send a test**, **New secret** and the
-  **Deliveries** log help set up the receiver. See [Webhooks](webhooks.md).
+  **Deliveries** log help set up the receiver. **Disable** stops a webhook and, from 0.0.4, gives
+  up on what is still queued for it; it works even when the webhook's host no longer resolves.
+  See [Webhooks](webhooks.md).
 
 Ask your operators to set `cert-alert.webhooks.secret-key` before you add the first webhook, so the
 secrets and URLs are stored encrypted.
@@ -191,10 +199,26 @@ On the **Notifications** page administrators get extra controls:
 |---|---|
 | **Email the round-up this many days before expiry** + **Save** | Sets how far ahead the daily round-up looks (1–365 days). Everyone sees the value and who set it; only administrators can change it. Overrides `cert-alert.notifications.digest.window`. |
 | **Dry run** | Builds every round-up message and sends none, writes nothing, and shows who would hear and the rendered messages (up to 25 shown; the count gives the total). Works whether or not email is enabled. A message that failed to build (for example a typo in a custom template) is shown in red at the top. If nothing would be sent, a note says why. |
-| **Run the expiry round-up** | Runs the round-up now: writes notifications and, if email is enabled, sends mail. |
+| **Run the expiry round-up** | Runs the round-up now: writes notifications and, if email is enabled, sends mail. The line beside the button gives the result (*N expiring, N told, N emailed*) and, where it applies, a note. |
 
 The lead-days setting decides the round-up only. The page and the operator alert channels still
 report a certificate crossing into `EXPIRING_SOON` (based on `warning-threshold-days`) regardless.
+
+From 0.0.4:
+
+- **One message per address.** Where several entries publish the same address (a person's second
+  account, or a person and a contact added by address), their certificates go out in one message,
+  each credential once. Each entry still has its own round-up on the page.
+- **The message cap.** A run sends at most `cert-alert.notifications.email.max-per-run` (500)
+  messages. Where that binds, the soonest expiries are mailed first and the longest-expired wait,
+  and the note says *Stopped at the 500 message cap for one run …; N message(s) were not sent this
+  run*. A dry run counts them the same way. Ask your operators to raise the cap.
+- **A lapsed half of a pair stays.** A person whose signing certificate expired and was not
+  renewed keeps being told, although their encryption certificate is current (and the other way
+  round).
+- **Escalation.** A certificate reported as a `WARNING` when it came into the warning window is
+  reported once more, as `CRITICAL`, when it comes inside `critical-threshold-days` (7 by
+  default). A certificate its entry has already renewed raises no alert when it lapses.
 
 ## Projects and project administrators
 
@@ -256,8 +280,12 @@ Two jobs change data permanently. Both are off by default and both have previews
 
 | Job | Preview | Run now | Notes |
 |---|---|---|---|
-| **Prune** (deletes cached entries unseen for `prune.after`) | `GET /api/v1/sync/prune/preview` → `{"prunable": N}` | `POST /api/v1/sync/prune` | The manual call runs regardless of `prune.enabled`. Deletes from CertAlert's cache only; audit records survive |
-| **Certificate clean-up** (deletes expired/revoked certificates **from the directory**) | `GET /api/v1/sync/certificate-cleanup/preview` | `POST /api/v1/sync/certificate-cleanup` | Does nothing unless `certificate-cleanup.enabled: true`. Capped at `max-per-run`; revoked first; one audit record per certificate removed. Needs write on the certificate attribute |
+| **Prune** (deletes cached entries unseen for `prune.after`) | `GET /api/v1/sync/prune/preview` → `{"prunable": N}` | `POST /api/v1/sync/prune` | The manual call runs regardless of `prune.enabled`. Deletes from CertAlert's cache only; audit records survive. From 0.0.4 it deletes the unseen people, or servers, only after a sweep of that kind has completed without errors since they were last seen, and only when they are at most 10% of that kind (`prune.max-share`); otherwise the run ends `COMPLETED_WITH_ERRORS` and the log says why |
+| **Certificate clean-up** (deletes expired/revoked certificates **from the directory**) | `GET /api/v1/sync/certificate-cleanup/preview` | `POST /api/v1/sync/certificate-cleanup` | Does nothing unless `certificate-cleanup.enabled: true`. Capped at `max-per-run`; revoked first; one audit record per certificate removed. Needs write on the certificate attribute. From 0.0.4 a revoked certificate becomes removable `revoked-after` (7 days) after it was first found revoked, and one that could not be removed is tried again behind the rest |
+
+From 0.0.4 the two previews, and the run log (`GET /api/v1/sync/runs`), are for administrators and
+auditors; before, any signed-in user could read them. A pruned entry takes the contacts and
+addresses added here and its project memberships with it.
 
 !!! danger
     Certificate clean-up removes values from somebody else's system of record and cannot be undone

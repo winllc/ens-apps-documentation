@@ -16,7 +16,7 @@ A signed-in user is an administrator when:
   `SSO_OIDC_ADMIN_GROUPS` or `SSO_SAML_ADMIN_GROUPS`. Such a session ends after `SSO_IDP_ADMIN_SESSION_LIFETIME`
   (default `1h`), because the provider is not asked again during it.
 
-With [several directories](configuration.md#several-directories) (next release), each directory
+With [several directories](configuration.md#several-directories) (v0.0.6), each directory
 has its own `ADMINUSERS` / `ADMINGROUPS`, matched against users and groups of that directory only; an
 administrator from any of them administers the whole portal.
 
@@ -41,7 +41,9 @@ requires the administrator role.
   you lose them or your account is disabled. Revoke tokens nobody uses; the list shows each one's last use.
 - **Webhooks** post signed events (`entry.changed`, `group.membership_changed`, `form.submitted`) to an HTTPS
   receiver, optionally for some directories only. The signing secret is shown once; **Send test event** checks
-  the receiver, and the delivery log shows what was sent. See [Webhooks](webhooks.md).
+  the receiver, and the delivery log shows what was sent. From v0.0.9 **New secret** asks before it replaces a
+  webhook's secret (the receiver rejects every delivery until it has the new one), and the dialog that shows a
+  new secret closes only with **Done**. See [Webhooks](webhooks.md).
 
 ## Getting started
 
@@ -177,7 +179,11 @@ returned with the save.
 
 A definition exposes one form within a namespace of the directory. All reads and writes through
 the definition are confined to entries **below the base DN that match the filter**. The server
-compares parsed DNs (RFC 4514), so string tricks cannot escape the namespace.
+compares parsed DNs (RFC 4514), so string tricks cannot escape the namespace. From v0.0.9 the filter
+also holds for what is written: a create or a change after which the entry would no longer match
+the filter is refused (400, *... it would not match the directory's filter*), judged by the
+attributes the write sets. So with the filter `(department=Sales)`, nobody can save an entry of this
+definition with another department.
 
 | Section | Setting | Description |
 |---|---|---|
@@ -200,7 +206,7 @@ compares parsed DNs (RFC 4514), so string tricks cannot escape the namespace.
 Deleting a definition also removes all its permission grants. The audit log records how many grants
 were removed.
 
-!!! info "Next release: several directories"
+!!! info "Several directories (v0.0.6)"
     With [more than one LDAP directory](configuration.md#several-directories), the **Namespace**
     section starts with **LDAP directory**: the directory this definition reads and writes. The
     base DN, the DN browser and **Test namespace** then work in that directory, and choosing
@@ -213,10 +219,10 @@ were removed.
     A definition of a disabled directory stays listed here but nobody can open it (403
     `feature_not_licensed`). **My profile** shows a user only definitions of their own directory.
 
-!!! warning "From the next release: attribute matching must be safe"
+!!! warning "Attribute matching must be safe (from v0.0.4)"
     Matching by an attribute (*entry attribute equals the user's attribute*) is only as strong as
     those attributes. A user who can edit `mail` in self service could set it to a colleague's and
-    match the colleague's entry. So, from the next release, **My profile** refuses a definition's
+    match the colleague's entry. So, from v0.0.4, **My profile** refuses a definition's
     attribute matching, with a message, while:
 
     - users can edit the **entry attribute** in this definition's own form (a **Self-service**
@@ -264,9 +270,10 @@ flowchart TD
   groups resolved at sign-in and read again every `GROUP_REFRESH_INTERVAL` (5 minutes by default).
   Group membership changes therefore take effect within that interval, while grant changes take
   effect immediately.
-- A grant for the same definition and subject replaces the previous access level.
+- A grant for the same definition and subject replaces the previous access level. From v0.0.9
+  **Revoke** asks for confirmation, naming the user or group and the directory.
 - Read-only definitions accept only view grants.
-- **Several directories (next release)**: a grant names the directory of its user or group. The
+- **Several directories (v0.0.6)**: a grant names the directory of its user or group. The
   **Grant access** form then has a directory list, set to the definition's directory; pick another
   to grant to users or groups of another directory (for example a partner forest), and the search
   looks there. A grant matches only users who signed in to that directory, and groups of that
@@ -274,7 +281,7 @@ flowchart TD
   before name `default`. **Every signed-in user can read** covers users of every directory.
 - **Self-service**: users can always see definitions that can locate them (self match) on
   **My profile**, and edit their own entry's **Self-service** fields there, even without a grant.
-  From the next release, attribute matching must find exactly one entry (unless it matches by the
+  From v0.0.4, attribute matching must find exactly one entry (unless it matches by the
   user's `dn`) and neither attribute may be self-editable; see
   [Directory definitions](#directory-definitions).
 
@@ -297,7 +304,8 @@ up. See [Group access → License](#group-access-license).
 
 ## Group access
 
-*Admin → Directory definitions → Group access* (v0.0.7)
+*Admin → Directory definitions → Group access* (v0.0.7; owners managing owners, expiring requests,
+open groups and time-limited membership from v0.0.11)
 
 Group access lets the people in a directory find its groups, ask to join one, and have the group's
 owners decide, without anyone holding edit access to the whole definition. It is off until you turn
@@ -309,8 +317,15 @@ it on for a definition whose entries are groups. The definition must be **Read /
 | **Member field** | *Automatic (member, uniqueMember or memberUid)* | The form's member field: the first of `member`, `uniqueMember` or `memberUid` the form has, or another multi-valued DN field you choose. The form must have one. Approving adds the requester's DN to it, or their login name for `memberUid` |
 | **Owner attribute** | `owner` | The DN-valued attribute naming who approves: people, or groups whose members all approve |
 | **Groups that take requests** | every group | An LDAP filter, for example `(!(cn=domain admins))`. Other groups can be looked up but not requested |
+| **Open groups** (v0.0.11) | none | An LDAP filter, for example `(cn=social-*)`. Among the groups that take requests, those that match are joined at once with **Join**, without a request or approval. Use it only for groups that give no access worth guarding |
+| **Requests expire after (days)** (v0.0.11) | empty: never | An open request nobody answered in this many days is closed as *expired*, and the requester can ask again. 1 to 365 |
+| **Longest membership (days)** (v0.0.11) | empty: no limit | Every membership the portal grants here (an approved request, a join, a member an owner adds) gets an end date no later than this many days ahead, and the portal removes the member when it has passed. Empty: an end date is optional. 1 to 3650 |
 | **Require a reason** | off | A request must say why |
 | **Members may leave on their own** | off | Members can remove themselves; otherwise they ask the owners |
+| **Owners may add and remove owners** (v0.0.11) | off | A group's owners change its owners on the group's page, without write access to the definition. The owner attribute must then be a multi-valued field of the form; otherwise the definition is not saved (*Owners can only change owners the form holds*) |
+
+Definitions saved before v0.0.11 keep working as they did: the four new settings are off or empty
+until you set them.
 
 How it works:
 
@@ -321,17 +336,81 @@ How it works:
 - **Who decides.** A group's owners, and anyone who may edit the definition (administrators
   included). Nobody decides their own request. *To review* lists what each person can decide, and
   the menu shows how many are waiting. Rejecting leaves the group as it is; the requester sees the
-  decision and the owner's note either way.
+  decision and the owner's note either way. A group without owners is decided by those who may
+  edit the definition.
+- **Several requests at once** (v0.0.11). In *To review*, and under **Requests to join** on a
+  group's page, requests can be ticked (or **Select all shown**) and decided together with
+  **Approve selected** or **Reject selected** and one note, at most 50 at once. Each request is
+  still decided on its own, with its own audit event: the answer lists those that could not be
+  decided and why (for example one that somebody else answered meanwhile).
 - **Owners manage members** on the group's page: find people by name, login or e-mail to add them,
   and remove members. This is the only write group access allows; owners can't edit the group's
-  other attributes unless they hold **Can view and edit** on the definition.
+  other attributes unless they hold **Can view and edit** on the definition. From v0.0.11:
+    - **Add from a list** takes pasted logins, e-mail addresses or DNs, one per line (at most 200).
+      A line must name exactly one person of the directory, by login name, e-mail address or DN.
+      The owner sees who was found (and who is **Already a member**), which lines nobody matches
+      and which several people match, and then adds the people found in one step, with an end date
+      if they want. Nothing is added before that.
+    - **Export CSV** downloads the group's members: name, login, e-mail, DN and end date. Like the
+      directory's member export it needs the `directory-editor` license feature (the button is
+      hidden without it), guards cells against spreadsheet formulas, holds at most
+      `EXPORT_MAX_ENTRIES` members (10,000), is recorded as `data.exported` and also works while
+      the license is read-only.
+    - The member list of a group the directory returns in parts (Active Directory, over 1,500
+      members) shows every member (v0.0.9).
+- **Open groups** (v0.0.11). A group that takes requests and matches the **Open groups** filter
+  shows **Open to join**, and **Join** adds the user at once. The change is recorded like any
+  other (`details.via` `group-join`). A request for an open group is refused; one the user made
+  before the group became open is withdrawn when they join.
+- **Requests expire** (v0.0.11), where **Requests expire after (days)** is set. A job checks every
+  15 minutes and closes requests that waited that long. *My requests* then says *Nobody answered
+  within N days. You can ask again.* Closing is recorded as `group.access-expired`, by the system.
+- **Time-limited membership** (v0.0.11).
+    - A request can ask for access until a date (**Access until**). The approver may shorten it,
+      not extend it. Owners can give the members they add an end date (**End date for people you
+      add**), and set, change or remove one later with **End date** in the member list.
+    - Dates are whole days in UTC. The member belongs to the group through that day; an hourly job
+      removes them once it has passed, so within the hour after. The member list, the group's page
+      and *My groups* show the date.
+    - With **Longest membership (days)** set, every membership the portal grants ends within it:
+      a request, an added member or a join without a date gets the longest, and an end date can be
+      moved but not removed. Lowering the setting does not shorten memberships already granted.
+    - The portal knows only the end dates it granted. Members added elsewhere (the entry form, an
+      import, a bulk change, the integration API, the directory itself) have none. A record whose
+      member is no longer in the group is dropped, and adding the person again without a date
+      clears it.
+    - A member the directory won't let go (for example the last member of a group whose form
+      requires one) stays: `group.membership-expired` is recorded as failed, and the portal tries
+      again a day later.
+- **Owners manage owners** (v0.0.11), where **Owners may add and remove owners** is on. On the
+  group's page, under **Owners**, those who manage the group add people as owners (**Make owner**)
+  and remove any owner, a person or a group. Only people of the directory can be added there; to
+  make a group an owner, edit the group's entry. The last owner can't be removed. With the setting
+  off, owners change only through the entry form, by those who may edit the definition.
+- **Past requests** (v0.0.11). On the group's page, those who manage it see its closed requests,
+  newest first, 20 a page: who asked and why, who approved or rejected it (or that it was withdrawn
+  or expired), when, and the note. As long as the portal keeps them (a year).
 - **Audit and webhooks.** Requests and decisions are audited (see [Audit log](#audit-log)). A
   membership change is the usual `entry.update` event, and its `details.via` says why someone
-  without write access could make it: `group-access-request`, `group-owner` or `group-leave`. It also
-  sends the `group.membership_changed` [webhook](webhooks.md).
+  without write access could make it: `group-access-request`, `group-owner`, `group-leave` or,
+  from v0.0.11, `group-join` (an open group). It also sends the `group.membership_changed`
+  [webhook](webhooks.md). From v0.0.11 a change of owners by an owner is an `entry.update` with
+  `details.via` `group-owners`; an end date set, changed or removed is
+  `group.membership-end-date`; and a member removed after their end date is an `entry.update` by
+  the system with `details.via` `group-membership-expired`, the webhook, and a
+  `group.membership-expired` event.
 - **Storage.** Requests are kept in `group-access-requests.json` in the data directory, or in the
   shared database when one is configured. Closed requests are kept for a year (at most 5,000); the
-  audit trail keeps them for good.
+  audit trail keeps them for good. End dates are kept in `group-membership-expiries.json`, or in
+  the shared database's table `dsp_group_membership_expiry` (the file is imported once).
+
+!!! warning "Expiry pauses unless the license is in full effect"
+    The two jobs that close expired requests and remove members after their end date run only
+    while the license is valid (or in its grace period) and includes `directory-editor` or
+    `self-service-profile`. While the portal is read-only or unlicensed, **members stay in their
+    groups past their end date**; the first run after the license is back removes them. With
+    several API instances, one instance runs each job, and each request or membership is closed
+    once. See [Operator guide → Scheduled jobs](operator-guide.md#scheduled-jobs).
 
 ### License { #group-access-license }
 
@@ -339,7 +418,7 @@ How it works:
 |---|---|
 | `directory-editor` and `self-service-profile` | Available |
 | `directory-editor` only | Available |
-| `self-service-profile` only | Available: users look groups up, ask to join and leave, and owners decide and manage members, although the **Directories** menu is hidden. Administrators and editors still approve |
+| `self-service-profile` only | Available: users look groups up, ask to join and leave, and owners decide and manage members, although the **Directories** menu is hidden. Administrators and editors still approve. **Export CSV** on a group's page is not offered: it needs `directory-editor` |
 | Neither | Off: `/api/groups/**` answers 403 `feature_not_licensed`, and **Group access** is not in the menu |
 | Several directories without `multi-directory` | Only the first directory's group directories take part; users of other directories see none |
 
@@ -347,8 +426,9 @@ So a license sold for self service alone (*My profile*) also covers group reques
 approval. Grants and `white-pages` don't change who may look groups up or ask to join.
 
 !!! example "Demo"
-    The demo turns group access on for **Groups**. Carol Chen co-owns *engineering*, and
-    *directory-admins* doesn't take requests.
+    The demo turns group access on for **Groups**. Carol Chen co-owns *engineering* (and, from
+    v0.0.11, may change its owners), *directory-admins* doesn't take requests, *social-club* is
+    open to join, and requests expire after 30 days.
 
 ## Metrics dashboards
 
@@ -386,6 +466,11 @@ Chart settings:
     charted or filtered on. User-supplied regular expressions run with a time budget.
 
 Creating, changing and deleting dashboards is recorded in the audit log.
+
+From v0.0.11 a dashboard's results stay as they are, for each viewer, until that viewer clicks
+**Refresh** (or reloads the page in the browser): opening the dashboard again shows them with the time they were computed and does not
+compute them again. Saving a dashboard recomputes that dashboard for you; other pages keep what they
+show. See [User guide → Metrics](user-guide.md#metrics).
 
 ## Data analysis
 
@@ -457,14 +542,15 @@ application. The format, the outputs to Splunk and syslog, and integrity checkin
 
 | Recorded | Activity names | Includes |
 |---|---|---|
-| Entries created, updated, renamed, deleted (through a directory or **My profile**) | `entry.create`, `entry.update`, `entry.self_update`, `entry.delete` | Each changed attribute's values before and after. A delete keeps everything the entry held; a rename records `previousDn` |
-| Sign-ins and sign-outs (password or certificate) | `auth.login`, `auth.logout`, `auth.lockout` | For failures: the name tried, or the certificate subject, serial and issuer, and the reason. A certificate header that did not come from the portal's proxy is recorded with `reasonCode` `untrusted_certificate_header` and the connecting `peerAddress`. A revoked certificate, or one whose status is unknown, is recorded with `certificate_revoked` or `revocation_unknown`. A sign-in before the consent banner was acknowledged is recorded with `consent_required` |
-| Sessions ending | `auth.session-expired` | The reason: `idle`, `absolute`, `concurrent` or `account-removed` |
+| Entries created, updated, renamed, deleted (through a directory or **My profile**) | `entry.create`, `entry.update`, `entry.self_update`, `entry.delete` | Each changed attribute's values before and after. A delete keeps everything the entry held; a rename records `previousDn`. From v0.0.9 an update whose rename the directory refused after its other changes were made is recorded as what was done (a success), with `partial` saying that it was not renamed |
+| Sign-ins and sign-outs (password or certificate) | `auth.login`, `auth.logout`, `auth.lockout` | For failures: the name tried, or the certificate subject, serial and issuer, and the reason. From v0.0.9 a wrong or revoked token presented to the audit pull API (`/api/audit/events`) is recorded as a failed `auth.login` with `method` `api-token` and the source address, never the token; repeats from one address within a minute are folded into one more event with a count. A certificate header that did not come from the portal's proxy is recorded with `reasonCode` `untrusted_certificate_header` and the connecting `peerAddress`. A revoked certificate, or one whose status is unknown, is recorded with `certificate_revoked` or `revocation_unknown`. A sign-in before the consent banner was acknowledged is recorded with `consent_required` |
+| Sessions ending | `auth.session-expired` | The reason: `idle`, `absolute`, `concurrent`, `account-removed` or, from v0.0.9, `account-disabled` (the directory marks the account disabled or locked) |
 | The consent banner | `auth.consent-acknowledged` | The client address |
 | Password changes | `auth.password-changed`, `auth.password-reset` | A password attribute changed by the user themselves (`changed`), or by someone else through a directory (`reset`). The value is never recorded |
-| Refused requests | `access.denied` | Method, path and reason (role, license, feature, CSRF header, the portal's own permission checks). Identical denials within 60 seconds are folded into one event with a count |
+| Refused requests | `access.denied` | Method, path and reason (role, license, feature, CSRF header, the portal's own permission checks). Identical denials within 60 seconds are folded into one event with a count. From v0.0.9, when a client is refused on very many different paths at once, further denials are folded per person and reason whatever the path (`anyPath`) |
 | Configuration changes | `grant.save`, `grant.revoke`, `definition.*`, `form.*`, `schema.import`, `schema.attribute_type.save/delete`, `schema.object_class.save/delete`, `dashboard.*`, `analysis.*` | The settings that changed, before and after |
-| Group access requests (v0.0.7) | `group.access-requested`, `group.access-cancelled`, `group.access-approved`, `group.access-rejected` | The group; for a decision also the request, the requester and the owner's note. The membership change itself is an `entry.update` with `details.via` |
+| Group access requests (v0.0.7) | `group.access-requested`, `group.access-cancelled`, `group.access-approved`, `group.access-rejected` and, from v0.0.11, `group.access-expired` (by the system) | The group; for a decision also the request, the requester and the owner's note. From v0.0.11 also `until`: the end date asked for, or the one an approval granted; and for an expired request `afterDays`. The membership change itself is an `entry.update` with `details.via` |
+| Group membership end dates (v0.0.11) | `group.membership-end-date`, `group.membership-expired` (by the system) | `group.membership-end-date`: the group and the member with the date before and after, or, for members added with an end date, the members, their number and the date. `group.membership-expired`: the group, the member and the date; **Failed** when the directory refused to remove the member. The removal itself is an `entry.update` by the system with `details.via` `group-membership-expired` |
 | The license | `license.installed`, `license.rejected`, `license.mode-changed` | The reason for a rejection; the old and new mode |
 | Exports | `analysis.export`, `data.exported`, `audit.exported` | Which analysis, run or filter |
 | The audit trail itself and the system | `audit.*`, `system.started`, `system.stopped`, `job.*` | See [Audit logging](../audit-logging.md#what-is-recorded) |
@@ -481,7 +567,15 @@ search reads at most `ENS_AUDIT_QUERY_MAX_SCAN` events (2,000,000 by default) an
 stopped there. From the page you can also:
 
 - **Export** the current filter (up to 100,000 events) as CSV or NDJSON;
-- **Verify integrity** of the hash chain;
+- **Verify integrity** of the hash chain. After retention has deleted old events, the oldest
+  retained event must be the one right after the last event retention deleted, and chained to
+  it (v0.0.9): events removed from the start of the store by any other means are reported as
+  missing. Retention records how far it deleted next to the events (the file `audit-pruned`, or
+  a row in the shared database), so this shows a deletion that left that record alone; someone
+  able to rewrite both the events and the record is caught only by the copies your SIEM holds.
+  The portal keeps no separate record of its newest event, so events removed from the end of
+  the store are not reported either (see
+  [what Verify integrity checks](../audit-logging.md#what-verify-integrity-checks));
 - see each output's **Delivery** status;
 - create and revoke **API tokens** for a SIEM to pull events.
 
@@ -489,7 +583,15 @@ The page works whatever the license says. How long events are kept is an operato
 `ENS_AUDIT_RETENTION_DAYS` (default: keep everything); see the
 [Operator guide](operator-guide.md#data-and-backups).
 
-## LDAP directories (next release)
+!!! note "Syslog over `tcp` and `tls` is best effort"
+    These protocols have no delivery acknowledgement. From v0.0.9 the forwarder checks before each
+    batch that the collector has not closed the connection, opens a new one after 30 seconds
+    unused, and sends the batch last written on a connection that turned out broken again, so a
+    collector restart can repeat up to one batch (the same event `id`s). A batch the collector
+    does not take within 10 seconds fails and is retried. Where no event may be missing, use Splunk
+    HEC or the pull API.
+
+## LDAP directories (v0.0.6)
 
 *Admin → LDAP directories*
 

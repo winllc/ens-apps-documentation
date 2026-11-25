@@ -8,7 +8,9 @@ review before publication.
 
 Every build runs axe-core against the web client (the `accessibility` CI job: 23 pages and 3
 dialogs, in the light and dark colour schemes, plus keyboard checks). A serious or critical
-violation fails the build.
+violation fails the build. From v0.0.11 the checks also cover the page of an open group and the
+group access dialogs: a member's end date, adding people from a pasted list, asking for access, and
+deciding several requests at once.
 
 ## What changed for accessibility
 

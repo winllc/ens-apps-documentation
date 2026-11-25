@@ -17,9 +17,10 @@ Backups themselves are in the [Operator Guide](operator-guide.md#database-backup
 |---|---|---|
 | Calls to Authentication Manager | Almost every page an operator or user opens calls AM through the Connector. Their latency is usually AM's, not the Portal's | `ens_rsa_am_call_seconds`; `connector.read-timeout-millis` (120 s) |
 | Concurrent operators and self-service users | Each request holds a Portal thread and, while it waits for AM, a Connector thread | Connector Tomcat `maxThreads` 150 on 8443 (fixed in its `server.xml`) |
-| The nightly jobs | Between 00:30 and 00:35 the jobs search AM for expiring and unused tokens and send email: the busiest minutes for AM and the SMTP relay | `cron.<job>.cron`, `cron.timezone` |
-| Email | Sent asynchronously on a pool of 50 to 500 threads | The relay's own limits |
-| Database growth | Small tables, except `AuditEvent`, which grows with every sign-in and change until `ENS_AUDIT_RETENTION_DAYS` removes old events | `ENS_AUDIT_RETENTION_DAYS` |
+| The nightly jobs | Between 00:30 and 00:45 the jobs search AM for expiring and unused tokens, send email and delete records past their retention: the busiest minutes for AM and the SMTP relay. From 0.0.3 the registration reminders ask AM about 100 users per Connector call, and only about enrollments whose reminder is due | `cron.<job>.cron`, `cron.timezone` |
+| Email | Pages send asynchronously on a pool of 50 to 500 threads. From 0.0.3 the scheduled jobs send one message at a time on the job's thread, each bounded by the SMTP timeouts (10 s to connect, 30 s to read or write), so a slow relay makes the jobs longer | The relay's own limits; `spring.mail.properties.mail.smtp.*` |
+| Database growth | Small tables, except `AuditEvent`, which grows with every sign-in and change until `ENS_AUDIT_RETENTION_DAYS` removes old events. With webhooks, `WebhookDelivery` gets one row per event and webhook; from 0.0.3 it is purged after 90 days | `ENS_AUDIT_RETENTION_DAYS`, `ENS_RETENTION_<TABLE>_DAYS` ([Data retention](configuration.md#data-retention)) |
+| Site reports | From 0.0.3 one Connector call per report, which counts the tokens in the site's serial ranges in the Connector (two AM searches per range) and returns two numbers; before, every token in the ranges was sent to the Portal | The number and size of a site's serial ranges |
 | AM searches | Free-text user searches return at most 25 results per identity source | `search.useridonly` |
 | Failed anonymous steps | Each answers no sooner than the uniform response time (1 s), and holds its request thread that long. Each limited attempt also reads and writes a row in the rate-limit tables | `rsa.rate-limit.uniform-response-time`, `rsa.rate-limit.*` |
 
@@ -55,10 +56,11 @@ suite-wide picture, see [Sizing, availability and recovery](../availability-and-
 |---|---|
 | Sessions | `SPRING_SESSION*` (Spring Session JDBC). `ENS_SESSION_STORE=memory` keeps them in each Portal's memory |
 | Rate limits and backoff | `RateLimitWindow`, `RateLimitBackoff` |
-| Scheduled jobs, including data retention and audit pruning | Each run takes a lock row (`CronLock`) first, so a job runs on one replica at a time. The help-desk request expiry and the purges of expired rows are safe to run on every replica |
-| License, installation id, license history | `ens_license_*` |
+| Scheduled jobs, including data retention and audit pruning | Each run takes a lock row (`CronLock`) first, so a job runs on one replica at a time. The help-desk request expiry and the purges of expired rows are safe to run on every replica. From 0.0.3 the notices the jobs sent are recorded in `SentNotice`, so a run on another replica, or a second run the same day, sends nothing twice |
+| Appointment times and shipments (from 0.0.3) | A booking locks the agent's row and reads the day's appointments with a locking read, and a shipment request locks its site, so two requests on different replicas cannot both take one time or open two shipments for one site. A shipment carries a `version`: the second of two simultaneous changes is refused (HTTP 409) |
+| License, installation id, license history, the latest time seen (from 0.0.3) | `ens_license_*` |
 | SAML requests in progress | `SsoSamlRequest`; OpenID Connect sign-ins in progress are in the session |
-| SAML logout requests in progress (next release) | `SsoSamlLogoutRequest` (Flyway `V9`), so the asserting party's LogoutResponse may reach any replica |
+| SAML logout requests in progress (from 0.0.2) | `SsoSamlLogoutRequest` (Flyway `V9`), so the asserting party's LogoutResponse may reach any replica |
 
 **Two things stay on one machine:**
 
@@ -158,6 +160,11 @@ A rollback always needs the database backup taken before the upgrade: `upgrade.s
 `backups/RSAAPP-before-<version>-<time>.sql.gz` in the install folder; with Helm, take it
 yourself. The new release migrates the schema on its first start (Flyway), and an older release
 is not built to run on a newer schema.
+
+**From 0.0.3 back to 0.0.2.** The first start of 0.0.3 ran Flyway `V10` to `V18` (new columns on
+`Shipment`, `AuditChainHead` and `ens_license_installation`, the table `SentNotice`, new indexes and
+the binary collation of the link codes). Restore the pre-upgrade dump, and put back **both** images:
+a Portal and a Connector of different releases do not work together.
 
 **From MySQL 8.4 back to a release with MySQL 8.0.** MySQL upgrades its data files in place, and
 8.0 can't start on data 8.4 has upgraded. Going back means a new, empty MySQL 8.0 data volume and

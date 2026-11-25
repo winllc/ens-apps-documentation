@@ -26,7 +26,7 @@ manager approves), so their managers know where they are when they are not at a 
 |---|---|
 | **Automatic check-in** | A PowerShell agent run by Windows Task Scheduler posts `login`, `lock`, `unlock` and `logout` events. An unlock is stored as a check-in when the person has no check-in yet that day. |
 | **Status per person** | Each person's status for the day is `IN`, `AWAY` (screen locked), `OUT` (checked out) or `NONE`. A calendar status such as *Work From Home* or *Temporary Duty* takes its place when one is set, shown by its name. |
-| **Auto check-out** | A background job checks out anyone who has been locked for longer than `check-out-after-minutes`, after midnight for a lock left in the evening. The record is flagged as forced. |
+| **Auto check-out** | A background job checks out anyone who has been locked for longer than `check-out-after-minutes`, after midnight for a lock left in the evening, and closes a session left open (no lock or logoff) at the end of the person's day. The record is flagged as forced. |
 | **Absence alerts** | If someone is not checked in by their expected time plus a grace period on a working day, their directory manager, their delegates and the managers of their groups get an in-app notification and an email. Their directory manager or a delegate records what happened. |
 | **Statuses and approvals** | People set a late arrival or early leave themselves; statuses that excuse an absence (leave, telework, temporary duty, training) are requested and approved by their manager or a delegate on the **Approvals** page. Delegates are set by administrators. |
 | **Reports and exports** | Group reports as PDF, CSV or Excel, people lists, and scheduled e-mailed reports, with each person's times in their own or their site's time zone. See [Reports, exports and time zones](exports.md). |
@@ -34,7 +34,7 @@ manager approves), so their managers know where they are when they are not at a 
 | **Single sign-on** | OpenID Connect and SAML 2.0, beside client certificates and the directory password. See [Single sign-on](single-sign-on.md). |
 | **Privacy and retention** | What coworkers see of each other is configurable. Old check-ins and statuses can be summarised by month and deleted after a set number of days. Everyone can download their own data; administrators export or erase a person's data. |
 | **Home dashboard** | Each user sees their own status, the last 30 days, whether their workstation agent is reporting, and anything scheduled in the next two weeks. Users with direct reports also see their team. |
-| **Groups** | Browse the directory group trees (`groupOfUniqueNames`), see each member's status, favorite groups, assign extra group managers (administrators), and generate a group report as a PDF. |
+| **Groups** | Browse the directory group trees (`groupOfUniqueNames` by default; Active Directory's `group` by setting), see each member's status, favorite groups, assign extra group managers (administrators), and generate a group report as a PDF. |
 | **Org chart** | Builds a hierarchy from one flat directory attribute (for example `RYS34B` becomes `RYS` → `34` → `B`) and shows how many people are present in each organization. Parse rules can override how values are split. |
 | **My Reports** | One table of everyone who reports to you in the directory, with 30-day attendance, average arrival and absence-alert history. |
 | **Metrics** | Organization-wide accounted-for rate, status mix, workstation agent coverage, activity through the day, and status breakdowns by organization, employee type, location and branch. |
@@ -120,13 +120,16 @@ unloaded. So `/api/check/out` is the one unauthenticated check-in endpoint. The 
 `sessionId` once, and only within 7 days of the check-in. Refused logouts are rate-limited per client
 address; a logout with a usable `sessionId` never is.
 
+Each event also carries the workstation's computer name, so someone signed in on two PCs is read
+correctly: a lock on one is not hidden by an event on the other.
+
 ## Components
 
 | Component | Where it ships | Description |
 |---|---|---|
 | Server | Container image `ghcr.io/winllc/in-n-out-work` (in the release package's `images/`, and run by the Helm chart) | Spring Boot 4 application: web UI, REST API, scheduled jobs, LDAP and database access. |
 | Web UI | Inside the server | Thymeleaf pages using the Tabler UI kit, Tabulator tables, FullCalendar, ApexCharts and flatpickr. |
-| Windows client | The release package's `windows-client/` folder | `Update-WorkStatus.ps1`, the `Install-InOutWorker.ps1` installer, a sample configuration file and five Task Scheduler XML definitions. See [Windows client](windows-client.md). |
+| Windows client | The release package's `windows-client/` folder | `Update-WorkStatus.ps1`, the `Install-InOutWorker.ps1` installer, a sample configuration file and six Task Scheduler XML definitions. See [Windows client](windows-client.md). |
 | Database migrations | Inside the server | Flyway migrations, applied at startup. There is no `migrations/` folder and no migration Job. |
 | Backup scripts | The release package's `backup.sh` and `restore.sh`; the Helm chart's optional backup CronJob | The database and, in the release package, the license volume. See [Operations](operator-guide.md#backups). |
 
@@ -140,7 +143,7 @@ address; a logout with a usable `sessionId` never is.
 | Views | Thymeleaf with the layout dialect and Spring Security extras |
 | Database | PostgreSQL (16 in the release package and the chart's embedded database). Flyway owns the schema; Hibernate only validates it (`ddl-auto: validate`) |
 | Observability | Micrometer with Prometheus, on a separate management port; ECS JSON logs |
-| Directory | Any LDAP v3 server. People are `inetOrgPerson` by default; groups are `groupOfUniqueNames`. |
+| Directory | Any LDAP v3 server. People are `inetOrgPerson` by default; groups are `groupOfUniqueNames` by default (their object class and member attribute are settings, for Active Directory's `group` and `member`). |
 | Caching | Caffeine |
 | Delivery | Signed release package (Docker Compose or Podman) and Helm chart |
 | Container | Red Hat UBI 9 `openjdk-21-runtime` with `krb5-workstation` |

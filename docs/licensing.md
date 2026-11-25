@@ -44,12 +44,45 @@ The license takes effect immediately; no restart is needed.
 While an application is unlicensed, administrators are taken to the license screen as soon as they
 sign in. Everyone else sees a page asking them to contact their administrator.
 
+### When an upload is refused
+
+A refused file is never installed: the license that was installed stays in force, the screen gives
+the reason, and the attempt is recorded in the audit trail as `license.rejected`.
+
+| The file is | What the screen says |
+|---|---|
+| Not a genuine ENS license (damaged, edited, or signed by a key the application does not trust) | That it isn't a valid ENS license, and why |
+| For another product | "This is a license for …, not …." |
+| Bound to another installation | "This license is bound to installation …; this one is …." |
+| An older revision of a license this installation has already accepted | "A newer revision (…) of this license has been installed here; install that one." |
+| Not yet valid, while the installed license is in full effect | "This license starts on *date*; the license installed now is still in force. Upload this one on or after that day." |
+| Expired past its grace period, while the installed license is in full effect | "This license expired on *date*; the license installed now is still in force." |
+
+The last two rows are new in CertAlert 0.0.4, the Directory Services Portal 0.0.9, ReadyRoom 0.0.11
+and the RSA Operations Portal 0.0.3. (CertAlert 0.0.4 has no download; its first release package
+with these changes is 0.0.5: see
+[Releases and downloads](releases.md#versions-without-a-download).) Earlier releases installed such a file over a working license:
+next term's license uploaded before its start date left the application unlicensed until that date,
+and an old expired file made it read-only. **Upload next term's license on or after its start
+date.** The Directory Services Portal's upload API answers such a file with
+`"state": "NOT_IN_EFFECT"`.
+
+"In full effect" means valid, or expired but still within its grace period. When no license is in
+full effect (none installed, read-only or unlicensed), a file that is not yet valid or already
+expired is installed as before, and the application is then in that file's state.
+
+ReadyRoom, the Directory Services Portal and, from 0.0.3, the RSA Operations Portal also refuse an
+upload while the audit trail cannot be written ("The license was not installed: the audit log
+cannot be written." in the RSA Operations Portal), so that no license change goes unrecorded.
+Upload again once the audit trail can be written.
+
 ### Hiding the license screen's menu entry
 
-From the next release, `ENS_LICENSE_MENU_VISIBLE=false` (Helm: `license.menuVisible: false`) takes
-the license screen out of the navigation, for installations where operators should not be pointed at
-it. The default is `true`, so nothing changes unless you set it. A value that is not a boolean stops
-the application at startup.
+`ENS_LICENSE_MENU_VISIBLE=false` (Helm: `license.menuVisible: false`) takes the license screen out
+of the navigation, for installations where operators should not be pointed at it (CertAlert 0.0.3,
+the Directory Services Portal 0.0.4, ReadyRoom 0.0.3 and the RSA Operations Portal 0.0.2, and
+later). The default is `true`, so nothing changes unless you set it. A value that is not a boolean
+stops the application at startup.
 
 | Application | What `false` hides |
 |---|---|
@@ -84,6 +117,15 @@ Where that directory is kept depends on how you installed:
 **Keep that volume.** The installation id lives there: if it is lost, the installation gets a new id
 and any license bound to the old one must be re-bound on the portal. `helm upgrade` keeps the PVC;
 `helm uninstall` deletes a PVC the chart created.
+
+Next to the license, the directory holds three small files: `installation-id`,
+`revisions.properties` (the highest revision accepted of each license) and, from the releases named
+under [The clock](#the-clock), `latest-time-seen`. CertAlert, ReadyRoom and the RSA Operations
+Portal keep all of this in their database instead (tables `ens_license_installation`,
+`ens_license_file` and `ens_license_revision`), and so does the Directory Services Portal when it
+has a shared database: the directory is then read once, on the first start, to import what an
+earlier release kept there. See
+[Sizing, availability and recovery](availability-and-sizing.md#backups-and-disaster-recovery).
 
 You can also skip the upload screen and give the license to the installer:
 
@@ -126,8 +168,29 @@ When the application starts, it installs that license into `ENS_LICENSE_FILE`, b
 
 Anything else is left alone, so a different license uploaded on the license screen is never replaced by
 the variable. A license for another product or another installation, or text that isn't a valid license,
-is refused, and the installed license is untouched. The application logs one line saying what it did with
-`ENS_LICENSE`. That line is the place to look if a license from the variable didn't take effect.
+is refused, and the installed license is untouched. So is a newer revision that is not yet valid, or
+expired past its grace period, while the installed license is in full effect (see
+[When an upload is refused](#when-an-upload-is-refused)). The application logs one line saying what
+it did with `ENS_LICENSE`. That line is the place to look if a license from the variable didn't take
+effect:
+
+| Log line | Meaning |
+|---|---|
+| `ENS_LICENSE (<id> revision <n>) was installed to …` | Installed |
+| `ENS_LICENSE (<id> revision <n>) is already installed, or an older revision of the installed license.` | Nothing to do |
+| `ENS_LICENSE (<id>) was not installed: license <other id> is already installed. …` | A different license is installed and usable. Upload the new one on the license screen to change licenses |
+| `ENS_LICENSE (<id>) was refused: …` (warning) | Another product or installation, an older revision, or not yet in effect, with the reason |
+| `ENS_LICENSE was not installed: …` (warning) | The variable does not hold a valid license |
+| `ENS_LICENSE could not be written to …: …. It is tried again in 30 seconds.` (warning) | The license store could not be read or written, for example because the database was still starting |
+
+The variable is looked at once per start, with one exception. From CertAlert 0.0.4, the Directory
+Services Portal 0.0.9, ReadyRoom 0.0.11 and the RSA Operations Portal 0.0.3, a start at which the
+license store could not be read or written is not the end of it: the application tries the
+variable again at a license check at least 30 seconds later, and keeps trying until the store
+answers. Earlier releases ignored the variable until the next restart, so a pod that started before
+its database could stay unlicensed with its license in the environment. Every other outcome in
+the table is final until the application restarts: a license refused because it has not started yet
+is installed by a restart on or after its start date.
 
 === "Release package"
 
@@ -183,6 +246,42 @@ ReadyRoom so do a person's data export and erasure (erasure also while read-only
 to 10% over, the application warns. Further over, it stops taking on more, though it never removes
 anything. CertAlert enforces this as it sweeps the directory, and ReadyRoom as new people are tracked.
 The RSA Operations Portal and Directory Services Portal show usage only.
+
+### The clock
+
+Start dates, expiry and grace are checked against the server's clock. From CertAlert 0.0.4, the
+Directory Services Portal 0.0.9, ReadyRoom 0.0.11 and the RSA Operations Portal 0.0.3, each
+installation also records the latest time it has seen, so that setting the clock back does not
+bring an expired license back:
+
+- The application writes the clock's time to its license state at the first license check after a
+  start and then at most once an hour. The recorded time only ever moves forward.
+- While the clock is no more than **one day** behind the recorded time, the clock is used. NTP
+  steps and corrections of minutes or hours change nothing.
+- When the clock is more than a day behind it, licenses are checked as of the recorded time less
+  one day. The license screen's message then ends with "(This server's clock is behind a time this
+  installation has already seen, so the license is checked as of *date*.)", and the log has a
+  warning: `The clock reads …, before …, the latest time this installation has seen: licenses are
+  checked as of ….`
+
+**Upgrading.** Nothing to set. The database column is added by the application's own migration at
+the first start of the new release, and an installation coming from an earlier release has no
+recorded time until that start records one. Check that the host's clock is right before that first
+start. An earlier release ignores the file and the column, so going back to one changes nothing.
+
+!!! warning "A clock that was once far in the future"
+    If a host's clock ran ahead by more than a day while the application was running (a wrong date
+    set by hand, a hypervisor or hardware clock fault before NTP corrected it), that future time
+    may have been recorded. After the clock is corrected, licenses keep being checked as of that
+    time less one day until the real date catches up with it. A subscription or evaluation whose
+    expiry falls before that date shows as expired, with the renewal warning, or as read-only once
+    its grace period is also before it, although it is valid by the calendar. A perpetual license
+    is not affected, because it has no expiry date.
+
+    The application has no screen or setting that lowers the recorded time. Correct the clock on
+    every host that runs the application, then send ENS Solutions the license screen's message and
+    the log warning: support will tell you how to clear the recorded time for your installation.
+
 
 ## Features
 
@@ -259,6 +358,11 @@ certification.
 
   Until the old key is removed from the applications, keep it trusted on the portal with
   `LICENSE_TRUSTED_KEYS` (Ed25519 or ECDSA P-256).
+- **Renewals with a later start date.** An application refuses a license that has not started
+  yet while its installed license is in full effect (see
+  [When an upload is refused](#when-an-upload-is-refused)), from the releases named there. When a
+  renewal's start date is in the future, tell the customer to upload it on or after that date; the
+  current license, with its grace period, covers the days until they do.
 - **Inspecting and checking files.** `npm run license -- inspect file.lic` decodes a license and
   shows each signature's key id, and `npm run license -- verify file.lic <public-key>...` checks
   every signature made by a key given. Add `--alg p256` to check it the way a Java runtime in FIPS

@@ -13,10 +13,18 @@ An administrator enters an `https://` URL, picks the events and a format, and is
 endpoint's **signing secret** (`whsec_…`) once. **New secret** replaces it (the new one is shown
 once); **Send a test** posts a `webhook.test` event. The page shows each endpoint's delivery log.
 
+**Disable** stops a webhook without deleting it or its delivery log; **Enable** starts it again.
+From 0.0.4, disabling also gives up on what is still queued for it (the delivery log shows *The
+webhook is disabled*); earlier releases kept posting queued deliveries for up to a day. **Send a
+test** still reaches a disabled webhook. Disabling or renaming a webhook does not look its host up
+again, so a webhook whose host name no longer resolves, or that a tightened `allowed-hosts` no
+longer covers, can still be disabled. Changing the URL checks the new address as for a new
+webhook.
+
 | Event | When |
 |---|---|
-| `certificate.expiring` | A certificate moved into its warning window (the same alert the e-mail channel sends) |
-| `certificate.expired` | A certificate expired |
+| `certificate.expiring` | A certificate moved into its warning window (the same alert the e-mail channel sends). From 0.0.4 it is sent once more for the same certificate, with `data.severity` `CRITICAL` instead of `WARNING`, when the certificate comes inside `critical-threshold-days` (7): a receiver that de-duplicates on the fingerprint should take the severity into account. From 0.0.4 none is sent for a certificate its entry has already renewed |
+| `certificate.expired` | A certificate expired. From 0.0.4 not sent for one already renewed |
 | `job.completed`, `job.failed` | Any run of a job, scheduled or started by hand, ended |
 | `webhook.test` | **Send a test** on the Integrations page |
 
@@ -80,6 +88,10 @@ after the commit by one replica (claimed in the database, under a lock), with a 
 - A **2xx** answer is delivered. Anything else (a timeout, a 5xx, a redirect, which is never
   followed) is retried after `retry-initial` (1 minute), doubling up to `retry-max` (1 hour), until
   the delivery is `give-up-after` (a day) old.
+- From 0.0.4 the answer is taken from its status line and headers as soon as they arrive. A
+  receiver, or a proxy in front of it, that answers 2xx and then keeps the connection open is
+  delivered to; earlier releases waited for the connection to close, recorded such a try as
+  unanswered and posted the same event again.
 - Delivered and failed rows are kept for `keep` (14 days).
 - **A dead receiver holds up nobody else.** A pass of the sender starts no try after `run-budget`
   (40 seconds); one endpoint gets at most `endpoint-tries-per-run` (10) tries and `endpoint-budget`
@@ -91,8 +103,9 @@ after the commit by one replica (claimed in the database, under a lock), with a 
 ## Where a webhook may go
 
 - `https://` only, with no credentials in the URL.
-- Before saving, and again at every send, the host is resolved and every address it resolves to is
-  checked. Never allowed: loopback; link-local (169.254.0.0/16 and fe80::/10, so never a cloud
+- When a webhook is added or its URL changed, and again at every send, the host is resolved and
+  every address it resolves to is checked (from 0.0.4 a save that keeps the URL, such as disabling
+  or renaming, does not resolve it again). Never allowed: loopback; link-local (169.254.0.0/16 and fe80::/10, so never a cloud
   metadata service); the other metadata addresses (fd00:ec2::254, 100.100.100.200, 168.63.129.16);
   unspecified, multicast or broadcast addresses; an IPv6 address carrying one of those
   (IPv4-compatible, 6to4, NAT64); Teredo (2001::/32); the local-use NAT64 prefix (64:ff9b:1::/48);
@@ -106,14 +119,14 @@ after the commit by one replica (claimed in the database, under a lock), with a 
 - Narrow it further with `cert-alert.webhooks.allowed-hosts` (names, `*.suffix`, CIDR ranges):
   once set, a webhook may go only to the hosts it lists.
 - **Webhooks connect directly**, unless an [egress proxy](#through-an-egress-proxy) is set (from
-  the next release). The JVM's `https.proxyHost` and `HTTPS_PROXY` are not used. With the Helm
+  0.0.3). The JVM's `https.proxyHost` and `HTTPS_PROXY` are not used. With the Helm
   chart's NetworkPolicy on, `networkPolicy.egress.web` must reach the receivers.
 
 ### Through an egress proxy
 
-!!! info "From the next release"
-    Releases up to now always connect directly. The proxy settings are new, and unset: webhooks keep
-    connecting directly until you set them.
+!!! info "From 0.0.3"
+    Earlier releases always connect directly. The proxy settings are unset by default: webhooks
+    keep connecting directly until you set them.
 
 Where the only way out is an HTTP forward proxy, set `cert-alert.webhooks.proxy.host` and
 `cert-alert.webhooks.proxy.port` (`CERT_ALERT_WEBHOOKS_PROXY_HOST` and `_PORT`; Helm
@@ -143,22 +156,22 @@ without a user, both a password and a password file, or an unreadable password f
 
 ### Private networks
 
-!!! info "From the next release"
-    Releases up to now allow private addresses unless `block-private-networks: true` is set. The
-    next release changes the default as described here.
+!!! info "From 0.0.3"
+    Earlier releases allow private addresses unless `block-private-networks: true` is set. 0.0.3
+    changed the default as described here.
 
 `cert-alert.webhooks.block-private-networks` (`CERT_ALERT_WEBHOOKS_BLOCK_PRIVATE_NETWORKS`, Helm
 `webhooks.blockPrivateNetworks`) has three states:
 
 | Setting | Private addresses |
 |---|---|
-| Unset (the default from the next release) | Refused for webhooks saved from now on. A webhook that existed at the upgrade keeps its address until its URL is changed, and is named in a warning at every start |
+| Unset (the default from 0.0.3) | Refused for webhooks saved from now on. A webhook that existed at the upgrade keeps its address until its URL is changed, and is named in a warning at every start |
 | `true` | Refused for every webhook |
-| `false` | Allowed for every webhook, as releases before the next one did. A warning is logged at every start |
+| `false` | Allowed for every webhook, as releases before 0.0.3 did. A warning is logged at every start |
 
 Which webhooks keep their address is recorded by migration `V29`
-(`webhook_endpoint.private_networks_allowed`), which marks every webhook that exists when the next
-release first starts. Once such a webhook's URL is changed, the new address is checked like any new
+(`webhook_endpoint.private_networks_allowed`), which marks every webhook that exists when 0.0.3
+or later first starts. Once such a webhook's URL is changed, the new address is checked like any new
 webhook's. Nothing stops working on the upgrade.
 
 A receiver inside your network, such as a chat bridge or a ticketing relay, is let in by
@@ -174,7 +187,7 @@ AES-GCM encrypted. Without one they are stored as they are, and a warning is log
 
 - Helm: `webhooks.secretKey`, or `webhooks.existingSecret` / `webhooks.existingSecretKey`.
   Release package: `CERT_ALERT_WEBHOOKS_SECRET_KEY` in `.env`.
-- **New installations get a key (from the next release).** The release package's `install.sh`
+- **New installations get a key (from 0.0.3).** The release package's `install.sh`
   writes a random key into a new `.env`. The Helm chart generates one into its own Secret on a new
   install (`webhooks.generateSecretKey`, default `true`) and keeps it across upgrades by `lookup`.
   It cannot do so under `helm template` or Argo CD, which render without cluster access: give the
@@ -194,11 +207,11 @@ AES-GCM encrypted. Without one they are stored as they are, and a warning is log
 | Property (`cert-alert.webhooks.`) | Env var | Default | Description |
 |---|---|---|---|
 | `enabled` | `CERT_ALERT_WEBHOOKS_ENABLED` | `true` | `false` queues and posts nothing |
-| `allowed-hosts` | `CERT_ALERT_WEBHOOKS_ALLOWED_HOSTS` | empty | Hosts a webhook may go to: names, `*.suffix` or CIDR ranges. Empty: any host the address rules allow. From the next release, a host listed here may be on a private network |
-| `block-private-networks` | `CERT_ALERT_WEBHOOKS_BLOCK_PRIVATE_NETWORKS` | `false`; unset from the next release | Unset: private addresses refused for webhooks saved from now on, existing ones keep theirs. `true`: refused for all. `false`: allowed for all. See [Private networks](#private-networks) |
-| `secret-key` | `CERT_ALERT_WEBHOOKS_SECRET_KEY` | none (generated on new installs from the next release) | Base64 AES key that encrypts signing secrets and URLs in the database |
-| `proxy.host`, `proxy.port` (next release) | `CERT_ALERT_WEBHOOKS_PROXY_HOST`, `_PORT` | none (direct) | An HTTP forward proxy webhooks go through with `CONNECT`. See [Through an egress proxy](#through-an-egress-proxy) |
-| `proxy.username`, `proxy.password-file`, `proxy.password` (next release) | `CERT_ALERT_WEBHOOKS_PROXY_USERNAME`, `_PASSWORD_FILE`, `_PASSWORD` | none | HTTP Basic credentials for the proxy: a user with a password file or a password, never both |
+| `allowed-hosts` | `CERT_ALERT_WEBHOOKS_ALLOWED_HOSTS` | empty | Hosts a webhook may go to: names, `*.suffix` or CIDR ranges. Empty: any host the address rules allow. From 0.0.3, a host listed here may be on a private network |
+| `block-private-networks` | `CERT_ALERT_WEBHOOKS_BLOCK_PRIVATE_NETWORKS` | unset from 0.0.3; `false` before | Unset: private addresses refused for webhooks saved from now on, existing ones keep theirs. `true`: refused for all. `false`: allowed for all. See [Private networks](#private-networks) |
+| `secret-key` | `CERT_ALERT_WEBHOOKS_SECRET_KEY` | none (generated on new installs from 0.0.3) | Base64 AES key that encrypts signing secrets and URLs in the database |
+| `proxy.host`, `proxy.port` (from 0.0.3) | `CERT_ALERT_WEBHOOKS_PROXY_HOST`, `_PORT` | none (direct) | An HTTP forward proxy webhooks go through with `CONNECT`. See [Through an egress proxy](#through-an-egress-proxy) |
+| `proxy.username`, `proxy.password-file`, `proxy.password` (from 0.0.3) | `CERT_ALERT_WEBHOOKS_PROXY_USERNAME`, `_PASSWORD_FILE`, `_PASSWORD` | none | HTTP Basic credentials for the proxy: a user with a password file or a password, never both |
 | `connect-timeout`, `read-timeout` | | `5s`, `10s` | Per try |
 | `delivery-timeout` | | `30s` | All of one delivery; the connection is closed at it |
 | `poll-interval` | | `30s` | How often the sender looks for due deliveries |
@@ -207,12 +220,12 @@ AES-GCM encrypted. Without one they are stored as they are, and a warning is log
 | `keep` | | `14d` | How long delivered and failed rows are kept |
 
 The Helm chart sets the first four from `webhooks.enabled`, `webhooks.allowedHosts`,
-`webhooks.blockPrivateNetworks` and `webhooks.secretKey`. From the next release,
+`webhooks.blockPrivateNetworks` and `webhooks.secretKey`. From 0.0.3,
 `webhooks.blockPrivateNetworks` defaults to `""` (unset), and `webhooks.generateSecretKey`
 (`true`) generates a key on a new install when neither `secretKey` nor `existingSecret` is given.
 A release whose own values set `false` keeps it; one that relied on the chart's old default
 (`false`) moves to unset.
-From the next release, `webhooks.proxy.host`, `.port`, `.username`, `.password`,
+From 0.0.3, `webhooks.proxy.host`, `.port`, `.username`, `.password`,
 `.existingSecret` and `.existingSecretKey` set the proxy settings; `webhooks.proxy` is empty, so an
 upgrade keeps connecting directly.
 

@@ -37,7 +37,7 @@ the host's memory (`MemoryMax=80%`). See [syncd's page](syncd/availability-and-s
 
 **Every application can run as several replicas** (syncd's engine as an active/passive pair) behind one Service or load balancer, with
 the Helm chart. Sessions, scheduled-job locks, single sign-on requests in progress and the license
-state (installation id, license, revisions seen) are kept in the database, so any replica serves any
+state (installation id, license, revisions seen, and the latest time seen) are kept in the database, so any replica serves any
 request, each scheduled job runs on one replica at a time, and a restart or rolling update signs
 nobody out. Each product page lists exactly what is shared and what stays per replica.
 
@@ -78,7 +78,7 @@ Also:
 | Product | What to back up | Backup tooling in the release |
 |---|---|---|
 | CertAlert | The PostgreSQL database; the license volume | None scheduled. `upgrade.sh` writes a database dump before it upgrades; otherwise use `pg_dump` or your database's backups |
-| Directory Services Portal | The data directory (configuration, audit store, analysis results); the license directory | `./portal.sh backup` and `./portal.sh restore` (Docker package; the license volume is not included). Native and Helm: `tar` or volume snapshots |
+| Directory Services Portal | The data directory (configuration, audit store, analysis results); the license directory. With a shared database (`DSP_DATABASE_URL`), that database instead: the configuration, the audit trail and the license state are in it | `./portal.sh backup` and `./portal.sh restore` (Docker package; the license volume and a shared database are not included: `pg_dump` the database). From 0.0.9 a backup is written whole or not at all, and a restore checks the archive before it stops or replaces anything. Native and Helm: `tar` or volume snapshots |
 | ReadyRoom | The PostgreSQL database; the license volume | `./backup.sh` (database and license volume, kept 14 days) and `./restore.sh`. Helm: a backup CronJob, off by default (`backup.enabled`) |
 | RSA Operations Portal | The MySQL database; the license volume; the AM trust store and the Connector's certificates | `util/backupdb.sh`. Helm: a backup CronJob, off by default (`backup.enabled`) |
 | syncd | The engine store (`/var/lib/syncd/engine`), the console's PostgreSQL database, its master key (`/var/lib/syncd/console/master.key`) and `/etc/syncd` | `syncd backup --to <dir or s3://...>` of the running engine, on a schedule with `engine.backup`; `syncdctl backup` and `restore` (adds the console database and `/etc/syncd`); `syncdctl upgrade` takes one first. Helm: snapshot the engine's volume or run `syncd backup --to s3://...` in its pod, `pg_dump` the database and keep the `syncd-console` Secret |
@@ -89,8 +89,13 @@ you received. Directory data, and for the RSA Operations Portal everything in Au
 Manager, are backed up by those systems, not by the applications.
 
 **The installation id** is in the database (for the Directory Services Portal without a database,
-in the license volume), next to the license and the revisions seen. Restore it with the data, and
-a license bound to the installation keeps working. If it is lost, the application gets a new id: an unbound license
+in the license volume), next to the license, the revisions seen and, from CertAlert 0.0.4, the
+Directory Services Portal 0.0.9, ReadyRoom 0.0.11 and the RSA Operations Portal 0.0.3, the latest
+time the installation has seen (see [Licensing](licensing.md#the-clock)). Restore it with the
+data, and a license bound to the installation keeps working. A restored backup carries an older
+latest time, which the first license check simply brings forward. Before you start a restored or
+standby host, check its clock: a clock far ahead is recorded, and has to be
+[cleared by hand](licensing.md#the-clock) afterwards. If it is lost, the application gets a new id: an unbound license
 works again once you upload the file, but a bound license is refused, and ENS Solutions has to
 re-bind or re-issue it.
 
@@ -100,8 +105,12 @@ restore the settings and the license volume, restore the data, start, and check 
 
 **The audit trail after a restore** ends at the backup. Events recorded afterwards reuse sequence
 numbers your SIEM may already have from the lost period, so de-duplicate on `id`, never on `seq`,
-and reset a pull-API collector's cursor to the restored trail's newest sequence number. See
-[Audit logging](audit-logging.md).
+and reset a pull-API collector's cursor to the restored trail's newest sequence number. Restore
+the audit store whole: the events together with the record of the chain's head and of how far
+retention deleted (the same database for CertAlert, ReadyRoom and the RSA Operations Portal; for
+the Directory Services Portal without a database, the whole audit directory, its `audit-pruned`
+file included). **Verify integrity** reports a trail whose start or end does not match that record
+as broken. See [Audit logging](audit-logging.md#what-verify-integrity-checks).
 
 ## Rolling back an upgrade
 
@@ -110,7 +119,10 @@ run on data a newer one has written. Every rollback therefore means:
 
 1. a backup taken **before** the upgrade. CertAlert's, the Directory Services Portal's, the RSA
    Operations Portal's and ReadyRoom's `upgrade.sh` write one, and so does syncd's `syncdctl upgrade`;
-   with Helm and the native package, take it yourself;
+   with Helm and the native package, take it yourself. The Directory Services Portal's `upgrade.sh`
+   does not back up a shared database (`DSP_DATABASE_URL`), which the new release may update as it
+   starts: from 0.0.9 it warns, and asks before going on when run from a terminal. Run `pg_dump`
+   first;
 2. stopping the new release, restoring that backup, and starting the previous release (or
    `helm rollback`, which restores the previous manifests and values but never the data).
 

@@ -56,8 +56,12 @@ With TLS on, ReadyRoom refuses to start if no keystore is set, or if no truststo
 
 | Property | Packaged | Description |
 |---|---|---|
-| `spring.datasource.url` | `jdbc:postgresql://${DB_HOST:postgres}:${DB_PORT:5432}/${DB_NAME:appdb}?options=${DB_OPTIONS:-c%20plan_cache_mode%3Dforce_custom_plan}` | JDBC URL. Set `DB_HOST`, `DB_PORT` and `DB_NAME`, or `SPRING_DATASOURCE_URL` whole. A whole URL of your own should keep the `options` parameter. |
+| `spring.datasource.url` | `jdbc:postgresql://${DB_HOST:postgres}:${DB_PORT:5432}/${DB_NAME:appdb}?options=${DB_OPTIONS:-c%20plan_cache_mode%3Dforce_custom_plan}&tcpKeepAlive=true&socketTimeout=${DB_SOCKET_TIMEOUT:600}` | JDBC URL. Set `DB_HOST`, `DB_PORT` and `DB_NAME`, or `SPRING_DATASOURCE_URL` whole. A whole URL of your own should keep the `options`, `tcpKeepAlive` and `socketTimeout` parameters: `DB_OPTIONS` and `DB_SOCKET_TIMEOUT` only fill in the packaged URL. |
 | `DB_OPTIONS` | `-c%20plan_cache_mode%3Dforce_custom_plan` | PostgreSQL settings for each connection, URL-encoded (Helm: `database.options`). The default plans every query for its own parameters. PostgreSQL's own default switches a query that runs often over long lists of people to a generic plan, which was up to 240 times slower in a 100,000-person load test. Behind a connection pooler that refuses startup options (PgBouncer without `ignore_startup_parameters`), set it empty (Helm: `-`) and run `ALTER DATABASE <name> SET plan_cache_mode = force_custom_plan` instead. |
+| `DB_SOCKET_TIMEOUT` | `600` | From 0.0.11. Seconds a statement's answer is waited for before its connection is given up, with TCP keep-alive on (Helm: `database.socketTimeout`). A connection lost without a reset (a database failover, a firewall dropping idle connections) then fails instead of holding a request, or a scheduled job and its lock, indefinitely. `0` waits for ever. It applies to Flyway's migrations too: raise it if one statement of a migration or of the retention purge runs longer. |
+| `application.database.statement-timeout-seconds` (`DB_STATEMENT_TIMEOUT`) | `570` | From 0.0.11. PostgreSQL's `statement_timeout` on each of the application's connections, in seconds (Helm: `database.statementTimeout`): the database itself cancels a statement that runs longer. Keep it below `DB_SOCKET_TIMEOUT`. `0` turns it off. See [Statement and lock timeouts](#statement-and-lock-timeouts). |
+| `application.database.lock-timeout-seconds` (`DB_LOCK_TIMEOUT`) | `120` | From 0.0.11. PostgreSQL's `lock_timeout` on each connection, in seconds (Helm: `database.lockTimeout`): a statement that waits longer for a row, a table or a person's lock fails. `0` turns it off. |
+| `spring.datasource.hikari.maximum-pool-size` (`DB_POOL_SIZE`) | `20` | The most database connections one replica opens, shared by the request threads and the scheduled jobs (Helm: `database.poolSize`). Up to 0.0.10 it was Spring Boot's default, 10. Keep the number of replicas times `DB_POOL_SIZE` under PostgreSQL's `max_connections` (100 by default). |
 | `spring.datasource.username` | `DB_USERNAME`, packaged `appuser` | |
 | `spring.datasource.password` | `DB_PASSWORD`, packaged `secret123` | Override it. |
 | `spring.datasource.driver-class-name` | `org.postgresql.Driver` | |
@@ -69,6 +73,23 @@ With TLS on, ReadyRoom refuses to start if no keystore is set, or if no truststo
 | `spring.jpa.properties.hibernate.dialect` | `org.hibernate.dialect.PostgreSQLDialect` | |
 | `spring.jpa.properties.hibernate.jdbc.batch_size` | `50` | Lets the directory refresh write changed rows in batches. |
 | `spring.jpa.properties.hibernate.order_inserts` / `order_updates` | `true` | |
+
+### Statement and lock timeouts
+
+From 0.0.11 ReadyRoom sets `statement_timeout` and `lock_timeout` on every connection as its pool
+opens it, and the startup log says
+`Database timeouts for <pool>: statement_timeout 570s, lock_timeout 120s (0: none)`.
+
+- A statement cut off by either limit fails: a page or API call answers `500`, and a scheduled job
+  fails that run (audited as `job.failed`) and tries again on its next run instead of holding its
+  lock.
+- Flyway's migrations are not limited: its connections set both to `0`, and the pool's connections
+  are replaced once it has migrated.
+- A `spring.datasource.hikari.connection-init-sql` of your own replaces these settings; the log then
+  says `Database timeouts: <pool> has its own connection-init-sql; leaving it as it is`.
+- They are set with a statement, not a startup option, so they also work behind a connection pooler
+  that refuses startup options. Behind PgBouncer in transaction pooling, set them on the database or
+  the role instead, for example `ALTER ROLE <app user> SET statement_timeout = '570s'`.
 
 ## LDAP connection
 
@@ -85,11 +106,11 @@ With TLS on, ReadyRoom refuses to start if no keystore is set, or if no truststo
 | `application.ldap.read-retries` | `1` | `1` | How many more times a read of a person outside sign-in (reports, exports, absence alerts, a person's manager) is tried when the directory does not answer (a time-out, or no free pooled connection), 200 ms and then 400 ms later (`APPLICATION_LDAP_READRETRIES`). After that a page or API call is answered `503` with `Retry-After: 5`, and a background job leaves that person, or its run, for its next run. Never taken for "no such person". Kept short because the request waits for it; `0` turns it off. |
 | `application.ldap.page-size` | `500` | `500` | Entries per page for large searches. Keep it below the server's size limit (Active Directory 1000, OpenLDAP 500). `0` turns paging off for directories without the paged results control. |
 | `application.ldap.max-pages` | – | `1000` | The most pages one paged search reads before it logs a warning and returns what it has. This protects against a directory or proxy that keeps returning a paging cookie. |
-| `application.ldap.search-max-results` | – | `500` | The most people a name search (*Find a user*) lists (`APPLICATION_LDAP_SEARCHMAXRESULTS`). The directory is asked for one more, so the page can say there are more and ask for more of the name. Keep it below the directory's size limit if paging is off. |
+| `application.ldap.search-max-results` | – | `500` | The most people a name search (*Find a user*) lists (`APPLICATION_LDAP_SEARCHMAXRESULTS`). The directory is asked for one more, so the page can say there are more and ask for more of the name. From 0.0.11 it also bounds the name search behind the **Add a delegate** and **Add a manager** pickers. Keep it below the directory's size limit if paging is off. |
 | `application.ldap.search-max-download` | – | `5000` | The most people a download of a name search holds (`APPLICATION_LDAP_SEARCHMAXDOWNLOAD`); a search matching more is refused with `400` (`too_many_matches`). |
-| `application.ldap.user-cache-size` | – | `150000` | The most directory users kept in memory for sign-in, reports and alerts (`APPLICATION_LDAP_USERCACHESIZE`), about 1 KB of heap each. Keep it at or above the number of people who check in. Below that, check-ins and large group reports read the directory for nearly every person. Up to the current release it was fixed at 5,000. |
+| `application.ldap.user-cache-size` | – | `150000` | The most directory users kept in memory for sign-in, reports and alerts (`APPLICATION_LDAP_USERCACHESIZE`), about 1 KB of heap each. Keep it at or above the number of people who check in. Below that, check-ins and large group reports read the directory for nearly every person. Before 0.0.6 it was fixed at 5,000. |
 | `application.ldap.group-membership-cache-seconds` | `300` | `300` | How long a user's group memberships are cached. Permission checks read them on every request, so a directory change can take this long to show. `0` disables the cache. |
-| `application.ldap.pool-max-size` | `0` | `0` | The most pooled directory connections (`APPLICATION_LDAP_POOLMAXSIZE`). `0` sizes the pool for the request threads: `server.tomcat.threads.max` plus `spring.task.scheduling.pool.size` (208 with the defaults), never fewer than 20. Every sign-in reads the directory, so a pool smaller than the request threads makes a burst of check-ins wait for a connection, and a wait longer than the connect timeout fails the read. Connections are opened only when needed and closed after 5 idle minutes. Lower it if the directory limits connections per client; raise it together with `server.tomcat.threads.max`. The startup log says `LDAP connection pooling enabled for ..., at most <n> connections`. |
+| `application.ldap.pool-max-size` | `0` | `0` | The most pooled directory connections (`APPLICATION_LDAP_POOLMAXSIZE`). `0` sizes the pool for the request threads: `server.tomcat.threads.max` plus `spring.task.scheduling.pool.size` (216 with the defaults), never fewer than 20. Every sign-in reads the directory, so a pool smaller than the request threads makes a burst of check-ins wait for a connection, and a wait longer than the connect timeout fails the read. Connections are opened only when needed and closed after 5 idle minutes. Lower it if the directory limits connections per client; raise it together with `server.tomcat.threads.max`. The startup log says `LDAP connection pooling enabled for ..., at most <n> connections`. |
 | `application.ldap.sign-in-retries` | `2` | `2` | How many more times a sign-in reads the directory when it does not answer (a time-out, or no free pooled connection), 200 ms and then 400 ms later, before the request is answered `503` with `Retry-After: 5` (`APPLICATION_LDAP_SIGNINRETRIES`). A directory that cannot be asked is never taken for "no such user": that is still a `401`, at once. |
 
 The JDK connection pool is configured by system properties that ReadyRoom sets at startup, unless
@@ -98,11 +119,11 @@ you pass them with `-D`:
 | System property | Default set by ReadyRoom |
 |---|---|
 | `com.sun.jndi.ldap.connect.pool.protocol` | `plain ssl` (pools `ldaps://` connections too) |
-| `com.sun.jndi.ldap.connect.pool.maxsize` | `application.ldap.pool-max-size`, or with that at `0` the request threads plus the job threads (208 with the defaults; it was a fixed `20`) |
+| `com.sun.jndi.ldap.connect.pool.maxsize` | `application.ldap.pool-max-size`, or with that at `0` the request threads plus the job threads (216 with the defaults; it was a fixed `20`) |
 | `com.sun.jndi.ldap.connect.pool.timeout` | `300000` (5 minutes idle) |
 
 A connection is waited for as long as `com.sun.jndi.ldap.connect.timeout` (5 s packaged). If the
-database pool (`spring.datasource.hikari.maximum-pool-size`) is raised, raise the directory pool with it:
+database pool (`DB_POOL_SIZE`) is raised, raise the directory pool with it:
 a larger database pool lets more requests reach the directory at once.
 
 ## Directory mapping
@@ -111,8 +132,10 @@ a larger database pool lets more requests reach the directory at once.
 |---|---|---|---|
 | `application.user-base-dn` | `dc=winllc,dc=com` | – | Base DN for every user search, the login form's user search and the org chart scan. **Required.** |
 | `application.user-ldap-filter` | `(objectclass=inetOrgPerson)` | `(objectclass=inetOrgPerson)` | Identifies user entries. It is used alone to list and count users, and combined into an AND for search, reports, direct reports and Windows sign-in. Parentheses are added if you leave them out, and a blank value falls back to the default. Example: `(&(objectclass=inetOrgPerson)(!(employeeType=CONTRACTOR)))`. |
-| `application.groups[].groups-base-dn` | `ou=Groups,dc=winllc,dc=com`, `ou=Companies,dc=winllc,dc=com` | none | One entry per top-level group tree shown on the **Groups** page. Groups are `groupOfUniqueNames` entries. |
-| `application.super-user-dns` | none | none | DNs that always get the `ADMIN` role (matched without regard to case), `APPLICATION_SUPERUSERDNS_0`, `_1`, ... None are packaged: name at least one, or nobody can administer ReadyRoom or reach the license screen (startup logs a warning). The demo profile and the development compose file name their own. |
+| `application.groups[].groups-base-dn` | `ou=Groups,dc=winllc,dc=com`, `ou=Companies,dc=winllc,dc=com` | none | One entry per top-level group tree shown on the **Groups** page. Groups are the entries of the object class below. |
+| `application.ldap.group-object-class` | `groupOfUniqueNames` | `groupOfUniqueNames` | From 0.0.11. The object class of groups (`APPLICATION_LDAP_GROUPOBJECTCLASS`; Helm: `ldap.groupObjectClass`). `group` for Active Directory, `groupOfNames` for directories that use it. Group trees, group reports, group managers' absence alerts and group-based visibility all read groups of this class. |
+| `application.ldap.group-member-attribute` | `uniqueMember` | `uniqueMember` | From 0.0.11. The attribute that lists a group's members' DNs (`APPLICATION_LDAP_GROUPMEMBERATTRIBUTE`; Helm: `ldap.groupMemberAttribute`). `member` for Active Directory and `groupOfNames`. A large Active Directory group, whose members the directory hands over in ranges (`member;range=0-1499`, then on), is read range by range. |
+| `application.super-user-dns` | none | none | DNs that always get the `ADMIN` role, `APPLICATION_SUPERUSERDNS_0`, `_1`, ... Each is compared with the directory's DN as a DN, without regard to case or to spaces after the commas (from 0.0.11; before, `CN=Jane Doe, OU=Users, ...` written with spaces signed in as `USER`). None are packaged: name at least one, or nobody can administer ReadyRoom or reach the license screen (startup logs a warning). The demo profile and the development compose file name their own. |
 | `application.user-ldap-organization-attribute` | `o` | `organization` | Organization of a user. |
 | `application.user-ldap-employee-type-attribute` | `employeeType` | `employeeType` | Employee type. Used in metrics and org-chart breakdowns. |
 | `application.user-ldap-location-attribute` | `l` | `location` | Location. |
@@ -185,6 +208,10 @@ day: with a day start of 18:00, 02:00 is the small hours of the same shift.
 | Property | Packaged | Built-in | Description |
 |---|---|---|---|
 | `application.check-out-after-minutes` (`checkOutAfterMinutes`) | `240` | `240` | How long someone's latest event can be a screen lock before they are automatically checked out, also when that runs past midnight (a lock after about 20:00 with `240`). On a day of *Early Leave* with a time of leaving, a lock at or after that time is checked out on the next run instead. |
+| `application.end-of-day.check-out` | `true` | `true` | From 0.0.11 (`APPLICATION_ENDOFDAY_CHECKOUT`; Helm: `endOfDay.checkOut`). A session left open, whose last event is a check-in or an unlock with no lock or logoff after it, is checked out automatically at the cut-off of its day. `false` keeps such a session open until the person's next event, as up to 0.0.10. See [Operations → Scheduled jobs](operator-guide.md#scheduled-jobs). |
+| `application.end-of-day.at` | empty | empty | From 0.0.11 (`APPLICATION_ENDOFDAY_AT`; Helm: `endOfDay.at`). The cut-off, `HH:mm`, in the person's own day (their time zone and day start; a time before the day start is the next morning). Empty: the end of their day, a second before their next day starts. A session last seen at or after the cut-off is closed at the end of its day. Anything but empty or a time of day stops startup. |
+| `application.ha.outage-grace` | `30m` | `30m` | `APPLICATION_HA_OUTAGEGRACE`. After the whole service was down, how long after the outage's end absence alerts wait for people whose check-in was due after it began. `0` turns it off. See [Availability](availability-and-sizing.md#high-availability). |
+| `application.ha.max-check-out-postponement` | `24h` | `24h` | From 0.0.11 (`APPLICATION_HA_MAXCHECKOUTPOSTPONEMENT`; Helm: `maxCheckOutPostponement`). A session locked before an outage of the whole service is checked out that much later, by the time the service was down since the lock. This is the most it is postponed; `0` never postpones it. |
 | `application.extra-time-before-absent-notification-minutes` | – | `60` | Grace period after a person's expected login time before an absence alert is raised. The help dialog shows this value. |
 | `application.inactive-cron.fixed-rate` | `60000` | `1800000` | Milliseconds between auto check-out runs. It is used as a fixed **delay** after each run finishes, so runs never overlap. |
 | `application.inactive-cron.initial-delay` | `60000` | `1800000` | Delay before the first auto check-out run, in ms. |
@@ -193,9 +220,10 @@ day: with a day start of 18:00, 02:00 is the small hours of the same shift.
 | `application.refresh-user-records-cron.enabled` | `true` | `true` | Turns the directory-to-database refresh on or off without removing its schedule. |
 | `application.refresh-user-records-cron.fixed-rate` | `3600000` | `3600000` | Milliseconds between refreshes (fixed delay). |
 | `application.refresh-user-records-cron.initial-delay` | `300000` | `300000` | Delay after startup before the first refresh, in ms. |
-| `spring.task.scheduling.pool.size` | `3` | – | One thread per job, so a slow run of one job does not delay the others. |
+| `spring.task.scheduling.pool.size` | `16` | – | A thread for each scheduled job, with room to spare, so a slow run of one job (a directory, mail server or webhook receiver that does not answer) does not delay the others. It was `8` up to 0.0.10. The service heartbeat has a thread of its own. |
 | `application.logoff.session-max-age-hours` | `168` | `168` | Env var `APPLICATION_LOGOFF_SESSIONMAXAGEHOURS`. How long after a check-in its `sessionId` can identify the Windows client's logout (a week, so a workstation left logged on over a weekend still records its logout). A later logout, or a second one with the same id, is refused. |
 | `application.logoff.refused-per-minute` | `30` | `30` | Env var `APPLICATION_LOGOFF_REFUSEDPERMINUTE`. Refused logouts without a sign-in (unknown, used or expired `sessionId`) allowed from one client address per minute. Past it, the next ones get `429` and are no longer audited one by one. A logout with a usable `sessionId` is never counted. `0` turns the limit off. |
+| `application.logoff.bind-to-address` | `true` | `true` | Env var `APPLICATION_LOGOFF_BINDTOADDRESS`. A logout without a sign-in is accepted only from the client address its check-in came from (the address ReadyRoom sees: behind a reverse proxy, the forwarded one with `SERVER_FORWARD_HEADERS_STRATEGY` set). Workstations behind one NAT address share it. Set it to `false` only where addresses change between logon and logoff (roaming laptops, VPN reconnects) and those logouts would otherwise be lost. |
 
 What each job does is described in [Operations](operator-guide.md#scheduled-jobs).
 
@@ -206,9 +234,10 @@ What each job does is described in [Operations](operator-guide.md#scheduled-jobs
 | `application.calendar.employee-type-filters` | `APPLICATION_CALENDAR_EMPLOYEETYPEFILTERS_0_LABEL`, `..._0_VALUES`, `_1_LABEL`, ... | Gov: `GOV,GOVERNMENT,CIV,CIVILIAN`; CTR: `CTR,CON,CONTRACTOR`; MIL: `MIL,MILITARY` | `calendar.employeeTypeFilters` (empty list: the default) | The Team Calendar's and Group Calendar's **Show** choices after *All*, in order: each a label and the employee types it shows, matched ignoring case against the person's employee type (`application.user-ldap-employee-type-attribute`, default `employeeType`). Setting any replaces the defaults. See [Mapping your directory's employee types](#mapping-your-directorys-employee-types) |
 | `application.events.request-statuses` | `APPLICATION_EVENTS_REQUESTSTATUSES` | `OUT_OF_OFFICE,WORK_FROM_HOME,TDY,TRAINING,SCHEDULED_LEAVE,ABSENT_EXCUSED` | `events.requestStatuses` (empty list: the default) | The statuses people **request** and their manager, a delegate or an administrator approves before they count. Comma-separated status codes (`TDY` is Temporary Duty (TDY); `TRAINING` is Training). `STANDARD` is refused at startup. A deployment that sets this keeps its list on upgrade: add `TRAINING` for Training to need approval. Leaving an excusing status out lets people set it themselves; startup then warns that it stops absence alerts without approval (the warning also names Late Arrival, which delays them). See [Statuses and approvals](user-guide.md#statuses-and-approvals) |
 | `application.events.max-range-days` | `APPLICATION_EVENTS_MAXRANGEDAYS` | `366` | `events.maxRangeDays` | The most days one call may set a status, a request or an organization calendar event on, 1 to 3660. Longer ranges are refused with `range_too_long` |
+| `application.events.max-view-days` | `APPLICATION_EVENTS_MAXVIEWDAYS` | `400` | `events.maxViewDays` | From 0.0.11. The most days one calendar read may cover, 1 to 3660: a person's calendar, a group's and the team's calendar, the organization calendar. The default is a year view with the weeks around it; the pages ask for about six weeks. A longer range is refused with `400` (`range_too_long`), and one that ends before it starts with `400` (`invalid_range`), before anything is read |
 | `application.events.late-arrival-latest-time` | `APPLICATION_EVENTS_LATEARRIVALLATESTTIME` | `12:00` | – | The latest time, `HH:mm`, a person may give for a late arrival they set for themselves, and for the **Login Time** on their profile. Either becomes the time their absence alert waits for. Later is refused (`late_arrival_too_late`); a manager, delegate or administrator recording a late arrival for someone is not limited |
 | `application.events.late-arrival-max-days` | `APPLICATION_EVENTS_LATEARRIVALMAXDAYS` | `31` | – | The most days one late arrival a person sets for themselves may cover; more is refused (`late_arrival_too_long`). Not a limit on a manager, delegate or administrator |
-| `application.events.alert-answer-days` | `APPLICATION_EVENTS_ALERTANSWERDAYS` | `14` | – | How many days after an absence alert its manager or delegate may still answer it, or change the answer; after that only an administrator may (the alert page says why). At least 1. An alert whose day an approved request covers takes the request's answer and cannot be answered on its own at any age. See [Administration → Absence notifications](admin-guide.md#absence-notifications) |
+| `application.events.alert-answer-days` | `APPLICATION_EVENTS_ALERTANSWERDAYS` | `14` | – | How many days after an absence alert its manager or delegate may still answer it, or change the answer; after that only an administrator may (the alert page says why). At least 1. From 0.0.11 the bell and Home's **Awaiting your response** list only alerts this recent, the newest 50. An alert whose day an approved request covers takes the request's answer and cannot be answered on its own at any age. See [Administration → Absence notifications](admin-guide.md#absence-notifications) |
 | `application.privacy.coworker-visibility` | `APPLICATION_PRIVACY_COWORKERVISIBILITY` | `full` | `privacy.coworkerVisibility` | What people see of coworkers whose details they may not see: `full` (in, away or out, and the day's status), `status` (`IN` or `OUT` only) or `none` (no status; the org chart shows headcounts without how many are present, except to the `ADMIN` and `MANAGER` roles). Any other value stops startup. See [Security → Authorization](security.md#authorization) |
 | `application.retention.events-days` | `APPLICATION_RETENTION_EVENTSDAYS` | `0` (keep forever) | `retention.eventsDays` | Days to keep check-in records, calendar statuses, status requests and absence alerts. `0`, or at least `31`: the home page, My Reports and the average login time read the last 30 days. Older check-ins and statuses are summarised by month, then deleted. Audit events are not affected. See [Operations → Retention](operator-guide.md#retention) |
 | `application.retention.cron` | `APPLICATION_RETENTION_CRON` | `0 17 2 * * *` (02:17 daily) | `retention.schedule` | When the purge runs: a six-field Spring cron, in ReadyRoom's time zone (`application.timezone`). Checked at startup |
@@ -267,6 +296,15 @@ behind the calendars take the label as `type` (`/api/event/reports?type=CTR`); a
 | `application.notification-sender-email` | `""` | – | From address of absence emails (`APPLICATION_NOTIFICATIONSENDEREMAIL`). Must be a valid address; required when `SPRING_MAIL_HOST` is set, or startup fails. |
 | `application.application-base-url` | `http://localhost:8181` | `https://localhost` | Base of the link in absence emails (`<base>/app/notifications/id/<id>`). Set it to the URL users really use. |
 
+From 0.0.11 absence alert emails are sent apart from finding the absences. The absence-alert job
+only records the alerts; a job of its own (`SendAlertEmailsJob`, every 30 seconds, on one replica at
+a time) sends the emails of the last day's alerts that have not gone out and that nobody has
+answered, and marks each once the mail server has taken it. When the mail server cannot be reached,
+times out or refuses the sign-in, that run stops at the first such email and the next run tries
+again; one run sends for at most two minutes. A mail server that does not answer therefore never
+delays finding who is absent. The other emails (status requests, decisions, record corrections) are
+sent after their change is saved, on a background thread.
+
 ## User interface
 
 | Property | Packaged | Built-in | Description |
@@ -306,7 +344,7 @@ OpenID Connect and SAML 2.0, each off until enabled (`ENS_SSO_OIDC_ENABLED`,
 user filter (`ENS_SSO_OIDC_USER_FILTER`, `ENS_SSO_SAML_USER_FILTER`). `ENS_SSO_ROLE_MAPPING` maps the
 provider's groups to `MANAGER` or `ADMIN`. Every `ENS_SSO_*` setting, the addresses to register and
 provider walkthroughs are in [Single sign-on](single-sign-on.md#settings); with Helm, the `sso.*`
-values. From the next release the issuer and the SAML metadata must be `https://` (or a file), SAML
+values. From 0.0.3 the issuer and the SAML metadata must be `https://` (or a file), SAML
 needs an `https://` `APPLICATION_BASE_URL`, and the release package's `env.template` lists every
 `ENS_SSO_*` setting.
 
@@ -314,9 +352,9 @@ needs an `https://` `APPLICATION_BASE_URL`, and the release package's `env.templ
 
 | Area | Settings | Details |
 |---|---|---|
-| Public API (`application.api.*`) | `APPLICATION_API_MAXTOKENDAYS` (`366`), `_DEFAULTRATEPERMINUTE` (`120`), `_MAXRATEPERMINUTE` (`1200`), `_MAXRANGEDAYS` (`366`), `_MAXPAGESIZE` (`500`). From the next release rates are counted in the database for all replicas together (up to the current release per replica: with N replicas a token may make up to N times its rate) | [API reference → Settings](api-reference.md#settings) |
+| Public API (`application.api.*`) | `APPLICATION_API_MAXTOKENDAYS` (`366`), `_DEFAULTRATEPERMINUTE` (`120`), `_MAXRATEPERMINUTE` (`1200`), `_MAXRANGEDAYS` (`366`), `_MAXPAGESIZE` (`500`). Rates are counted in the database for all replicas together | [API reference → Settings](api-reference.md#settings) |
 | Live account check (`application.ldap.account-status.*`) | `APPLICATION_LDAP_ACCOUNTSTATUS_FILTER`, `_LOCKOUTDURATION`, `_CACHESECONDS` (`60`), `_BUILTINCHECKS` (`true`), `_ACTIVEDIRECTORY` (`auto`) | Applies to API token, webhook and scheduled report owners, to certificate and single sign-on sign-ins, and to signed-in browser sessions (there an unreadable directory does not refuse); [API reference → Tokens](api-reference.md#tokens) |
-| Webhooks (`application.webhooks.*`) | `APPLICATION_WEBHOOKS_SECRETKEY` (unset: webhooks off), `_ALLOWEDCIDRS`, `_MAXATTEMPTS` (`8`), `_DELIVERYLOGDAYS` (`30`), timeouts and run limits | [Webhooks → Settings](webhooks.md#settings) |
+| Webhooks (`application.webhooks.*`) | `APPLICATION_WEBHOOKS_SECRETKEY` (unset: webhooks off), `_ALLOWEDCIDRS`, `_MAXATTEMPTS` (`8`), `_DELIVERYLOGDAYS` (`30`), timeouts and run limits. From 0.0.11 a webhook that gives no answer for about a day is disabled | [Webhooks → Settings](webhooks.md#settings) |
 | Reports and time zones (`application.reports.*`) | `APPLICATION_REPORTS_SITETIMEZONES`, `_MAXRANGEDAYS` (`366`), `_HTMLMAXMEMBERS` (`200`), `_MAXATTACHMENTBYTES` (`10485760`), `_MAXRECIPIENTS` (`20`), `_RETRYHOURS` (`24`) | [Reports, exports and time zones](exports.md#settings) |
 
 ## Logging, monitoring and diagnostics
@@ -338,7 +376,7 @@ ENS application; see [Audit logging → Settings](../audit-logging.md#settings).
 
 | Env var | Default | Description |
 |---|---|---|
-| `ENS_AUDIT_CHAIN_MILLIS` (next release) | `500` | Each audit event is stored in the same transaction as the action it records, without waiting for its place in the hash chain; a chainer on each replica then adds stored events to the chain in batches, in the order they were recorded. A replica chains its own events as soon as they commit; this is how often, in milliseconds, it also looks for events still to be chained (those another replica recorded, or left by a crash). Until it is chained, an event is in no list, export, verification, pull-API answer or output; **Audit log** says how many are waiting. Helm: `extraEnv` |
+| `ENS_AUDIT_CHAIN_MILLIS` (from 0.0.6) | `500` | Each audit event is stored in the same transaction as the action it records, without waiting for its place in the hash chain; a chainer on each replica then adds stored events to the chain in batches, in the order they were recorded. A replica chains its own events as soon as they commit; this is how often, in milliseconds, it also looks for events still to be chained (those another replica recorded, or left by a crash). Until it is chained, an event is in no list, export, verification, pull-API answer or output; **Audit log** says how many are waiting. Helm: `extraEnv` |
 
 ## Security headers, banner and sessions
 
@@ -360,6 +398,18 @@ The ENS platform settings: every ENS application has them, with the same names a
 The durations are Spring durations (`30m`, `12h`), each at least one minute. Helm: `session.*`.
 The settings for client certificates (`ENS_X509_*`) are in
 [Installation → Client certificates](install.md#client-certificates-cacpiv).
+
+### Password sign-in throttling
+
+From 0.0.11 failed password sign-ins on the **Sign in** page are counted, in the database, once for
+all replicas. Past either limit within a minute, further password sign-ins are refused before the
+directory is asked, until the minute that the first failure started is over. See
+[Security → LDAP username and password](security.md#ldap-username-and-password).
+
+| Property | Env var | Built-in | Helm | Description |
+|---|---|---|---|---|
+| `application.login.address-failures-per-minute` | `APPLICATION_LOGIN_ADDRESSFAILURESPERMINUTE` | `30` | `login.addressFailuresPerMinute` | Failed password sign-ins a minute from one client address. Behind a reverse proxy, set `SERVER_FORWARD_HEADERS_STRATEGY`, or every browser shares the proxy's address and its limit. `0` turns the limit off |
+| `application.login.username-failures-per-minute` | `APPLICATION_LOGIN_USERNAMEFAILURESPERMINUTE` | `5` | `login.usernameFailuresPerMinute` | Failed password sign-ins a minute for one username as entered (trimmed, any case), from anywhere. `0` turns the limit off |
 
 ## Example: production settings
 
@@ -431,7 +481,7 @@ page. In summary:
 
 | Setting | Built-in default | Description |
 |---|---|---|
-| `BaseUrl` | `https://192.168.1.29:8444/api/check` (a lab address) | Server check-in API, for example `https://readyroom.example.com:8181/api/check`. Always set it. |
+| `BaseUrl` | none | Server check-in API, for example `https://readyroom.example.com:8181/api/check`. Required: from 0.0.11 the client has no built-in server, and a run without one ends with exit code 1. |
 | `Authentication` | `Certificate` | `Certificate`, `Windows` or `Auto`. |
 | `CertificateThumbprint` | blank | Use this client certificate. |
 | `CertificateSubjectContains` | blank | Otherwise, use the first certificate whose subject contains this text. |

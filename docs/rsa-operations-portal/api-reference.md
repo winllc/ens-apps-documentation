@@ -83,8 +83,9 @@ curl -X POST -H "Authorization: Bearer ensapi_..." -H "Content-Type: application
 The change is made in Authentication Manager on the Connector's service account, after its
 `am.change-attempt` is committed. The audit trail's actor is `{"type":"service","id":"<identity>"}`,
 with `details.serviceIdentity`, and the Connector's log names `for=service:<identity>`. The user gets
-the help-desk e-mail, which says the integration made the change. Emergency access codes and clearing
-the cached Windows password are not offered through the API.
+the help-desk e-mail, which says the integration made the change. Emergency access codes, clearing
+the cached Windows password and removing an account from the RSA-enabled group (`rsa-group-remove`,
+from 0.0.3) are not offered through the API.
 
 ### Errors, limits and sessions
 
@@ -94,13 +95,20 @@ the cached Windows password are not offered through the API.
   reason's key); `429` with `Retry-After` (the token's limit, or the code limits of
   [Rate limits](security.md#rate-limits-and-uniform-answers)); `502` (Authentication Manager or the
   Connector failed).
+- From 0.0.3, calls refused with `401` are counted per client address against
+  `rsa.rate-limit.sign-in.per-ip` (`120/10m`), separately from sign-ins. Past it, further calls without a
+  valid token from that address get `429` with `Retry-After` and `{"error":"rate_limited",...}`
+  until the window ends. Calls with a valid token are not counted and keep working. Replace an
+  expired or revoked token rather than retry with it.
 - Each token's limit is counted in the database, across replicas.
 - Calls keep no session and set no cookie. CSRF protection is off on `/api/v1` only, where nothing
   runs without a bearer token, so a signed-in browser's cookie is no use there.
 - Audited: `api.token-created` (a warning when a token that can change something is given all
   security domains), `api.token-revoked`, `api.disable-cap-exceeded`; `access.denied` with
   `api_token_missing`, `api_token_invalid`, `api_token_expired`, `api_token_revoked` or
-  `api_scope_required`.
+  `api_scope_required`. From 0.0.3 repeats from one address within a minute are one event with
+  `details.count`, and calls refused with `429` for the per-address limit are not recorded one by
+  one (the first is `auth.rate-limited` with `details.flow` `api`).
 
 | Setting | Default | Meaning |
 |---|---|---|
@@ -131,8 +139,8 @@ The POSTs anyone can reach without signing in (sign-in, Test My Token, the PIN r
 | GET/POST | `/login` | Public | Login page |
 | POST | `/perform_login` | Public | Spring Security login processing (`username`, `password`) |
 | POST/GET | `/perform_logout` | Auth | Logout (also ends the AM session) |
-| GET | `/signed-out` | Public (next release) | After sign-out with `ENS_SSO_OIDC_END_SESSION=true` or `ENS_SSO_SAML_SINGLE_LOGOUT=true`: says the operator is signed out of the Portal and goes on to the OpenID Connect provider's `end_session_endpoint`, or to the SAML asserting party with a signed LogoutRequest (a page refresh and a **Continue** button). See [Single sign-on → Signing out](single-sign-on.md#signing-out) |
-| GET | `/logout/saml2/slo` | Public (next release) | SAML SingleLogoutService (HTTP-Redirect), with `ENS_SSO_SAML_SINGLE_LOGOUT=true`: the asserting party's LogoutResponse, and its signed LogoutRequests, which end the matching operator's session. See [SAML single logout](single-sign-on.md#saml-single-logout-next-release) |
+| GET | `/signed-out` | Public (from 0.0.2) | After sign-out with `ENS_SSO_OIDC_END_SESSION=true` or `ENS_SSO_SAML_SINGLE_LOGOUT=true`: says the operator is signed out of the Portal and goes on to the OpenID Connect provider's `end_session_endpoint`, or to the SAML asserting party with a signed LogoutRequest (a page refresh and a **Continue** button). See [Single sign-on → Signing out](single-sign-on.md#signing-out) |
+| GET | `/logout/saml2/slo` | Public (from 0.0.2) | SAML SingleLogoutService (HTTP-Redirect), with `ENS_SSO_SAML_SINGLE_LOGOUT=true`: the asserting party's LogoutResponse, and its signed LogoutRequests, which end the matching operator's session. See [SAML single logout](single-sign-on.md#saml-single-logout) |
 | GET | `/additionalParameterLoginHandler` | Public | Additional RSA login prompts |
 | POST | `/additionalParameterLoginHandler/submit` | Public | Answer the prompts |
 | GET | `/message` | Public | Shows `messages`/`errors` keys |
@@ -157,7 +165,7 @@ The POSTs anyone can reach without signing in (sign-in, Test My Token, the PIN r
 | GET | `/user/pinReset/passwordReset` | Public | Windows-password reset form (`?noFooter`) |
 | POST | `/user/pinReset/passwordReset/submit` | Public | Submit username, password and token serial |
 | GET | `/user/pinReset/start/{resetCode}` | Public | PIN-check email link |
-| POST | `/user/pinReset/verify` | Public | Verify the current tokencode of the reset code's token (`tokencode`, 6 to 8 digits, no PIN; with `resetCode`). Each reset code accepts at most `cron.tokenPinCheck.resetLinkMaxAttempts` codes |
+| POST | `/user/pinReset/verify` | Public | Verify the current tokencode of the reset code's token (`tokencode`, 6 to 8 digits, no PIN; with `resetCode`). Each reset code accepts at most `cron.tokenPinCheck.resetLinkMaxAttempts` codes. From 0.0.3 the reset code, like the exemption confirmation code and the appointment id below, must match exactly as issued (case and accents included) |
 | POST | `/user/pinReset/reset` | Public | Reset the PIN for a reset code |
 | GET, POST | `/user/exemption/request` | Public (client certificate required) | Request an MFA exemption |
 | GET, POST | `/user/exemption/confirm/{code}` | Public | Confirm an exemption request from the emailed link |
@@ -168,12 +176,12 @@ The POSTs anyone can reach without signing in (sign-in, Test My Token, the PIN r
 | Method | Path | Access | Purpose |
 |---|---|---|---|
 | GET | `/ta/list` | Public | Directory |
-| GET | `/ta/details/{rsaId}` | Public | Trusted Agent details |
-| GET | `/appointment/schedule/{taRsaId}` | Public | Booking form |
-| POST | `/appointment/schedule` | Public | Create an appointment |
+| GET | `/ta/details/{rsaId}` | Public | Trusted Agent details. From 0.0.3 a deactivated agent's are shown to TRUSTED_AGENT and PMO only |
+| GET | `/appointment/schedule/{taRsaId}` | Public | Booking form. From 0.0.3 not for a deactivated agent |
+| POST | `/appointment/schedule` | Public | Create an appointment (`requesterRsaId`, `taRsaId`, `appointmentType`, `date` as `MM/DD/YYYY`, `time` as `H:mm`). From 0.0.3 the time must be one the form offers: in the future, on a quarter hour within the agent's working hours, and free. Otherwise the form is shown again with the reason; a time taken by a simultaneous request is refused with the usual answer and audited as `appointment.request-refused` (`slot_not_available`) |
 | GET | `/appointment/details/{appointmentId}` | Public | Appointment details |
 | POST | `/appointment/confirm` | TRUSTED_AGENT | Confirm (assigned agent only) |
-| POST | `/appointment/cancel` | Public | Cancel (assigned agent, or requester with a matching certificate) |
+| POST | `/appointment/cancel` | Public | Cancel (`appointmentId`). From 0.0.3 whoever has the appointment's id, which is the secret in the e-mailed link, can cancel; before, the assigned agent, or an anonymous requester with the certificate used when booking |
 | POST | `/appointment/updateNotes` | TRUSTED_AGENT | Update notes |
 | GET | `/rest/appointment/appointmentTimesForTaOnDate/{MM-dd-yyyy}/{taRsaId}` | Public | JSON list of booked times |
 
@@ -183,8 +191,8 @@ The POSTs anyone can reach without signing in (sign-in, Test My Token, the PIN r
 |---|---|---|---|
 | GET, POST | `/token/distribute/search` | TRUSTED_AGENT | Find a user to assign a token to |
 | GET | `/token/distribute/user/{userId}` | TRUSTED_AGENT | Assignment form |
-| POST | `/token/distribute/complete` | TRUSTED_AGENT | Assign the token |
-| GET, POST | `/token/lost/search` | TRUSTED_AGENT, HELP_DESK | Find a user with a token |
+| POST | `/token/distribute/complete` | TRUSTED_AGENT | Assign the token. From 0.0.3, for a privileged user or the agent's own account: redirects to a new help-desk request (`token-assign`) |
+| GET, POST | `/token/lost/search` | TRUSTED_AGENT, HELP_DESK | Find a user (from 0.0.3 every user found, with or without a token) |
 | GET | `/token/lost/user/{userId}` | TRUSTED_AGENT, HELP_DESK | User's tokens |
 | POST | `/token/lost/complete` | TRUSTED_AGENT, HELP_DESK | Redirects to a new help-desk request to mark the token lost (`rsaId`, `tokenSerial`) |
 | POST | `/token/pinReset` | TRUSTED_AGENT, HELP_DESK | Redirects to a new help-desk request to reset the PIN |
@@ -199,7 +207,7 @@ The POSTs anyone can reach without signing in (sign-in, Test My Token, the PIN r
 | GET, POST | `/user/search` | TRUSTED_AGENT, HELP_DESK | Search |
 | POST | `/user/search/idOnly` | TRUSTED_AGENT, HELP_DESK | Exact User ID or last-name search |
 | GET | `/user/search/details/{userId}` | TRUSTED_AGENT, HELP_DESK | User details |
-| POST | `/user/search/mfaEnabledGroupToggle/{userId}` | TRUSTED_AGENT, HELP_DESK | Add to or remove from the AD RSA-enabled group (`enabled=true/false`) |
+| POST | `/user/search/mfaEnabledGroupToggle/{userId}` | TRUSTED_AGENT, HELP_DESK | Add to or remove from the AD RSA-enabled group (`enabled=true/false`). From 0.0.3, removing a privileged user or the operator's own account redirects to a new help-desk request (`rsa-group-remove`) |
 | POST | `/user/search/unlock/{userId}` | TRUSTED_AGENT, HELP_DESK | Clear the AM lockout (one click, not a help-desk request) |
 | POST | `/user/search/emergencyTokenCode` | TRUSTED_AGENT, HELP_DESK | Redirects to a new help-desk request for an emergency access code |
 | POST | `/user/search/clearCachedWindowsPassword` | TRUSTED_AGENT, HELP_DESK | Redirects to a new help-desk request to clear the cached Windows password |
@@ -210,7 +218,7 @@ See [Help-desk requests](help-desk.md). Every step is checked on the server; `{i
 
 | Method | Path | Access | Purpose |
 |---|---|---|---|
-| GET | `/helpdesk/new?action=&userId=&serial=` | TRUSTED_AGENT, HELP_DESK | Start a request. `action` is `pin-reset`, `emergency-access`, `token-lost`, `token-deprovision` or `clear-windows-password` |
+| GET | `/helpdesk/new?action=&userId=&serial=` | TRUSTED_AGENT, HELP_DESK | Start a request. `action` is `pin-reset`, `emergency-access`, `token-lost`, `token-deprovision` or `clear-windows-password`, and from 0.0.3 `token-assign` (TRUSTED_AGENT only) or `rsa-group-remove` |
 | POST | `/helpdesk/new` | TRUSTED_AGENT, HELP_DESK | Open it, with a ticket and a reason |
 | GET | `/helpdesk/request/{id}` | TRUSTED_AGENT, HELP_DESK, PMO | The request's page |
 | POST | `/helpdesk/request/{id}/verify/{method}/start` | TRUSTED_AGENT, HELP_DESK | Start a verification's first step, such as sending the e-mail code |
@@ -227,14 +235,14 @@ See [Help-desk requests](help-desk.md). Every step is checked on the server; `{i
 | Method | Path | Access | Purpose |
 |---|---|---|---|
 | GET | `/sites/list` | TRUSTED_AGENT | Site list |
-| GET | `/sites/details/{shippingId}` | Auth; TRUSTED_AGENT from the next release, like the site list and the shipment pages that link there | Site details |
+| GET | `/sites/details/{shippingId}` | Auth; TRUSTED_AGENT from 0.0.2, like the site list and the shipment pages that link there | Site details |
 | GET, POST | `/sites/add` | TRUSTED_AGENT | Add a site |
 | GET | `/sites/edit/{shippingId}` | PMO | Edit form |
 | POST | `/sites/edit` | PMO | Save an edit |
 | POST | `/sites/updateStatus` | PMO | Activate or deactivate |
 | POST | `/sites/delete/{shippingId}` | PMO | Delete |
-| POST | `/sites/addSerialRange/{shippingId}` | PMO | Add a serial range |
-| POST | `/sites/removeSerialRange/{shippingId}` | PMO | Remove a serial range |
+| POST | `/sites/addSerialRange/{shippingId}` | PMO | Add a serial range (`serialNumberStart`, `serialNumberEnd`). From 0.0.3 both must be digits and the start no higher than the end, or nothing is stored; `token.serial.prefix` is added where missing |
+| POST | `/sites/removeSerialRange/{shippingId}` | PMO | Remove a serial range, checked the same way |
 | GET | `/shipment/list/{filter}` | TRUSTED_AGENT | Shipment list |
 | GET, POST | `/shipment/request` | TRUSTED_AGENT | Request a shipment |
 | GET | `/shipment/details/{guid}` | TRUSTED_AGENT | Shipment details |
@@ -249,6 +257,8 @@ See [Help-desk requests](help-desk.md). Every step is checked on the server; `{i
 | GET | `/report/site/{shippingId}` | TRUSTED_AGENT | Site report |
 | GET | `/report/ta/{rsaId}` | PMO | Trusted Agent report |
 | GET | `/report/overview` | PMO | Not implemented (always errors) |
+
+From 0.0.3 a shipment POST answers `409` with the error page (*Someone else changed this at the same time, so nothing was saved...*) when someone else changed the shipment since it was read. Nothing is saved and nobody is e-mailed.
 
 ### Trusted Agent administration and profile
 
@@ -273,10 +283,10 @@ See [Help-desk requests](help-desk.md). Every step is checked on the server; `{i
 | GET | `/roleMapping/roleView?roleName=` | PMO | Users in a role |
 | GET | `/manualCron` | Auth | Job list (the menu entry is shown to PMO) |
 | POST | `/manualCron/{name}` | PMO | Run a job |
-| POST | `/email/sendGroupMessage` | PMO | Group email (`group`, `subject`, `message`, `attachment`) |
+| POST | `/email/sendGroupMessage` | PMO | Group email (`group`, `subject`, `message`, `attachment`). From 0.0.3 it answers with `email.notSent` when the group has no recipients, a recipient look-up fails or the license holds e-mail back |
 | GET | `/user/exemption/review/list` | PMO | Exemption queue |
 | GET | `/user/exemption/review/details/{requestId}` | PMO | Request details |
-| POST | `/user/exemption/review/submit` | PMO | `action=approve` or `deny`, `comments` |
+| POST | `/user/exemption/review/submit` | PMO | `action=approve` or `deny`, `comments`. From 0.0.3 refused for a request its account owner has not confirmed (`user.exemption.review.notConfirmed`) or that is already reviewed (`user.exemption.review.alreadyReviewed`) |
 | POST | `/user/exemption/review/delete` | PMO | Delete a request |
 
 ### License and audit log
@@ -284,15 +294,15 @@ See [Help-desk requests](help-desk.md). Every step is checked on the server; `{i
 | Method | Path | Access | Purpose |
 |---|---|---|---|
 | GET | `/admin/license` | Auth (the screen is for PMO) | License screen |
-| POST | `/admin/license` | PMO | Upload a license file |
+| POST | `/admin/license` | PMO | Upload a license file. From 0.0.3 a file that is not yet valid or already expired is refused while the installed license is in full effect, and nothing is installed while the audit log cannot be written ([Installation → License](install.md#license)) |
 | GET | `/license/status` | Auth | License state as JSON; PMO users also get the installation id and file |
 | GET | `/admin/audit` | PMO | Audit Log page (search and filters) |
 | GET | `/admin/audit/events/{seq}` | PMO | One event |
-| GET | `/admin/audit/export` | PMO | Export the current filter as CSV or NDJSON (audited). From the next release, a CSV value starting with `=`, `+`, `-`, `@`, a tab or a carriage return gets a leading `'`; NDJSON keeps every value exactly |
+| GET | `/admin/audit/export` | PMO | Export the current filter as CSV or NDJSON (audited). From 0.0.2, a CSV value starting with `=`, `+`, `-`, `@`, a tab or a carriage return gets a leading `'`; NDJSON keeps every value exactly |
 | POST | `/admin/audit/verify` | PMO | Verify the hash chain |
 | POST | `/admin/audit/tokens`, `/admin/audit/tokens/{id}/revoke` | PMO | Create or revoke a pull-API token |
 | GET | `/admin/integrations` | PMO | API tokens and webhooks. `POST /admin/integrations/tokens`, `/tokens/{id}/revoke`, `/webhooks`, `/webhooks/{id}/rotate`, `/webhooks/{id}/delete` |
-| GET | `/api/audit/events?after=<seq>&limit=<n>` | Bearer token | The audit pull API: no session, no CSRF token, works in every license mode. See [Audit logging](../audit-logging.md#the-pull-api) |
+| GET | `/api/audit/events?after=<seq>&limit=<n>` | Bearer token | The audit pull API: no session, no CSRF token, works in every license mode. From 0.0.3 a wrong or revoked token (`401`) is recorded as a failed `auth.login` with `details.method` `api-token`. See [Audit logging](../audit-logging.md#the-pull-api) |
 
 ### JSON endpoints
 

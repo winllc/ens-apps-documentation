@@ -20,13 +20,28 @@ A searchable table of Trusted Agents (first and last name, email, phone, site na
 * **Details** (`/ta/details/{id}`): the agent's contact details, desk, working hours and site address.
 * **Schedule Appointment** (`/appointment/schedule/{id}`).
 
+From 0.0.3 a deactivated agent has neither page: both show the error page, as for an agent ID that does not exist. Trusted Agents and PMO users still see a deactivated agent's details.
+
 ### Schedule an appointment
 
 1. From the directory, choose **Schedule Appointment** for an agent.
-2. Enter your **User ID**, pick an **appointment type** (*New Token*, *Replace Token* or *Return Token*), and pick a **date** and **time**. Times the agent has already booked are loaded from the portal and are not offered. Times are shown in the server's time zone.
+2. Enter your **User ID**, pick an **appointment type** (*New Token*, *Replace Token* or *Return Token*), and pick a **date** and **time**. The page offers a time every 15 minutes within the agent's working hours (8:00 to 16:00 when the agent has set none; from 0.0.3 an agent whose hours start or end on a half hour, such as 8:30 to 16:30, is offered 8:30 to 16:15). Times the agent has already booked are loaded from the portal and are not offered. Times are shown in the server's time zone.
 3. Submit. The page says *Your request has been received*, whatever happens next. If the User ID can book the appointment, the portal creates it, emails the agent, and emails you the details with a link to the appointment's page (`/appointment/details/{id}`), where you can change or cancel it. The email goes to the address RSA AM has for your User ID.
 
-Nothing is booked if the User ID is not in RSA AM, already holds a token, or already has two open appointments (`rsa.rate-limit.appointment.max-open-per-user`); the page does not say which, and no email arrives. The agent confirms the appointment. You receive a reminder email before a confirmed appointment. You can **cancel** from the details page if your browser presents the same PKI certificate you used when you booked.
+Nothing is booked if the User ID is not in RSA AM, already holds a token, or already has two open appointments (`rsa.rate-limit.appointment.max-open-per-user`); the page does not say which, and no email arrives. The agent confirms the appointment. You receive a reminder email before a confirmed appointment.
+
+From 0.0.3 the server takes only a time the page offers, and the form says why it refuses another one:
+
+| Message | Cause |
+|---|---|
+| *Choose a time for the appointment.* | No time, or something that is not a time of day |
+| *That time has passed. Choose a later date or time.* | The date and time are not in the future |
+| *Choose one of the times offered: a quarter hour within the trusted agent's working hours.* | A time outside the agent's working hours, or not on a quarter hour |
+| *That time has just been booked. Choose another time.* | Someone else has that time |
+
+If two people ask for the same time at the same moment, one of them gets it; the other still sees *Your request has been received* and gets no email.
+
+**Cancelling.** While the appointment is pending, its details page has **Cancel Appointment**. From 0.0.3 whoever has the link from the email can cancel: you do not need to be signed in or to present a certificate. Before 0.0.3 a requester could cancel only with the same PKI certificate they presented when booking. Keep the link to yourself.
 
 ### Test My Token (`/user/token/test`)
 
@@ -39,7 +54,7 @@ After five tests for one User ID in the same 15-minute period (counted from the 
 
 ### Enroll your token (set your PIN)
 
-After a Trusted Agent assigns you a token, you receive an email (*"RSA SecurID Token Pin Activation"*) with a link to `/user/registration/start?userId=<you>`. During a staged roll-out you may first get a notice that you will be able to set your PIN later. The link arrives on the allowed date and is re-sent every few days until you finish.
+After a Trusted Agent assigns you a token, you receive an email (*"RSA SecurID Token Pin Activation"*) with a link to `/user/registration/start?userId=<you>`. During a staged roll-out you may first get a notice that you will be able to set your PIN later. The link arrives on the allowed date and is re-sent every few days until you finish, from 0.0.3 for at most 30 days (`cron.sendDelayedTokenRegistrationEmails.maxDaysOfReminders`).
 
 1. **Start**: confirm your User ID, enter the **tokencode currently on your token**, and tick to accept the user agreement.
 2. **Complete**: if more than one of your tokens is waiting for a PIN, choose the token serial. Enter your new **PIN** twice (6 digits by default, numbers only) and the **Next Token Code**. Wait for the token display to change before you enter it.
@@ -65,7 +80,7 @@ The page offers two **Pin Reset Options**:
 
     `/user/pinReset/passwordReset`
 
-    1. Enter your Windows **username** and **password**, and the **token serial**. Omit the leading zeros; the portal adds the configured serial prefix.
+    1. Enter your Windows **username** and **password**, and the **token serial**. You can omit the leading zeros: the portal adds the configured serial prefix when it is missing. From 0.0.3 the full serial works too; before, the prefix was added a second time and the reset failed.
     2. If RSA accepts the password and the serial belongs to you, the PIN is cleared and you go to **Enroll your token**. Otherwise the page says *"The PIN could not be reset with these details…"*, whatever the reason.
 
 ### PIN-check email links (`/user/pinReset/start/{code}`)
@@ -87,28 +102,28 @@ Resetting a PIN, issuing an emergency access code, marking a token lost, deprovi
 
 ### My TA Profile (`/ta/profile`)
 
-Update your **phone**, **desk**, **working hours** (from and to) and **site**. The page also lists your **upcoming appointments** (each with a **Details** link) and a personal activity report. The menu badge shows how many appointment requests you have not reviewed yet.
+Update your **phone**, **desk**, **working hours** (from and to) and **site**. The page also lists your **upcoming appointments** (each with a **Details** link) and a personal activity report: the tokens you issued, and from 0.0.3 your latest 100 events (the PMO's Trusted Agent report lists them all). The menu badge shows how many appointment requests you have not reviewed yet.
 
 ### Appointments
 
 Open an appointment from your profile. You can:
 
 * **Confirm** it. The requester is emailed and will get a reminder.
-* **Cancel** it. The requester is emailed.
+* **Cancel** it, while it is pending. The requester is emailed.
 * **Update notes**.
 
-Only the agent the appointment is booked with can change it.
+Only the agent the appointment is booked with can confirm it or change its notes. From 0.0.3 anyone who has the appointment's link can cancel it, so that the requester can.
 
 ### Assign Token (`/token/distribute/search`)
 
 1. Search for the user. Free text matches User ID, first, middle and last name, with up to 25 results per identity source. If `search.useridonly` is on, enter an exact User ID or a last name instead. Verify the user's identity with photo ID.
 2. Choose the user. If they already hold a valid (unexpired) token, the page shows *"User already is assigned a token"* with no assignment form. If they have an approved exemption, assignment is blocked.
 3. Enter the **token serial** from the back of the token. After a few assignments with similar serials, the page pre-fills the common prefix so you type only the last 3 digits. During a staged roll-out, the **allowed to set PIN** date is pre-set.
-4. Submit. The portal takes back the user's **expired** tokens (each recorded as `token.expired-unassigned`), links the new token to the user in RSA AM, both in your own AM session, records an audit event, and emails the user the enrollment link (or the delayed-PIN notice).
+4. Submit. From 0.0.3, if the user is privileged (by default: holds a Portal role or any RSA AM administrative role) or is your own account, nothing is assigned yet: the portal opens a [help-desk request](help-desk.md#tokens-and-the-rsa-enabled-group) with the user and the serial filled in, which needs a ticket, a verified user and a second operator's approval. For every other user the portal takes back the user's **expired** tokens (each recorded as `token.expired-unassigned`), links the new token to the user in RSA AM, both in your own AM session, records an audit event, and emails the user the enrollment link (or the delayed-PIN notice).
 
 ### User Lost Token (`/token/lost/search`)
 
-Search (only users with a valid token are listed), open the user, review their tokens, and click **Mark Lost** for the lost token. This opens a [help-desk request](help-desk.md). When it runs, the token is unassigned in RSA AM, the user is removed from the AD RSA-enabled group (if AD integration is on), an audit event is recorded, and the user gets the help-desk notice by email. Users who lose `cron.lostTokenThresholdMonitor.tokens.lost` tokens within the configured window are reported to the MFA mailbox.
+Search, open the user, review their tokens, and click **Mark Lost** for the lost token. From 0.0.3 the search lists every user it finds, and the user's page says *This user has no tokens* when there are none; before, only users with a valid token were listed, and a user whose token look-up failed was missing from the results. This opens a [help-desk request](help-desk.md). When it runs, the token is unassigned in RSA AM, the user is removed from the AD RSA-enabled group (if AD integration is on), an audit event is recorded, and the user gets the help-desk notice by email. Users who lose `cron.lostTokenThresholdMonitor.tokens.lost` tokens within the configured window are reported to the MFA mailbox.
 
 ### Deprovision Token (`/token/deprovision/search`)
 
@@ -120,14 +135,14 @@ Search for a user, then open **User Details** (`/user/search/details/{id}`):
 
 | Section | Contents and actions |
 |---|---|
-| User Details | User ID, name, email, last login, enabled, **In MFA Enabled Active Directory Group** with **Add to Group** or **Remove From Group**, **Locked Out** with **Unlock** (one click), and **Clear Cached Windows Password** under *Additional User Options* (a help-desk request) |
+| User Details | User ID, name, email, last login, enabled, **In MFA Enabled Active Directory Group** with **Add to Group** or **Remove From Group** (from 0.0.3, removing a privileged user or your own account opens a [help-desk request](help-desk.md#tokens-and-the-rsa-enabled-group); otherwise one click), **Locked Out** with **Unlock** (one click), and **Clear Cached Windows Password** under *Additional User Options* (a help-desk request) |
 | Token Details | For each token: serial, expiration date, PIN set?, and the buttons **Reset Pin** (clears the PIN so the user sets a new one), **Mark Lost**, and **Generate Emergency Token Code** (a temporary fixed tokencode valid for `token.emergencyCode.validityInDays` days, revealed once; the token is flagged lost in RSA). Each opens a [help-desk request](help-desk.md) |
 | Enrollment History | Date, token serial, user certificate DN |
 | Activity Log | Audit events for this user: type, timestamp, Trusted Agent, details |
 
 ### Sites (`/sites/list`)
 
-A table of sites. **Add** a site (`/sites/add`) with shipping ID, name, address, building, city, state, ZIP, country and time zone; the shipping ID must be unique. Open a site to see its details, its Trusted Agents and its associated token serial ranges, and to open the **Site Report** (tokens at site, tokens issued, enrolled users).
+A table of sites. **Add** a site (`/sites/add`) with shipping ID, name, address, building, city, state, ZIP, country and time zone; the shipping ID must be unique. Open a site to see its details, its Trusted Agents and its associated token serial ranges, and to open the **Site Report** (tokens at site, tokens issued, enrolled users). The report counts the tokens in the site's serial ranges in RSA AM, each token once; if RSA AM cannot be asked, the report fails rather than show too few.
 
 ### Shipments (`/shipment/list/all`)
 
@@ -152,6 +167,8 @@ stateDiagram-v2
 | **Print label** | `/shipment/print/{guid}` (only while being worked or shipped) | Trusted Agent |
 | **Receive** | `/shipment/receive/{guid}`: confirm the start and end serials received | Trusted Agent |
 | Work, send, delete | See [Admin Guide → Shipments](admin-guide.md#shipments) | PMO |
+
+From 0.0.3, if someone else changes a shipment between your opening it and your saving a change (you cancel while the PMO sends it, say), your change is refused: *Someone else changed this at the same time, so nothing was saved. Open it again to see its current state, and try again if it still needs doing.* Nobody is emailed about a change that was refused.
 
 Email notifications go to the requesting agent when the shipment is requested, being worked, sent and cancelled, and to the sending PMO user when it is received. The menu shows a count of new shipment requests to PMO users.
 

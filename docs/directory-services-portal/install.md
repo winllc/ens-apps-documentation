@@ -38,7 +38,8 @@ the portal's own tests and CI actually run against:
 | OpenLDAP or 389 Directory Server in production | **Not tested** | The configuration examples are illustrations built from the documented settings |
 | Microsoft Active Directory | **Not tested** | The configuration example (`sAMAccountName`, `memberOf`) is an illustration. AD-specific behaviour, such as setting `unicodePwd`, has not been tested |
 | Others (Oracle, OpenDJ/PingDS, eDirectory, ApacheDS) | **Not tested** | |
-| LDAPS and StartTLS | **Not covered by automated tests** | The embedded directory listens on plain LDAP only |
+| LDAPS with a private CA | **Tested** on every build from v0.0.10 | Two in-memory LDAPS directories whose CA is only in a PKCS12 trust store given to the JVM (`javax.net.ssl.trustStore`): both connect, and without the trust store the server is refused |
+| StartTLS | **Not covered by automated tests** | |
 
 If you run the portal against a directory that isn't tested, try it on a test instance of that
 directory first: sign-in with your user and group filters, schema pull, and one create, update,
@@ -87,16 +88,16 @@ release key and verifying the image signatures are described in
 ```bash
 tar xzf directory-services-portal-<version>.tar.gz
 cd directory-services-portal-<version>
-./install.sh                      # plain HTTP on 0.0.0.0:8080 (next release: 127.0.0.1:8080)
+./install.sh                      # plain HTTP on 127.0.0.1:8080, this host only
 ```
 
 The installer picks the container engine, verifies `SHA256SUMS`, loads the images from
 `images/`, writes `.env` (mode `600`) with a random `X509_PROXY_SECRET`, and validates the
 compose configuration. It **never overwrites an existing `.env`** unless you pass `--force-env`.
-From the next release a new `.env` also gets a random `DSP_SECRETS_KEY`, the key webhook signing
+From v0.0.4 a new `.env` also gets a random `DSP_SECRETS_KEY`, the key webhook signing
 secrets are stored encrypted with (`--force-env` carries the previous one over): **keep a copy of
 `.env` with, but apart from, your backups**, since the stored secrets can't be read without it. See
-[Webhooks → Encrypted signing secrets](webhooks.md#encrypted-signing-secrets-next-release).
+[Webhooks → Encrypted signing secrets](webhooks.md#encrypted-signing-secrets).
 
 The engine is, in order: `--engine docker|podman`, the `CONTAINER_ENGINE` environment variable,
 `CONTAINER_ENGINE` in `.env`, and otherwise Docker if its daemon answers, else Podman. The
@@ -106,10 +107,11 @@ engine has its own containers and volumes: to move an installed portal to the ot
 
 ### 2. Choose how it is published
 
-By default the web tier is published over plain HTTP on **every interface**
-(`WEB_BIND=0.0.0.0`), port 8080 (`WEB_PORT`). Choose another way with the installer's options:
+By default the web tier is published over plain HTTP on **this host only**
+(`WEB_BIND=127.0.0.1`), port 8080 (`WEB_PORT`). Packages before v0.0.4 published it on every
+interface (`0.0.0.0`). Choose another way with the installer's options:
 
-!!! info "From the next release: plain HTTP on this host only by default"
+!!! info "Plain HTTP on this host only by default (from v0.0.4)"
     A new `.env` written by `./install.sh` without `--bind` has `WEB_BIND=127.0.0.1`: plain HTTP
     carries directory passwords and the session cookie in clear, so it is not offered to the
     network unless you choose it. To serve the network, put a TLS-terminating proxy on this host
@@ -123,7 +125,7 @@ By default the web tier is published over plain HTTP on **every interface**
 === "Plain HTTP"
 
     ```bash
-    ./install.sh                      # 0.0.0.0:8080 (next release: 127.0.0.1:8080)
+    ./install.sh                      # 127.0.0.1:8080, this host only
     ./install.sh --bind 127.0.0.1     # this host only, for a TLS proxy on the same host
     ./install.sh --bind 0.0.0.0       # every interface: only behind a TLS proxy elsewhere
     ./install.sh --http 8081          # another port
@@ -151,9 +153,20 @@ By default the web tier is published over plain HTTP on **every interface**
     no published port. Attach your reverse proxy to the `directory-services-portal_default`
     network and forward to `http://web:8080`.
 
+!!! info "Behind a TLS proxy or load balancer: `WEB_TRUSTED_PROXIES` (v0.0.9)"
+    With a proxy in front, the web tier sees the proxy's address on every connection, and every
+    user has that address in the audit trail and for the per-address limits (sign-in lockout,
+    single sign-on starts, failed API tokens). Set `WEB_TRUSTED_PROXIES` in `.env` to the address
+    the proxy connects from as the web container sees it (the first field of the lines in
+    `./portal.sh logs web`; for a proxy on this host usually the compose network's gateway, for
+    example `172.18.0.1`), then run `./portal.sh up`. The web tier then takes each client's address
+    from that proxy's `X-Forwarded-For`. List only proxies. See
+    [Configuration → Behind another proxy](configuration.md#behind-another-proxy).
+
 !!! warning "Plain HTTP on 0.0.0.0"
-    With the default bind, anyone who can reach the host can reach the portal, and passwords and
-    session cookies cross the network in clear text. The installer warns about it. Put a TLS
+    With `--bind 0.0.0.0`, or an `.env` from before v0.0.4 or without `WEB_BIND`, anyone who can
+    reach the host can reach the portal, and passwords and session cookies cross the network in
+    clear text. The installer warns about it. Put a TLS
     proxy in front, use `--https`, or set `WEB_BIND=127.0.0.1` in `.env` and run `./portal.sh up`.
 
 `install.sh` options:
@@ -162,10 +175,10 @@ By default the web tier is published over plain HTTP on **every interface**
 |---|---|
 | `--http [PORT]` | Plain HTTP on PORT (default 8080, the default). With `--https` too, it redirects to HTTPS |
 | `--https [PORT]` | HTTPS on PORT (default 8443), X.509 sign-in available; needs `./certs`. Without `--http`, only HTTPS is published |
-| `--bind ADDRESS` | Host address to publish on (default `0.0.0.0`; `127.0.0.1` for this host only). From the next release the default is `127.0.0.1` for plain HTTP and `0.0.0.0` with `--https` |
+| `--bind ADDRESS` | Host address to publish on: `127.0.0.1` for this host only, `0.0.0.0` for every interface. The default is `127.0.0.1` for plain HTTP and `0.0.0.0` with `--https` (before v0.0.4: `0.0.0.0` for both) |
 | `--no-publish` | Publish nothing; route your own proxy on the compose network to `web:8080` |
 | `--engine ENGINE` | `docker` or `podman` |
-| `--demo` | The built-in demo directory (no LDAP server), demo users and dashboards. It is published like any install, so add `--bind 127.0.0.1`. From the next release it also sets `DEMO_MODE=true`, which the built-in directory requires |
+| `--demo` | The built-in demo directory (no LDAP server), demo users and dashboards. It is published like any install, so add `--bind 127.0.0.1`. From v0.0.4 it also sets `DEMO_MODE=true`, which the built-in directory requires |
 | `--demo-openldap` | A demo OpenLDAP container (`docker-compose.openldap.yml`), when the package includes its image |
 | `--force-env` | Rewrite `.env` (the old one is kept as `.env.bak-<time>`) |
 | `--start` | Run `./portal.sh up` afterwards |
@@ -228,7 +241,7 @@ and a new installation id means re-binding the license on the ENS licensing port
 ```bash
 ./portal.sh logs api              # follow the API log
 ./portal.sh backup                # portal-backup-<date>.tar.gz: configuration, audit log, analysis results
-./portal.sh restore <file>
+./portal.sh restore <file>        # checks the archive first; the data is replaced only once it is all extracted
 ./portal.sh license <file.lic>    # install or replace the license
 ./portal.sh down                  # stop (data is kept in the portal-data volume)
 ```
@@ -246,7 +259,11 @@ cd directory-services-portal-<new-version>
 
 `upgrade.sh` copies `.env`, `license/` and `certs/` across (it never overwrites), verifies the
 package and loads its images, generates `X509_PROXY_SECRET` if the old `.env` has none, and backs
-up the portal data to `backups/`. It then points `.env` at the new images (keeping a
+up the portal data to `backups/`. With the shared database (`DSP_DATABASE_URL` in `.env`) the
+configuration, the audit store and the license state are in the database, which this backup does
+not hold and which the new version may update as it starts: back it up yourself first (`pg_dump`).
+From v0.0.9 `upgrade.sh` warns about it and, when run from a terminal, asks *Is the database backed
+up? Continue the upgrade?* before it switches the images. It then points `.env` at the new images (keeping a
 `.env.bak-<time>`) and restarts with `./portal.sh up`. The data volume and the license volume are
 reused. To go back, run `./portal.sh up` in the old directory and, if needed,
 `./portal.sh restore` the backup. Options: `--no-backup`, `--no-start`, `--skip-verify`,
@@ -254,29 +271,38 @@ reused. To go back, run `./portal.sh up` in the old directory and, if needed,
 
 !!! note "What an upgrade keeps"
     - **Ports and addresses.** `WEB_BIND`, `WEB_PORT` and `HTTPS_PORT` are not changed, so an
-      installation bound to `127.0.0.1` stays local. Only new installations get the `0.0.0.0`
-      default. From the next release, new installations get `127.0.0.1` for plain HTTP instead;
-      an `.env` without `WEB_BIND` still publishes on every interface, and `install.sh` warns when
+      installation bound to `127.0.0.1` stays local, and one published on `0.0.0.0` stays
+      published. Only new installations get the default, which from v0.0.4 is `127.0.0.1` for
+      plain HTTP; an `.env` without `WEB_BIND` still publishes on every interface, and `install.sh` warns when
       plain HTTP is published beyond the host or `ENS_COOKIE_SECURE` is not `true`.
     - **From a package before Podman support.** There, `docker-compose.yml` published nothing and
       `docker-compose.publish.yml` published `WEB_PORT`. `upgrade.sh` rewrites `COMPOSE_FILE`:
       without `docker-compose.publish.yml` it uses `docker-compose.no-publish.yml` (still nothing
       published); with it, the file is dropped (the same `WEB_BIND:WEB_PORT`). It also adds
       `CONTAINER_ENGINE=docker`. Nothing needs doing by hand.
-    - **Demo directory (next release).** An `.env` that sets `DIRECTORY_MODE=memory` and has no
+    - **Demo directory (v0.0.4).** An `.env` that sets `DIRECTORY_MODE=memory` and has no
       `DEMO_MODE` line gets `DEMO_MODE=true` added by `install.sh` (which `upgrade.sh` runs), so a
       demo keeps starting.
     - **New settings** are not written into an existing `.env` (except `X509_PROXY_SECRET`): they
       take their defaults, and older names keep working (`SESSION_TTL_MINUTES`, `COOKIE_SECURE`,
       `X509_CHECK_REVOCATION`). Compare your `.env` with the package's `env.template` to adopt
       them.
-    - **Webhook secrets key (next release).** An `.env` from an earlier package is not given a
+    - **Webhook secrets key (v0.0.4).** An `.env` from an earlier package is not given a
       `DSP_SECRETS_KEY`: webhook signing secrets stay unencrypted, with a warning, and
       `install.sh` says so. Add `DSP_SECRETS_KEY=$(openssl rand -base64 32)` to `.env` to encrypt
       them at the next start, and keep a copy apart from your backups.
-    - **Signing out at the identity provider (next release).** A new `.env` sets
+    - **Signing out at the identity provider (v0.0.4).** A new `.env` sets
       `SSO_OIDC_PROVIDER_LOGOUT=true` and `SSO_SAML_SINGLE_LOGOUT=true`; an upgraded one without
       them signs out as before. See [Single sign-on → Signing out](single-sign-on.md#signing-out).
+    - **Single sign-on start limit (v0.0.9).** An `.env` written by v0.0.4 to v0.0.8 sets
+      `SSO_START_LIMIT_PER_MINUTE=30` and keeps it; the default is now `600`. Raise it (or remove
+      the line) when users reach the portal through one proxy address and `WEB_TRUSTED_PROXIES` is
+      not set, or the 31st user starting single sign-on within a minute is told to wait.
+    - **`WEB_TRUSTED_PROXIES` (v0.0.9)** is not added to an existing `.env`: add it when a proxy
+      is in front of the web tier (see above).
+    - **LDAPS trust store (v0.0.10).** A `JAVA_TOOL_OPTIONS` trust store in `.env` is now used for
+      the directory connection. If you set `LDAP_TLS_REJECT_UNAUTHORIZED=false` because it was
+      not, set it back to `true`.
     - **Revocation.** An `.env` from an earlier package sets `ENS_X509_REVOCATION=off` and
       `ENS_X509_REVOCATION_FAIL=closed`, which keep revocation checking off; the installer says
       so. Empty both for the default live, soft-fail check.
@@ -342,14 +368,14 @@ The installer verifies `SHA256SUMS`, creates the system user `dsp` and installs:
 | `/etc/directory-services-portal/portal.env` | Settings (mode `640`, `root:dsp`); kept on upgrades. A new `portal.env` sets `LDAP_BIND_PASSWORD_FILE` and `MANAGEMENT_SERVER_ADDRESS=127.0.0.1` |
 | `/etc/directory-services-portal/ldap-bind-password` | The LDAP service account's password (mode `640`, `root:dsp`), read through `LDAP_BIND_PASSWORD_FILE`. Created empty if missing and never overwritten; write the password into it. An upgraded `portal.env` that still sets `LDAP_BIND_PASSWORD` keeps working |
 | `/etc/directory-services-portal/proxy-secret` | The X.509 proxy secret (mode `640`, `root:dsp`), generated once and kept. The API reads it through `X509_PROXY_SECRET_FILE`, set in the systemd unit |
-| `/etc/directory-services-portal/secrets-key` (next release) | The key webhook signing secrets are stored encrypted with (`DSP_SECRETS_KEY_FILE` in the new `portal.env`; mode `640`, `root:dsp`), generated by a new installation only and never replaced. Back it up apart from the data |
+| `/etc/directory-services-portal/secrets-key` (v0.0.4) | The key webhook signing secrets are stored encrypted with (`DSP_SECRETS_KEY_FILE` in the new `portal.env`; mode `640`, `root:dsp`), generated by a new installation only and never replaced. Back it up apart from the data |
 | `/etc/directory-services-portal/nginx-proxy-secret.conf` | The copy of the proxy secret that nginx includes (mode `600`, `root`), rewritten from `proxy-secret` on every run |
 | `/var/lib/directory-services-portal` | Data: configuration, audit log, analysis results (back this up) |
 | `/var/lib/ens/directory-portal` | The ENS license and this installation's id; keep it |
 | `/etc/systemd/system/directory-services-portal.service` | The systemd unit, hardened: `ProtectSystem=strict` with `ReadWritePaths` limited to the data and license directories, no capabilities, a system-call filter, `UMask=0077` and more (see [Security](security.md#network-exposure)) |
-| `/etc/nginx/conf.d/directory-services-portal.conf` (or `sites-enabled/`) | Serves the client on port 8080 and proxies `/api` to `127.0.0.1:3001` (only when nginx is installed). From the next release it listens on `NGINX_LISTEN` from `portal.env`: see below |
+| `/etc/nginx/conf.d/directory-services-portal.conf` (or `sites-enabled/`) | Serves the client on port 8080 and proxies `/api` to `127.0.0.1:3001` (only when nginx is installed). From v0.0.4 it listens on `NGINX_LISTEN` from `portal.env`: see below |
 
-!!! info "From the next release: nginx listens on this host only by default"
+!!! info "nginx listens on this host only by default (from v0.0.4)"
     A new `portal.env` sets `NGINX_LISTEN=127.0.0.1:8080`, and `install.sh` writes it into the
     nginx site: plain HTTP on this host only, for a TLS proxy on it (set `ENS_COOKIE_SECURE=true`
     in `portal.env` then). `NGINX_LISTEN=8080` listens on every interface, for a TLS proxy on
@@ -368,6 +394,14 @@ The installer verifies `SHA256SUMS`, creates the system user `dsp` and installs:
 - **Logs:** `journalctl -u directory-services-portal -f`.
 - **HTTPS:** terminate TLS in nginx (add a `listen 443 ssl` server, or put a proxy in front) and
   set `ENS_COOKIE_SECURE=true`.
+- **Behind a proxy** (a TLS proxy on this host, a load balancer; v0.0.9): set
+  `WEB_TRUSTED_PROXIES` in `portal.env` to the address or addresses it connects to nginx from
+  (`127.0.0.1` for one on this host) and run `install.sh` again. nginx then takes the client's
+  address from that proxy's `X-Forwarded-For`. Otherwise every user has the proxy's address, and
+  the sign-in lockout, the single sign-on start limit and the audit trail count them as one. See
+  [Configuration → Behind another proxy](configuration.md#behind-another-proxy).
+- **LDAPS with a private CA:** a trust store in `JAVA_TOOL_OPTIONS`; see
+  [Configuration → LDAPS with a private CA](configuration.md#ldaps-with-a-private-ca).
 - **Prometheus:** set `MANAGEMENT_SERVER_PORT` (for example `9090`) in `portal.env`. It listens on
   `127.0.0.1` only (`MANAGEMENT_SERVER_ADDRESS`).
 - **SELinux:** with SELinux enforcing, run `setsebool -P httpd_can_network_connect 1` so that
@@ -391,11 +425,13 @@ The installer verifies `SHA256SUMS`, creates the system user `dsp` and installs:
 
 Run the new package's `sudo ./install.sh`. Settings and data are kept. It generates the X.509
 proxy secret if there is none yet; restart the API afterwards
-(`systemctl restart directory-services-portal`). From the next release, an upgraded `portal.env`
+(`systemctl restart directory-services-portal`). From v0.0.4, an upgraded `portal.env`
 without `NGINX_LISTEN` keeps nginx on every interface; add `NGINX_LISTEN=127.0.0.1:8080` and run
 `install.sh` again to keep plain HTTP to this host. An upgraded `portal.env` without
 `DSP_SECRETS_KEY_FILE` keeps storing webhook signing secrets unencrypted; `install.sh` prints how to
-create `secrets-key` and add the setting.
+create `secrets-key` and add the setting. A `portal.env` written by v0.0.4 to v0.0.8 sets
+`SSO_START_LIMIT_PER_MINUTE=30` and keeps it, while the default is `600` from v0.0.9: raise it, or
+set `WEB_TRUSTED_PROXIES`, when users reach the portal through a proxy.
 
 ## Install with Helm
 
@@ -443,8 +479,8 @@ same version. The chart's README lists every value. Run
 
 | Value | Purpose |
 |---|---|
-| `ldap.*`, `admin.*` | Directory connection, users and groups, administrators (the `LDAP_*` and `ADMIN_*` settings). Next release: `ldap.url` may be a list (or a string with commas or spaces) of the directory's servers, tried in order; `ldap.serverSelection` (`failover` or `round-robin`); `ldap.name` |
-| `directories` | Next release: several LDAP directories (license feature `multi-directory`), see below. When set, `ldap.*` (except `truststore`) and `admin.*` are not used |
+| `ldap.*`, `admin.*` | Directory connection, users and groups, administrators (the `LDAP_*` and `ADMIN_*` settings). v0.0.6: `ldap.url` may be a list (or a string with commas or spaces) of the directory's servers, tried in order; `ldap.serverSelection` (`failover` or `round-robin`); `ldap.name` |
+| `directories` | v0.0.6: several LDAP directories (license feature `multi-directory`), see below. When set, `ldap.*` (except `truststore`) and `admin.*` are not used |
 | `directory.mode` | `ldap`, or `memory` for the built-in demo directory (evaluation only) |
 | `server.session.*` | `idleTimeout` (`30m`), `adminIdleTimeout`, `absoluteTimeout` (`12h`), `maxPerUser` (`0`). The deprecated `server.sessionTtlMinutes`, when set, still wins over `idleTimeout` |
 | `server.groupRefreshInterval`, `server.login.*` | Group refresh (`5m`); `maxFailures` (`8`) and `lockoutWindow` (`15m`) for the sign-in lockout |
@@ -461,6 +497,8 @@ same version. The chart's README lists every value. Run
 | `persistence.license`, `persistence.data` | The two volumes: `size`, `storageClass`, `accessModes`, `existingClaim` |
 | `ingress.*`, `route.*`, `service.*` | How users reach the portal |
 | `networkPolicy.*` | Optional NetworkPolicies for both workloads; required for edge-terminated X.509 sign-in |
+| `web.trustedProxies` (v0.0.9) | `[]`. The addresses or CIDRs the ingress controller or load balancer connects to the web pods from (for example the pod CIDR), whose `X-Forwarded-For` names the client (`WEB_TRUSTED_PROXIES`, given to the web pods and the API). Empty: every user has the ingress controller's address. A `/0` entry is refused. See [Ingress, OpenShift and HTTPS](#5-ingress-openshift-and-https) |
+| `sso.saml.metadataRefresh` (v0.0.9) | `1h`: how long the identity provider's SAML metadata is used before it is read again (`SSO_SAML_METADATA_REFRESH`; `0`: once) |
 | `api.*`, `web.*` | Images, resources, probes, scheduling, `extraEnv`, `extraEnvFrom` |
 | `global.imageRegistry`, `imagePullSecrets` | Registry mirror and pull secrets |
 
@@ -468,7 +506,7 @@ Every setting from the Docker package's `env.template` has a value; the
 [Configuration](configuration.md) page describes what each one does. Anything else goes in
 `api.extraEnv`.
 
-#### Several directories (next release)
+#### Several directories (v0.0.6)
 
 Each entry of `directories` becomes a `PORTAL_DIRECTORIES_<n>_*` block (see
 [Configuration → Several directories](configuration.md#several-directories)); each bind password is
@@ -516,7 +554,7 @@ stores it in its own Secret) or taken from a Secret you create:
 | LDAPS trust store password | `ldap.truststore.password.value` | `ldap.truststore.password.existingSecret`, `.existingSecretKey` |
 | ENS license | `license.file` (`--set-file`) | `license.existingSecret` (key `license.lic`) |
 | Web server certificate | `tls.certificate`, `tls.key`, `tls.clientCa` | `tls.existingSecret` (keys `server.pem`, `server.key`, `ca.pem`) |
-| Webhook secrets key (next release; `DSP_SECRETS_KEY_FILE`, mounted at `/etc/dsp/secrets/key`) | `integrations.webhooks.secretsKey.value`, or *(generated by a new installation with `.generate: true`, the default, into the chart's Secret under `secrets-key`, kept across upgrades; never by an upgrade or `helm template`)* | `integrations.webhooks.secretsKey.existingSecret`, `.existingSecretKey` (default key `secrets-key`) |
+| Webhook secrets key (v0.0.4; `DSP_SECRETS_KEY_FILE`, mounted at `/etc/dsp/secrets/key`) | `integrations.webhooks.secretsKey.value`, or *(generated by a new installation with `.generate: true`, the default, into the chart's Secret under `secrets-key`, kept across upgrades; never by an upgrade or `helm template`)* | `integrations.webhooks.secretsKey.existingSecret`, `.existingSecretKey` (default key `secrets-key`) |
 | X.509 proxy secret | *(generated with `x509.enabled` into `<release>-directory-services-portal-x509-proxy`, kept across upgrades)* | `x509.proxySecret.existingSecret`, `.existingSecretKey` (default key `proxy-secret`) |
 
 The chart keeps the generated X.509 proxy secret by reading it back from the cluster. Rendering
@@ -527,9 +565,13 @@ there, create the Secret yourself and set `x509.proxySecret.existingSecret`:
 kubectl create secret generic dsp-x509-proxy -n dsp --from-literal=proxy-secret="$(openssl rand -hex 32)"
 ```
 
-For LDAPS with a private CA, put a PKCS12 trust store in a Secret and set
+For LDAPS (or StartTLS) with a private CA, put a PKCS12 trust store in a Secret and set
 `ldap.truststore.existingSecret`. It replaces the JVM's default trust store, so include every CA
-the API must trust:
+the API must trust. This needs **v0.0.10 or later**: up to v0.0.9 the API did not use
+the trust store for directory connections, which failed with `certificate_unknown`. Build the
+store with `keytool -importcert`, so that each CA is a trusted certificate entry (a file made with
+`openssl pkcs12 -export -nokeys` holds none for Java), and give its password, without which Java
+opens the store but finds it empty:
 
 ```bash
 keytool -importcert -noprompt -alias corp-ca -file corp-ca.pem -keystore truststore.p12 \
@@ -546,6 +588,10 @@ ldap:
       existingSecret: dsp-truststore
       existingSecretKey: truststore-password
 ```
+
+`ldap.truststore.key` is the file's key in the Secret (`truststore.p12`) and `.type` its type
+(`PKCS12`; `JKS` also works). If the directory is still refused, see
+[Operator guide → LDAPS certificate errors](operator-guide.md#ldaps-certificate-errors).
 
 ### 4. License
 
@@ -591,6 +637,23 @@ kubectl logs -n dsp deploy/dsp-directory-services-portal-api -c api | grep Licen
     Secure session cookies switch on automatically when `ingress.tls` is set. Schema imports
     can be up to 5 MB, so raise the controller's body size limit if it is lower
     (ingress-nginx: `nginx.ingress.kubernetes.io/proxy-body-size: 5m`).
+
+    From v0.0.9, also tell the web tier which addresses the ingress controller connects from, so
+    that it takes each client's address from the controller's `X-Forwarded-For`. Without it every
+    user has the controller's address in the audit trail and shares the per-address limits (the
+    API warns at startup while single sign-on is on):
+
+    ```yaml
+    web:
+      trustedProxies: [10.244.0.0/16]   # the cluster's pod CIDR, or the controller's addresses
+    networkPolicy:
+      enabled: true
+      webIngressFrom:                    # so that only the controller reaches the web pods
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+    ```
+    List only proxies: `X-Forwarded-For` from a listed address is believed.
 
 === "OpenShift"
 
@@ -710,7 +773,7 @@ and restarts both workloads. Before upgrading an edge-terminated setup (`x509.en
     - The license PVC is now kept on `helm uninstall`.
     - Nothing changes for single sign-on or the database until you set `sso.*` or `database.*`.
 
-!!! note "Next release"
+!!! note "v0.0.4"
     - With `directory.mode: memory` the chart sets `DEMO_MODE=true`, which the API requires for the
       built-in demo directory.
     - `sso.oidc.usernameClaim` keeps its default `preferred_username`, because chart defaults
@@ -727,6 +790,24 @@ and restarts both workloads. Before upgrading an edge-terminated setup (`x509.en
       per-address limits hold across replicas.
     - Rendering without cluster access (`helm template`, Argo CD) generates no key and sets neither
       sign-out setting: give them explicitly there.
+
+!!! note "v0.0.9 to v0.0.11"
+    - **`web.trustedProxies`** (v0.0.9) is empty on an upgrade: nothing changes, and the API warns
+      at startup while single sign-on is on. Set it to the ingress controller's or load balancer's
+      addresses.
+    - **Single sign-on start limit** (v0.0.9): the default rises from 30 to 600 a minute per client
+      address. The chart has no value for it; a release that sets `SSO_START_LIMIT_PER_MINUTE` in
+      `api.extraEnv` keeps its value.
+    - **`sso.saml.metadataRefresh`** (v0.0.9, `1h`): the identity provider's metadata is read again
+      by itself, so a rolled signing certificate needs no restart.
+    - **`ldap.truststore`** is used for directory connections from v0.0.10. If you set
+      `ldap.tlsRejectUnauthorized: false` because it was not, set it back to `true`.
+    - **With `database.url`**: the first start of v0.0.9 adds a column to the license state (Flyway
+      V12), and that of v0.0.11 the table `dsp_group_membership_expiry` (V13). Both are additive, so
+      pods of the previous release keep working during a rolling upgrade. Back up the database
+      before upgrading.
+    - **Group access** (v0.0.11): nothing to set in the chart. The new settings are per directory
+      definition, in the administration pages, and off until set.
 
 ### 8. Uninstall
 
@@ -803,7 +884,7 @@ needs to be mirrored.
 
 The portal's source repository has a `docker-compose.demo.yml` at its root. It builds the web tier
 and the API from source and runs the API in memory mode (`DIRECTORY_MODE=memory`,
-`SEED_DEMO_CONFIG=true`, and from the next release `DEMO_MODE=true`): an embedded demo directory,
+`SEED_DEMO_CONFIG=true`, and from v0.0.4 `DEMO_MODE=true`): an embedded demo directory,
 with example forms, directories and permissions. Sign in as `admin` (administrator), or `alice`, `bob`, `erin`, `dave` or `frank`,
 all with the password `password`.
 
@@ -850,8 +931,8 @@ For any installation that isn't a demo, set at least these values: in `.env` (Do
 
 | Setting | Helm value | Example |
 |---|---|---|
-| `DIRECTORY_MODE` | `directory.mode` | `ldap`. From the next release the API refuses to start with the default, `memory` (the built-in demo directory, whose administrator password is public), unless `DEMO_MODE=true` or it listens on loopback only |
-| `LDAP_URL` | `ldap.url` | `ldaps://ldap.example.com:636`; from the next release several servers of the directory, separated by commas or spaces (a list in Helm), tried in order |
+| `DIRECTORY_MODE` | `directory.mode` | `ldap`. From v0.0.4 the API refuses to start with the default, `memory` (the built-in demo directory, whose administrator password is public), unless `DEMO_MODE=true` or it listens on loopback only |
+| `LDAP_URL` | `ldap.url` | `ldaps://ldap.example.com:636`; from v0.0.6 several servers of the directory, separated by commas or spaces (a list in Helm), tried in order |
 | `LDAP_BIND_DN` | `ldap.bindDn` | `cn=portal,ou=system,dc=example,dc=com` |
 | `LDAP_BIND_PASSWORD_FILE` or `LDAP_BIND_PASSWORD` | `ldap.bindPassword` | (a Secret, mounted as a file) |
 | `LDAP_BASE_DN` | `ldap.baseDn` | `dc=example,dc=com` |
@@ -862,15 +943,16 @@ For any installation that isn't a demo, set at least these values: in `.env` (Do
 | `ENS_COOKIE_SECURE` | `server.cookieSecure` | `true` whenever browsers use HTTPS |
 
 Separate several administrators with `;` (DNs contain commas); in Helm, use a list. Several
-directories in one portal (next release, license feature `multi-directory`) are configured with
+directories in one portal (v0.0.6, license feature `multi-directory`) are configured with
 `PORTAL_DIRECTORIES_<n>_*` instead (Helm: `directories`); see
 [Configuration → Several directories](configuration.md#several-directories). For
 `ldaps://` with a private CA, see
 [Configuration → LDAPS with a private CA](configuration.md#ldaps-with-a-private-ca), or
 `ldap.truststore` in Helm. All settings are described in [Configuration](configuration.md).
 
-The portal has no database and sends no email. Audit events can also go to Splunk or syslog;
-see [Audit logging](../audit-logging.md).
+The portal needs no database (a shared PostgreSQL only for
+[several API replicas](#several-api-replicas)) and sends no email. Audit events can also go to
+Splunk or syslog; see [Audit logging](../audit-logging.md).
 
 ## First start checklist
 

@@ -34,13 +34,18 @@ counts the person as gone from the lock, not the logoff.
 
 The five user tasks run as `BUILTIN\Users` (S-1-5-32-545) at *LeastPrivilege*, so they fire for
 whichever user triggered them, in that user's own session, without elevation. All six tasks are
-hidden, keep running when a laptop switches to battery, and are stopped after 5 minutes. The user
-tasks ignore a new start while one is already running. The Logout task queues them instead, because
-several users can log off a shared PC at once and each needs a run.
+hidden, keep running when a laptop switches to battery, and are stopped after 5 minutes. From
+0.0.11 the user tasks start a run for every event, alongside one still running (*Parallel*): a lock
+that comes while an earlier lock is still retrying, or another user's event on a shared PC, gets
+its own run. Up to 0.0.10 they ignored a new start while one was running, and that event was never
+sent. The script keeps the order: an older run does not post once a newer one has started (see
+[Order of events](#order-of-events)). The Logout task queues its runs, because several users can
+log off a shared PC at once and each needs a run.
 
 ```mermaid
 flowchart TD
-    A[Task fires with -Action] --> B[Load config:<br/>-ConfigPath, then script folder]
+    A[Task fires with -Action] --> A2[Record this run as<br/>the user's latest event]
+    A2 --> B[Load config:<br/>-ConfigPath, then script folder]
     B --> C{Action needs<br/>sign-in?}
     C -- "login / unlock" --> D[Wait up to 30 s for<br/>the user profile to load]
     C -- lock --> E
@@ -67,7 +72,10 @@ unloaded, so the logoff task cannot authenticate. ReadyRoom handles this as foll
    server records as the check-in because the person has none yet that day. The agent saves it,
    with the Windows user name and the user's SID, to
    `%ProgramData%\InOutWorker\sessions\<SID>.json`. Only that user, SYSTEM and Administrators can
-   read the file. The `sessionId` is never written to a log. A login whose response carries no
+   read the file. From 0.0.11 the agent restricts the file before the `sessionId` goes into it, and
+   writes nothing if it cannot; and it writes nothing into a file named after the user that another
+   account created first (it logs an error, and an administrator deletes that file). The
+   `sessionId` is never written to a log. A login whose response carries no
    `sessionId`, and any other unlock, leave the cached file as it is, and the SYSTEM run never
    writes it. So a workstation kept logged on for days or weeks and only locked overnight gets a
    fresh `sessionId` with each day's first unlock, and its eventual logoff still has a usable one.
@@ -94,11 +102,33 @@ or a remote disconnect.
   else came before it (a lock just after midnight, or the automatic check-out of last night's
   lock). This covers people who leave the workstation locked overnight instead of logging off.
   The answer to such an unlock carries a new `sessionId`, as a login's does.
-- The request body binds exactly two fields: `sessionId` and `windowsUserId`. With certificate
-  sign-in, the user's identity comes from the certificate. With Windows sign-in, it comes from the
-  verified Kerberos ticket. A signed-in call is recorded under the signed-in user, whatever the body
-  says: `sessionId` identifies the user only on a logout that does not sign in. The `windowsUserId`
-  in the body is stored for information only and is never used for identity.
+- The request body binds three fields: `sessionId`, `windowsUserId` and, from 0.0.11, `machine`.
+  With certificate sign-in, the user's identity comes from the certificate. With Windows sign-in,
+  it comes from the verified Kerberos ticket. A signed-in call is recorded under the signed-in
+  user, whatever the body says: `sessionId` identifies the user only on a logout that does not sign
+  in. The `windowsUserId` in the body is stored for information only and is never used for
+  identity.
+- `machine` is the workstation's computer name (`%COMPUTERNAME%`), which the agent sends with
+  every event. The server keeps it with the record (at most 255 characters), and tells one
+  workstation's events from another's for someone signed in on two PCs: a lock on one is not
+  hidden by a later lock or logoff on the other, and is still checked out automatically. A server
+  older than 0.0.11 ignores the field, and a client older than 0.0.11 sends none; its events are
+  read as before. The name is in the person's data export (see [Privacy](privacy.md#export)).
+- An event the server cannot store answers `500` (from 0.0.11), and the agent logs the failure
+  and ends with exit code 3. Up to 0.0.10 such a failure answered `200`, and the agent logged
+  `Server accepted` for an event that was lost.
+
+### Order of events
+
+Each run first records itself as the user's latest event, in `%LOCALAPPDATA%\InOutWorker\latest-event`,
+before anything that can make it wait (the profile, the certificate store). It checks that record
+before it posts, and again before each retry after a `503`: once a later logon, lock or unlock of
+the same user has started, the older run posts nothing and logs
+`Not sending '<action>': a later logon, lock or unlock of this user has started.` Sent after the
+newer event, it would undo it: an unlock posted after the lock that followed it would show the
+person at work while the screen is locked. A `-WhatIf` run records nothing. From 0.0.11 the wait
+for the profile matches it by the user's SID, not by the account name, so a renamed account or a
+temporary profile no longer waits the full 30 seconds.
 
 ## Installation
 
@@ -117,7 +147,17 @@ What the installer does:
    configuration.
 2. Writes `inoutworker.config.json` to the install folder **only if you passed at least one
    setting**, so re-running the installer without arguments does not blank an existing
-   configuration. It warns if an existing configuration file is not owned by an administrator.
+   configuration. From 0.0.11 it writes the settings you pass over what the file already holds
+   and keeps the rest: `.\Install-InOutWorker.ps1 -Authentication Auto` alone switches an installed
+   workstation over and keeps its `BaseUrl`, certificate settings and `Retries`. Up to 0.0.10 such
+   a re-run wrote a file with only that setting. It warns if an existing configuration file is not
+   owned by an administrator, and keeps none of that file's settings.
+
+    Before it changes anything, the installer works out the resulting configuration and stops
+    (exit code 1, *No BaseUrl is configured. Pass -BaseUrl ...*) when it would have no `BaseUrl`:
+    a first install without `-BaseUrl`, or a re-run over a file without one. It also stops when the
+    existing file cannot be read as JSON: correct or delete it, then run the installer again.
+
 3. Prepares `%ProgramData%\InOutWorker`, where the SYSTEM task writes its log and reads each
    user's session file. Administrators own all three folders, and none inherits from
    `%ProgramData%`:
@@ -142,17 +182,18 @@ What the installer does:
 
 Re-run the installer on every workstation when you upgrade the client. Without arguments it keeps
 the existing configuration, installs the new script and tasks, and corrects the folder permissions
-an older client left behind.
+an older client left behind. The 0.0.11 client also works with an older server, but only a 0.0.11
+server keeps the workstation's name and answers a failed event with an error.
 
 ### Installer parameters
 
 | Parameter | Default | Description |
 |---|---|---|
 | `-InstallDir` | `$env:ProgramFiles\InOutWorker` | Where the script and its config file go. |
-| `-BaseUrl` | – | Written to the config file. |
+| `-BaseUrl` | – | Written to the config file. Required unless the installed config file already has one. |
 | `-Authentication` | – | `Certificate`, `Windows` or `Auto`. Written to the config file. |
 | `-CertificateThumbprint` | – | Written to the config file. |
-| `-SkipCertificateCheck` | off | Written to the config file. Only for lab servers with self-signed certificates. |
+| `-SkipCertificateCheck` | off | Written to the config file, only when passed (from 0.0.11 a re-run without it keeps the file's value). Only for lab servers with self-signed certificates. |
 | `-Uninstall` | – | Unregisters the six tasks, deletes the install folder, and deletes the session files and `sessions\`. The logs are left in place, in `%ProgramData%\InOutWorker\logs` and in `%LOCALAPPDATA%\InOutWorker\logs` in each user's profile. |
 | `-WhatIf` | – | Shows what would happen without changing anything. |
 
@@ -160,8 +201,9 @@ an older client left behind.
     The installer needs the `tasks\` folder next to it and must run elevated. To deploy with a
     software distribution tool, copy the whole `windows-client\` folder to the target and run
     `powershell.exe -ExecutionPolicy Bypass -File Install-InOutWorker.ps1 -BaseUrl ...` as an
-    administrator or SYSTEM. `CertificateSubjectContains` cannot be set through the installer, so
-    to use it, ship your own `inoutworker.config.json` in the install folder instead.
+    administrator or SYSTEM. `CertificateSubjectContains`, `Retries` and `MaxRetryWaitSeconds`
+    cannot be set through the installer, so to use them, ship your own `inoutworker.config.json` in
+    the install folder instead; the installer keeps them when it is run again.
 
 ### Prerequisites per workstation
 
@@ -210,7 +252,7 @@ Explicit parameters override the file. The script itself never needs to be edite
 
 | Key / parameter | Default | Description |
 |---|---|---|
-| `BaseUrl` / `-BaseUrl` | `https://192.168.1.29:8444/api/check` | Base URL of the check-in API, without a trailing slash (one is trimmed). It must start with `http://` or `https://`. The built-in value is a lab address, so always set it, for example to `https://readyroom.example.com:8181/api/check`. |
+| `BaseUrl` / `-BaseUrl` | none | Base URL of the check-in API, without a trailing slash (one is trimmed), for example `https://readyroom.example.com:8181/api/check`. It must start with `http://` or `https://`. Required: from 0.0.11 there is no built-in address, and a run without one ends with exit code 1 (`Configuration error: BaseUrl is not configured.`). Up to 0.0.10 the client fell back to a lab address. |
 | `Authentication` / `-Authentication` | `Certificate` | How `login`, `lock` and `unlock` sign in. `Certificate`: client certificate only. `Windows`: Kerberos only. `Auto`: Kerberos, then the certificate. |
 | `CertificateThumbprint` / `-CertificateThumbprint` | blank | Use the certificate with this thumbprint (non-hex characters are ignored). |
 | `CertificateSubjectContains` / `-CertificateSubjectContains` | blank | If no thumbprint matches, use the first certificate whose subject contains this text. |
@@ -239,7 +281,7 @@ thumbprint, then by subject text, then the certificate with the most recent *Not
 | `C:\Program Files\InOutWorker\inoutworker.config.json` | Configuration, if the installer wrote one. |
 | `%ProgramData%\InOutWorker\sessions\<SID>.json` | `sessionId`, `windowsUserId`, `userSid` and `savedAtUtc` from the user's last check-in (a login, or an unlock the server recorded as the day's check-in). Readable only by that user, SYSTEM and Administrators. Overwritten by the next check-in, never deleted by a logout. |
 | `%ProgramData%\InOutWorker\logs\inoutworker-yyyyMMdd.log` | The SYSTEM runs' log (the Logout task): one file per day. |
-| `%LOCALAPPDATA%\InOutWorker\latest-event` | A token naming the user's latest logon, lock or unlock run, so that a run still retrying a `503` stops once a later one has started. |
+| `%LOCALAPPDATA%\InOutWorker\latest-event` | A token naming the user's latest logon, lock or unlock run, written at the start of each run, so that an older run posts nothing once a later one has started. See [Order of events](#order-of-events). |
 | `%LOCALAPPDATA%\InOutWorker\logs\inoutworker-yyyyMMdd.log` | The user's own runs' log (Login, Lock, Unlock, Disconnect and Reconnect), in their profile: one file per day. |
 
 Lines in both logs look like `[yyyy-MM-dd HH:mm:ss][LEVEL][action] message`. Task Scheduler cannot
@@ -251,9 +293,9 @@ or a request body.
 | Code | Meaning |
 |---|---|
 | `0` | Success, or a `-WhatIf` run. |
-| `1` | Configuration error (missing or invalid `BaseUrl`, unknown `Authentication`). |
+| `1` | Configuration error (missing or invalid `BaseUrl`, unknown `Authentication`). The installer also ends with `1` when no `BaseUrl` would be configured. |
 | `2` | `Authentication` is `Certificate` and no usable client certificate was found. |
-| `3` | Every sign-in attempt for the HTTP request failed. |
+| `3` | Every sign-in attempt for the HTTP request failed, or the server answered an error (`500` included). |
 | `4` | `logout` ran as SYSTEM without a valid `-UserSid`, for example because the Logout task was started by hand rather than by event 4647. |
 
 The exit code of each run appears in Task Scheduler as the task's *Last Run Result*.
@@ -292,15 +334,18 @@ ended. To test a logout, log off, or run the script as the user with `-Action lo
 | `Profile for <user> not ready after 30s; continuing anyway.` | The profile loaded slowly. The post may fail if the certificate store is not yet available. Increase `-ProfileWaitTimeoutSec` in the task's arguments if this keeps happening. |
 | `POST to ... with Certificate sign-in failed (HTTP 401)` | The certificate was not accepted: it is not issued by a CA in the server's truststore, or its subject DN is not a directory user. |
 | `POST to ... failed (HTTP 503) [directory_unavailable] ...; trying again in 5s (1 of 3).` | The server could not reach its directory to check who signed in (it tries three times itself). The user was not refused. The agent sends the event again after the server's `Retry-After`, up to `Retries` times. If the directory still does not answer, the run ends with exit code 3, and the next logon, lock or unlock goes through once the directory answers. |
-| `Not sending 'lock' again: a later logon, lock or unlock of this user has started.` | A `503` was being retried when the same user locked, unlocked or logged on again. The older event is dropped, because sent after the newer one it would undo it (a lock after the unlock that followed it would show the person as locked while they work). |
+| `Not sending 'lock': a later logon, lock or unlock of this user has started.` | The same user locked, unlocked or logged on again before this run posted, or while it was retrying a `503`. The older event is dropped, because sent after the newer one it would undo it (a lock after the unlock that followed it would show the person as locked while they work). |
+| `Configuration error: BaseUrl is not configured.` (exit 1) | The config file has no `BaseUrl`, or there is no config file. Re-run the installer with `-BaseUrl`. |
+| `POST to ... failed (HTTP 500) [internal_error] ...` (exit 3) | The server could not store the event (a database error or a lock timeout). The event is not recorded and is not sent again; the server log has the cause. |
 | `The server redirected instead of accepting Windows sign-in (is application.windows-auth enabled on the server?)` | Windows sign-in is off on the server. Enable it, or set `Authentication` to `Certificate`. |
 | `BaseUrl uses an IP address; Windows sign-in needs the server's host name.` | Use the host name registered as the SPN in `BaseUrl`. |
 | `Logout has no sessionId; the server cannot resolve the DN from it.` | The login post did not complete, so there is no session file. Investigate why the login failed. The server refuses the logout with `401`. |
 | `POST to .../out with Anonymous sign-in failed (HTTP 401) [unknown_session] ...` | The session id is unknown, already used or older than 7 days. Nothing is recorded; the user is checked out automatically if their last event was a lock. |
 | `POST to .../out with Anonymous sign-in failed (HTTP 429) [rate_limited] ...` | The server has refused more than `application.logoff.refused-per-minute` logouts with an unusable session id from this address in the last minute. See [Troubleshooting](troubleshooting.md#check-ins-not-arriving). |
 | `... does not exist; re-run Install-InOutWorker.ps1. ...` or `... is missing, a link, or not owned by SYSTEM or Administrators; not reading it. Re-run Install-InOutWorker.ps1.` | `sessions\` is missing or not as the installer left it. Re-run the installer. |
-| `Session file ... is a link or not owned by <SID>; ignoring it.` | The file was replaced by a link, or another account created it. Delete it as an administrator; the user's next login writes a new one. |
-| `Failed to write session file ...` | Usually another account created the user's session file first. An administrator deletes it. |
+| `Session file ... is a link or not owned by <SID>; ignoring it.` | At logoff: the file was replaced by a link, or another account created it. Delete it as an administrator; the user's next login writes a new one. |
+| `Session file ... is a link or not owned by <SID>; not writing the sessionId into it. An administrator should delete it; until then this user's logoff cannot be attributed.` (`ERROR`) | At check-in: another account created a file named after this user, or it is a link. The agent writes nothing into it. Delete it as an administrator; the user's next login writes a new one. |
+| `Did not write the session file ...: .... The next logoff cannot be attributed.` (`ERROR`) | The file could not be created, restricted to its user or written. The agent never leaves a `sessionId` in a file it could not restrict. Check the `sessions\` folder's permissions by re-running the installer. |
 | `Logout needs -UserSid when run as SYSTEM ...` (exit 4) | The Logout task was started by hand, or its trigger does not pass the SID. Re-run the installer to restore the task. |
 | `Server certificate validation DISABLED by configuration.` | `SkipCertificateCheck` is on. Turn it off outside a lab. |
 | A TLS or trust error for the server certificate | Windows does not trust the server's CA. Install the CA or fix the server certificate's host name. |

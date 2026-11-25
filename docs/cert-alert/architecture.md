@@ -22,7 +22,7 @@ src/main/java/com/winllc/certalert/
 ├── observability/  ens_* Prometheus metrics, management-port endpoints
 ├── repository/     Spring Data / DataTables repositories and filter specifications
 ├── revocation/     CRL store, OCSP/CRL checker, issuer certificates, fetch policy, revocation at sign-in
-├── scheduling/     DirectoryJobScheduler (all cron jobs)
+├── scheduling/     DirectoryJobScheduler (all cron jobs, on a shared pool of scheduler threads)
 ├── security/       X.509 (servlet and header mode) and LDAP-bind authentication, single sign-on
 │                   (sso/: OIDC and SAML), consent banner, session limits, security headers, roles
 │                   and groups, the auditor's read-only filter, ServerAccessPolicy
@@ -31,7 +31,7 @@ src/main/java/com/winllc/certalert/
 ├── web/            page controllers, REST API, DataTables endpoints, error handling
 └── webhook/        webhook endpoints, the delivery outbox, address guard, signing and secret encryption
 src/main/resources/
-├── db/migration/   Flyway migrations V1–V28
+├── db/migration/   Flyway migrations V1–V32, V37 and V39
 ├── static/         css, js (table wiring), img (logo, favicons)
 ├── templates/      Thymeleaf pages, email templates, layout fragments, icon sprite
 └── dev-directory.ldif   sample directory used by the developers' tests (not shipped)
@@ -90,7 +90,7 @@ flowchart TB
 ## The sync pipeline
 
 ```text
-DirectoryJobScheduler  (crons, each guarded against overlap by a database lock)
+DirectoryJobScheduler  (crons on eight shared threads, each guarded against overlap by a database lock)
         |
 DirectorySyncService        streams LDAP pages, outside any transaction
         |
@@ -127,12 +127,13 @@ Design points, all for directories of 100,000+ entries:
 
 | Concern | Handling |
 |---|---|
-| Directory size limits | Paged searches; an unpaged search silently truncates at the server's limit |
+| Directory size limits | Paged searches; an unpaged search silently truncates at the server's limit. From 0.0.4 a search the server still cuts short (some count the limit across all pages) fails the sweep rather than ending early, unless `count-limit` set the limit on purpose |
 | Memory | Entries are streamed a page at a time and never collected |
 | Round trips | Batches: one query to load what is held, one flush |
 | Insert batching | Sequence-generated ids (identity columns would defeat JDBC batching) |
 | Session growth | Persistence context cleared after every batch |
-| Failure isolation | A failed batch is logged and skipped; the run records the error count |
+| Failure isolation | From 0.0.4 a failed batch is written again one entry per transaction, so only the entry that cannot be written is skipped; it is named in the log and the run counts it. Values are cut to their column lengths, and a batch keeps the first of a repeated DN. Earlier releases skipped the whole batch |
+| Scheduling | From 0.0.4 every scheduled job, the mail and webhook outboxes, the audit flush and the session sweep share `spring.task.scheduling.pool.size` threads (`CERT_ALERT_SCHEDULER_THREADS`, 8), so a long sweep does not hold up the rest. Jobs started by hand report progress from a thread of their own |
 
 **Reconciliation** matches certificates by the SHA-256 fingerprint of their DER: already-cached
 certificates are left alone, ones no longer published are dropped, new ones are parsed and stored.
@@ -141,7 +142,19 @@ Re-syncing an unchanged directory writes nothing.
 **Alerting fires on transitions, not on discovery.** A certificate seen for the first time is not
 an alert, so the first sync of a large directory does not flood anyone. A cached certificate
 moving into `EXPIRING_SOON` or `EXPIRED` (noticed by a sweep, the changelog or the hourly refresh)
-is.
+is. From 0.0.4:
+
+- a certificate its entry has already replaced (a newer certificate with the same subject and
+  use) raises no alert when it lapses; the status change is still recorded in the entry's history;
+- the hourly refresh **escalates**: each cached certificate keeps the severity of the last alert
+  raised about it (`last_alert_severity`), and one alerted on as a `WARNING` is alerted on once
+  more, as `CRITICAL`, when it is still `EXPIRING_SOON` and inside `critical-threshold-days`. A
+  certificate first found already inside the threshold is not alerted on.
+
+**Pruning** works on how long an entry has gone unseen, not on a diff of one sweep's results. From
+0.0.4 each kind of entry is pruned only when a sweep of that kind has completed with no errors
+since the newest of the unseen entries was last seen, and only when they are at most
+`prune.max-share` (10%) of that kind.
 
 ## Status roll-up
 
@@ -200,13 +213,15 @@ flowchart LR
     NAN --> PN[Per-person notification<br/>CERTIFICATE_STATUS]
     CRON[Daily round-up cron] --> NS[NotificationService.digest]
     NS --> DIG[One EXPIRY_DIGEST per person]
-    NS --> MAIL[Round-up email<br/>expiring-user / expiring-server]
+    NS --> MAIL[Round-up email, one per address<br/>expiring-user / expiring-server]
     REV[Revocation job] --> RV[CERTIFICATE_REVOKED notification]
 ```
 
 Recipients are resolved from ownership: a person's own certificates go to them; a server's go to
 its `serverPOC` values resolved to people (including group addresses), contacts added here, and
-administrators of projects containing it. Unclaimed addresses still receive email.
+administrators of projects containing it. Unclaimed addresses still receive email. From 0.0.4 the
+round-up's mail is folded by lower-cased address (one message per address and kind, each
+credential once) and sent most urgent first, up to `email.max-per-run`.
 
 ### Adding an alert channel
 
@@ -252,13 +267,13 @@ erDiagram
 | `directory_user_email` | Addresses from `additional-email-attributes` |
 | `directory_server` | Cached IC Non-Person Entity and its roll-up |
 | `directory_server_poc` | The directory's `serverPOC` values (replaced by every sweep) |
-| `cached_certificate` | Parsed certificate detail: subject, issuer, serial, validity, key and signature algorithms, hash, SANs, SHA-256 fingerprint, key usage, risk flags, revocation status and endpoints. Exactly one owner (check constraint) |
+| `cached_certificate` | Parsed certificate detail: subject, issuer, serial, validity, key and signature algorithms, hash, SANs, SHA-256 fingerprint, key usage, risk flags, revocation status and endpoints. From 0.0.4 also when it was first found revoked (`revocation_found_at`), the severity of the last expiry alert (`last_alert_severity`) and when the clean-up last failed to remove it (`cleanup_attempted_at`). Exactly one owner (check constraint) |
 | `server_contact` | Contacts added in CertAlert (person or address); survive sweeps |
 | `user_email_alias` | Addresses added to a person (`PERSONAL` or `GROUP`) |
 | `project`, `project_user`, `project_server`, `project_admin` | Projects |
 | `notification`, `notification_setting` | Notifications (recipient held as a user id and/or address, not a foreign key) and the round-up lead-days override |
 | `audit_event` | Audit trail, in the `ens-audit/1` format since `V18`; subject is deliberately **not** a foreign key so records outlive entries |
-| `audit_chain_head`, `audit_delivery`, `audit_api_token` | The chain's newest sequence number and hash (locked while an event is added), each audit output's delivery position, and the pull API's tokens |
+| `audit_chain_head`, `audit_delivery`, `audit_api_token` | The chain's newest sequence number and hash (locked while an event is added) and, from 0.0.4, the sequence number and hash of the last event retention pruned; each audit output's delivery position; and the pull API's tokens |
 | `outbound_email` | The email outbox: messages waiting to be sent, and what became of recent ones |
 | `server_attribute_definition`, `server_attribute_option` | Editable-attribute definitions (values live only in the directory; the old `server_attribute_value` table was dropped in `V11`) |
 | `changelog_cursor` | Changelog position and counters |
@@ -266,13 +281,13 @@ erDiagram
 | `shedlock`, `job_run` | Job locks across replicas, and jobs started by hand |
 | `spring_session`, `spring_session_attributes` | Sessions in the database |
 | `saml_authn_request` | SAML sign-in requests waiting for their answer |
-| `ens_license_*` | The license, installation id and revisions |
+| `ens_license_*` | The license, installation id and revisions, and from 0.0.4 the latest time the installation has seen |
 | `api_token` | API tokens (SHA-256 of the token, scopes, expiry, creator) |
 | `webhook_endpoint`, `webhook_delivery` | Webhooks (URL and signing secret, AES-GCM encrypted when a key is set) and their delivery outbox and log |
 | `saved_view`, `scheduled_report` | Saved views of the Certificates page, and scheduled e-mailed reports |
 
 The schema is created and evolved by Flyway (`V1__create_directory_tables` …
-`V28__webhook_url_encrypted_and_report_owner_dn`; the list is in the
+`V39__ens_license_latest_time_seen`; the list is in the
 [Operator guide](operator-guide.md#upgrades)); Hibernate only validates it. `V18` moved the
 audit trail to the `ens-audit/1` format and added `audit_chain_head`, `audit_delivery` and
 `audit_api_token`; `V19` added the email outbox, `outbound_email`; `V20` rewrote the check on

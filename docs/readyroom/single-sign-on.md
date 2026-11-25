@@ -58,8 +58,8 @@ audience assertions must name), is built from it and never from a request's `Hos
 | OIDC redirect URI | `<base>/login/oauth2/code/oidc` |
 | SAML entity id and metadata | `<base>/saml2/service-provider-metadata/saml` (download it for the provider) |
 | SAML assertion consumer service (HTTP-POST) | `<base>/login/saml2/sso/saml` |
-| OIDC post-logout redirect URI (next release, with `ENS_SSO_OIDC_END_SESSION`) | `<base>/signed-out` |
-| SAML single logout service (next release, HTTP-Redirect, with `ENS_SSO_SAML_SINGLE_LOGOUT`; named in the SP metadata) | `<base>/logout/saml2/slo` |
+| OIDC post-logout redirect URI (from 0.0.3, with `ENS_SSO_OIDC_END_SESSION`) | `<base>/signed-out` |
+| SAML single logout service (from 0.0.3, HTTP-Redirect, with `ENS_SSO_SAML_SINGLE_LOGOUT`; named in the SP metadata) | `<base>/logout/saml2/slo` |
 
 `ENS_SSO_SAML_ENTITY_ID`, when set, must be an absolute URI.
 
@@ -70,27 +70,27 @@ audience assertions must name), is built from it and never from a request's `Hos
 | `ENS_SSO_ROLE_MAPPING` | empty | Provider group to role, as above |
 | `ENS_SSO_CLOCK_SKEW` | `60s` | How far the provider's clock may be off for token and assertion times (at most 5 minutes) |
 | `ENS_SSO_OIDC_ENABLED` | `false` | OpenID Connect |
-| `ENS_SSO_OIDC_ISSUER_URI` | | The issuer. Its discovery document is read on first use, not at startup, so a provider outage does not stop ReadyRoom. From the next release `https://` only, and the endpoints and key set the discovery document names must be `https://` too; `http://` stops startup |
+| `ENS_SSO_OIDC_ISSUER_URI` | | The issuer. Its discovery document is read on first use, not at startup, so a provider outage does not stop ReadyRoom. From 0.0.3 `https://` only, and the endpoints and key set the discovery document names must be `https://` too; `http://` stops startup |
 | `ENS_SSO_OIDC_CLIENT_ID` | | Also the audience ID tokens must name |
 | `ENS_SSO_OIDC_CLIENT_SECRET`, `ENS_SSO_OIDC_CLIENT_SECRET_FILE` | empty | Empty: a public client (PKCE only). The file wins |
 | `ENS_SSO_OIDC_SCOPES` | `openid,profile,email` | |
 | `ENS_SSO_OIDC_USER_FILTER` | required | For example `(userPrincipalName={upn})` |
 | `ENS_SSO_OIDC_GROUPS_CLAIM` | `groups` | |
 | `ENS_SSO_OIDC_DISPLAY_NAME` | `Sign in with single sign-on` | The button |
-| `ENS_SSO_OIDC_END_SESSION` (next release) | `false` (the bundle's `env.template` sets `true` for new installs) | Signing out also ends the provider's session (RP-initiated logout). See [Signing out](#signing-out) |
+| `ENS_SSO_OIDC_END_SESSION` (from 0.0.3) | `false` (the bundle's `env.template` sets `true` for new installs) | Signing out also ends the provider's session (RP-initiated logout). See [Signing out](#signing-out) |
 | `ENS_SSO_SAML_ENABLED` | `false` | SAML 2.0 |
-| `ENS_SSO_SAML_IDP_METADATA` | | The provider's metadata: `https://...` (read on first use and every 12 hours, keeping the last good copy) or `file:/path`. From the next release `http://` stops startup, and a redirect of the metadata may not leave https |
+| `ENS_SSO_SAML_IDP_METADATA` | | The provider's metadata: `https://...` (read on first use and every 12 hours, keeping the last good copy) or `file:/path`. From 0.0.3 `http://` stops startup, and a redirect of the metadata may not leave https |
 | `ENS_SSO_SAML_ENTITY_ID` | `{baseUrl}/saml2/service-provider-metadata/saml` | This service provider's entity id |
 | `ENS_SSO_SAML_USER_FILTER` | required | `{nameid}` and attribute names, for example `(userPrincipalName={http://schemas.xmlsoap.org/ws/2005/05/identity/claims/upn})` |
 | `ENS_SSO_SAML_GROUPS_ATTRIBUTE` | `http://schemas.microsoft.com/ws/2008/06/identity/claims/groups` | |
-| `ENS_SSO_SAML_SP_KEY_FILE`, `ENS_SSO_SAML_SP_CERT_FILE` | empty | PEM, PKCS#8 RSA key and certificate: signs requests and decrypts encrypted assertions, if the provider wants either; from the next release, also signs single logout messages |
+| `ENS_SSO_SAML_SP_KEY_FILE`, `ENS_SSO_SAML_SP_CERT_FILE` | empty | PEM, PKCS#8 RSA key and certificate: signs requests and decrypts encrypted assertions, if the provider wants either; from 0.0.3, also signs single logout messages |
 | `ENS_SSO_SAML_DISPLAY_NAME` | `Sign in with SAML single sign-on` | The button |
-| `ENS_SSO_SAML_SINGLE_LOGOUT` (next release) | `false` (the bundle's `env.template` sets `true` for new installs) | SAML single logout; needs the SP key and certificate. See [Signing out](#signing-out) |
+| `ENS_SSO_SAML_SINGLE_LOGOUT` (from 0.0.3) | `false` (the bundle's `env.template` sets `true` for new installs) | SAML single logout; needs the SP key and certificate. See [Signing out](#signing-out) |
 
 A missing required setting, a filter with no placeholder, or a role mapping to anything but `MANAGER`
 or `ADMIN` stops startup with the setting's name.
 
-!!! info "From the next release: trust material over HTTPS only"
+!!! info "Trust material over HTTPS only (from 0.0.3)"
     The OIDC issuer and the SAML metadata are what every ID token and assertion is verified against,
     so they are read only over `https://` (or, for SAML, from a file), never `http://`, where anyone
     on the network path could swap the keys. An `http://` value stops startup, naming the setting.
@@ -103,9 +103,9 @@ or `ADMIN` stops startup with the setting's name.
 
 With Helm these are the `sso.*` values (`sso.roleMapping`, `sso.oidc.issuerUri`,
 `sso.oidc.existingSecret`, `sso.saml.idpMetadataUrl` or `sso.saml.metadataConfigMap`,
-`sso.saml.spKeySecret`, and from the next release `sso.oidc.endSession` and `sso.saml.singleLogout`,
+`sso.saml.spKeySecret`, and from 0.0.3 `sso.oidc.endSession` and `sso.saml.singleLogout`,
 ...). With the release package, add the `ENS_SSO_*` variables to `.env`;
-from the next release the package's `env.template` has a commented *Single sign-on* block with all of
+from 0.0.3 the package's `env.template` has a commented *Single sign-on* block with all of
 them (copy it into an older `.env`), and its `README.md` a *Single sign-on* section.
 
 ## Provider walkthroughs
@@ -159,7 +159,7 @@ or *Group*); metadata `https://<adfs>/FederationMetadata/2007-06/FederationMetad
   cookie. The request it answers is kept in the database by its RelayState (`sso_saml_request`, ten
   minutes) and tied to the browser by a cookie of its own (`ENS_SAML_<relay state>`,
   `SameSite=None; Secure`, sent only to the assertion consumer service). **SAML needs HTTPS.** From
-  the next release, startup stops when SAML is on and `APPLICATION_BASE_URL` is not `https://`.
+  0.0.3, startup stops when SAML is on and `APPLICATION_BASE_URL` is not `https://`.
 - ReadyRoom asks the provider's HTTP-Redirect sign-in endpoint (the POST binding would need a
   self-submitting form, which the Content-Security-Policy blocks).
 - The consent banner, when on, must be acknowledged before either method starts.
@@ -172,9 +172,9 @@ groups granted through `ENS_SSO_ROLE_MAPPING`. Every refusal is a failed `auth.l
 
 ## Signing out
 
-Up to the current release, signing out ends the ReadyRoom session only, and the identity provider's
+By default, signing out ends the ReadyRoom session only, and the identity provider's
 stays open: on a shared desk, the next person pressing the single sign-on button is signed in as the
-last one. From the next release two settings end it too. Both are off unless set, so an upgrade
+last one. From 0.0.3 two settings end it too. Both are off unless set, so an upgrade
 changes nothing; the release bundle's `env.template` turns them on for new installs.
 
 - **OpenID Connect**, `ENS_SSO_OIDC_END_SESSION=true` (Helm `sso.oidc.endSession`): after

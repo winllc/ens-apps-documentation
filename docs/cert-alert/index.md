@@ -26,10 +26,10 @@ certificate crosses into expiry.
 
 | Area | What CertAlert does |
 |---|---|
-| **Directory scrape** | Paged, streamed LDAP sweeps of people and servers, built for 100,000+ entries. Certificates are reconciled by SHA-256 fingerprint, so re-syncing an unchanged directory writes nothing. |
+| **Directory scrape** | Paged, streamed LDAP sweeps of people and servers, built for 100,000+ entries. Certificates are reconciled by SHA-256 fingerprint, so re-syncing an unchanged directory writes nothing. A sweep the directory cuts short at its size limit fails rather than passing for a complete one (from 0.0.4). |
 | **Changelog connector** | Optionally follows the directory's `cn=changelog` so a change reaches the cache within seconds rather than at the next nightly sweep. |
 | **Search tables** | *People* and *Servers* tables with status roll-ups, expiry filters, point-of-contact search, risky-name and project filters, and expandable rows. |
-| **Expiry status** | Every certificate is `VALID`, `EXPIRING_SOON` (within 30 days by default) or `EXPIRED`; an hourly job re-evaluates status as time passes. |
+| **Expiry status** | Every certificate is `VALID`, `EXPIRING_SOON` (within 30 days by default) or `EXPIRED`; an hourly job re-evaluates status as time passes and, from 0.0.4, raises a second, `CRITICAL` alert when an expiring certificate comes within 7 days (by default). |
 | **Notifications** | Per-person in-app notifications when a certificate crosses into a bad state, plus a daily *expiry round-up* by email to every point of contact. |
 | **Alert channels** | Operator-facing channels (application log, email to a fixed list) receive every alert as it happens. |
 | **Revocation** | A nightly job checks CRLs (and OCSP where no CRL exists) for the certificates each entry currently holds. |

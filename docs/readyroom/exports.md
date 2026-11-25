@@ -13,7 +13,15 @@
   yourself needs an unlock first. While the day is in progress a screen lock is a break, not
   a departure: the page shows *No logoff recorded* and a download leaves the check-out empty. Once
   the day is over, a day that ends with a screen lock ended at that lock (the automatic check-out
-  of an evening lock is written after midnight, on the next day).
+  of an evening lock is written after midnight, on the next day). From 0.0.11:
+    - a session left open (a check-in or unlock last) is closed by an automatic check-out at the
+      end of the person's day. When they left is not known, so that check-out is no departure: the
+      day still shows *No logoff recorded*, and a download leaves the check-out empty;
+    - where the Windows client names its workstation, a logoff counts back to a lock on the same
+      workstation only. Someone who locks one PC at 08:15 and logs off another at 17:00 left at
+      17:00;
+    - Home, the user tables, the people lists and the public API's people show the same check-out
+      time as the reports. Before, they showed the time the automatic check-out was written.
 - **People lists**: a group's members (on its page) and a name search (*Find a user*) download as a
   list of people with each person's status on the day the page shows (the **System Date**, else
   today), and the file is named after that day. A search lists its first
@@ -23,6 +31,11 @@
 - **The group report page** counts every member in its day summaries but shows the own days of the
   first `APPLICATION_REPORTS_HTMLMAXMEMBERS` (200) members only, and says so (a month of a
   5,000-member group was a 68 MB page). The CSV and Excel downloads have every member.
+- **A member's employee type, organization and location** in a group report come, from 0.0.11,
+  from their user record, which the hourly directory refresh keeps up to date; only a member
+  without a record is read from the directory. So a large group's report no longer reads the
+  directory once per member, and a member whose directory entry has gone but who is still on the
+  group's member list is listed rather than left out.
 - **When the directory cannot be read**, a group's members are not known: the group report page
   says *The directory could not be read*, and its CSV and Excel downloads answer `503`
   (`directory_unavailable`, with `Retry-After: 5`) instead of a file with only its header. The same
@@ -128,6 +141,6 @@ is the person's own day.
 Until `APPLICATION_REPORTS_SITETIMEZONES` is set, reports look as before (everyone in
 `APPLICATION_TIMEZONE`). Flyway `V10` adds `user_records.time_zone` and `report_schedules`.
 
-From the next release, a person's profile or site zone also decides their day on every page and
+From 0.0.6, a person's profile or site zone also decides their day on every page and
 for the absence alert, not only in reports. Until a day start is set, days start at midnight, as
 before.

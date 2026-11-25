@@ -28,7 +28,8 @@ PMO administrators let ITSM and identity-governance tools in, and tell them what
   prefix, scopes, expiry, last use and the address it came from, and revokes it.
 - **Webhooks**: an `https` URL and the events (`helpdesk.*`, `token.*`, `user.*`, or single events).
   The signing secret is shown once; **rotate** replaces it. The page lists the latest deliveries.
-  See [Webhooks](webhooks.md).
+  From 0.0.3 the delivery log is purged after `ENS_RETENTION_WEBHOOK_DELIVERIES_DAYS` (90 days),
+  and a delivered event's body is not kept. See [Webhooks](webhooks.md).
 
 Changes an integration asks for are [help-desk requests](help-desk.md): they need a ticket and a
 verified user, and a privileged user's request waits for a second operator, who approves it on the
@@ -79,7 +80,7 @@ Each row goes through the same registration as above. The results page shows the
 From **Trusted Agent Directory → Details**, PMO users see **Edit TA** (`/ta/modify/user/{id}`) and **TA Report** (`/report/ta/{id}`).
 
 * **Edit**: contact details, desk, working hours, site.
-* **Status**: mark the agent active or inactive. This also links or unlinks the TRUSTED_AGENT AM admin role, records `TRUSTED_AGENT_MARKED_ACTIVE` or `TRUSTED_AGENT_MARKED_INACTIVE`, and emails the agent with the *ta-status-changed* template.
+* **Status**: mark the agent active or inactive. This also links or unlinks the TRUSTED_AGENT AM admin role, records `TRUSTED_AGENT_MARKED_ACTIVE` or `TRUSTED_AGENT_MARKED_INACTIVE`, and emails the agent with the *ta-status-changed* template. From 0.0.3 an inactive agent's details page is shown to Trusted Agents and PMO users only, and nobody can book an appointment with them; before, both pages still worked for anyone who had the agent's ID.
 * **Delete**: removes the profile, unlinks the TRUSTED_AGENT AM admin role, and records `TRUSTED_AGENT_DELETED`.
 * **TA Report**: tokens issued by the agent and the agent's audit events.
 
@@ -91,7 +92,7 @@ Trusted Agents add and maintain sites. PMO users can also:
 
 * **Edit Site** (`/sites/edit/{shippingId}`);
 * **Delete** a site (`SITE_DELETED` audit event);
-* manage the **token serial ranges** associated with a site (**Associate New Token Serial Range with Site**, or **Delete** a range). Each site's report and token counts use these ranges.
+* manage the **token serial ranges** associated with a site (**Associate New Token Serial Range with Site**, or **Delete** a range). Each site's report and token counts use these ranges. From 0.0.3 both serials must be digits, the first no higher than the last, and `token.serial.prefix` is added where it is missing, as for shipments; otherwise the page answers *Enter the first and last serial numbers of the range as digits, the first no higher than the last.* and stores nothing.
 
 ## Shipments
 
@@ -105,9 +106,11 @@ PMO users fulfil the shipment requests raised by Trusted Agents:
 
 PMO users can also **delete** a shipment (`/shipment/modify/delete/{guid}`).
 
+From 0.0.3 a shipment that someone else changed since you opened it is not overwritten: your change is refused with *Someone else changed this at the same time, so nothing was saved* (HTTP 409), and nobody is emailed. Open the shipment again; if the agent cancelled it meanwhile, there is nothing left to send.
+
 ## Exemption requests
 
-**PMO Activities → Exemption Requests** (`/user/exemption/review/list`) lists requests that are not yet reviewed, and can be switched to show all. Open a request to see the user ID, certificate DN, reason and dates, then:
+**PMO Activities → Exemption Requests** (`/user/exemption/review/list`) lists requests that are not yet reviewed, and can be switched to show all. A request reaches the *Not Reviewed* list once its account owner has confirmed it from the e-mailed link. From 0.0.3 the *All* list marks the others **Not confirmed**, their page shows *Not confirmed by the account owner* in place of the review form, and the server refuses to approve or deny them (*The account owner has not confirmed this request yet. It can be reviewed once it is confirmed.*). A request can be reviewed once: a second decision is refused with *This request has already been reviewed.* Open a request to see the user ID, certificate DN, reason and dates, then:
 
 * **Approve** or **Deny** with optional **comments**. The reviewer and the review time are recorded, and the requester is emailed (*user-exemption-request-updated* template). Approved users cannot be assigned a token, and they are excluded from the `USERS_WITHOUT_TOKEN` group email.
 * **Delete** the request.
@@ -132,7 +135,7 @@ Notifications appear on the home page until they expire. You can also delete the
 |---|---|
 | `TRUSTED_AGENTS` | Email addresses of active Trusted Agents |
 | `PMO` | Users holding the PMO AM admin role |
-| `USERS_WITH_TOKEN` | Every email address on a token enrollment record |
+| `USERS_WITH_TOKEN` | From 0.0.3: users who registered a token that has not expired. Before: every email address on a token enrollment record, withdrawn enrollments and returned tokens included |
 | `ALL_USERS` | Same as `USERS_WITH_TOKEN` |
 | `ALL_ADMINS` | `TRUSTED_AGENTS` + `PMO` |
 | `ALL_ADMINS_AND_USERS` | `ALL_USERS` + `ALL_ADMINS` |
@@ -140,18 +143,23 @@ Notifications appear on the home page until they expire. You can also delete the
 
 Addresses without an `@` are dropped, and each recipient gets an individual message.
 
+From 0.0.3 the page reports success only when the messages were handed to the mail queue. It answers *Could not send email.* and records nothing when the group has no recipients, when a recipient look-up fails (the PMO role in RSA AM, for example), or when the license holds e-mail back. The audit event `email.group-sent` carries the number of recipients (`details.recipients`).
+
 ## Scheduled jobs (`/manualCron`)
 
-The **Manual Run Cron Jobs** page lists each job's name, description, enabled and debug flags, and last-run details (for example *"Finished at: …, Message: Successfully Sent 12 emails out of 12"*, prefixed `(DEBUG MODE - NO EMAILS SENT)` in debug mode). **Run** triggers the job immediately, in the background.
+The **Manual Run Cron Jobs** page lists each job's name, description, enabled and debug flags, and last-run details (for example *"Sent 12 emails, 0 failed"*, prefixed `(DEBUG MODE - NO EMAILS SENT)` in debug mode). **Run** triggers the job immediately, in the background.
+
+From 0.0.3 a job that could not do its work shows `Failed: ...` here and is audited as `job.failed`: RSA AM or the Connector could not be reached, or none of the e-mail it had to send went out. A count such as *Sent 11 emails, 1 failed* is what the mail relay took. Running `expiring` or `appointmentupcoming` again on the same day sends nothing twice.
 
 | Job | Purpose |
 |---|---|
 | `expiring` | Token-expiry reminder emails |
 | `appointmentupcoming` | Upcoming-appointment reminders to users, and digests to agents |
 | `resyncta` | Re-sync Trusted Agents with RSA AM |
-| `lostTokenThresholdMonitor` | Report users with too many lost tokens to `mfa.group.email` (debug **on** by default: only logged. From the next release the report is on by default and goes to `mfa.group.email` when it is set; `debug=true` keeps it off, with a warning at every start) |
-| `sendDelayedTokenRegistrationEmails` | Send or re-send enrollment links for staged roll-outs |
+| `lostTokenThresholdMonitor` | Report users with too many lost tokens to `mfa.group.email` (debug **on** by default: only logged. From 0.0.2 the report is on by default and goes to `mfa.group.email` when it is set; `debug=true` keeps it off, with a warning at every start) |
+| `sendDelayedTokenRegistrationEmails` | Send or re-send enrollment links for staged roll-outs, from 0.0.3 for at most `maxDaysOfReminders` (30) days after the date the token may be registered |
 | `tokenPinCheck` | Initial-PIN and check-PIN emails for tokens that have not been used |
+| `dataRetention` | Delete closed records past their retention ([Configuration → Data retention](configuration.md#data-retention)) |
 
 Enabling or disabling a job, debug mode and schedules are set in `.env` (Helm: `config`) ([Configuration → Scheduled jobs](configuration.md#scheduled-jobs)). A disabled job does not run, even when triggered from this page. Last-run details are lost when the portal restarts.
 
@@ -160,7 +168,7 @@ Enabling or disabling a job, debug mode and schedules are set in `.env` (Helm: `
 | Report | URL | Access |
 |---|---|---|
 | Trusted Agent report | `/report/ta/{userId}` | PMO |
-| Site report | `/report/site/{shippingId}` | Trusted Agent |
+| Site report | `/report/site/{shippingId}` | Trusted Agent. Tokens at the site and tokens issued are counted in RSA AM from the site's serial ranges, each token once (from 0.0.3 in one Connector call) |
 | Overview report | `/report/overview` | PMO. Not implemented: it always returns the error page ("Could not generate report"). |
 
 ## Branding and content

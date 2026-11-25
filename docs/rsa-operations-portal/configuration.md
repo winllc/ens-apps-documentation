@@ -103,7 +103,7 @@ With Helm, the Portal and the Connector are two Deployments, the license is in t
 
 | Name | Default | Description |
 |---|---|---|
-| `spring.datasource.url` | `jdbc:mysql://database.winllc-dev.com/RSAAPP`; from the next release `jdbc:mysql://localhost:3306/RSAAPP` | JDBC URL. The release package's template sets `jdbc:mysql://mysql:3306/RSAAPP?sslMode=REQUIRED`. The Helm chart builds it from `database.*` (with `sslMode=REQUIRED` by default). |
+| `spring.datasource.url` | `jdbc:mysql://database.winllc-dev.com/RSAAPP`; from 0.0.2 `jdbc:mysql://localhost:3306/RSAAPP` | JDBC URL. The release package's template sets `jdbc:mysql://mysql:3306/RSAAPP?sslMode=REQUIRED`. The Helm chart builds it from `database.*` (with `sslMode=REQUIRED` by default). |
 | `spring.datasource.username` | `appuser` | Database user. The release package's MySQL creates `appuser` (`MYSQL_USER`). |
 | `spring.datasource.password` | empty | Database password. |
 | `spring.datasource.driver-class-name` | `com.mysql.cj.jdbc.Driver` | JDBC driver. |
@@ -117,12 +117,13 @@ With Helm, the Portal and the Connector are two Deployments, the license is in t
 
 | Name | Default | Description |
 |---|---|---|
-| `spring.mail.host` | `email.winllc-dev.com`; from the next release `localhost` | SMTP relay used by `JavaMailSender`. |
+| `spring.mail.host` | `email.winllc-dev.com`; from 0.0.2 `localhost` | SMTP relay used by `JavaMailSender`. |
 | `spring.mail.port` | `25` | SMTP port. |
 | `spring.mail.test-connection` | `true` | Spring Boot checks the SMTP connection at startup. |
-| `mail.default.from` | `noreply@winllc-dev.com`; from the next release none | The From address on every email the portal sends. From the next release, not set: `noreply@<the host of application.dns.name>`, with a warning at every start (Helm `mail.from`, whose default `""` gets this too). Set an address your relay accepts |
-| `mail.smtp.host` / `mail.smtp.port` | `email.winllc-dev.com` (from the next release `localhost`) / `25` | Present in `application.properties`. The portal code does not read them; `spring.mail.*` controls delivery. |
-| `mfa.group.email` | `postmaster@winllc-dev.com`; from the next release none | MFA/PMO team mailbox. It receives the lost-token-threshold report and appears in user emails as the contact address. From the next release, not set: the lost-token report goes to nobody (the users are only logged, and reported once it is set) and e-mails to users name "your help desk" as their contact, with a warning at every start. Set it (Helm `mail.mfaGroupEmail`) (`GUIDE.md` calls it "the from address", but the From header comes from `mail.default.from`.) |
+| `spring.mail.properties.mail.smtp.connectiontimeout`, `.timeout`, `.writetimeout` | `10000`, `30000`, `30000` | From 0.0.3: how long, in milliseconds, a send waits for the SMTP relay to connect, to answer and to take the message. The scheduled jobs send their e-mail on the job's own thread, so a relay that stalls fails the send after this long instead of holding the job. Helm: under `config`. |
+| `mail.default.from` | `noreply@winllc-dev.com`; from 0.0.2 none | The From address on every email the portal sends. From 0.0.2, not set: `noreply@<the host of application.dns.name>`, with a warning at every start (Helm `mail.from`, whose default `""` gets this too). Set an address your relay accepts |
+| `mail.smtp.host` / `mail.smtp.port` | `email.winllc-dev.com` (from 0.0.2 `localhost`) / `25` | Present in `application.properties`. The portal code does not read them; `spring.mail.*` controls delivery. |
+| `mfa.group.email` | `postmaster@winllc-dev.com`; from 0.0.2 none | MFA/PMO team mailbox. It receives the lost-token-threshold report and appears in user emails as the contact address. From 0.0.2, not set: the lost-token report goes to nobody (the users are only logged, and reported once it is set) and e-mails to users name "your help desk" as their contact, with a warning at every start. Set it (Helm `mail.mfaGroupEmail`) (`GUIDE.md` calls it "the from address", but the From header comes from `mail.default.from`.) |
 | `group.email` | empty | Present in `application.properties`. Not read by the code. |
 
 ### RSA AM settings used by the portal
@@ -170,7 +171,7 @@ These are the ENS platform settings: every ENS application has them, with the sa
 | Name | Default | Description |
 |---|---|---|
 | `MANAGEMENT_SERVER_PORT` | unset | Spring Boot's setting: a port of its own for the actuator. There, without sign-in, are `/actuator/prometheus` and the health endpoints; the Portal's own port then has no actuator. Without it, Prometheus is not exposed at all. Never publish this port to users. The Helm chart sets it (`metrics.enabled`, `metrics.port: 9090`) |
-| `LOGGING_STRUCTURED_FORMAT_CONSOLE` | unset (text) | Spring Boot's setting: `ecs` writes one JSON object per console log line (Elastic Common Schema), with the request id as `requestId`. The Helm chart does that by default (`logFormat: json`). From the next release the same setting in `connector.env` does it for the Connector (Helm `connector.logFormat: json`); see [Logging](#logging) |
+| `LOGGING_STRUCTURED_FORMAT_CONSOLE` | unset (text) | Spring Boot's setting: `ecs` writes one JSON object per console log line (Elastic Common Schema), with the request id as `requestId`. The Helm chart does that by default (`logFormat: json`). From 0.0.2 the same setting in `connector.env` does it for the Connector (Helm `connector.logFormat: json`); see [Logging](#logging) |
 | `management.endpoint.health.group.readiness.include` | `readinessState,db,connector` | What readiness waits for: the database and the Connector |
 
 Each log line carries the request id: the caller's `X-Request-Id` if it is a plain token, otherwise a new one, returned in the response's `X-Request-Id` and recorded in the request's audit events. The metrics are listed in the [Operator Guide](operator-guide.md#health-and-monitoring).
@@ -202,12 +203,12 @@ AD integration adds a user to the "RSA enabled" group when they complete enrollm
 | `active-directory.connections-allowed` | `false` | Master switch. When `false`, add and remove operations are logged and skipped. |
 | `active-directory.properties[i].rsaSecurityDomainGuid` | sample | RSA AM security domain GUID whose users live in this AD. The user's domain selects the AD connection. |
 | `active-directory.properties[i].contextFactory` | `com.sun.jndi.ldap.LdapCtxFactory` | JNDI context factory class. |
-| `active-directory.properties[i].providerURL` | `ldap://ad.winllc-dev.com:389` for `[0]`; from the next release empty | LDAP URL. |
+| `active-directory.properties[i].providerURL` | `ldap://ad.winllc-dev.com:389` for `[0]`; from 0.0.2 empty | LDAP URL. |
 | `active-directory.properties[i].security.authType` | `simple` | Bind type. |
-| `active-directory.properties[i].security.username` | sample DN for `[0]`; from the next release empty | Bind DN. |
+| `active-directory.properties[i].security.username` | sample DN for `[0]`; from 0.0.2 empty | Bind DN. |
 | `active-directory.properties[i].security.password` | empty | Bind password. |
-| `active-directory.properties[i].rsaEnabledGroup` | sample DN for `[0]`; from the next release empty | DN of the group whose members must use RSA to sign in to their workstation. |
-| `active-directory.properties[i].userSearchBase` | sample DN for `[0]`; from the next release empty | Base for `samAccountName` lookups. |
+| `active-directory.properties[i].rsaEnabledGroup` | sample DN for `[0]`; from 0.0.2 empty | DN of the group whose members must use RSA to sign in to their workstation. |
+| `active-directory.properties[i].userSearchBase` | sample DN for `[0]`; from 0.0.2 empty | Base for `samAccountName` lookups. |
 | `active-directory.properties[i].trust-store`, `.trust-store-password` | not set | A JKS or PKCS12 file with the AD CA, for `ldaps://` with a private CA. One store must hold the CAs of every AD instance. Without it, the JVM's default trust store is used. Either way the domain controller's certificate and host name are checked |
 | `active-directory.properties[i].connect-timeout-millis`, `.read-timeout-millis` | `5000`, `15000` | Give up on an unreachable or stalled domain controller |
 | `active-directory.properties[i].page-size` | `500` | Large searches are paged; keep it at or below AD's `MaxPageSize` (1000) |
@@ -220,43 +221,71 @@ An instance with a missing setting is left out at startup, and the log says whic
 
 ### Scheduled jobs
 
-For every job `<name>` in `expiring`, `appointmentupcoming`, `resyncta`, `lostTokenThresholdMonitor`, `sendDelayedTokenRegistrationEmails` and `tokenPinCheck`:
+For every job `<name>` in `expiring`, `appointmentupcoming`, `resyncta`, `lostTokenThresholdMonitor`, `sendDelayedTokenRegistrationEmails`, `tokenPinCheck` and `dataRetention`:
 
 | Name | Description |
 |---|---|
 | `cron.<name>.enabled` | `true` lets the job run (on schedule or by hand). |
-| `cron.<name>.debug` | `true` runs the job without sending email. |
+| `cron.<name>.debug` | `true` runs the job without sending email or changing anything; `dataRetention` then only counts what it would delete. |
 | `cron.<name>.description` | Label shown on the Manual Cron page. |
 | `cron.<name>.cron` | Spring 6-field cron expression (sec min hour day month weekday). |
 
 | Name | Default | Description |
 |---|---|---|
-| `cron.timezone` | the server's (UTC in the containers) | Time zone the schedules mean, for example `America/New_York`. Helm: `cronTimezone` |
+| `cron.timezone` | the server's (UTC in the containers) | Time zone the schedules mean, for example `America/New_York`. From 0.0.3 the appointment reminders and the lost-token report also count their days ("tomorrow", "the last 30 days") in this zone; before, in the server's. Helm: `cronTimezone` |
 | `cron.lock.maximumHoldMinutes` | `360` | A job's claim in the `CronLock` table left by a node that died is released after this |
 | `cron.lock.minimumHoldSeconds` | `120` | A claim is held at least this long, so a node with a slightly late clock does not run the same occurrence again |
 
 | Name | Default |
 |---|---|
 | `cron.expiring.enabled` / `.debug` / `.cron` | `true` / `false` / `0 30 0 ? * *` |
-| `cron.expiring.notification.daysBefore` | `30,14,7,1` (one notice each) |
+| `cron.expiring.notification.daysBefore` | `30,14,7,1` (one notice each). From 0.0.3 a night the job missed is caught up with the notice of the last milestone passed |
 | `cron.appointmentupcoming.enabled` / `.debug` / `.cron` | `true` / `false` / `0 30 0 ? * *` |
 | `cron.appointmentupcoming.remindDaysBefore` | `1` |
 | `cron.appointmentupcoming.taDigestDays` | `7` |
 | `cron.resyncta.enabled` / `.debug` / `.cron` | `true` / `false` / `0 30 0 ? * *` |
-| `cron.lostTokenThresholdMonitor.enabled` / `.debug` / `.cron` | `true` / **`true`** (from the next release `false`) / `0 35 0 ? * *`. With `debug=true` the report of users over the lost-token threshold is only logged, never sent to `mfa.group.email`. **From the next release the report is on by default** (`debug=false` in `application.properties`), now that `mfa.group.email` has no built-in address: an installation with `mfa.group.email` set, upgraded ones included, gets the nightly report after the upgrade; without it the report goes to nobody (the users are logged). `cron.lostTokenThresholdMonitor.debug=true` (Helm: under `config`) keeps it off, with a warning at every start |
+| `cron.lostTokenThresholdMonitor.enabled` / `.debug` / `.cron` | `true` / **`true`** (from 0.0.2 `false`) / `0 35 0 ? * *`. With `debug=true` the report of users over the lost-token threshold is only logged, never sent to `mfa.group.email`. **From 0.0.2 the report is on by default** (`debug=false` in `application.properties`), now that `mfa.group.email` has no built-in address: an installation with `mfa.group.email` set, upgraded ones included, gets the nightly report after the upgrade; without it the report goes to nobody (the users are logged). `cron.lostTokenThresholdMonitor.debug=true` (Helm: under `config`) keeps it off, with a warning at every start |
 | `cron.lostTokenThresholdMonitor.window.inDays` | `30` |
 | `cron.lostTokenThresholdMonitor.tokens.lost` | `3` |
 | `cron.sendDelayedTokenRegistrationEmails.enabled` / `.debug` / `.cron` | `true` / `false` / `0 32 0 ? * *` |
 | `cron.sendDelayedTokenRegistrationEmails.daysBetweenReminderEmails` | `3` |
+| `cron.sendDelayedTokenRegistrationEmails.maxDaysOfReminders` | `30` (from 0.0.3). No more reminders this many days after the date the token may be registered; `0`: no limit, as before 0.0.3 |
 | `cron.tokenPinCheck.enabled` / `.debug` / `.cron` | `true` / `false` / `0 30 0 ? * *` |
 | `cron.tokenPinCheck.daysSinceLastLogin` | `60` |
 | `cron.tokenPinCheck.daysBetweenReminderEmails` | `14` |
 | `cron.tokenPinCheck.resetLinkValidDays` | `14` |
 | `cron.tokenPinCheck.resetLinkMaxAttempts` | `5` |
+| `cron.dataRetention.enabled` / `.debug` / `.cron` | `true` / `false` / `0 45 0 ? * *`. See [Data retention](#data-retention) |
 
 `resetLinkValidDays` is how long the reset link in a PIN-check email works, and `resetLinkMaxAttempts` how many tokencodes one link accepts before it refuses more.
 
-The descriptions default to: "Send Expiring Token Reminder Cron", "Send Upcoming Appointments Email Cron", "Re-sync Trusted Agents with Authentication Manager Cron", "Identify Users with multiple lost Tokens", "Send Delayed Token Registration Emails Cron" and "Reset Token Pin Checker". [Architecture](architecture.md#scheduled-jobs) describes what each job does.
+The descriptions default to: "Send Expiring Token Reminder Cron", "Send Upcoming Appointments Email Cron", "Re-sync Trusted Agents with Authentication Manager Cron", "Identify Users with multiple lost Tokens", "Send Delayed Token Registration Emails Cron", "Reset Token Pin Checker" and "Delete closed records past their retention". [Architecture](architecture.md#scheduled-jobs) describes what each job does.
+
+### Data retention
+
+The `dataRetention` job deletes each table's **closed** records once they are older than the table's retention, every night at 00:45, on one Portal node (`CronLock`). A record still in use is never deleted, however old. Set the retention in days in `.env` (Helm: `retention.*`); `0` keeps a table's records forever. The property form is `ens.retention.<table>-days`, for example `ens.retention.webhook-deliveries-days`.
+
+| Name | Default | Helm | Deleted after that many days | Never deleted |
+|---|---|---|---|---|
+| `ENS_RETENTION_APPOINTMENTS_DAYS` | `365` | `retention.appointmentsDays` | Appointments, after their day (attended or cancelled) | Appointments still to come |
+| `ENS_RETENTION_HELPDESK_REQUESTS_DAYS` | `730` | `retention.helpdeskRequestsDays` | Help-desk requests closed (completed, failed, rejected, cancelled, expired), counted from their last step | Open requests (verifying, waiting for approval, approved, running) |
+| `ENS_RETENTION_EXEMPTION_REQUESTS_DAYS` | `365` | `retention.exemptionRequestsDays` | Denied exemption requests, after the review; requests the account owner never confirmed, after the request | Approved exemptions (in force), and confirmed requests waiting for review |
+| `ENS_RETENTION_SHIPMENTS_DAYS` | `730` | `retention.shipmentsDays` | Received, cancelled, returned or undeliverable shipments, after their last step | New, in-progress and shipped shipments |
+| `ENS_RETENTION_TOKEN_ENROLLMENTS_DAYS` | `730` | `retention.tokenEnrollmentsDays` | Token registrations: a registered token, after it expired; a token taken back before it was registered, after its last reminder | Tokens waiting for their user to register, and registered tokens that have not expired |
+| `ENS_RETENTION_PIN_RESET_TRACKERS_DAYS` | `365` | `retention.pinResetTrackersDays` | PIN reminder trackers (`tokenPinCheck`), after the last reminder | Trackers whose reset link still works (`cron.tokenPinCheck.resetLinkValidDays`) |
+| `ENS_RETENTION_CERTIFICATE_MAPPINGS_DAYS` | `730` | `retention.certificateMappingsDays` | Certificate-to-user mappings that a newer mapping of the same certificate replaced, after they were added | The newest mapping of each certificate |
+| `ENS_RETENTION_SYSTEM_NOTIFICATIONS_DAYS` | `365` | `retention.systemNotificationsDays` | System notifications, after they expired | Notifications still shown |
+| `ENS_RETENTION_WEBHOOK_DELIVERIES_DAYS` (from 0.0.3) | `90` | `retention.webhookDeliveriesDays` | The webhook delivery log: delivered, given-up and cancelled deliveries, after their last attempt. A delivered event's payload (user ID, token serial, actor) is not kept even before then | Deliveries still waiting to be sent |
+
+With Helm, an empty value keeps the default, and `retention.enabled` (`true`) is `cron.dataRetention.enabled`.
+
+- **Audit.** Each run that deletes anything records one `data.purged` event with the count per table (`details.purged.<table>`), the total and the retention in force (`details.retentionDays.<table>`), and nothing from the deleted records. The job's `job.completed` event and the Manual Cron page show the same counts.
+- **Dry run.** `cron.dataRetention.debug=true` counts what would go and deletes nothing. `cron.dataRetention.enabled=false` turns the job off.
+- **License.** Unlike the other jobs, it runs without the `scheduled-jobs` license feature and while the license is read-only: personal data must not outlive its retention because a license lapsed.
+- **Batches.** Rows go 500 at a time, each batch in its own short transaction, and each delete checks its rows again, so a record reopened or approved meanwhile stays.
+- **Not covered.** The audit trail has its own retention (`ENS_AUDIT_RETENTION_DAYS`; see [Audit logging](../audit-logging.md)). The rate-limit tables hold only hashed keys and are emptied as their rows expire. Trusted Agents and sites are kept until an operator removes them.
+- **Upgrading.** The defaults apply from the first night after an upgrade, so closed records older than the retention go then. Set the variables first (or `0`) if your records schedule keeps them longer, and take a backup.
+- **Backups.** Deleted records remain in database backups until those expire.
 
 ### Help-desk controls
 
@@ -278,7 +307,7 @@ which are the Connector's. Elsewhere the environment forms are `RSA_RATELIMIT_EN
 | Name | Default | Helm | Description |
 |---|---|---|---|
 | `rsa.rate-limit.enabled` | `true` | `rateLimit.enabled` | Apply the limits, backoff and uniform time. `false` is logged as a warning at every start. The feature caps of Test My Token, the PIN reset link and the token swap hold either way |
-| `rsa.rate-limit.sign-in.per-ip`, `.per-user` | `120/10m`, `10/10m` | `rateLimit.signIn.perIp`, `.perUser` | Sign-in attempts per client address and per user ID |
+| `rsa.rate-limit.sign-in.per-ip`, `.per-user` | `120/10m`, `10/10m` | `rateLimit.signIn.perIp`, `.perUser` | Sign-in attempts per client address and per user ID. From 0.0.3 the per-address limit also applies, counted separately, to [integration API](api-reference.md#errors-limits-and-sessions) calls refused for want of a valid token: past it they get `429` and are no longer recorded one by one |
 | `rsa.rate-limit.self-service.per-ip`, `.per-user` | `60/10m`, `10/10m` | `rateLimit.selfService.perIp`, `.perUser` | Test My Token, the PIN resets, registration and exemption requests: per client address, and per user ID or token serial |
 | `rsa.rate-limit.appointment.per-ip`, `.per-user` | `20/1h`, `3/24h` | `rateLimit.appointment.perIp`, `.perUser` | Appointment bookings and cancellations: per client address, and per requester user ID |
 | `rsa.rate-limit.appointment.max-open-per-user` | `2` | `rateLimit.appointment.maxOpenPerUser` | Open appointments (not cancelled, today or later) one user ID may have. More are not booked |
@@ -295,11 +324,11 @@ With Helm, an empty value keeps the default.
 Off until an identity provider is configured. The providers are Spring Boot's own
 `SPRING_SECURITY_OAUTH2_CLIENT_*` and `SPRING_SECURITY_SAML2_RELYINGPARTY_*` settings; the Portal adds
 `ENS_SSO_ROLES_PMO_n`, `ENS_SSO_ROLES_TRUSTED_AGENT_n`, `ENS_SSO_ROLES_HELP_DESK_n`, the claim and
-attribute names, `ENS_SSO_LABELS_<ID>`, `ENS_SSO_REQUIRE_FOR_ADMIN_ROLES` (`false`; unset from the
-next release, which keeps mapped administrative roles to single sign-on), `ENS_SSO_PENDING_TIMEOUT`
-(`5m`) and `ENS_SSO_CLOCK_SKEW` (`60s`), and needs `APPLICATION_DNS_NAME`. The next release adds
-`ENS_SSO_OIDC_END_SESSION` (`false`; `true` in new installations' `env.template`), which signs the
-operator out of the OpenID Connect provider too. See [Single sign-on](single-sign-on.md#settings);
+attribute names, `ENS_SSO_LABELS_<ID>`, `ENS_SSO_REQUIRE_FOR_ADMIN_ROLES` (unset from 0.0.2, which keeps mapped administrative roles to single
+sign-on; `false` before), `ENS_SSO_PENDING_TIMEOUT` (`5m`) and `ENS_SSO_CLOCK_SKEW` (`60s`), and needs
+`APPLICATION_DNS_NAME`. From 0.0.2 there are also `ENS_SSO_OIDC_END_SESSION` and
+`ENS_SSO_SAML_SINGLE_LOGOUT` (both `false`; `true` in new installations' `env.template`), which sign
+the operator out of the identity provider too. See [Single sign-on](single-sign-on.md#settings);
 with Helm, the `sso.*` values.
 
 ### Integration API and webhooks
@@ -311,7 +340,8 @@ with Helm, the `sso.*` values.
 | `ens.webhooks.allowed-hosts` (`ENS_WEBHOOKS_ALLOWEDHOSTS`) | none | Host names and CIDR ranges a webhook may reach although internal |
 
 Tokens themselves (scopes, validity, limits) are set per token on *Admin → Integrations*. Webhook
-retry and timeout settings are in [Webhooks → Settings](webhooks.md#settings). Webhook signing secrets
+retry and timeout settings are in [Webhooks → Settings](webhooks.md#settings); how long the delivery
+log is kept is `ENS_RETENTION_WEBHOOK_DELIVERIES_DAYS` in [Data retention](#data-retention). Webhook signing secrets
 are encrypted under `rsa.helpdesk.code-key`; see [Help-desk controls](#help-desk-controls).
 
 ### Branding, text and email templates
@@ -368,13 +398,13 @@ The placeholder order is fixed by the code, so keep the same `{n}` meanings when
 | `default_build/portal/log4j2.xml` | `/log4j2.xml` (selected by `-Dlogging.config=/log4j2.xml`) | Console plus a rolling file `/var/log/rsaapp-portal.log` (host `./logs/`), rolled daily or at 10 MB into `rsaapp-portal-YYYY-MM/app-MM-dd-yyyy-N.log.gz`. Root level `info`. Messages are written with `%enc{%m}{CRLF}`, so their line breaks appear as `\r` and `\n`. |
 | `default_build/log4j.xml` | `/custom/log4j.xml` in the connector | Log4j 1.x configuration with a rolling file `/var/log/connector.log` (10 MB × 5). The image does not select it automatically. Pass it through `JAVA_OPTS` if you want it. Without it, the connector uses the packaged `log4j.xml` (stderr, root `DEBUG`). Both use the layout `com.winllc.rsaapp.connector.logging.CrlfSafePatternLayout`. |
 
-From the next release, each Connector console line starts with its own date and time
+From 0.0.2, each Connector console line starts with its own date and time
 (`2026-10-25T14:03:07.123Z WARN, ...`, in the container's time zone), whatever the container runtime
 adds: the pattern in the packaged `log4j.xml` and in `default_build/log4j.xml` (which `upgrade.sh`
 replaces) begins with `%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX}`. A log shipper that parsed the old
 `LEVEL, message` lines needs the new leading field.
 
-**Connector JSON logs (next release).** `LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs` in `connector.env`
+**Connector JSON logs (from 0.0.2).** `LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs` in `connector.env`
 (Helm `connector.logFormat: json`; default `text`) makes the Connector's console write one JSON object
 per line instead, in the Elastic Common Schema like the Portal's: `@timestamp` (UTC), `log.level`,
 `log.logger`, `process.thread.name`, `message`, `service.name` (`rsa-operations-portal-connector`),
@@ -422,10 +452,10 @@ The other settings:
 |---|---|---|
 | `config.properties.location` | none (system property) | URL (`file:` or `classpath:`) of the properties file to load. |
 | `java.naming.factory.initial` | `weblogic.jndi.WLInitialContextFactory` | JNDI factory for the RSA SDK. |
-| `java.naming.provider.url` | dev host; from the next release `t3s://am-primary.invalid:7002`, which never resolves | `t3s://<AM primary FQDN>:7002` |
-| `ims.httpinvoker.client.provider.url` | dev host; from the next release `am-primary.invalid` | `https://<AM primary FQDN>:7002/ims-ws/httpinvoker/CommandServer`, used for admin (write) commands. Use the name in AM's certificate: the Connector checks it. (`GUIDE.md` spells it `ims.httpinvokder…`, but the code uses `httpinvoker`.) |
-| `ims.httpinvoker.client.provider.readonly.url` | dev host; from the next release `am-primary.invalid` | `https://<AM primary or replica FQDN>:7002/ims-ws/httpinvoker/CommandServer`, used for read-only searches. |
-| `ims.soap.client.provider.url` | dev host; from the next release `am-primary.invalid` | `https://<AM primary FQDN>:7002/ims-ws/services/CommandServer` (SOAP target in the SDK context). |
+| `java.naming.provider.url` | dev host; from 0.0.2 `t3s://am-primary.invalid:7002`, which never resolves | `t3s://<AM primary FQDN>:7002` |
+| `ims.httpinvoker.client.provider.url` | dev host; from 0.0.2 `am-primary.invalid` | `https://<AM primary FQDN>:7002/ims-ws/httpinvoker/CommandServer`, used for admin (write) commands. Use the name in AM's certificate: the Connector checks it. (`GUIDE.md` spells it `ims.httpinvokder…`, but the code uses `httpinvoker`.) |
+| `ims.httpinvoker.client.provider.readonly.url` | dev host; from 0.0.2 `am-primary.invalid` | `https://<AM primary or replica FQDN>:7002/ims-ws/httpinvoker/CommandServer`, used for read-only searches. |
+| `ims.soap.client.provider.url` | dev host; from 0.0.2 `am-primary.invalid` | `https://<AM primary FQDN>:7002/ims-ws/services/CommandServer` (SOAP target in the SDK context). |
 | `ims.ssl.client.trust.keystore.filename` | developer workstation path | Path to the trust store holding the AM root CA. With the compose mounts, `default_build/ssl/trust.jks` is visible to the connector as `/custom/ssl/trust.jks`. |
 | `com.rsa.ssl.client.id.store.password`, `com.rsa.ssl.client.id.key.password` | empty | Two-way SSL identity keystore and key passwords (only for client-certificate command targets, which the connector does not use). |
 | `ims.ssl.client.provider.url` | `t3s://local1:7022` | Two-way SSL provider URL. |

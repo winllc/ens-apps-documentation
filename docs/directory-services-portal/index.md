@@ -22,8 +22,8 @@ their data for correct and unique values.
 | Directory definitions | A form bound to a base DN, scope (one level / subtree) and optional filter. Read/write or read-only white pages |
 | Permissions | View or view-and-edit grants per definition, for users or LDAP groups. A definition can also be readable by every signed-in user |
 | End users | Search, sort, page, view, create, edit (including rename) and delete entries. **My profile** lists the user's own entries |
-| Group access | Users look groups up and ask to join; the groups' owners approve and manage members without edit access to the directory. Licensed by `directory-editor` or `self-service-profile` ([Admin guide](admin-guide.md#group-access)) |
-| Metrics | Out-of-the-box overviews for every directory, shared dashboards, and an explorer for building ad-hoc charts. Every chart has a table view and CSV download |
+| Group access | Users look groups up and ask to join; the groups' owners approve and manage members without edit access to the directory. From v0.0.11 also: open groups joined without approval, requests that expire, memberships with an end date that the portal removes when it has passed, owners managing owners, adding members from a pasted list, and a member export. Licensed by `directory-editor` or `self-service-profile` ([Admin guide](admin-guide.md#group-access)) |
+| Metrics | Out-of-the-box overviews for every directory, shared dashboards, and an explorer for building ad-hoc charts. Every chart has a table view and CSV download. Pages keep their results until the user refreshes them (v0.0.11) |
 | Data analysis | Saved comparisons (2–6 sources) and quality checks (1–6 sources), run as background tasks, with paged findings and CSV export |
 | Background tasks | Long metrics and all analyses run on the server, with progress, cancellation and notifications |
 | Audit log | Every change and sign-in, with before/after values, in the hash-chained `ens-audit/1` format, with delivery to Splunk or syslog (see [Audit logging](../audit-logging.md)) |
@@ -72,10 +72,10 @@ See [Architecture](architecture.md) for components, request flow and data storag
 |---|---|---|
 | [Installation](install.md) | Operators | Prerequisites, the Docker and native packages (including HTTPS and the demo directory), the Helm chart, verification |
 | [Configuration](configuration.md) | Operators | Every environment variable and property, grouped by area, with examples |
-| [Operator guide](operator-guide.md) | Operators | Start/stop, health, logs, backups, monitoring, upgrades, troubleshooting runbook |
+| [Operator guide](operator-guide.md) | Operators | Start/stop, health, logs, backups, scheduled jobs, monitoring, upgrades, troubleshooting runbook (including LDAPS certificate errors) |
 | [Sizing, availability and recovery](availability-and-sizing.md) | Operators | Sizing, what high availability is possible, disaster recovery, rolling back an upgrade |
-| [Administrator guide](admin-guide.md) | Portal administrators | Schema, forms, directory definitions, permissions, dashboards, data analysis, audit log |
-| [User guide](user-guide.md) | Everyone | Signing in, browsing directories, entry CRUD, My profile, metrics, background tasks, import and export |
+| [Administrator guide](admin-guide.md) | Portal administrators | Schema, forms, directory definitions, permissions, group access, dashboards, data analysis, audit log |
+| [User guide](user-guide.md) | Everyone | Signing in, browsing directories, entry CRUD, My profile, group access, metrics, background tasks, import and export |
 | [Single sign-on](single-sign-on.md) | Operators | OIDC and SAML setup, Entra ID, Okta and AD FS, administrators from provider groups |
 | [Import and export](import-export.md) | Everyone | CSV and LDIF export and import, bulk membership, limits |
 | [Webhooks](webhooks.md) | Integrators | Events, signatures, delivery, where webhooks may go |

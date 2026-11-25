@@ -90,7 +90,7 @@ ReadyRoom sets no protocols, so the JDK's defaults apply.
 | Directory | `ldaps://` in the CertAlert, Directory Services Portal and ReadyRoom templates (CertAlert's chart has no default URL). The RSA Operations Portal's optional Active Directory connection takes the URL you give |
 | Mail | ReadyRoom requires STARTTLS by default. CertAlert uses STARTTLS when you set `SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_ENABLE=true`. The RSA Operations Portal's templates configure no TLS for SMTP |
 | Database | RSA Operations Portal: `sslMode=REQUIRED`. CertAlert and ReadyRoom: the PostgreSQL JDBC driver's default unless you add `sslmode` to the URL (CertAlert's chart: `database.params`, for example `sslmode=verify-full`) |
-| Splunk HEC and syslog | The certificate is checked against the JVM trust store. Syslog defaults to `tcp`, which is plain text; use `tls` |
+| Splunk HEC and syslog | The certificate is checked against the JVM trust store. Syslog defaults to `tcp`, which is plain text; use `tls`. Syslog delivery is best effort over any protocol: see [Audit logging](audit-logging.md#sending-events-to-splunk-or-another-siem) |
 | Portal to Connector (RSA) | HTTPS on 8443, with mutual TLS in new installations (an upgraded one keeps what it had) |
 | RSA Connector to Authentication Manager | TLS 1.3 or 1.2, with AM's certificate checked against `trust.jks` and its host name checked |
 
@@ -155,7 +155,7 @@ product's page has the full table.
 |---|---|---|---|---|
 | Notice and consent banner (`ENS_CONSENT_BANNER_ENABLED`, off by default) | Yes | Yes | Yes | Yes |
 | Idle, administrator idle and absolute timeouts, sessions per user (`ENS_SESSION_*`: `30m`, the idle value, `12h`, no limit) | Yes | Yes | Yes | Yes |
-| Failed sign-in lockout | The directory's password policy | `LOGIN_MAX_FAILURES` (8) in `LOGIN_LOCKOUT_WINDOW` (15m), plus the directory's own | The directory's password policy | Authentication Manager's lockout policy, plus the Portal's rate limits and backoff (`rsa.rate-limit.*`) |
+| Failed sign-in lockout | The directory's password policy | `LOGIN_MAX_FAILURES` (8) in `LOGIN_LOCKOUT_WINDOW` (15m), plus the directory's own | The directory's password policy, plus, from 0.0.11, a limit on failed password sign-ins a minute: 30 per client address and 5 per user name (`application.login.address-failures-per-minute`, `application.login.username-failures-per-minute`) | Authentication Manager's lockout policy, plus the Portal's rate limits and backoff (`rsa.rate-limit.*`) |
 | Client-certificate revocation checking (`ENS_X509_REVOCATION`, off by default) | Yes | Yes | Yes | Not applicable: SecurID sign-in |
 | Allowed certificate issuers (`ENS_X509_ALLOWED_ISSUERS`) | Yes | Yes | Yes | Not applicable |
 | Security headers, CSRF protection (`ENS_CSP_REPORT_ONLY` must stay `false`) | Yes | Yes | Yes | Yes |
@@ -189,7 +189,7 @@ Settings worth fixing for every STIG deployment:
 
 | Product | Images and chart signed with cosign | SPDX SBOM | CI vulnerability scan (Trivy) | Release download |
 |---|---|---|---|---|
-| CertAlert | Yes, on release tags | In the download, and attested on the image | Yes | `SHA256SUMS`, signed with GPG |
+| CertAlert | Yes, on release tags, from 0.0.5 by the digest the registry reports; the image also carries a build-provenance attestation | In the download, and attested on the image | Yes | `SHA256SUMS`, signed with GPG |
 | Directory Services Portal | Yes, on release tags | In the download, and attested on the images | Yes | `SHA256SUMS`, signed with GPG |
 | ReadyRoom | Yes, on release tags | In the download, and attested on the image | Yes | `SHA256SUMS`, signed with GPG |
 | RSA Operations Portal | Yes, on release tags (both images) | In the download, and attested on the images | Yes, both images | `SHA256SUMS`, signed with GPG |
@@ -203,5 +203,6 @@ Authentication Manager SDK requires, and the commons-compress 1.19 shaded inside
 `jython-standalone.jar`, which the Connector never loads.
 
 The download's `SHA256SUMS.asc` exists only when ENS's release signing key is set on the
-product's repository. How to check the signatures is in
-[Releases and downloads](releases.md#verifying-the-images-and-the-chart).
+product's repository; without it the checksums are published unsigned. CertAlert 0.0.3 and 0.0.4
+have no download, and their images on `ghcr.io` are unsigned: use 0.0.5 or later. How to check the
+signatures is in [Releases and downloads](releases.md#verifying-the-images-and-the-chart).

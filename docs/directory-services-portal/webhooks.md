@@ -19,9 +19,14 @@ A webhook can be limited to some directories. **Send test event** queues a `ping
 
 From v0.0.7 membership changes made through [group access](admin-guide.md#group-access) (an
 approved request, an owner adding or removing members, a member leaving) send
-`group.membership_changed` and `entry.changed` like any other.
+`group.membership_changed` and `entry.changed` like any other. From v0.0.11 so do joining an open
+group and the removal of a member whose end date has passed. That removal is made by the portal
+itself, not by a person: its `actor` has `username` and `authMethod` set to `null`, so receivers
+must not rely on a user name there. An owner changing a group's owners sends `entry.changed` (the
+owner attribute is not a member attribute). End dates themselves are not in the payload; setting or
+changing one sends no event.
 
-From the next release every event's `data` also has `directory`, the id of the LDAP directory the
+From v0.0.6 every event's `data` also has `directory`, the id of the LDAP directory the
 entry is in (`default` with one directory; see
 [Configuration → Several directories](configuration.md#several-directories)), next to
 `definitionId`, and the `actor` has `directory`, the directory the person who made the change
@@ -109,11 +114,16 @@ Delivery is **at least once**: an attempt whose answer was lost is made again wi
   written every couple of seconds, not per change, so a crash loses at most the deliveries queued in
   those seconds; it holds at most 10,000 waiting deliveries, beyond which new ones are dropped,
   logged and audited as `webhook.delivery-dropped`.
+- **While `WEBHOOKS_ENABLED=false`** (v0.0.9): changes are not queued, so the outbox can't grow
+  while nothing drains it. Deliveries queued before stay queued and go out when sending is turned
+  on again; events of changes made in between are never sent. Finished deliveries are still removed
+  from the log after `WEBHOOK_LOG_RETENTION`. Up to v0.0.8 such changes were queued, without limit
+  in the shared database.
 - **With the shared database** (`DSP_DATABASE_*`): the `webhooks` document and the
   `dsp_webhook_delivery` table (Flyway migration V3, applied at start), where each due delivery is
-  sent by one replica. Up to the current release, the events of an entry change made while the
+  sent by one replica. Up to v0.0.3, the events of an entry change made while the
   database can't be reached are logged and lost.
-- **From the next release, no event is lost with the shared database**: an entry change's
+- **From v0.0.4, no event is lost with the shared database**: an entry change's
   deliveries are written in the same transaction as its audit event, so both are stored or neither
   is (then the change is answered `503`, unaudited, like any change whose audit event can't be
   stored); nothing waits in a replica's memory. Should only the delivery rows fail while the audit
@@ -122,13 +132,13 @@ Delivery is **at least once**: an attempt whose answer was lost is made again wi
   written to the outbox file is kept in memory the same way; there only the instance stopping before
   it is queued loses it. Nothing to configure.
 - **Signing secrets** sign every request, so they are kept, readable only by the portal's user. They
-  are never returned by the API again, logged or audited. Up to the current release they are stored
-  as they are; from the next release they can be stored encrypted with `DSP_SECRETS_KEY` (below).
+  are never returned by the API again, logged or audited. Up to v0.0.3 they are stored
+  as they are; from v0.0.4 they can be stored encrypted with `DSP_SECRETS_KEY` (below).
   Back up and protect `DATA_DIR` and the database accordingly.
 - Changes to webhooks are audited (`webhook.created`, `webhook.updated`, `webhook.secret-rotated`,
   `webhook.deleted`) with the URL's host only.
 
-## Encrypted signing secrets (next release)
+## Encrypted signing secrets (v0.0.4) { #encrypted-signing-secrets }
 
 With `DSP_SECRETS_KEY`, or `DSP_SECRETS_KEY_FILE` naming a file that holds it (32 random bytes in
 base64: `openssl rand -base64 32`), signing secrets are stored encrypted: each with its own random
@@ -164,17 +174,17 @@ AES-256 key (AES-GCM, bound to its webhook), stored wrapped by `DSP_SECRETS_KEY`
 
 | Variable | Property | Default | Description |
 |---|---|---|---|
-| `WEBHOOKS_ENABLED` | `portal.integration.webhooks.enabled` | `true` | `false` stops sending (deliveries stay queued) and creating webhooks |
+| `WEBHOOKS_ENABLED` | `portal.integration.webhooks.enabled` | `true` | `false` stops sending and creating webhooks. Deliveries already queued stay queued; from v0.0.9 changes made meanwhile are not queued (see [Storage](#storage)) |
 | `WEBHOOK_ALLOWED_HOSTS` | `portal.integration.webhooks.allowed-hosts` | empty | Host names (or `*.example.com`) whose webhooks may reach internal addresses |
 | `WEBHOOK_MAX_ATTEMPTS` | `portal.integration.webhooks.max-attempts` | `8` | Attempts per delivery |
 | `WEBHOOK_CONNECT_TIMEOUT`, `WEBHOOK_READ_TIMEOUT` | | `5s`, `10s` | Per attempt |
 | `WEBHOOK_SEND_TIMEOUT` | | `20s` | The whole attempt |
 | `WEBHOOK_RUN_BUDGET` | | `40s` | How long one delivery run starts attempts for |
 | `WEBHOOK_LOG_RETENTION` | | `30d` | How long finished deliveries are kept |
-| `DSP_SECRETS_KEY`, `DSP_SECRETS_KEY_FILE` (next release) | `portal.secrets.key`, `portal.secrets.key-file` | empty (generated for new installs) | The key signing secrets are stored encrypted with (32 bytes, base64). See [Encrypted signing secrets](#encrypted-signing-secrets-next-release) |
+| `DSP_SECRETS_KEY`, `DSP_SECRETS_KEY_FILE` (v0.0.4) | `portal.secrets.key`, `portal.secrets.key-file` | empty (generated for new installs) | The key signing secrets are stored encrypted with (32 bytes, base64). See [Encrypted signing secrets](#encrypted-signing-secrets) |
 
-Helm: `integrations.webhooks.enabled`, `.allowedHosts`, `.maxAttempts`, `.runBudget` and, from the
-next release, `.secretsKey.*`; any other goes in `api.extraEnv`.
+Helm: `integrations.webhooks.enabled`, `.allowedHosts`, `.maxAttempts`, `.runBudget` and, from
+v0.0.4, `.secretsKey.*`; any other goes in `api.extraEnv`.
 
 ## Administration endpoints
 
@@ -186,7 +196,7 @@ Session and administrator only (the `X-DSP-Request: 1` header applies):
 | GET | `/api/admin/webhooks/settings` | Event types and limits |
 | POST | `/api/admin/webhooks` | Create; the answer holds the secret, once |
 | PUT | `/api/admin/webhooks/{id}` | Change |
-| POST | `/api/admin/webhooks/{id}/rotate-secret` | New secret, shown once |
+| POST | `/api/admin/webhooks/{id}/rotate-secret` | New secret, shown once. The old one stops working at once; on the page, **New secret** asks first (v0.0.9) |
 | POST | `/api/admin/webhooks/{id}/test` | Queue a `ping` |
 | DELETE | `/api/admin/webhooks/{id}` | Delete |
 | GET | `/api/admin/webhooks/{id}/deliveries` | The delivery log |

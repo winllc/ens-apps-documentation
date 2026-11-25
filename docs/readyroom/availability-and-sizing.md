@@ -17,10 +17,11 @@ Backups themselves are in [Operations](operator-guide.md#backups).
 |---|---|---|
 | Workstations | Every logon, lock, unlock and logoff is one request from the Windows client and one row in `check_in_out_records`. Logons bunch up at the start of the working day | |
 | Database growth | `check_in_out_records` grows by one row per workstation event, and by default nothing is deleted: 5,000 users over 90 days make about 1.2 million rows. With `APPLICATION_RETENTION_EVENTSDAYS` set, older rows are summarised by month and deleted. The audit trail grows too, until `ENS_AUDIT_RETENTION_DAYS` removes old events | [Retention](operator-guide.md#retention), `APPLICATION_RETENTION_EVENTSDAYS`, `ENS_AUDIT_RETENTION_DAYS` |
-| The directory | Users are cached (up to 150,000 by default, about 1 KB each), group trees and the org chart too (at most 5,000 entries each), all refreshed in the background; group memberships are cached for 300 s. LDAP connections are pooled, by default one for every request and job thread (208), opened only when needed | `application.cache-duration-*`, `application.ldap.user-cache-size`, `application.ldap.group-membership-cache-seconds`, `application.ldap.pool-max-size` |
-| Scheduled jobs | Auto check-out every minute, absence alerts every 5 minutes, the directory refresh hourly, and, when set, the retention purge daily (one day at a time, 500 people per transaction) | `application.inactive-cron.*`, `application.send-absent-notification-cron.*`, `application.refresh-user-records-cron.*`, `application.retention.*` |
-| Audited actions | Every sign-in, status change, request, answer and administrative change stores an audit event in its own transaction. Up to the current release each one also waited for the single audit chain head row, held until its transaction committed, so audited actions queued one behind another across all replicas, whatever the hardware. From the next release they are stored without that lock and added to the chain in batches by a background chainer, so they no longer queue | `ENS_AUDIT_CHAIN_MILLIS` |
-| Database connections | Spring Boot's connection pool, one per replica; requests release their connection when the service call ends (`open-in-view: false`) | `spring.datasource.hikari.maximum-pool-size` (Spring Boot's setting) |
+| The directory | Users are cached (up to 150,000 by default, about 1 KB each), group trees and the org chart too (at most 5,000 entries each), all refreshed in the background; group memberships are cached for 300 s. LDAP connections are pooled, by default one for every request and job thread (216), opened only when needed. A group report takes each member's employee type, organization and location from their user record, which the directory refresh keeps, and reads the directory only for members without one | `application.cache-duration-*`, `application.ldap.user-cache-size`, `application.ldap.group-membership-cache-seconds`, `application.ldap.pool-max-size` |
+| Scheduled jobs | Auto check-out every minute, absence alerts every 5 minutes with their emails sent by a job of their own every 30 seconds, the directory refresh hourly, and, when set, the retention purge daily (one day at a time, 500 people per transaction). They run on 16 threads, one for each job with room to spare, so a slow run of one does not delay another | `application.inactive-cron.*`, `application.send-absent-notification-cron.*`, `application.refresh-user-records-cron.*`, `application.retention.*`, `spring.task.scheduling.pool.size` |
+| Audited actions | Every sign-in, status change, request, answer and administrative change stores an audit event in its own transaction. Before 0.0.6 each one also waited for the single audit chain head row, held until its transaction committed, so audited actions queued one behind another across all replicas, whatever the hardware. From 0.0.6 they are stored without that lock and added to the chain in batches by a background chainer, so they no longer queue | `ENS_AUDIT_CHAIN_MILLIS` |
+| Database connections | One pool per replica, of at most `DB_POOL_SIZE` connections (20; it was 10 up to 0.0.10), shared by the request threads and the scheduled jobs. Requests release their connection when the service call ends (`open-in-view: false`). Keep the number of replicas times `DB_POOL_SIZE` under PostgreSQL's `max_connections` (100 by default): 4 replicas of 20 leave 20 connections for everything else. From 0.0.11 a connection gives up on an answer after `DB_SOCKET_TIMEOUT` (600 s), and PostgreSQL cancels a statement after `DB_STATEMENT_TIMEOUT` (570 s) and a lock wait after `DB_LOCK_TIMEOUT` (120 s), so a lost connection or a statement waiting on a lock cannot hold a connection, or a job's lock, indefinitely | `DB_POOL_SIZE`, `DB_SOCKET_TIMEOUT`, `DB_STATEMENT_TIMEOUT`, `DB_LOCK_TIMEOUT` (Helm `database.poolSize`, `.socketTimeout`, `.statementTimeout`, `.lockTimeout`); see [Configuration](configuration.md#database) |
+| Who may see whom | For a viewer who is not an administrator, ReadyRoom works out whom they are responsible for from the directory (the groups they own, those groups' members, their direct reports). From 0.0.11 each replica keeps those answers for a minute, per viewer and per group, instead of reading them on every call. Delegates and groups' alternate managers, which ReadyRoom stores, are read on every call through the `pg_trgm` indexes where those exist | |
 
 `db/perf/seed_volume.sql` and the manual `QueryPerformanceMeasurement` test in the source tree fill a
 throwaway database with 5,000 users over 90 days and time the main queries. They are tools for
@@ -43,6 +44,11 @@ How to adjust:
 - **Slow pages.** Turn on `application.diagnostics.request-metrics` to see SQL statements and LDAP
   operations per request, and check the directory's response times first: the LDAP timeouts are 5 s
   (connect) and 30 s (read).
+- **Database connections.** Watch `hikaricp_connections_pending` and
+  `hikaricp_connections_active` (Spring Boot's pool metrics). Requests waiting for a connection for
+  long mean the pool is too small for the load: raise `DB_POOL_SIZE`, within PostgreSQL's
+  `max_connections`, and the directory pool with it (see
+  [Configuration → LDAP connection](configuration.md#ldap-connection)).
 - **Database.** Watch its size, and set `APPLICATION_RETENTION_EVENTSDAYS` if it grows more than
   you want ([Retention](operator-guide.md#retention)).
 
@@ -58,29 +64,34 @@ sends once and never retries, are not lost during an upgrade. For the suite-wide
 | State | How |
 |---|---|
 | Browser sessions | Spring Session JDBC |
-| Scheduled jobs | Each job (the directory sync, auto check-out, absence alerts, the retention purge, audit retention and session clean-up) holds a lock (`shedlock`) while it runs, so it runs on one replica at a time. A replica that finds the lock held skips that run. A lock left by a replica that died lapses within the job's interval |
-| Audit chain (next release) | Every replica stores its audit events without a lock and runs a chainer that adds stored events to the hash chain. Chainers take turns on the chain head's row lock, which the database releases if a replica dies, so one replica's failure never holds up the others' events. Each event is chained once, whichever replica recorded it; its line goes to the stdout and audit file of the replica that chained it |
+| Scheduled jobs | Each job (the directory sync, auto check-out, absence alerts and their emails, scheduled reports, webhook deliveries, the retention purge, audit retention and session clean-up) holds a lock (`shedlock`) while it runs, so it runs on one replica at a time. A replica that finds the lock held skips that run. A lock left by a replica that died lapses within the job's interval (two minutes at least). From 0.0.11 a lock is kept alive for at most 30 times that (an hour for the auto check-out), so a run that hangs on one replica no longer stops the job on all of them |
+| Audit chain (from 0.0.6) | Every replica stores its audit events without a lock and runs a chainer that adds stored events to the hash chain. Chainers take turns on the chain head's row lock, which the database releases if a replica dies, so one replica's failure never holds up the others' events. Each event is chained once, whichever replica recorded it; its line goes to the stdout and audit file of the replica that chained it |
 | Audit forwarding (Splunk, syslog) | Every replica runs a forwarder; each batch is delivered under a lock, so none goes out twice |
 | License, installation id, revisions seen | The `ens_license_*` tables. An upload on one replica is in force on all within seconds |
 | License mode changes | Each replica notices; the change is recorded once |
 | Group cache evictions | **Evict** and **Evict All** on Settings drop the entries on the replica that served the page and record the eviction (table `cache_invalidations`, Flyway `V13`, rows kept a day); every other replica reads new ones every `application.cache-invalidation-poll-millis` (10 s) and drops the same entries |
 
-**Rate limits** (next release): a public API token's requests a minute and
-`application.logoff.refused-per-minute` per client address are counted in the database (table
+**Rate limits** (from 0.0.3): a public API token's requests a minute,
+`application.logoff.refused-per-minute` per client address and, from 0.0.11, failed password
+sign-ins (`application.login.*`) are counted in the database (table
 `rate_limit_windows`, Flyway `V11`), once for all replicas: with N replicas a token gets its rate, not
 N times it, and the one request that goes over is audited once. Window times are the database's
 clock. If the database cannot count for a moment, each replica counts in its own memory meanwhile (a
-WARN at most once a minute) rather than refuse requests. Up to the current release they are counted
-in each replica's memory, so a token may make up to N times its rate, and an address get up to N
+WARN at most once a minute) rather than refuse requests. Before 0.0.3 they were counted
+in each replica's memory, so a token could make up to N times its rate, and an address get up to N
 times as many refusals, before `429`.
 
 **Per replica**, by design: the access-denial summaries (each replica collapses and records its
 own), the count of a webhook's failed tries in a row (for its `WARN`), and the caches of directory
 users and groups, revocation answers and CRLs, which are re-read on their own; an eviction made on
-Settings reaches every replica (above), expiry does not need to.
+Settings reaches every replica (above), expiry does not need to. From 0.0.11 each replica also
+keeps, for a minute, what the directory says about whom a viewer is responsible for (the groups
+they own, a group's members, their direct reports), so such a change in the directory applies
+everywhere within a minute; a delegate or a group's alternate manager set in ReadyRoom applies at
+once on every replica.
 
-**Helm.** Several replicas need the license volume off, after the first start of this release has
-imported it into the database:
+**Helm.** Several replicas need the license volume off, after the first start of a release that
+keeps the license in the database (0.0.2 or later) has imported it:
 
 ```yaml
 replicaCount: 2
@@ -105,17 +116,30 @@ whose liveness probe fails and reschedules it if its node fails. Liveness checks
 state only, so a database or directory outage never restarts it. Run PostgreSQL with your own
 high-availability setup (with Helm, an external server).
 
-**Outages and absence alerts.** Every replica updates a heartbeat in the database every 15 seconds.
-When the whole service was down (with one replica, every upgrade), the gap is recorded
-(`service_outage`), because check-ins sent during it were lost. Absence alerts about people whose
-check-in time plus grace fell after the outage began wait until `application.ha.outage-grace`
-(`APPLICATION_HA_OUTAGEGRACE`, `30m`; `0` turns this off) after its end, and a session last seen
-locked before the outage is checked out automatically only `checkOutAfterMinutes` after its end.
+**Outages and absence alerts.** Every replica updates a heartbeat in the database every 15 seconds,
+from 0.0.11 on a thread of its own, so job threads that are all busy are not taken for an outage.
+When the whole service was down for more than 45 seconds (with one replica, every upgrade), the gap
+is recorded (`service_outage`), because check-ins sent during it were lost. Then:
+
+- absence alerts about people whose check-in time plus grace fell after the outage began wait
+  until `application.ha.outage-grace` (`APPLICATION_HA_OUTAGEGRACE`, `30m`; `0` turns this off)
+  after its end, so their next logon or unlock can arrive first;
+- a session last seen locked before the outage is checked out automatically that much later:
+  `checkOutAfterMinutes` after the lock plus the time the service was down since, because its
+  unlock may have been lost. A two-minute restart postpones it by two minutes. The postponement is
+  at most `application.ha.max-check-out-postponement` (`APPLICATION_HA_MAXCHECKOUTPOSTPONEMENT`,
+  `24h`; `0` turns it off). Up to 0.0.10 the whole `checkOutAfterMinutes` started again at the
+  outage's end;
+- locks made before a long outage are checked out on the first run after it, however long it
+  lasted. Up to 0.0.10 a lock older than two days and the limit was never checked out.
+
 With two replicas and rolling updates there is no such gap.
 
 **What a workstation does while ReadyRoom is down.** The Windows client posts each event when it
 happens; an event that fails is logged on the workstation (exit code 3) and is not recorded by the
-server. A logoff can still be recorded after an outage while its logon's session id is valid (7
+server. From 0.0.11 that includes an event the server could not store (a database error, a lock
+timeout), which it answers `500`; up to 0.0.10 such an event was answered `200` and the client
+took it for accepted. A logoff can still be recorded after an outage while its logon's session id is valid (7
 days by default). See [Windows client](windows-client.md).
 
 ## Disaster recovery

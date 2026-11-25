@@ -32,18 +32,43 @@ A token in stock, assigned to nobody, is still deprovisioned at once.
 An operator acting on their own account goes through a help-desk request, which always needs a
 second operator.
 
+### Tokens and the RSA-enabled group
+
+From 0.0.3, two more changes are help-desk requests when the user is
+[privileged](#approval-by-a-second-operator) or is the operator's own account. For every other
+account they stay one click, as before.
+
+| Change | Where it starts | Request (`action`) | License feature | Tokencode accepted as verification |
+|---|---|---|---|:-:|
+| Assign a token | **Assign Token**: on **Submit**, after the page's own checks (no exemption, no valid token, the PIN date) | `token-assign`; only a Trusted Agent can open it, as on that page | `trusted-agents` | No |
+| Remove the user from the Active Directory group that requires token sign-in | **User Details** → **Remove From Group** | `rsa-group-remove` | `help-desk` | Yes |
+
+- Registration needs only the user ID and the code the new token shows, so whoever holds a new
+  token can set its PIN. Without the request, a Trusted Agent could give themselves or an
+  administrator a token and sign in as that account, and any operator could take an administrator
+  out of the group that requires token sign-in, alone.
+- The request is verified, approved by a second operator and run like the others. When a
+  `token-assign` request runs, the Portal checks again that the token is still unassigned and that
+  the user has no approved exemption and no valid token. The user's e-mail says that the token was
+  assigned and where to set its PIN, or that the account was removed from the group.
+- **Add to Group** stays one click for every account.
+
 **From an integration.** ITSM and identity-governance tools open help-desk requests through the
 [integration API](api-reference.md#integration-api), under the same rules: a ticket and a reason, a
 verified user (by e-mailed code or tokencode, never `in-person`), and a second operator's approval on
-the Help-Desk Requests page when the user is privileged. Three more actions exist through the API
-only, and operators approve them like the others: `token-assign`, `user-enable` and `user-disable`.
+the Help-Desk Requests page when the user is privileged. Two more actions exist through the API
+only, and operators approve them like the others: `user-enable` and `user-disable`. `token-assign`
+is asked for through the API too (and, from 0.0.3, by the [Assign Token page](#tokens-and-the-rsa-enabled-group)
+for a privileged or own account).
 Disabling needs no verification, so one service identity may disable at most `ens.api.disable-cap`
-accounts (`10/1h`) before each further disable waits for a second operator. Emergency access codes
-and clearing the cached Windows password are not offered through the API.
+accounts (`10/1h`) before each further disable waits for a second operator. Emergency access codes,
+clearing the cached Windows password and removing an account from the RSA-enabled group are not
+offered through the API.
 
 ## How a request goes
 
-Requests are opened by users with the `TRUSTED_AGENT` or `HELP_DESK` role. **Help-Desk Requests**
+Requests are opened by users with the `TRUSTED_AGENT` or `HELP_DESK` role (`token-assign` by a
+Trusted Agent only). **Help-Desk Requests**
 in the menu (`/helpdesk/requests`) lists the requests waiting for your approval and your own.
 
 1. **Ticket and reason.** Both are required: a ticket or reference of up to 100 characters, and a
@@ -80,8 +105,8 @@ shown in that order:
 
 !!! warning "A tokencode proves possession, not identity"
     A tokencode shows only that the caller holds the token. It counts **only for deprovisioning a
-    token and clearing the cached Windows password**, never for a PIN reset, an emergency access
-    code or a lost token: someone holding a stolen token could otherwise have its PIN reset and set
+    token, clearing the cached Windows password and removing an account from the RSA-enabled
+    group**, never for a PIN reset, an emergency access code, a lost token or a token assignment: someone holding a stolen token could otherwise have its PIN reset and set
     their own, and for an emergency code or a lost token the caller does not have the token anyway.
     For those three, it is neither offered nor accepted. While verification is required, configuring
     `tokencode` as the only method, or no method, stops the Portal at startup.
@@ -214,5 +239,6 @@ serial and the verification:
 | `am.change-attempt`, `am.change-outcome` | Before and after the change in Authentication Manager. If the attempt can't be recorded and committed first, the change is not made (see [Security → Other controls](security.md#other-controls)) |
 
 The change itself is also recorded as before (`token.pin-reset`, `token.marked-lost`,
-`token.deprovisioned`, `token.emergency-code-issued`, `user.windows-password-cleared`), and appears in
+`token.deprovisioned`, `token.emergency-code-issued`, `user.windows-password-cleared`; for the two
+requests added in 0.0.3, `token.distributed` and `group.member-removed`), and appears in
 the user's **Activity Log**.

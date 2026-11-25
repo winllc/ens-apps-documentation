@@ -50,7 +50,7 @@ Use these in test setups only. The API logs a warning at startup while one is on
 
 | Setting | What it does | Instead |
 |---|---|---|
-| `LDAP_TLS_REJECT_UNAUTHORIZED=false` | Trusts any directory server certificate | Give the API a trust store with the directory's CA ([Configuration](configuration.md#ldaps-with-a-private-ca)) |
+| `LDAP_TLS_REJECT_UNAUTHORIZED=false` | Trusts any directory server certificate | Give the API a trust store with the directory's CA ([Configuration](configuration.md#ldaps-with-a-private-ca)). This needs v0.0.10 or later: earlier releases did not use the given trust store for the directory |
 | `ENS_AUDIT_SPLUNK_INSECURE=true` | Trusts any Splunk HEC certificate | Add Splunk's CA to the JVM trust store |
 
 ### The license check in FIPS mode
@@ -86,14 +86,15 @@ a decision for a STIG deployment. Each is described in [Configuration](configura
 | Administrator idle timeout | `ENS_SESSION_ADMIN_IDLE_TIMEOUT` | the idle timeout | `15m` is the suggested value |
 | Absolute session lifetime | `ENS_SESSION_ABSOLUTE_TIMEOUT` | `12h` | Your policy's value |
 | Concurrent sessions per user | `ENS_SESSION_MAX_PER_USER` | `0` (no limit) | `3` is the suggested value |
-| Failed sign-ins before lockout | `LOGIN_MAX_FAILURES`, `LOGIN_LOCKOUT_WINDOW` | `8`, `15m` | `3` in `15m` is the suggested value. The lockout is per user name and client address, held in memory; the directory's own lockout policy still applies to binds |
+| Sessions of disabled accounts | `GROUP_REFRESH_INTERVAL` | `5m` | From v0.0.9 the session of an account the directory disables or locks ends within this interval. Keep it short, and not `0` (which checks only at sign-in) |
+| Failed sign-ins before lockout | `LOGIN_MAX_FAILURES`, `LOGIN_LOCKOUT_WINDOW` | `8`, `15m` | `3` in `15m` is the suggested value. The lockout is per user name and client address, held in memory (in the shared database when there is one); the directory's own lockout policy still applies to binds. Behind an ingress controller, load balancer or TLS proxy, set `WEB_TRUSTED_PROXIES` (v0.0.9) so that the address is the client's and not the proxy's |
 | Certificate revocation checking | `ENS_X509_REVOCATION` | `off` | `ocsp`, `crl` or `ocsp-then-crl`, with `ENS_X509_REVOCATION_FAIL=closed`. The API warns at startup while it is off with certificate sign-in enabled |
 | Accepted certificate issuers | `ENS_X509_ALLOWED_ISSUERS` | any trusted CA | Your DoD issuing CAs, if the trust bundle holds others |
 | Certificate-only sign-in | `PASSWORD_LOGIN_ENABLED` | `true` | `false` where only CAC/PIV sign-in is allowed |
 | Secure session cookie | `ENS_COOKIE_SECURE` | `false` | `true` whenever TLS ends at a proxy |
 | Security headers | always on | | CSP, HSTS on HTTPS, `nosniff`, `DENY` framing. `ENS_CSP_REPORT_ONLY` must stay `false` |
 | Audit trail | `ENS_AUDIT_*` | stored locally, stdout | Forward to your SIEM, and set `ENS_AUDIT_RETENTION_DAYS` to your retention policy ([Audit logging](../audit-logging.md)) |
-| Directory TLS | `LDAP_URL`, `LDAP_STARTTLS`, `LDAP_TLS_REJECT_UNAUTHORIZED` | `ldaps://` in the packaged templates | `ldaps://` or StartTLS, with certificate checking on |
+| Directory TLS | `LDAP_URL`, `LDAP_STARTTLS`, `LDAP_TLS_REJECT_UNAUTHORIZED` | `ldaps://` in the packaged templates | `ldaps://` or StartTLS, with certificate checking on; for a DoD or other private CA, a trust store given to the JVM (v0.0.10 or later) |
 | Service account password | `LDAP_BIND_PASSWORD_FILE` | the Helm chart and native package use it | Keep the password out of the environment where you can |
 
 Already in place without settings: every sign-in, sign-out, lockout, session expiry, refused

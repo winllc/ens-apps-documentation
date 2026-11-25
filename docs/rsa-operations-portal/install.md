@@ -141,9 +141,9 @@ In `/opt/rsa-operations-portal`, replace every `CHANGE_ME` in the three settings
 - [ ] `spring.datasource.password`, the same as `MYSQL_PASSWORD` in `mysql.env`
 - [ ] `CONNECTOR_AUTH_PASSWORD`, any long random value: the Portal uses it to authenticate to the Connector
 - [ ] `role.mapped.1.rsaSecurityGuid` (TRUSTED_AGENT), `role.mapped.2.rsaSecurityGuid` (PMO), `role.mapped.3.rsaSecurityGuid` (HELP_DESK)
-- [ ] `spring.mail.host`, `mail.smtp.host`, `mail.default.from`, `mfa.group.email`. The nightly lost-token report goes to `mfa.group.email` (a new `.env` has `cron.lostTokenThresholdMonitor.debug=false`; from the next release that is the built-in default): set it to the MFA team's address. From the next release none of these has a built-in address: without `mail.default.from` e-mails go out from `noreply@<the host of application.dns.name>`, and without `mfa.group.email` the report goes to nobody and e-mails name "your help desk" (a warning at every start for each)
-- [ ] With an OpenID Connect provider (next release): the new `.env` has `ENS_SSO_OIDC_END_SESSION=true`, so allow `<application.dns.name>/` as a post-logout redirect URI at the provider, or set it to `false`
-- [ ] With a SAML asserting party (next release): the new `.env` has `ENS_SSO_SAML_SINGLE_LOGOUT=true`; give the Portal a signing key (the commented `..._SIGNING_CREDENTIALS_0_*` lines) and give the asserting party the Portal's metadata, or set it to `false`
+- [ ] `spring.mail.host`, `mail.smtp.host`, `mail.default.from`, `mfa.group.email`. The nightly lost-token report goes to `mfa.group.email` (a new `.env` has `cron.lostTokenThresholdMonitor.debug=false`; from 0.0.2 that is the built-in default): set it to the MFA team's address. From 0.0.2 none of these has a built-in address: without `mail.default.from` e-mails go out from `noreply@<the host of application.dns.name>`, and without `mfa.group.email` the report goes to nobody and e-mails name "your help desk" (a warning at every start for each)
+- [ ] With an OpenID Connect provider (from 0.0.2): the new `.env` has `ENS_SSO_OIDC_END_SESSION=true`, so allow `<application.dns.name>/` as a post-logout redirect URI at the provider, or set it to `false`
+- [ ] With a SAML asserting party (from 0.0.2): the new `.env` has `ENS_SSO_SAML_SINGLE_LOGOUT=true`; give the Portal a signing key (the commented `..._SIGNING_CREDENTIALS_0_*` lines) and give the asserting party the Portal's metadata, or set it to `false`
 - [ ] `application.dns.name`: the URL users will reach
 
 `connector.env` (the Connector):
@@ -261,7 +261,7 @@ cd rsa-operations-portal-<new version>
 It stays with the engine that runs the installation (`--engine` to choose). `upgrade.sh`:
 
 1. loads the new images; nothing changes if they do not load;
-2. backs up the database to `backups/RSAAPP-before-<version>-<time>.sql.gz` in the install folder (skip with `--no-backup`);
+2. from 0.0.3, starts MySQL if it is stopped, on the image it has now, and waits for it to be healthy: the backup and the MySQL 8.0 checks below need it running. If MySQL has no container at all (after `./util/compose.sh down`), it stops here with nothing changed: run `./util/compose.sh up -d mysql` in the install folder and run `upgrade.sh` again. Then it backs up the database to `backups/RSAAPP-before-<version>-<time>.sql.gz` in the install folder (skip with `--no-backup`). The dump is written as `.part`, readable by its owner only, and kept only once it is complete; a failed or incomplete backup stops the upgrade with nothing changed;
 3. keeps where the Portal listens: if `.env` sets neither `PORTAL_HTTP_PUBLISH` nor `PORTAL_HTTPS_PUBLISH`, it writes there how the running Portal is published (else what the old `docker-compose.yml` published), and says so;
 4. updates the release files: `docker-compose.yml`, `env.template`, `connector.env.template`, `mysql.env.template`, the scripts, `util/`, `default_build/portal/` and `default_build/log4j.xml`;
 5. splits a `.env` from a release that kept every setting in that one file (see below), and moves AM passwords out of `connector.env`'s `JAVA_OPTS` into `RSA_*` variables (`util/move-connector-secrets.sh`, keeping the original as `connector.env.before-secrets.<time>`);
@@ -275,14 +275,25 @@ It keeps `.env`, `connector.env`, `mysql.env`, `license/`, a `docker-compose.ove
 
 The Portal updates its database schema itself on the first start of the new version (Flyway migrations). A database from release 1.5 or earlier, whose tables Hibernate created, is taken over: its tables, data and ids are kept, and what is missing is added. On a large audit table that first start takes longer. To roll back, see [Rolling back an upgrade](availability-and-sizing.md#rolling-back-an-upgrade).
 
-!!! note "To the next release"
+!!! note "To 0.0.3"
+    Nothing needs setting to keep signing in and serving. The Portal and the Connector must both be 0.0.3, which `upgrade.sh` takes care of: the Portal calls two Connector methods an older Connector does not have. The first start runs Flyway `V10`, `V11`, `V13`, `V14`, `V16` and `V18`. [Operator Guide → Upgrading to 0.0.3](operator-guide.md#upgrading-to-003) lists every change; the ones to act on:
+
+    - **Registration reminders** now stop 30 days after the date the token may be registered. `cron.sendDelayedTokenRegistrationEmails.maxDaysOfReminders=0` in `.env` keeps reminding without limit.
+    - **The webhook delivery log** is purged after 90 days from the first night on. Set `ENS_RETENTION_WEBHOOK_DELIVERIES_DAYS` in `.env` first (`0` keeps it) if you keep it longer.
+    - **Scheduled jobs** that could not reach Authentication Manager, or sent none of their e-mail, are now audited as `job.failed`: alert on it. They send their e-mail themselves, bounded by `spring.mail.properties.mail.smtp.connectiontimeout`, `.timeout` and `.writetimeout` (10000, 30000 and 30000 ms).
+    - **Tell your Trusted Agents and Help Desk staff**: a token for a privileged user or their own account, and **Remove From Group** for such an account, are now [help-desk requests](help-desk.md#tokens-and-the-rsa-enabled-group) that a second operator approves.
+    - **Run Audit Log → Verify integrity** after the upgrade: it now finds events deleted from the start of the trail by other means than retention.
+    - **A license for the next term** is refused while the installed one is in full effect: upload it on or after its start date ([License](#license)).
+    - **A stopped installation** is upgraded with its backup: `upgrade.sh` starts MySQL first (step 2 above).
+
+!!! note "To 0.0.2"
     Nothing needs doing to keep signing in and serving. `.env` is kept, so the settings below stay as they were unless you add them:
 
     - **Single sign-on and administrative roles.** With an identity provider configured, a role `ENS_SSO_ROLES_*` maps a group to now comes only through the provider; a passcode sign-in alone no longer gets it. `ENS_SSO_REQUIRE_FOR_ADMIN_ROLES=false` keeps the old behaviour. See [Single sign-on](single-sign-on.md#how-a-sign-in-goes).
     - **`ENS_SSO_OIDC_END_SESSION`** is off for an existing installation (a warning at every start while OpenID Connect is configured). Allow `<APPLICATION_DNS_NAME>/` as a post-logout redirect URI at the provider, then set it to `true`.
-    - **The lost-token report.** **From the next release the lost-token report is on by default** (`cron.lostTokenThresholdMonitor.debug=false` built in): an installation with `mfa.group.email` set, upgraded ones included, starts getting the nightly report of users over the lost-token threshold after the upgrade; `cron.lostTokenThresholdMonitor.debug=true` (Helm: under `config`) keeps it off, with a warning at every start. Check `mfa.group.email` before upgrading.
+    - **The lost-token report.** **From 0.0.2 the lost-token report is on by default** (`cron.lostTokenThresholdMonitor.debug=false` built in): an installation with `mfa.group.email` set, upgraded ones included, starts getting the nightly report of users over the lost-token threshold after the upgrade; `cron.lostTokenThresholdMonitor.debug=true` (Helm: under `config`) keeps it off, with a warning at every start. Check `mfa.group.email` before upgrading.
     - **No built-in addresses.** `mfa.group.email`, `mail.default.from`, the database and SMTP hosts, the Active Directory example and the Connector's Authentication Manager URLs no longer default to vendor test addresses. A working installation sets them all, so nothing changes; one that never set `mfa.group.email` or `mail.default.from` gets the behaviour in [Configuration → Mail](configuration.md#mail), with a warning at every start.
-    - **`ENS_SSO_SAML_SINGLE_LOGOUT`** is new and off for an existing installation. Give the Portal a signing key and refresh the relying party at the asserting party, then set it to `true`. See [SAML single logout](single-sign-on.md#saml-single-logout-next-release). Flyway `V9` adds the table `SsoSamlLogoutRequest`.
+    - **`ENS_SSO_SAML_SINGLE_LOGOUT`** is new and off for an existing installation. Give the Portal a signing key and refresh the relying party at the asserting party, then set it to `true`. See [SAML single logout](single-sign-on.md#saml-single-logout). Flyway `V9` adds the table `SsoSamlLogoutRequest`.
     - **Connector JSON logs.** `LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs` in `connector.env` makes the Connector write ECS JSON lines; the timestamped text lines stay the default. See [Configuration → Logging](configuration.md#logging).
     - **Site details** need the trusted agent role; the **audit CSV export** neutralises formulas; the **Connector's console lines** start with a timestamp (`upgrade.sh` replaces `default_build/log4j.xml`).
 
@@ -428,10 +439,11 @@ The key values:
 | `database.migration.*` | `spring.flyway.user`, `spring.flyway.password` |
 | `authManager.realm`, `.securityDomain` | `rsa.authmanager.realm.name`, `rsa.authmanager.securityDomain.name` (default `SystemDomain`) |
 | `roles.trustedAgentGuid`, `.pmoGuid`, `.helpDeskGuid` | `role.mapped.1-3.rsaSecurityGuid` |
-| `mail.host`, `.port`, `.from`, `.mfaGroupEmail` | `spring.mail.host`, `mail.smtp.host`, `mail.default.from`, `mfa.group.email`. From the next release an empty `from` means `noreply@<publicUrl host>`, and an empty `mfaGroupEmail` sends the lost-token report to nobody (a warning at every start for each) |
+| `mail.host`, `.port`, `.from`, `.mfaGroupEmail` | `spring.mail.host`, `mail.smtp.host`, `mail.default.from`, `mfa.group.email`. From 0.0.2 an empty `from` means `noreply@<publicUrl host>`, and an empty `mfaGroupEmail` sends the lost-token report to nobody (a warning at every start for each) |
 | `publicUrl` | `application.dns.name` (default: the first ingress or route host) |
 | `activeDirectory.*` | `active-directory.*` |
 | `cronTimezone`, `securityBanner.*` | `cron.timezone`, `security-banner.*` |
+| `retention.enabled` (`true`), `retention.appointmentsDays`, `.helpdeskRequestsDays`, `.exemptionRequestsDays`, `.shipmentsDays`, `.tokenEnrollmentsDays`, `.pinResetTrackersDays`, `.certificateMappingsDays`, `.systemNotificationsDays` and, from 0.0.3, `.webhookDeliveriesDays` | `cron.dataRetention.enabled` and `ENS_RETENTION_<TABLE>_DAYS` (see [Configuration → Data retention](configuration.md#data-retention)). An empty value keeps the default |
 | `consentBanner.*`, `session.*` | `ENS_CONSENT_BANNER_*`, `ENS_SESSION_*` (see [Configuration](configuration.md#security-headers-banner-and-sessions)) |
 | `helpDesk.verificationRequired`, `.verificationMethods`, `.privilegedRoles`, `.approverRoles`, `.requestTtl`, `.emailCodeKey` | `rsa.helpdesk.*` (see [Help-desk requests](help-desk.md#settings)); `emailCodeKey` is generated once and kept unless you give a value or a Secret. The other `rsa.helpdesk.*` settings go in `config` |
 | `connector.extraEnv` | The Connector's `RSA_TLS_VERIFY_HOSTNAME` and `CONNECTOR_SERIAL_FILTER_*` (see [RSA AM integration](rsa-integration.md#what-the-connector-accepts)) |
@@ -439,10 +451,10 @@ The key values:
 | `forwardedHeaders.internalProxies` | `SERVER_TOMCAT_REMOTEIP_INTERNAL_PROXIES`: CIDR ranges, each with its prefix length; the chart's schema refuses others. Empty: the private ranges |
 | `metrics.enabled` (`true`), `metrics.port` (`9090`), `metrics.serviceMonitor.*`, `metrics.allowFrom` | `MANAGEMENT_SERVER_PORT`: Prometheus and the probes on a port of their own, the `metrics` port of the Service |
 | `logFormat` (`json`) | `LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs`; `text` for plain lines |
-| `connector.logFormat` (`text`; next release) | The Connector's `LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs` with `json` |
+| `connector.logFormat` (`text`; from 0.0.2) | The Connector's `LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs` with `json` |
 | `backup.*` | A database backup CronJob (off by default; see [Operator Guide](operator-guide.md#database-backups)) |
 | `audit.*` | `ENS_AUDIT_*` (see [Audit logging](../audit-logging.md)) |
-| `config` | Any other Portal setting, for example `cron.expiring.notification.daysBefore` |
+| `config` | Any other Portal setting, for example `cron.expiring.notification.daysBefore`, `cron.sendDelayedTokenRegistrationEmails.maxDaysOfReminders` or `spring.mail.properties.mail.smtp.timeout` |
 
 `helm install` stops with a message when `database.host`, the database password, `mail.host` or the trust store Secret is missing. The Connector does not start without `trust.jks`.
 
@@ -503,7 +515,7 @@ route:
   host: rsa-portal.apps.example.com
 ```
 
-**Client certificates.** Sign-in uses SecurID passcodes. Some features also read the browser's X.509 client certificate: token enrollment records it, and PIN reset with a certificate, exemption requests and appointment cancellation need it. The Portal reads the certificate only from its own TLS session, never from a header. Behind edge termination, those features see no certificate. To use them, let the Portal terminate TLS itself and pass TLS through:
+**Client certificates.** Sign-in uses SecurID passcodes. Some features also read the browser's X.509 client certificate: token enrollment and appointment booking record it, and PIN reset with a certificate and exemption requests need it (up to 0.0.2 an anonymous requester also needed it to cancel an appointment; from 0.0.3 the link is enough). The Portal reads the certificate only from its own TLS session, never from a header. Behind edge termination, those features see no certificate. To use them, let the Portal terminate TLS itself and pass TLS through:
 
 ```bash
 kubectl -n rsa-portal create secret generic rsa-portal-tls-keystore \
@@ -541,8 +553,11 @@ helm upgrade rsa-portal oci://ghcr.io/winllc/charts/rsa-operations-portal --vers
 
 Back up the database first. The Portal updates its schema on the first start of the new version, and `helm rollback` restores the previous images and settings, not the previous database. The license PVC and the database are kept. The [release notes for the release package](#upgrade-with-upgradesh) apply to Helm too.
 
-!!! note "To the next release"
-    With single sign-on configured, a role `sso.roles` maps a group to now comes only through the identity provider, because `sso.requireForAdminRoles` defaults to `null` (unset); a release that set `requireForAdminRoles: false` explicitly keeps the old behaviour. `sso.oidcEndSession` (default `false`) signs operators out of the OpenID Connect provider too; allow `<publicUrl>/` as a post-logout redirect URI first. `sso.samlSingleLogout` (default `false`) does SAML single logout for each `sso.saml` entry with a `signingSecret` and a SingleLogoutService (in its metadata, or `singleLogoutUrl`); refresh the relying party at the asserting party first. From the next release the lost-token report is on by default (`cron.lostTokenThresholdMonitor.debug=false` built in): an installation with `mfa.group.email` set, upgraded ones included, starts getting the nightly report of users over the lost-token threshold after the upgrade; `cron.lostTokenThresholdMonitor.debug=true` (Helm: under `config`) keeps it off, with a warning at every start; `mail.mfaGroupEmail` is that address, and with `mail.from` empty (its default) e-mails now go out from `noreply@<publicUrl host>`. `connector.logFormat: json` makes the Connector write ECS JSON lines (default `text`).
+!!! note "To 0.0.3"
+    The chart upgrades the Portal and the Connector together, as 0.0.3 needs; do not keep `image.tag` or `connector.image.tag` on an older release. `retention.webhookDeliveriesDays` is new (empty: 90 days): the webhook delivery log is purged from the first night on, so set it first (`"0"` keeps it) if you keep the log longer. `cron.sendDelayedTokenRegistrationEmails.maxDaysOfReminders` (30) and the SMTP timeouts go under `config`. The other points of the [release package's note](#upgrade-with-upgradesh) and [Operator Guide → Upgrading to 0.0.3](operator-guide.md#upgrading-to-003) apply as they are.
+
+!!! note "To 0.0.2"
+    With single sign-on configured, a role `sso.roles` maps a group to now comes only through the identity provider, because `sso.requireForAdminRoles` defaults to `null` (unset); a release that set `requireForAdminRoles: false` explicitly keeps the old behaviour. `sso.oidcEndSession` (default `false`) signs operators out of the OpenID Connect provider too; allow `<publicUrl>/` as a post-logout redirect URI first. `sso.samlSingleLogout` (default `false`) does SAML single logout for each `sso.saml` entry with a `signingSecret` and a SingleLogoutService (in its metadata, or `singleLogoutUrl`); refresh the relying party at the asserting party first. From 0.0.2 the lost-token report is on by default (`cron.lostTokenThresholdMonitor.debug=false` built in): an installation with `mfa.group.email` set, upgraded ones included, starts getting the nightly report of users over the lost-token threshold after the upgrade; `cron.lostTokenThresholdMonitor.debug=true` (Helm: under `config`) keeps it off, with a warning at every start; `mail.mfaGroupEmail` is that address, and with `mail.from` empty (its default) e-mails now go out from `noreply@<publicUrl host>`. `connector.logFormat: json` makes the Connector write ECS JSON lines (default `text`).
 
 !!! note "To the release with sessions and the license in the database"
     The license PVC stays mounted, and the first start copies the license and the installation id into the database; then you can turn the volume off ([License](#helm-license)). Sessions open during that upgrade end once; later upgrades sign nobody out.
@@ -694,7 +709,7 @@ In the release package the accounts are `RSA_*` variables in `connector.env`, an
 
 ## Other setup
 
-* **E-mail.** The Portal checks the SMTP relay at startup and does not start without it. Set `spring.mail.host` and `mail.smtp.host` (Helm: `mail.host`), `mail.default.from` and `mfa.group.email`.
+* **E-mail.** The Portal checks the SMTP relay at startup and does not start without it. Set `spring.mail.host` and `mail.smtp.host` (Helm: `mail.host`), `mail.default.from` and `mfa.group.email`. From 0.0.3 a send gives up on a relay that does not connect within 10 seconds or does not answer within 30 ([Configuration → Mail](configuration.md#mail)).
 * **Active Directory** (optional). The Portal can keep users in an "RSA enabled" AD group while they hold a token. See [Configuration](configuration.md). With Helm, set `activeDirectory.enabled` and one entry in `activeDirectory.instances` per RSA security domain.
 * **Audit logging.** Every event is kept in the database and shown on the Audit Log page. Extra outputs (stdout, a file, Splunk, syslog) are set with the `ENS_AUDIT_*` settings (Helm: `audit.*`). See [Audit logging](../audit-logging.md).
 * **Branding.** Used while the license includes the branding feature. Release package: edit `default_build/`. Helm: supply ConfigMaps through `branding.*`.
@@ -703,9 +718,12 @@ In the release package the accounts are `RSA_*` variables in `connector.env`, an
 
 The Portal needs an ENS Solutions license. Download an evaluation or your organization's license from the ENS licensing portal. See [Licensing](../licensing.md).
 
-* **License screen:** `/admin/license`, for PMO users (*PMO Activities > Open License*). Upload the `.lic` file there. It takes effect at once, without a restart. Until a license is installed, only sign-in and the license screen work.
+* **License screen:** `/admin/license`, for PMO users (*PMO Activities > Open License*). Upload the `.lic` file there. It takes effect at once, without a restart. Until a license is installed, only sign-in and the license screen work (and, with `ENS_CONSENT_BANNER_ENABLED=true`, the notice-and-consent banner before them).
+* **What an upload is refused for, from 0.0.3:** a license that is not yet valid, or already expired, while the installed license is in full effect. The screen says *That license was not installed. This license starts on <date>; the license installed now is still in force. Upload this one on or after that day.* (or that it expired), and the upload is audited as `license.rejected`. Before 0.0.3 such a file replaced the working license, and the Portal dropped to sign-in and the license screen, or to read-only. With no license in full effect, such a file is installed as before. The same holds for a license given as `ENS_LICENSE`.
+* **The audit log comes first, from 0.0.3:** an upload reads the audit log before it installs anything, and answers *The license was not installed: the audit log cannot be written.* when it cannot. If the audit event fails after the license is in place, the license stays installed and the screen says *License installed, but the audit log could not record it.*
+* **The clock, from 0.0.3:** the Portal records the latest time it has seen, at most hourly, and checks the license no earlier than a day before it. Setting the server's clock back does not bring an expired license back; the license message then says that the clock is behind. Ordinary corrections of up to a day change nothing.
 * **Installation id:** shown on the license screen. Enter it on the ENS licensing portal to bind a license to this installation.
-* **At install time:** `license/license.lic` or `ENS_LICENSE` in `.env` (release package; see [step 5](#5-license)), or `license.file` or `license.existingSecret` (Helm; see [License](#helm-license)). `ENS_LICENSE` is installed when no usable license is installed yet, or when it is a newer revision.
+* **At install time:** `license/license.lic` or `ENS_LICENSE` in `.env` (release package; see [step 5](#5-license)), or `license.file` or `license.existingSecret` (Helm; see [License](#helm-license)). `ENS_LICENSE` is installed when no usable license is installed yet, or when it is a newer revision. From 0.0.3, if the database cannot be read or written at that moment (it is still starting), `ENS_LICENSE` is tried again on a license check at least 30 seconds later; before, it stayed unused until a restart.
 * **Where it is kept:** in the database, tables `ens_license_*`: back it up. Release 1.5 and earlier kept it in files, `ENS_LICENSE_FILE` (`/var/lib/ens/mfa-portal/license.lic`) and `ENS_LICENSE_STATE_DIR` (`/var/lib/ens/mfa-portal`), on the `ens-license` volume or the license PVC; the first start of a later release copies them into the database.
 
 ## First start checklist
