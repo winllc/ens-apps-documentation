@@ -4,7 +4,7 @@
     This page describes the governance layer as it is being built on the
     `ldap-sync-merge-view` branch `claude/modest-mayer-onyb29`, after release 0.6.1. It is
     not in a release, and the Governance pack is not issued in licenses yet. What is built
-    is listed below; roles follow.
+    is listed below.
 
 Governance answers who should have what, and why. The console decides; the engine
 carries the decision out and keeps it, so access is enforced, and ends on time, while
@@ -19,6 +19,8 @@ the console is down.
   an attribute value, or a *scope* (a key the publication's filter can test).
 - An **assignment** is the decision that a person holds an entitlement, from a date to a
   date, for a reason. The engine fulfils it through a **grant**.
+- A **role** bundles entitlements across systems (and other roles): holding the role is
+  holding each of them.
 
 ## What is built
 
@@ -36,6 +38,7 @@ the console is down.
 | Policies: separation of duties and rules over the person, a scan, violations, remediation and exceptions, and the check when access is asked for | Console: Policies, Violations, My policy violations |
 | Lifecycle: rules for joiners, movers and leavers; emergency termination and reinstatement | Console: Lifecycle; Terminate on a person's card; the engine's reserved `terminated` scope |
 | Manual systems: CSV imports, fulfilment tasks for the system's owner, tickets in ServiceNow, Jira or a webhook receiver | Console: Governance (Import CSV), Fulfilment, My tasks |
+| Roles: versions a second person approves, membership rules, requests for roles, certifications of roles, role mining | Console: Roles (`/governance/roles`), Role mining |
 | The Governance pack | Licensing |
 
 ## Setting a publication up for grants
@@ -147,7 +150,10 @@ A **campaign** asks reviewers to keep or revoke what people hold. A **campaign d
 says what is reviewed and by whom:
 
 - **Reviewers**: each person's manager, each entitlement's owner (then the system's), or
-  each system's owner. When that reviewer is missing or is the person reviewed, the
+  each system's owner. For roles, each role's owner reviews either **who holds the role**
+  (revoking takes it away; a holder the membership rule gave it to can be kept or flagged
+  only) or **what the role holds** (revoking proposes a version without it, which somebody
+  other than the reviewer approves), for the roles chosen or every active role. When that reviewer is missing or is the person reviewed, the
   person's manager reviews, then the definition's **fallback reviewer**. Nobody reviews
   their own access; a campaign with an item nobody can review does not start.
 - **Scope**: some systems or all, privileged entitlements only, only access nothing
@@ -233,6 +239,87 @@ from.
   engine will take the member out again); a member removed there ends it. Repeated deliveries
   are ignored.
 
+## Roles
+
+A **role** (Governance → Roles) holds entitlements, in any systems, and may include other
+roles (at most five deep; never in a cycle). A person holding the role holds each
+entitlement of what it expands to, as an assignment of the origin `role`; one who also holds
+an entitlement directly, or through another role, keeps it when the role goes.
+
+| Setting | What |
+|---|---|
+| Kind | Business (a job, a team) or IT (a technical bundle business roles include) |
+| Owner | Approves requests for the role, and reviews it in role certifications |
+| Requestable | People can ask for it on Request access |
+| Longest duration | Days it is given for; a request then needs an end date within it |
+| Approval workflow | The workflow requests for it go through; the default otherwise |
+
+### Versions
+
+What a role holds changes only by a **version**: someone proposes it (**Propose a change**:
+entitlements, included roles, a membership rule, a comment) and **somebody else approves
+it**. The proposer cannot, and the database refuses it besides. The role's page shows a
+proposed version beside the one in effect: what it removes struck through, what it adds
+marked new. A role is a draft until its first version is approved.
+
+On approval the change reaches everyone who holds the role: assignments are added for what
+it gained and ended for what it lost. When that would end more assignments than the **role
+removal limit** (1,000 by default; `role_removal_limit` in the governance settings), the
+approval is refused until the approver confirms it. A version whose entitlements alone
+violate a policy that blocks requests cannot be approved.
+
+**Retiring** a role ends every assignment of it; a role another active role includes cannot
+be retired until that role no longer includes it.
+
+### Membership rules
+
+A version may give the role by a **rule**: CEL over the person `e`, with the attributes rule
+policies read (see [Policies](#policies)), for example `e.department == "Sales"`. **Try the
+rule** counts who would gain and lose the role, with some of their logins, writing nothing.
+On approval the rule applies to everyone; after that, each joiner, mover and returner the
+projection sees is looked at once: who matches gains the role, and who no longer matches
+loses it after the version's **grace days** (0 by default).
+
+### Giving and asking
+
+A governance administrator gives a role on its page (a person, a reason, an optional end
+date), or takes it away. People ask for requestable roles on **Request access**, where they
+are listed before entitlements: the request goes through the role's workflow, the
+entitlement owner's step is the role's owner, and when it is approved the person holds the
+role. Giving up a role one holds needs no approval. Leavers and terminated people lose every
+role.
+
+Giving a role, by request or by hand, is checked against the policies over everything the
+role expands to, as giving an entitlement is.
+
+### Role or computed group?
+
+Both give access to groups of people. Choose by who decides and how the rule is governed:
+
+| | A role | A computed group |
+|---|---|---|
+| Lives in | The console | The engine's configuration |
+| Changes by | A version a second person approves in the console | A configuration version, through config approval and promotion |
+| Holds | Entitlements in any systems, other roles | Membership of one group in one target |
+| Given by | Administrators, requests, a membership rule over the projected person | A filter over the view's entity, every time it changes |
+| Ends | When taken away, by its end date, or after the rule's grace days | As soon as the filter no longer matches |
+| Reviewed in | Role certifications (who holds it, what it holds) | Not reviewed item by item: a rule decides it (kept or flagged only) |
+| Use it for | Jobs and teams whose access spans systems, exceptions people ask for, anything an owner should answer for | Groups that must follow an attribute exactly and at once, such as all staff, a department's list, or a location |
+
+A computed group cannot be part of a role: the rule in the configuration already decides who
+is in it.
+
+### Role mining
+
+**Role mining** (Governance → Roles → Role mining) proposes roles from what people hold now:
+
+1. For each value of a person attribute (`department` by default) with enough people (5),
+   the entitlements most of them (80 %) hold, with the share holding all of them.
+2. Sets of two or more entitlements that enough people hold exactly alike.
+
+Each run replaces the candidates nobody acted on. **Make a role** turns a candidate into a
+draft role with its first version proposed: nothing changes until somebody else approves it.
+
 ## Policies
 
 A **policy** says what nobody should hold (Governance → Policies):
@@ -247,7 +334,7 @@ A **policy** says what nobody should hold (Governance → Policies):
 | `e.<attribute>` | Every attribute the settings keep (`extra_attributes`), e.g. `e.employeeType` |
 | `e.entitlements` | A list: what the person holds, as `<system>:<native id>` (`=<value>` for an attribute value), e.g. `"Directory:cn=vpn,ou=Groups,dc=x"` |
 | `e.privileged` | The same, only privileged entitlements |
-| `e.roles` | Roles (empty until roles are built) |
+| `e.roles` | The roles the person holds, by name |
 
   For example `e.employeeType == "contractor" && size(e.privileged) > 0`. A condition that
   does not compile is refused when the policy is saved, with where. **Try it** shows how many
@@ -275,8 +362,9 @@ person would newly violate:
 | Warn | Goes ahead; every approver sees the warning |
 | Require an exception | Gains an approval step for the policy's owner; their approval grants the exception |
 
-Giving an assignment directly that would violate a policy is refused unless the call says
-`override_policy` with a reason, recorded as `governance.policy.overridden`.
+A role is checked by everything it expands to. Giving an assignment or a role directly that
+would violate a policy is refused unless the call says `override_policy` with a reason,
+recorded as `governance.policy.overridden`.
 
 ## Lifecycle
 
@@ -431,6 +519,11 @@ mapping.
 | `GET`, `POST /api/v1/governance/ticket-adapters`; `PUT`, `DELETE .../{aid}` | readers; writers | Ticket systems |
 | `GET /api/v1/governance/fulfilment-tasks`; `POST .../{tid}/complete` | readers; writers | Tasks of manual systems (`state`, `system_id`) |
 | `GET /api/v1/my/tasks`; `POST .../{tid}/complete` | the system's owner | Their tasks |
+| `GET`, `POST /api/v1/governance/roles`; `GET`, `PUT .../{rid}`; `POST .../{rid}/retire` | readers; writers | Roles |
+| `GET`, `POST /api/v1/governance/roles/{rid}/versions`; `POST .../versions/{ver}/approve` (`confirm_removals`), `/reject` | readers; writers | Versions: propose, approve (never one's own), reject |
+| `POST /api/v1/governance/roles/{rid}/simulate`, `.../versions/{ver}/simulate` | readers | Who a membership rule would add and remove, writing nothing |
+| `GET`, `POST /api/v1/governance/roles/{rid}/members`; `POST .../members/{maid}/end` | readers; writers | Who holds a role (`all` for ended ones too); give it (`override_policy`), take it |
+| `POST /api/v1/governance/role-mining`; `GET /api/v1/governance/role-candidates`; `POST .../{cid}/accept`, `/dismiss` | writers; readers | Role mining |
 | `GET /api/v1/my/identity`, `/my/access` | every signed-in role | The signed-in person, and what they hold |
 
 Writes need the Governance pack. Reads never do: what was recorded stays visible after
@@ -452,6 +545,8 @@ a license lapses.
 | `governance.request.created`, `.approved`, `.rejected`, `.cancelled`, `.completed`, `.overridden` | authorization |
 | `governance.assignment.conflict` | authorization |
 | `governance.policy.created`, `.updated`, `.deleted` | configuration |
+| `governance.role.created`, `.updated`, `.proposed`, `.approved`, `.rejected`, `.retired`; `governance.role_mining.ran` | configuration |
+| `governance.role.assigned`, `.unassigned`, `.rule_applied` | authorization |
 | `governance.violation.detected`, `.remediated`, `.excepted`; `governance.policy.overridden` | authorization |
 | `governance.lifecycle.updated` | configuration |
 | `governance.lifecycle.triggered`, `governance.identity.reinstated` | authorization |
@@ -500,5 +595,11 @@ each change the projection saw, the attributes' old and new values.
   stops as an inventory does, and finds tasks done; owners' tasks; tickets opened, read back
   and closed against stand-ins for ServiceNow, Jira and a webhook receiver). Not yet run
   against real ServiceNow or Jira instances.
+- Roles: integration tests (three entitlements in two systems; four eyes through the API
+  and in the database; a version reaching its holder; the removal limit; a role's end keeping
+  access held directly; includes and a refused cycle; a rule following a mover and a
+  joiner; a request for a role; both role certifications; mining nine of ten people holding
+  the same three entitlements), and two grants of one group in the engine's end-to-end
+  script against OpenLDAP.
 - Not built yet: holding grants in change windows and thresholds, correlation rules in
-  the API, SQL and REST targets, and roles.
+  the API, and roles as policy sets (a role is checked by what it expands to).
