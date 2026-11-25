@@ -4,7 +4,7 @@
     This page describes the governance layer as it is being built on the
     `ldap-sync-merge-view` branch `claude/modest-mayer-onyb29`, after release 0.6.1. It is
     not in a release, and the Governance pack is not issued in licenses yet. What is built
-    is listed below; certifications, access requests, policies and roles follow.
+    is listed below; policies and roles follow.
 
 Governance answers who should have what, and why. The console decides; the engine
 carries the decision out and keeps it, so access is enforced, and ends on time, while
@@ -29,6 +29,8 @@ the console is down.
 | A person's own page | Console: My access (`/my`); API under `/api/v1/my` |
 | The entitlement catalog: each system's accounts, groups and holdings, read daily from its target (`ListInventory`, `syncd inventory`) | Console: Catalog page, and "What they hold" on Assignments |
 | Access certifications: campaigns, reviewer queues, revocations the engine carries out, sign-off and the evidence report | Console: Access reviews (`/governance/campaigns`) and My reviews (`/my/reviews`) |
+| Access requests: approval workflows, requests for oneself or a direct report, approvals, end dates, overrides | Console: Request access, My requests, My approvals, My team; Workflows and Requests for administrators |
+| The Directory Services Portal: its group requests decided here (governed mode), and its owners' changes reported here | `governance:delegate` tokens; `POST /api/v1/governance/ingest/dsp` |
 | The Governance pack | Licensing |
 
 ## Setting a publication up for grants
@@ -183,6 +185,49 @@ allowed recipient domains, and links to the console when `CONSOLE_PUBLIC_URL` is
 webhook events `governance.campaign-started` and `governance.review-overdue` are raised as
 well.
 
+## Access requests
+
+People ask for access on **Request access** (`/my/request`): for themselves, or, as a
+manager, for a direct report. A governance administrator may ask for anyone. Each item goes
+through an **approval workflow** (Governance → Workflows): the entitlement's, else its
+system's, else the default one. With no workflow at all, requests are refused.
+
+A workflow is a list of steps, each with:
+
+| Field | What |
+|---|---|
+| Approver | The person's manager, the entitlement's owner, the system's owner, or one named person (`identity:<id>`) |
+| Several approvers | Any one of them, or all of them |
+| Skip when | A CEL condition over the person (`login`, `mail`, `status`, projected attributes) and `privileged`, `self_request`, `duration_days`, e.g. `!e.privileged && e.duration_days <= 30` |
+| Days to decide | Then the approver's manager is added beside them, or the item is rejected |
+
+**Nobody approves a request they made or benefit from.** Such an approver is replaced by
+their manager, then by the default workflow's **fallback approver**; the database refuses it
+besides. A rejection needs a comment and ends the item; the last approval makes an assignment
+(origin `request`) and the engine carries it out. An end date given with the request is
+enforced by the engine. An entitlement can require an end date and limit the duration
+(Catalog → the entitlement). Removing access one holds needs no approval.
+
+Approvers decide on **My approvals** (approve, reject, or hand to someone else). Requesters
+and the people the access is for follow **My requests**, and can cancel what still waits.
+Managers see their reports' access on **My team**. Governance administrators see every
+request (Governance → Requests) and can approve or reject what waits in place of the
+approvers, with a reason, recorded as an override; never on a request they made or benefit
+from.
+
+### The Directory Services Portal
+
+- **Governed mode:** the portal asks for groups here on its users' behalf with a token of the
+  scope `governance:delegate`, and its owners no longer decide. See
+  [Governed mode](../directory-services-portal/configuration.md#governed-mode).
+- **Changes its owners make:** add the portal under Governance → Workflows (*Portals
+  reporting group changes*) for the system whose groups it changes; the console shows a
+  signing secret once. In the portal, add a webhook for `group.membership_changed` to
+  `<console>/api/v1/governance/ingest/dsp` with that secret. A member added there becomes an
+  assignment with the origin `dsp` (a `conflict` in a group a syncd rule computes, because the
+  engine will take the member out again); a member removed there ends it. Repeated deliveries
+  are ignored.
+
 ## API
 
 | Method and path | Who | What |
@@ -210,6 +255,12 @@ well.
 | `GET /api/v1/governance/tasks`; `POST .../tasks/{tid}/done` | readers; writers | Tasks for the governance administrators |
 | `GET /api/v1/my/reviews`, `/my/reviews/{tid}/items` | every signed-in role | The signed-in person's review tasks and their items |
 | `POST /api/v1/my/reviews/{tid}/decisions`, `/delegate`, `/complete`; `GET /api/v1/my/people` | every signed-in role | Decide, hand items to someone else, finish |
+| `GET`, `POST /api/v1/governance/workflows`; `PUT`, `DELETE .../{wid}`; `PATCH /api/v1/governance/systems/{sid}` | readers; writers | Workflows, and a system's workflow and owner |
+| `GET /api/v1/governance/requests`, `.../{rid}`; `POST .../{rid}/override` | readers; writers | Requests, and overriding their approvers |
+| `POST /api/v1/governance/requests`; `GET .../{rid}/state`; `GET /api/v1/governance/entitlements/lookup` | administrators, or `governance:delegate` | Asking on a person's behalf (`on_behalf_of`) |
+| `GET`, `POST /api/v1/governance/ingest-sources`; `POST /api/v1/governance/ingest/dsp` | readers, writers; the portal's signature | Portals reporting group changes |
+| `GET /api/v1/my/catalog`, `GET`, `POST /api/v1/my/requests`, `GET .../{rid}`, `POST .../{rid}/cancel` | every signed-in role | Asking, and one's requests |
+| `GET /api/v1/my/approvals`, `POST .../{tid}/approve`, `/reject`, `/delegate`; `GET /api/v1/my/team` | every signed-in role | Approving, and a manager's team |
 | `GET /api/v1/my/identity`, `/my/access` | every signed-in role | The signed-in person, and what they hold |
 
 Writes need the Governance pack. Reads never do: what was recorded stays visible after
@@ -227,6 +278,9 @@ a license lapses.
 | `governance.campaign.created`, `governance.campaign.closed`, `governance.campaign.approved` (sign-off) | authorization |
 | `governance.review.decided` (one per submission), `governance.review.delegated` | authorization |
 | `governance.review.revocation_failed` | system |
+| `governance.workflow.updated`, `governance.ingest_source.saved` | configuration |
+| `governance.request.created`, `.approved`, `.rejected`, `.cancelled`, `.completed`, `.overridden` | authorization |
+| `governance.assignment.conflict` | authorization |
 | `governance.projection.halted`, `governance.inventory.completed`, `governance.inventory.suspect` | system |
 
 ## What the console stores about people
@@ -252,5 +306,9 @@ each change the projection saw, the attributes' old and new values.
   engine, revocations at the close, the clock). A campaign of 200,000 items starts in about
   9 seconds; a page of a reviewer's queue answers in about 25 ms. Not yet an end-to-end
   script with OpenLDAP.
+- Requests: integration tests (an approval chain to applied access, no self-approval,
+  rejection, a manager for a report, end dates and limits, timeouts, overrides, the portal's
+  signed webhook and delegated requests), and the portal's own test of governed mode against a
+  stand-in console. Not yet an end-to-end script.
 - Not built yet: holding grants in change windows and thresholds, correlation rules in
-  the API, requests, policies and roles.
+  the API, policies and roles.

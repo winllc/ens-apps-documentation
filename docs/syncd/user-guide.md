@@ -965,6 +965,20 @@ character replaced, dropped or added, or two neighbours swapped) from five chara
 suggestions shown, before you accept. How scoring and hints work is in
 [Reports, lineage and data quality](reports-and-data-quality.md#correlation-assistance).
 
+## Requesting access (`/my/request`)
+
+1. **Request access**, from My access. A manager chooses whom it is for: themselves or a
+   direct report.
+2. Search for what you need; **Add** each item. Items you hold, or asked for already, say so.
+3. Give an end date where the item needs one (some access is given for a limited time), a
+   reason, and a ticket if you have one. **Submit.**
+4. **My requests** shows each request, each item's state and its approvers' decisions.
+   **Cancel what waits** withdraws items not decided yet.
+
+Approvers find their work on **My approvals**: **Approve**, **Reject** (a comment is
+required), or **Hand to someone else**. Nobody is asked to approve a request they made or
+benefit from. Managers see their reports' access on **My team**.
+
 ## Access reviews (`/my/reviews`)
 
 When an [access certification](governance.md#access-certifications) names you as a
