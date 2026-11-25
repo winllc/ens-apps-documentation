@@ -162,7 +162,7 @@ each connector's pack.
 | Pack | Connectors | Features |
 |---|---|---|
 | Core | Active Directory, LDAP (OpenLDAP, 389 DS, Ping), PostgreSQL, MySQL and MariaDB, CSV files, DSML files (air gap; from 0.6.0) | The rule engine and the console, rule packages, data-quality checks, unmanaged-entry reports, secrets from Vault, AWS or Azure, SAML and X.509 sign-in, scoped roles, drift checks |
-| Enterprise Database | SQL Server, MongoDB, Debezium (Oracle, Db2 and others), the JDBC bridge | |
+| Enterprise Database | SQL Server, MongoDB, Debezium (Oracle, Db2 and others), the JDBC bridge | SQL tables as targets (`sql-targets`; in development) |
 | Cloud and SaaS | Microsoft Entra ID, SCIM 2.0, REST and OData, Workday, SAP SuccessFactors, UKG Pro | Entra ID certificate, federated and managed-identity sign-in |
 | Password Sync | | Capture agents, self-service, password delivery, initial passwords, password key and agent CA rotation |
 | High Availability | | Active/passive pairs, with the PostgreSQL, file and Kubernetes Lease backends |

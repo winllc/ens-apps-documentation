@@ -6,7 +6,9 @@ Entra ID, and since 0.5.0 REST and OData services and the HR services Workday, S
 SuccessFactors and UKG Pro, plus any database that Debezium Server can capture or that has
 a JDBC driver. Targets are LDAP directories, Active Directory, SaaS applications that
 speak SCIM 2.0, and Entra ID. Since 0.6.0 a `dsml` connector carries changes across an air
-gap as DSML v2 files: a target on the connected side, a source on the far side.
+gap as DSML v2 files: a target on the connected side, a source on the far side. In
+development (not in a release yet), PostgreSQL, MySQL and SQL Server tables are targets
+too: see [SQL tables as targets](#sql-tables-as-targets).
 
 This page says how each connector reads, what it needs on the source side, and which
 settings matter. Every key is listed in [Configuration](configuration.md#connectors-connectors);
@@ -1793,6 +1795,62 @@ prints `signed in to <host>:<port> as <user>, host key <key>` and how many files
 there. In the console, **Browse the files** lists the files, newest first, and shows the
 entries one carries; an object's sample shows its entries as the newest files carry them.
 
+## SQL tables as targets
+
+*In development, not in a release yet; Enterprise Database pack (the feature
+`sql-targets`), whichever database.*
+
+A publication to a `postgres`, `mysql` or `sql_server` connector writes each entity as one
+row of a table, found by its key column: for applications that keep their users in their
+own tables and have no LDAP, SCIM or API to provision through.
+
+```yaml
+publications:
+  - name: people_to_app
+    view: people
+    target: app_db
+    table: app.app_users          # table, or schema.table
+    key: login                    # the column naming the row
+    external_id: e.login          # its value
+    attributes:                   # column <- CEL over e, one value each
+      employee_no: e.employee_id
+      email: e.mail
+      full_name: e.display_name
+    account_state: { column: active, enabled: "true", disabled: "false" }
+    deprovision: disable
+    drift: { default: revert }
+    grants:
+      memberships: { table: app.user_roles, entity_column: login, group_column: role_name }
+```
+
+| The engine | The statement |
+|---|---|
+| adds an entity | `SELECT` by key; a row already there is updated and counted as adopted, else `INSERT` with the enabled value |
+| changes attributes | `UPDATE` of the changed columns; a row deleted by hand is inserted again |
+| a new key value | `UPDATE` of the key, and of the membership rows |
+| disables or enables | `UPDATE` of the `account_state` column |
+| deletes | `DELETE` of the membership rows, then of the row |
+| grants a membership (governance) | `INSERT` of (key, group) unless it is there; ending the grant deletes that row only |
+
+- Table and column names are identifiers (letters, digits and `_`), quoted as written in
+  every statement. PostgreSQL folds unquoted names to lower case: write them as the
+  database stores them. No SQL text from the configuration or the data is executed; every
+  value is a parameter.
+- Values travel as text and the database converts them to the column's type (`true` or
+  `1` for a boolean or bit, digits for an integer); for PostgreSQL syncd reads each
+  column's type from the catalog and casts.
+- Each entity's changes are one transaction. The account needs `SELECT`, `INSERT`,
+  `UPDATE` and `DELETE` on the tables and read access to the catalog.
+  `syncd test-connection` and the engine's start check that the tables and columns exist.
+- Drift checks read rows back by key; the unmanaged pass and the governance inventory list
+  the table by key, and the groups as the membership table's distinct group names.
+- Refused on such a publication: `dn`, `object_classes`, containers, moves, `writeback`,
+  `adopt`, `passwords`, computed `groups`, `references`, `strip_unmanaged_groups`.
+- Oracle and Db2 are not targets yet: the JDBC bridge only reads.
+
+Tested end to end against PostgreSQL 16, MySQL 8.0 and SQL Server 2022 (`tests/e2e/sql-target.sh`);
+CI also runs it against MariaDB and SQL Server 2019.
+
 ## Checking a connector
 
 Before publishing, check a connector against the real system. Nothing here writes.
@@ -1893,8 +1951,9 @@ Not tested against a real server:
 - **Other source families**: Kafka and inbound SCIM are not planned until a customer
   needs them. HR and SaaS services are read through the REST reader since 0.5.0; Workday
   SOAP and SuccessFactors `$expand` are not built.
-- **Other targets**: databases, files other than DSML, REST services, and applications
-  that do not speak SCIM 2.0.
+- **Other targets**: Oracle and Db2 tables (PostgreSQL, MySQL and SQL Server tables are
+  targets in development), files other than DSML, REST services, and applications that
+  do not speak SCIM 2.0.
 - **DSML over anything but a directory or SFTP**: a DSML gateway's SOAP or HTTP endpoint
   is not called; files go through a directory or an SFTP server. Not tested against a
   commercial DSML gateway or a data diode's transfer software.
