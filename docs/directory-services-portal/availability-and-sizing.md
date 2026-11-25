@@ -54,7 +54,7 @@ The web tier is stateless and can always have several replicas (Helm: `web.repli
 runs as one instance unless it has a shared PostgreSQL database. For the suite-wide picture, see
 [Sizing, availability and recovery](../availability-and-sizing.md).
 
-### The directory: failover (next release)
+### The directory: failover (v0.0.6)
 
 The portal can list several servers of one directory (replicas holding the same data):
 `LDAP_URL=ldaps://dc1.example.com:636,ldaps://dc2.example.com:636` (Helm: `ldap.url` as a list). A
@@ -64,6 +64,13 @@ closed after 15 minutes, so the pool goes back to the first once it answers agai
 password check fails over the same way. Failover is part of every edition (no license feature).
 Each API instance has its own pool per directory, so `LDAP_POOL_SIZE` applies per instance and per
 directory.
+
+While none of a directory's servers answers, the portal fails fast (v0.0.9): after a failed attempt
+to connect, every request that needs that directory gets the same error at once for 5 seconds, then
+one request tries again while the others still fail at once. Requests therefore don't pile up
+waiting for the connect timeout (`LDAP_TIMEOUT_MS`, 10 seconds), and pages that need no directory
+keep answering. The anonymous `/api/info`, which the sign-in page calls, asks the directory at most
+every 10 seconds.
 
 With [several directories](configuration.md#several-directories) (license feature
 `multi-directory`), each has its own servers and failover. One directory being down doesn't take
@@ -98,24 +105,34 @@ creates and upgrades its tables itself; the role needs `CREATE` on its schema.
 - **The audit store**, one hash chain in `dsp_audit_event`, with the audit API tokens and forwarder
   cursors.
 - **Background tasks' progress and results**, so the task list, results, cancelling and dismissing
-  work from any instance.
+  work from any instance. From v0.0.9 each instance marks its unfinished tasks every 2 seconds; a
+  task whose instance has not done so for 30 seconds (it stopped: an upgrade, a crash, an eviction)
+  is marked failed by any other instance (*The server running it stopped before it finished*), no
+  longer counts against `JOBS_MAX_ACTIVE_PER_USER`, and can be dismissed. An instance that shuts
+  down in order marks its own unfinished tasks failed first.
 - **Single sign-on** requests in flight and used SAML assertion ids.
-- **Per-address limits** (next release): failed API tokens and single sign-on starts are counted in
+- **Per-address limits** (v0.0.4): failed API tokens and single sign-on starts are counted in
   `dsp_rate_limit` (Flyway V4, applied at start), so a client gets the limit once, not once per
   instance. Should the database fail, an instance counts in its own memory meanwhile (a warning at
   most once a minute). The per-token request limit stays per instance.
-- **Webhooks** and their outbox. From the next release an entry change's deliveries are written in
+- **Webhooks** and their outbox. From v0.0.4 an entry change's deliveries are written in
   its audit event's transaction, so an instance stopping loses none, and the signing secrets are
   encrypted with `DSP_SECRETS_KEY`, which every instance needs, the same.
 - **The license**, the installation id and the revisions seen (`ens_license_*`): an upload on the
-  license screen reaches every instance.
+  license screen reaches every instance. From v0.0.9 also the latest time the installation has seen
+  (a column Flyway V12 adds), so a clock set back on one host doesn't bring an expired license back.
+- **Group access** requests and, from v0.0.11, the end dates of memberships
+  (`dsp_group_membership_expiry`, Flyway V13, created at the first start; an existing
+  `group-membership-expiries.json` is imported once).
 
 **One instance at a time:** the Splunk and syslog forwarders run on one elected instance (another
-takes over within seconds when it stops); audit retention and the license-mode check run under a
-cluster lock.
+takes over within seconds when it stops); audit retention, the license-mode check and, from
+v0.0.11, the two group access jobs (closing expired requests, removing members after their end
+date) run under a cluster lock, and each request or membership is closed by one instance only. See
+[Operator guide → Scheduled jobs](operator-guide.md#scheduled-jobs).
 
-**Per instance:** a background task runs on the instance that started it, and is lost if that
-instance stops. Each instance has its own LDAP pool and `DSP_DATABASE_POOL_SIZE` (10) database
+**Per instance:** a background task runs on the instance that started it, and fails if that
+instance stops (it is not moved to another one; run it again). Each instance has its own LDAP pool and `DSP_DATABASE_POOL_SIZE` (10) database
 connections.
 
 **Moving an existing installation to the database.** Set the `DSP_DATABASE_*` variables and restart
@@ -152,10 +169,10 @@ availability is yours to provide: run PostgreSQL with your own high-availability
 
 | Item | Holds | Back it up with |
 |---|---|---|
-| The shared PostgreSQL database, if you use one | Configuration, the audit store, sessions, background task results, the license and **this installation's id** | Your database's backups. `./portal.sh backup` and `upgrade.sh` don't include it |
-| Data directory (`/data`, the `portal-data` volume, `/var/lib/directory-services-portal`, or the data PVC) | Without the database: configuration, audit store, analysis results. With it: only what the first start imported | `./portal.sh backup`, `tar`, or volume snapshots ([Operator guide](operator-guide.md#data-and-backups)) |
+| The shared PostgreSQL database, if you use one | Configuration, the audit store, sessions, background task results, group access requests and membership end dates, the license and **this installation's id** | Your database's backups (`pg_dump`). `./portal.sh backup` and `upgrade.sh` don't include it; from v0.0.9 `upgrade.sh` warns about that, and asks before going on when run from a terminal |
+| Data directory (`/data`, the `portal-data` volume, `/var/lib/directory-services-portal`, or the data PVC) | Without the database: configuration, audit store, analysis results, API tokens, webhooks, group access requests and membership end dates. With it: only what the first start imported | `./portal.sh backup`, `tar`, or volume snapshots ([Operator guide](operator-guide.md#data-and-backups)) |
 | License directory (`ens-license` volume, `/var/lib/ens/directory-portal`, or the license PVC) | Without the database: the license file and **this installation's id**. With it: only what the first start imported | A copy of the directory or a snapshot. Keep the `.lic` file you received as well |
-| Settings | `.env` and `certs/` (Docker); `portal.env`, `ldap-bind-password`, `proxy-secret`, `secrets-key` (next release) and any TLS files (native); your values file and the Secrets it names, and the chart's Secret with `secrets-key` (Helm) | Your configuration management. They hold secrets: keep the copies private. From the next release `DSP_SECRETS_KEY` is needed to read the webhook signing secrets in the data backups: keep it apart from them |
+| Settings | `.env` and `certs/` (Docker); `portal.env`, `ldap-bind-password`, `proxy-secret`, `secrets-key` (v0.0.4) and any TLS files (native); your values file and the Secrets it names, and the chart's Secret with `secrets-key` (Helm) | Your configuration management. They hold secrets: keep the copies private. From v0.0.4 `DSP_SECRETS_KEY` is needed to read the webhook signing secrets in the data backups: keep it apart from them |
 | The release | The package you installed, or the image digests and chart version | Keep the download, or mirror the images |
 | Directory data | Entries | Your LDAP server's own backups. The portal holds none |
 
@@ -178,7 +195,8 @@ last backup are lost. Audit events already forwarded to Splunk or syslog are sti
 4. **Restore the data.** With the shared database, restore PostgreSQL from its backup, including
    the `ens_license_*` tables: without them, and without a license volume, the installation gets
    a new id. Without the database, restore the data directory from the latest backup:
-   `./portal.sh restore <file>` (Docker; it starts the API when done), `tar -x` into
+   `./portal.sh restore <file>` (Docker; it checks the archive first, replaces the data only once
+   the whole archive is extracted, and starts the API when done), `tar -x` into
    `/var/lib/directory-services-portal` and `chown -R dsp:dsp` (native), or restore the PVC from
    its snapshot (Helm).
 5. **Start the portal** (`./portal.sh up`, `systemctl start`, or your `api.replicaCount`) and
@@ -186,8 +204,14 @@ last backup are lost. Audit events already forwarded to Splunk or syslog are sti
 6. **Check it**:
     - the license screen shows the expected state and installation id;
     - **Audit log → Verify integrity** reports the chain intact (a partial last line from a
-      backup taken while the portal was busy is logged and ignored);
-    - sign in as a user and as an administrator, and open a directory.
+      backup taken while the portal was busy is logged and ignored). From v0.0.9 it also checks the
+      oldest event against how far retention had deleted (`audit/audit-pruned`, part of the data
+      directory), so restore the audit directory as a whole, not single month files;
+    - sign in as a user and as an administrator, and open a directory;
+    - where group memberships have end dates (v0.0.11): they come back with the data. A member
+      whose end date passed while the portal was down is removed by the next hourly run, once the
+      license is in full effect. End dates set after the backup are lost with it: those members
+      stay in their groups until an owner sets a date again or removes them.
 7. **Re-point audit consumers.** Events recorded after the restore continue from the restored
    store's newest sequence number, so they reuse numbers the SIEM may already have received from
    the lost period. De-duplicate on `id`, never on `seq`. A SIEM that pulls with the pull API
@@ -236,6 +260,14 @@ package and Helm, do it yourself.
     `helm rollback` restores the previous chart's manifests and values. It does **not** roll back
     the data: restore the data volume, or with the shared database PostgreSQL, from the backup you
     took before the upgrade. With the shared database, scale the API to 0 before restoring it.
+
+**Going back from v0.0.11 to an earlier release.** Earlier releases know nothing of the v0.0.11
+group access settings or of membership end dates: nobody is removed at an end date, requests don't
+expire, and open groups take requests again. They ignore `group-membership-expiries.json` and the
+table `dsp_group_membership_expiry`, and leave the Flyway V12 and V13 changes to the shared
+database in place, which are additive. Remove time-limited members by hand if you stay on the
+earlier release. Going back from v0.0.10 or later to v0.0.9 or earlier also brings back LDAPS
+failures for a directory whose CA is only in the trust store given to the JVM.
 
 **Why restore the data too.** A newer release may change what it writes, for example a new
 configuration field or audit details. An older release ignores configuration fields it doesn't

@@ -11,6 +11,12 @@ This page summarises the portal's security controls and the settings that affect
 - User passwords are used only to verify identity through an LDAP bind. They are not stored.
 - Because the LDAP server sees only the service account, the portal keeps its own
   [audit log](admin-guide.md#audit-log) of who changed what.
+- Connections to the directory over `ldaps://` or StartTLS verify the server's certificate and host
+  name (`LDAP_TLS_REJECT_UNAUTHORIZED=true`, the default) against the trust store given to the JVM,
+  or the JDK's own `cacerts` when none is given. Up to v0.0.9 only `cacerts` counted, so a
+  directory whose CA was in the given trust store alone could not be verified; from v0.0.10 give
+  the API a trust store with that CA instead of turning verification off. See
+  [Configuration → LDAPS with a private CA](configuration.md#ldaps-with-a-private-ca).
 
 ## Authentication
 
@@ -19,11 +25,13 @@ This page summarises the portal's security controls and the settings that affect
 | Password sign-in | Service-account search with `LDAP_USER_FILTER` (exactly one match), then an LDAP bind as the user |
 | Anonymous bind prevention | Empty passwords are rejected before any bind |
 | Username validation | Letters, digits and `. _ @ + -`, at most 128 characters; values are filter-escaped |
-| Brute-force throttling | `LOGIN_MAX_FAILURES` failures (default 8) per client address and username within `LOGIN_LOCKOUT_WINDOW` (default 15 minutes) → HTTP 429, audited as `auth.lockout` (severity alert). Relies on the real client address, so set `SERVER_FORWARD_HEADERS_STRATEGY=framework` behind a proxy. Without a shared database the counters are in memory, so a restart clears them; with one (`DSP_DATABASE_URL`) they are in `dsp_login_failure` (keys stored as SHA-256), whichever instance a request reaches |
+| Brute-force throttling | `LOGIN_MAX_FAILURES` failures (default 8) per client address and username within `LOGIN_LOCKOUT_WINDOW` (default 15 minutes) → HTTP 429, audited as `auth.lockout` (severity alert). Relies on the real client address, so set `SERVER_FORWARD_HEADERS_STRATEGY=framework` behind a proxy, and `WEB_TRUSTED_PROXIES` when another proxy is in front of the web tier (see [Network exposure](#network-exposure)). Without a shared database the counters are in memory, so a restart clears them; with one (`DSP_DATABASE_URL`) they are in `dsp_login_failure` (keys stored as SHA-256), whichever instance a request reaches |
 | Notice and consent banner | `ENS_CONSENT_BANNER_ENABLED=true`: no sign-in of any kind succeeds until the browser session has acknowledged the DoD banner. Enforced by the API (403 `consent_required`), audited as `auth.consent-acknowledged`. See [Configuration](configuration.md#notice-and-consent-banner) |
 | Certificate-only mode | `PASSWORD_LOGIN_ENABLED=false` |
 | Administrator role | `ROLE_ADMIN` from `ADMIN_USERS` / `ADMIN_GROUPS`; required for `/api/admin/**`. Read again from the directory every `GROUP_REFRESH_INTERVAL` (default 5 minutes) |
-| Single sign-on | OIDC (authorization code with PKCE, state, nonce; ID token signature, issuer, audience, expiry) and SAML 2.0 (signed response or assertions, issuer, audience, recipient, times, `InResponseTo`; IdP-initiated responses and replayed assertions refused). The asserted identity must match exactly one directory entry through `SSO_*_USER_FILTER`; unverified e-mail claims are not used. Roles come from the directory, plus administrator through `SSO_*_ADMIN_GROUPS` only, bounded by `SSO_IDP_ADMIN_SESSION_LIFETIME`. Every address given to the provider is built from `PORTAL_PUBLIC_URL`. No provider token is kept. From the next release signing out can also end the provider's session (`SSO_OIDC_PROVIDER_LOGOUT`, without `id_token_hint`; `SSO_SAML_SINGLE_LOGOUT`, signed, HTTP-Redirect). See [Single sign-on → Signing out](single-sign-on.md#signing-out) |
+| Disabled and locked accounts | From v0.0.9 the same re-read ends the sessions of an account the directory marks disabled or locked (`nsAccountLock: true`, Active Directory's ACCOUNTDISABLE flag, or `pwdAccountLockedTime`), within `GROUP_REFRESH_INTERVAL`, audited as `auth.session-expired` with the reason `account-disabled`. Before, such an account kept its session, administrator rights included, until the idle or absolute timeout. API tokens of such an account are refused as before |
+| Single sign-on | OIDC (authorization code with PKCE, state, nonce; ID token signature, issuer, audience, expiry) and SAML 2.0 (signed response or assertions, issuer, audience, recipient, times, `InResponseTo`; IdP-initiated responses and replayed assertions refused). The asserted identity must match exactly one directory entry through `SSO_*_USER_FILTER`; unverified e-mail claims are not used. Roles come from the directory, plus administrator through `SSO_*_ADMIN_GROUPS` only, bounded by `SSO_IDP_ADMIN_SESSION_LIFETIME`. Every address given to the provider is built from `PORTAL_PUBLIC_URL`. No provider token is kept. From v0.0.4 signing out can also end the provider's session (`SSO_OIDC_PROVIDER_LOGOUT`, without `id_token_hint`; `SSO_SAML_SINGLE_LOGOUT`, signed, HTTP-Redirect). See [Single sign-on → Signing out](single-sign-on.md#signing-out). From v0.0.9 the SAML identity provider's metadata (its signing certificates) is read again every `SSO_SAML_METADATA_REFRESH` and at once after a signature failure, so a certificate the provider withdraws stops being trusted, and a new one is trusted, without a restart |
+| Audit pull API tokens | Tokens of their own for `/api/audit/events`, kept as SHA-256. From v0.0.9 a wrong or revoked token is recorded as a failed `auth.login` (`method` `api-token`, the source address, never the token), folded per address, so token guessing shows in the audit trail |
 | API tokens | `dspat_` and 32 random bytes, kept as SHA-256 and compared in constant time; scoped, expiring, optionally limited to some directories; act as their creator with the creator's rights re-read from the directory, refused when the creator is disabled or locked. Accepted on `/api/v1` only, which accepts nothing else. See [API reference → API tokens](api-reference.md#api-tokens) |
 
 ## Sessions and CSRF
@@ -36,12 +44,12 @@ This page summarises the portal's security controls and the settings that affect
   lifetime (`ENS_SESSION_ABSOLUTE_TIMEOUT`, default `12h`) and an optional limit on concurrent
   sessions per user (`ENS_SESSION_MAX_PER_USER`; over it the oldest session ends). The web client's
   background polling is marked `X-DSP-Background: 1` and does not keep a session alive. Each expiry
-  is audited as `auth.session-expired` with the reason `idle`, `absolute`, `concurrent` or
-  `account-removed`.
+  is audited as `auth.session-expired` with the reason `idle`, `absolute`, `concurrent`,
+  `account-removed` or (from v0.0.9) `account-disabled`.
 - **Group refresh**: a signed-in user's groups and administrator status are read again every
   `GROUP_REFRESH_INTERVAL`. Removing someone from `ADMIN_GROUPS` takes effect within that
-  interval. If the account was deleted, its sessions end; if the directory is down, the session
-  keeps its groups.
+  interval. If the account was deleted or, from v0.0.9, disabled or locked in the directory, its
+  sessions end; if the directory is down, the session keeps its groups.
 - **CSRF defence**: every state-changing `/api/` request (anything except GET, HEAD, OPTIONS and TRACE)
   must carry `X-DSP-Request: 1`, or it is refused with 403 *Missing request verification header*.
   Browsers can't add custom headers to cross-site requests without a CORS preflight, which the API
@@ -67,14 +75,29 @@ This page summarises the portal's security controls and the settings that affect
   Write grants on them are rejected.
 - **Namespace confinement**: every read and write is limited to entries below the definition's base
   DN, within its scope, that match its filter. DNs are parsed and compared with RFC 4514 rules.
+  From v0.0.9 a create or update after which the entry would no longer match the filter is refused
+  (400) before anything is written, judged by the attributes the write sets; what the filter
+  tests beyond those, and ordering or extensible matches, are left to the directory.
 - Writes are limited to the form's writable fields. The server re-checks required fields,
   single-value rules, options (including directory-search options, which are looked up directly),
   formats and patterns (`FormValidator`, which mirrors the client rules in `shared/`).
 - Self-service edits are limited to `selfEditable`, non-read-only fields on entries that the
-  definition's self match resolves to the signed-in user. From the next release, a self match by an
+  definition's self match resolves to the signed-in user. From v0.0.4, a self match by an
   attribute is refused while users can edit either of its attributes in self service, or when the
   user's value matches more than one entry (matching by the user's `dn` may still find several), so
   a user cannot claim another person's entry by editing their own `mail`.
+- **Drop-down lookups in self service** (v0.0.9): a user without read access to a definition can ask
+  for a field's options (`GET /api/directories/{id}/options/{fieldId}`) only when the definition
+  finds an entry of their own. They can search and list options only for fields they may edit in
+  self service; for other fields they get only the labels of values their own entry holds, as
+  **My profile** shows them. A definition's people pickers therefore can't be used to look up
+  names, logins or e-mail addresses without a grant.
+- **Group access** gives a group's owners exactly these writes without a grant on the definition:
+  the group's member field and, where the definition allows it (v0.0.11), its owner attribute,
+  always keeping one owner. Each such change says so in the audit trail (`details.via`). Groups an
+  administrator marks open (v0.0.11) can be joined by any signed-in user of that directory without
+  approval: use that only for groups that give no access. See
+  [Admin guide → Group access](admin-guide.md#group-access).
 - Metrics and analyses read through the same permission checks. Non-administrators may chart and
   filter only the attributes the directory shows them. Password attributes can never be charted or
   filtered on. Comparisons and quality checks are for administrators only.
@@ -89,8 +112,12 @@ This page summarises the portal's security controls and the settings that affect
   page sizes and search lengths are bounded.
 - User-supplied regular expressions (metrics transforms, analysis patterns) run with a time budget,
   so a pathological pattern fails only that chart or rule.
-- **Password attributes** (`userPassword`, `unicodePwd` and the others) are never returned to the
-  browser, and are recorded as `(redacted)` in the audit log.
+- **Password attributes** (`userPassword`, `unicodePwd`, `sambaNTPassword`, `sambaLMPassword`,
+  `krbPrincipalKey` and the others) are never returned to the browser, and are recorded as
+  `[redacted]` in the audit log. From v0.0.9 they are recognised by their standard OIDs and by any
+  other name or OID the schema gives them, not only by name, and never read at all by metrics,
+  analyses and the administrators' **Test namespace** preview: such an attribute can't be charted,
+  compared, returned or used in a filter there, whichever way it is named.
 
 ## X.509 client certificates
 
@@ -146,18 +173,26 @@ issuer.
 - The compose files never publish the API. Only the web proxy can reach it, which is why
   `FORWARD_HEADERS_STRATEGY=framework` is safe there. Behind a proxy, `none` would make every
   request seem to come from the proxy, so the per-address limits (sign-in lockout, bad API tokens,
-  single sign-on starts; from the next release the last two are counted across replicas with the
-  shared database) would let one client get everybody refused; from the next release the API
+  single sign-on starts; from v0.0.4 the last two are counted across replicas with the
+  shared database) would let one client get everybody refused; from v0.0.4 the API
   warns at startup when it is evidently behind a proxy (`X509_SOURCE=header`, or `SERVER_ADDRESS`
   on loopback) with `none`.
-- **Plain HTTP stays on the host by default (next release).** The Docker package's `install.sh`
+- **Plain HTTP stays on the host by default (v0.0.4).** The Docker package's `install.sh`
   writes `WEB_BIND=127.0.0.1` for plain HTTP (with `--https`, `0.0.0.0`), and the native package's
   nginx site listens on `NGINX_LISTEN=127.0.0.1:8080`. Upgraded installations keep their address;
   the installers warn about plain HTTP reachable from the network.
-- **The built-in demo directory (next release).** `DIRECTORY_MODE=memory`, whose administrator
+- **The built-in demo directory (v0.0.4).** `DIRECTORY_MODE=memory`, whose administrator
   password is public, starts only with `DEMO_MODE=true` or an API on loopback only.
-- The web proxy overwrites `X-Forwarded-For` with the real client address, so clients can't spoof
-  their address.
+- The web proxy overwrites `X-Forwarded-For` with the address it sees, so clients can't spoof
+  their address. That is the client's own address unless another proxy (an ingress controller, a
+  load balancer, a TLS proxy) is in front of the web tier: then it is that proxy's, for everyone,
+  in the audit trail and for the per-address limits. From v0.0.9 `WEB_TRUSTED_PROXIES` (Helm
+  `web.trustedProxies`) lists the proxies whose `X-Forwarded-For` the web tier believes. List only
+  proxies: whatever connects from a listed address can name any client, which would defeat the
+  sign-in lockout. A catch-all (`/0`) is refused. Unset, the API warns at startup while single
+  sign-on is on, and the single sign-on start limit's default is `600` a minute per address (`30`
+  before v0.0.9) so that users sharing one address are not turned away. See
+  [Configuration → Behind another proxy](configuration.md#behind-another-proxy).
 - The native package binds the API to `127.0.0.1` and runs it as the unprivileged `dsp` user under a
   hardened systemd unit (`NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`,
   and write access only to the data directory). Any local process can reach `127.0.0.1`, which is
@@ -190,11 +225,35 @@ refused) unless the host is listed in `WEBHOOK_ALLOWED_HOSTS`, and cloud metadat
 refused regardless. The check runs when a webhook is saved and again at every delivery, which
 connects to exactly the address it checked, with no redirects and an overall deadline. Requests are
 signed with HMAC-SHA256 over a timestamp and the body. **Signing secrets are stored unencrypted**
-up to the current release, readable only by the portal's user (in `DATA_DIR/webhooks.json` or the
-shared database): protect backups accordingly. From the next release, with `DSP_SECRETS_KEY` (generated
+up to v0.0.3, readable only by the portal's user (in `DATA_DIR/webhooks.json` or the
+shared database): protect backups accordingly. From v0.0.4, with `DSP_SECRETS_KEY` (generated
 for new installations) they are stored encrypted (AES-256-GCM, each with its own key wrapped by
 `DSP_SECRETS_KEY`); keep the key apart from the backups. See
-[Webhooks → Encrypted signing secrets](webhooks.md#encrypted-signing-secrets-next-release).
+[Webhooks → Encrypted signing secrets](webhooks.md#encrypted-signing-secrets).
+From v0.0.9, while `WEBHOOKS_ENABLED=false`, changes are not queued for later, so no backlog of
+events (with entry names and DNs) builds up unattended.
+
+## Audit trail and license
+
+- Every event is chained to the one before by its hash (see [Audit logging](../audit-logging.md)).
+  **Verify integrity** recomputes the chain. From v0.0.9 retention records how far it deleted, and
+  verification requires the oldest retained event to follow that point and to be chained to the
+  last deleted event's hash: events removed from the start of the store by other means are
+  reported. The record is kept with the events (the file `audit-pruned`, or the row `audit/pruned`
+  of `dsp_document` in the shared database), so it does not protect against someone who can
+  rewrite both, such as a database administrator. The portal also keeps no separate record of its
+  newest event, so events removed from the end of the store are not reported (see
+  [what Verify integrity checks](../audit-logging.md#what-verify-integrity-checks)). Forward the
+  trail to a SIEM for a copy outside their reach.
+- Syslog over `tcp` or `tls` has no delivery acknowledgement and is best effort; where no event
+  may be missing, use Splunk HEC or the pull API.
+- Identical refusals (`access.denied`) are folded into one event per person, path and reason a
+  minute. From v0.0.9 at most 10,000 such windows are open at once; beyond that, refusals are folded
+  per person and reason whatever the path, so a client walking through paths can't exhaust memory.
+- The license (v0.0.9): setting the host's clock back by more than a day no longer brings an
+  expired license back, because the installation records the latest time it has seen. An upload
+  that is not yet valid or already expired is refused while the installed license is in full
+  effect, so a wrong file can't take a working portal out of service.
 
 ## Supply chain
 
@@ -229,14 +288,19 @@ deployment needs, and the options that are not FIPS-appropriate.
       unset or `false`
 - [ ] The bind password in a file (`LDAP_BIND_PASSWORD_FILE`) rather than the environment, where the
       deployment allows it
-- [ ] `ldaps://` or `LDAP_STARTTLS=true`, with `LDAP_TLS_REJECT_UNAUTHORIZED=true`
+- [ ] `ldaps://` or `LDAP_STARTTLS=true`, with `LDAP_TLS_REJECT_UNAUTHORIZED=true`; for a private CA,
+      a trust store given to the JVM (v0.0.10 or later)
 - [ ] HTTPS in front of the portal and `ENS_COOKIE_SECURE=true`
 - [ ] `SERVER_FORWARD_HEADERS_STRATEGY=framework` only when the API is reachable solely through your
       proxy
+- [ ] With an ingress controller, load balancer or TLS proxy in front of the web tier:
+      `WEB_TRUSTED_PROXIES` set to its addresses, and to nothing else
 - [ ] `ADMIN_GROUPS` set to a small, controlled group
 - [ ] With OIDC single sign-on, `SSO_OIDC_USERNAME_CLAIM` an immutable claim held in the directory
-      (`sub`, Entra ID `oid`); the next release warns at startup otherwise
+      (`sub`, Entra ID `oid`); the API warns at startup otherwise (v0.0.4)
 - [ ] Self matches by attribute use attributes users can't edit in self service
+- [ ] Group access: **Open groups** only for groups that give no access worth guarding, and a
+      **Longest membership** where access should not outlive its reason
 - [ ] `SEED_DEMO_CONFIG=false` in production
 - [ ] Session limits as your policy requires (DISA STIG suggests `ENS_SESSION_ADMIN_IDLE_TIMEOUT=15m`,
       `ENS_SESSION_MAX_PER_USER=3` and `LOGIN_MAX_FAILURES=3`)

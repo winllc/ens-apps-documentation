@@ -43,9 +43,24 @@ curl -X POST -H "Authorization: Bearer $DSP_TOKEN" -H "Content-Type: application
 ```
 
 Member changes are value-level adds and deletes, never a replace of the list (see
-[Import and export → Bulk membership](import-export.md#bulk-membership)).
+[Import and export → Bulk membership](import-export.md#bulk-membership)). From v0.0.9
+`GET .../members` returns every member of a group the directory answers in ranges (Active Directory,
+over 1,500 members).
 
-From the next release each directory in `GET /api/v1/directories` (and in `directory` of
+From v0.0.9 two answers of `POST .../entries` and `PATCH .../entry` are new (they are the same on
+the portal API's `POST` and `PUT`):
+
+- **400, the entry would leave the directory.** A create or change after which the entry would no
+  longer match the definition's filter is refused before anything is written; the message ends
+  *(it would not match the directory's filter ...)*.
+- **`"code": "partially_saved"`.** A `PATCH` that changes the naming attribute makes the other
+  changes first and renames the entry last. If the directory refuses the rename, the other changes
+  stay: the answer has the directory's error status (usually 400), `"code": "partially_saved"`,
+  and a message that ends with the entry's DN as it now is (*The entry is now ...*). Don't repeat
+  the whole request; read the entry and decide about the rename. The audit trail records what was
+  done (`entry.update`, success, with `details.partial`), and `entry.changed` is sent for it.
+
+From v0.0.6 each directory in `GET /api/v1/directories` (and in `directory` of
 `GET /api/v1/directories/{id}`) also has `directory`: the id of the LDAP directory its entries are in
 (`default` with one directory; see [Configuration → Several directories](configuration.md#several-directories)).
 A token acts as its creator in the directory the creator signed in to. Additive: clients that ignore
@@ -73,10 +88,10 @@ unknown fields need no change.
   event); a missing scope gets `403 insufficient_scope`.
 - **Rate limit**: `API_RATE_LIMIT_PER_MINUTE` (120) per token unless the token sets its own; over it,
   `429` with `Retry-After`. The count is kept in each API replica's memory, so with several replicas
-  a token can make up to the limit on each (also from the next release). An address that presents
+  a token can make up to the limit on each (also from v0.0.4). An address that presents
   more than `API_FAILED_TOKEN_LIMIT_PER_MINUTE` (30) unknown, expired or revoked tokens a minute gets
   `429` instead of `401` for further bad ones; a request with a valid token is never refused by it.
-  From the next release, with the shared database, that per-address count is kept in the database
+  From v0.0.4, with the shared database, that per-address count is kept in the database
   (`dsp_rate_limit`, Flyway V4), so it holds across replicas; should the database fail, a replica
   counts in its own memory meanwhile (a warning at most once a minute).
 - **Audited**: `api.token-created`, `api.token-revoked`; a token's changes name it
@@ -87,7 +102,7 @@ unknown fields need no change.
 |---|---|---|---|
 | `API_TOKEN_MAX_DAYS` | `365` | `integrations.api.maxTokenDays` | The longest lifetime an administrator may give a token |
 | `API_RATE_LIMIT_PER_MINUTE` | `120` | `integrations.api.rateLimitPerMinute` | Requests per minute per token, unless the token sets its own (per replica) |
-| `API_FAILED_TOKEN_LIMIT_PER_MINUTE` | `30` | | Bad tokens one address may present a minute before `429` (from the next release, across replicas with the shared database) |
+| `API_FAILED_TOKEN_LIMIT_PER_MINUTE` | `30` | | Bad tokens one address may present a minute before `429` (from v0.0.4, across replicas with the shared database) |
 
 Token administration (session, administrator, `X-DSP-Request: 1`):
 
@@ -111,7 +126,7 @@ to HTTPS receivers. See [Webhooks](webhooks.md).
 | Authentication | Session cookie `DSP_SESSION`, obtained from `POST /api/auth/login`, `POST /api/auth/x509` or [single sign-on](single-sign-on.md) |
 | CSRF | Every POST, PUT and DELETE must send `X-DSP-Request: 1` (otherwise 403). Not needed on `/api/v1`, which takes only API tokens |
 | Admin | `/api/admin/**` requires an administrator (otherwise 403 *Administrator access required*) |
-| Errors | `{"error": "message"}`, with field details for validation errors (400 *Invalid request*) |
+| Errors | `{"error": "message"}`, with field details (`details`) for validation errors (400 *Invalid request*) and, for some errors, a machine-readable `code` (`session_expired`, the license codes below, `ranged_values`, `partially_saved`, `license_refused`) |
 | Status codes | 200, 201 (created), 202 (background job), 204 (deleted), 400, 401 (*Authentication required*, or `"code": "session_expired"`), 403, 404, 405, 409 (conflict, e.g. form in use), 429 (throttled / too many tasks), 500, 503 (the audit store can't be written) |
 | License errors | 403 with `"code"` `license_required` (unlicensed), `license_read_only` (a write while read-only) or `feature_not_licensed` (with `"feature": "<id>"`) |
 | Background polling | Requests that should not count as user activity send `X-DSP-Background: 1`; they don't extend the session's idle time |
@@ -131,7 +146,7 @@ curl -b jar https://portal.example.com/api/definitions
 |---|---|---|
 | GET | `/api/health` | Liveness, kept for existing monitoring: `{"ok": true}` |
 | GET | `/api/v1/openapi`, `/api/v1/openapi.yaml` | The integration API's OpenAPI document |
-| GET | `/api/info` | `mode`, `connected` (whether the directory answers), `version`, `auth` (`password`, `x509`, `x509AutoLogin`, and `sso`: a list of `{id, label, url}` for each single sign-on button; from the next release `directories`, a list of `{id, name}` when more than one directory is enabled, else absent), `loginHint`, `banner`, and `consent` (the consent banner's `title` and `text`, or null). `baseDn` (of the user's directory) only for signed-in users; `ldapUrl` (the first directory's first server) and `error` only for administrators. With several directories `connected` is the first directory's |
+| GET | `/api/info` | `mode`, `connected` (whether the directory answers), `version`, `auth` (`password`, `x509`, `x509AutoLogin`, and `sso`: a list of `{id, label, url}` for each single sign-on button; from v0.0.6 `directories`, a list of `{id, name}` when more than one directory is enabled, else absent), `loginHint`, `banner`, and `consent` (the consent banner's `title` and `text`, or null). `baseDn` (of the user's directory) only for signed-in users; `ldapUrl` (the first directory's first server) and `error` only for administrators. With several directories `connected` is the first directory's. From v0.0.9 the directory is asked at most every 10 seconds; calls in between get the last answer |
 | GET | `/livez`, `/readyz` | Liveness and readiness probes on the API's own port. Not published by the web tier |
 | GET | `/actuator/health`, `/actuator/health/liveness`, `/actuator/health/readiness` | Spring Boot's probes (on the management port when `MANAGEMENT_SERVER_PORT` is set). Details only for administrators. Not published by the web tier |
 | GET | `/actuator/prometheus` | Prometheus metrics, on the management port only |
@@ -141,9 +156,9 @@ curl -b jar https://portal.example.com/api/definitions
 | Method | Path | Body / params | Description |
 |---|---|---|---|
 | POST | `/api/auth/consent` | — | Acknowledge the notice-and-consent banner for this browser session. Returns `{"consentRequired": false}`. Reachable without signing in |
-| POST | `/api/auth/login` | `{"username", "password"}`; next release: optional `"directory"` (an id from `/api/info`; none: the first directory; an unknown or disabled one: 400) | Password sign-in. Returns `{"user": SessionUser}`. 401 for bad credentials, 429 when throttled, 403 when password sign-in is disabled, 403 `consent_required` when the consent banner has not been acknowledged |
+| POST | `/api/auth/login` | `{"username", "password"}`; v0.0.6: optional `"directory"` (an id from `/api/info`; none: the first directory; an unknown or disabled one: 400) | Password sign-in. Returns `{"user": SessionUser}`. 401 for bad credentials, 429 when throttled, 403 when password sign-in is disabled, 403 `consent_required` when the consent banner has not been acknowledged |
 | POST | `/api/auth/x509` | — | Sign in with the presented client certificate. 403 `consent_required` as above |
-| POST | `/api/auth/logout` | — | Sign out and invalidate the session. Returns `{"ok": true, "consentRequired": ...}`: whether the banner must be acknowledged again before the next sign-in. From the next release, when signing out at the identity provider applies (`SSO_OIDC_PROVIDER_LOGOUT`, `SSO_SAML_SINGLE_LOGOUT`), also `redirect`: the address the web client goes to next. See [Single sign-on → Signing out](single-sign-on.md#signing-out) |
+| POST | `/api/auth/logout` | — | Sign out and invalidate the session. Returns `{"ok": true, "consentRequired": ...}`: whether the banner must be acknowledged again before the next sign-in. From v0.0.4, when signing out at the identity provider applies (`SSO_OIDC_PROVIDER_LOGOUT`, `SSO_SAML_SINGLE_LOGOUT`), also `redirect`: the address the web client goes to next. See [Single sign-on → Signing out](single-sign-on.md#signing-out) |
 | GET | `/api/auth/me` | — | `{"user": SessionUser or null, "consentRequired": ...}`. With X.509 auto-login enabled, it may sign the user in (only once the banner, if enabled, has been acknowledged), or return `certificateError` |
 
 | GET | `/api/auth/sso/authorize/oidc` | — | Start an OpenID Connect sign-on (a browser redirect); the provider returns to `/api/auth/sso/callback/oidc` |
@@ -152,7 +167,7 @@ curl -b jar https://portal.example.com/api/definitions
 
 `SessionUser` contains `username`, `dn`, `displayName`, `mail`, `groups`, `isAdmin`, `authMethod`
 (`password`, `x509`, `oidc` or `saml`) and `certificateSubject` (certificate sign-ins only). From
-the next release also `directory`: the id of the LDAP directory the user signed in to. See
+v0.0.6 also `directory`: the id of the LDAP directory the user signed in to. See
 [Single sign-on](single-sign-on.md).
 
 ## Directories and entries
@@ -163,14 +178,14 @@ the next release also `directory`: the id of the LDAP directory the user signed 
 | GET | `/api/definitions/{id}` | — | `{"definition", "form"}`; 403 without access |
 | GET | `/api/directories/{id}/entries` | `q` (≤ 256 characters), `page` (1–10000), `pageSize` (1–200), `sort` (attribute), `order` (`asc`/`desc`) | List and search entries |
 | GET | `/api/directories/{id}/entry` | `dn` | One entry |
-| POST | `/api/directories/{id}/entries` | `{"parentDn", "values": {attr: value or [values]}}` | Create; returns 201 |
-| PUT | `/api/directories/{id}/entry` | `dn`; `{"values": {...}}` | Update (and rename when the naming value changes) |
+| POST | `/api/directories/{id}/entries` | `{"parentDn", "values": {attr: value or [values]}}` | Create; returns 201. From v0.0.9: 400 when the entry would not match the definition's filter |
+| PUT | `/api/directories/{id}/entry` | `dn`; `{"values": {...}}` | Update (and rename when the naming value changes). From v0.0.9 the rename is made last: if the directory refuses it after the other changes were made, the answer has `"code": "partially_saved"` and names the entry's current DN. 400 when the entry would no longer match the definition's filter |
 | DELETE | `/api/directories/{id}/entry` | `dn` | Delete; returns 204 |
-| GET | `/api/directories/{id}/options/{fieldId}` | `q` (typed text) or repeated `value` (labels for stored values, ≤ 200) | Drop-down options |
+| GET | `/api/directories/{id}/options/{fieldId}` | `q` (typed text) or repeated `value` (labels for stored values, ≤ 200) | Drop-down options. From v0.0.9, a user without read access to the definition gets them only when the definition finds an entry of their own (403 otherwise): searching and listing only for fields they may edit in self service, and for other fields only the labels of values their own entry holds |
 | GET | `/api/me/entries` | — | **My profile**: per self-matching definition, the user's entries and self-editable attributes |
 | PUT | `/api/me/{id}/entry` | `dn`; `{"values": {...}}` | Self-service update of the user's own entry |
 | POST | `/api/directories/{id}/export` | `q`, `format` (`csv` or `ldif`) | Export the entries matching the search (up to `EXPORT_MAX_ENTRIES`). Audited as `data.exported` |
-| GET | `/api/directories/{id}/members` | `dn`, `attribute` | A group's members |
+| GET | `/api/directories/{id}/members` | `dn`, `attribute` | A group's members; from v0.0.9 all of them, also when the directory returns them in ranges |
 | POST | `/api/directories/{id}/members/export` | `dn`, `attribute`, `format` | Export a group's members |
 | POST | `/api/directories/{id}/members` | `dn`; `{"add": [], "remove": []}` | Bulk membership change (up to `BULK_MAX_MEMBERS`) |
 | POST | `/api/directories/{id}/import` | `format` (`csv`/`ldif`), `mode` (`create`, `update` or `upsert`, the default), `dryRun`; the file as the body | Import, or check the file with `dryRun=true`. Long imports answer 202 as a background job |
@@ -190,17 +205,41 @@ group (its owners, and editors of the definition). See
 | GET | `/api/groups` | `q` (≤ 256 characters), `definition` | Search groups, each with the user's membership, ownership and request |
 | GET | `/api/groups/mine` | — | The user's groups |
 | GET | `/api/groups/{definitionId}/group` | `dn` | One group |
-| POST | `/api/groups/{definitionId}/requests` | `dn`; `{"reason"}` | Ask to join; returns 201. 409 when already a member, 403 when the group doesn't take requests |
+| POST | `/api/groups/{definitionId}/requests` | `dn`; `{"reason", "until"}` | Ask to join; returns 201. 409 when already a member, 403 when the group doesn't take requests. v0.0.11: optional `until`, the last day of the access asked for; 409 when the group is open (join it instead) |
+| POST | `/api/groups/{definitionId}/join` | `dn` | v0.0.11. Join an open group at once. 403 when the group is not open, 409 when already a member |
 | POST | `/api/groups/{definitionId}/leave` | `dn` | Leave the group (when the directory allows it) |
-| GET | `/api/groups/{definitionId}/members` | `dn`, `q`, `page` | Owners: a page of members |
-| POST | `/api/groups/{definitionId}/members` | `dn`; `{"add": [], "remove": []}` | Owners: add and remove members |
+| GET | `/api/groups/{definitionId}/members` | `dn`, `q`, `page` | Owners: a page of members (25); v0.0.11: each with `until` when the membership has an end date |
+| POST | `/api/groups/{definitionId}/members` | `dn`; `{"add": [], "remove": [], "until"}` | Owners: add and remove members. v0.0.11: optional `until`, the last day of the members added |
+| POST | `/api/groups/{definitionId}/members/until` | `dn`; `{"member", "until"}` | v0.0.11. Owners: set or change a member's end date; without `until`, remove it (400 where the directory sets a longest membership). 404 when `member` is not in the group |
+| POST | `/api/groups/{definitionId}/members/export` | `dn` | v0.0.11. Owners: the members as a CSV file (`name`, `login`, `mail`, `dn`, `until`), at most `EXPORT_MAX_ENTRIES`. Needs `directory-editor`; works while the license is read-only. Audited as `data.exported` |
 | GET | `/api/groups/{definitionId}/people` | `dn`, `q` | Owners: find people to add |
-| GET | `/api/groups/{definitionId}/group/requests` | `dn` | Owners: the group's requests |
+| POST | `/api/groups/{definitionId}/people/resolve` | `dn`; `{"lines": []}` (≤ 200) | v0.0.11. Owners: look up a pasted list of logins, e-mail addresses or DNs. Returns `{"found": [{line, value, dn, name, member}], "notFound": [], "ambiguous": [{line, matches}]}`; `value` is what to send in `add`. Changes nothing |
+| POST | `/api/groups/{definitionId}/owners` | `dn`; `{"add": [], "remove": []}` (≤ 20 each) | v0.0.11. Owners: add people as owners and remove owners. 403 unless the definition lets owners change owners; 400 when the group would be left without an owner, or a value to add is not a person of the directory |
+| GET | `/api/groups/{definitionId}/group/requests` | `dn` | Owners: the group's open requests |
+| GET | `/api/groups/{definitionId}/group/history` | `dn`, `page` | v0.0.11. Owners: the group's closed requests, most recently closed first: `{"items", "total", "page", "pageSize"}` (20 a page) |
 | GET | `/api/groups/requests` | `scope`: `mine` (default), `review` or `decided` | Requests |
 | GET | `/api/groups/requests/summary` | — | Counts for the menu: open requests to review, and the user's own |
 | POST | `/api/groups/requests/{id}/cancel` | — | Withdraw one's own open request |
-| POST | `/api/groups/requests/{id}/approve` | `{"note"}` | Approve: adds the requester to the member field |
+| POST | `/api/groups/requests/{id}/approve` | `{"note", "until"}` | Approve: adds the requester to the member field. v0.0.11: optional `until`, an end date no later than the day asked for (400 otherwise). 409 when the request was decided, withdrawn or expired meanwhile, or asked for access until a day that has passed |
 | POST | `/api/groups/requests/{id}/reject` | `{"note"}` | Reject |
+| POST | `/api/groups/requests/decide` | `{"ids": [], "approve": true or false, "note"}` (1 to 50 ids) | v0.0.11. Decide several requests with one note, each on its own. Always 200 with `{"results": [{id, ok, status, error, code}], "decided", "failed"}`: for a request that was not decided, `error` and the status `code` deciding it alone would have answered |
+
+Fields added in v0.0.11 (all additive):
+
+| Where | Field | Meaning |
+|---|---|---|
+| A group, in lists and in `group` | `open` | It can be joined at once, without approval |
+| | `memberUntil` | The last day of the user's own membership, when the portal granted it for a limited time |
+| `GET .../group` | `canManageOwners` | The viewer may add and remove the group's owners |
+| `GET .../group`, `GET /api/groups/directories` | `maxMembershipDays` | The longest membership the directory grants, or null |
+| A request | `status` | Also `expired`, next to `pending`, `approved`, `rejected` and `cancelled` |
+| | `expiredAfterDays` | For an expired request, the days it waited |
+| | `until`, `grantedUntil` | The last day asked for, and the end date the approval gave |
+
+Dates are whole days in UTC, written `yyyy-MM-dd`: the member belongs to the group through that
+day. An end date must be today or later, and no later than the directory's longest membership
+allows (3650 days where it sets none); otherwise 400 with `details.until`. Where the definition
+sets a longest membership, a request, a join or members added without `until` get that long.
 
 ## Metrics
 
@@ -227,11 +266,11 @@ group (its owners, and editors of the definition). See
 | Method | Path | Description |
 |---|---|---|
 | GET | `/api/jobs` | The user's recent jobs |
-| GET | `/api/jobs/{id}` | One job (status, progress) |
+| GET | `/api/jobs/{id}` | One job (status, progress). From v0.0.9, with the shared database, a job whose API instance stopped becomes `failed` about 30 seconds later, with the error *The server running it stopped before it finished* |
 | GET | `/api/jobs/{id}/result` | `{"job", "result"}` |
 | POST | `/api/jobs/{id}/cancel` | Cancel a queued or running job |
 | POST | `/api/jobs/seen` | `{"ids": [...]}`: mark notifications as seen |
-| DELETE | `/api/jobs/{id}` | Remove a job from the list |
+| DELETE | `/api/jobs/{id}` | Remove a job from the list (a job of an instance that stopped is removed at once) |
 
 ## Administration (`ROLE_ADMIN`)
 
@@ -239,8 +278,8 @@ group (its owners, and editors of the definition). See
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/admin/schema` | Merged schema (server + custom). Next release: `directory` (an id; none: the first directory) chooses whose server schema |
-| POST | `/api/admin/schema/refresh` | Pull the schema from the directory (next release: `directory` as above) |
+| GET | `/api/admin/schema` | Merged schema (server + custom). v0.0.6: `directory` (an id; none: the first directory) chooses whose server schema |
+| POST | `/api/admin/schema/refresh` | Pull the schema from the directory (v0.0.6: `directory` as above) |
 | POST | `/api/admin/schema/import` | `{"text"}` (≤ 2,000,000 characters): import schema definitions |
 | GET | `/api/admin/schema/export` | Custom definitions as a `.schema` file |
 | PUT | `/api/admin/schema/attribute-types` | `{"definition", "originalOid"}`: save a custom attribute type |
@@ -258,28 +297,28 @@ group (its owners, and editors of the definition). See
 | PUT | `/api/admin/forms/{id}` | Update; returns `{"form", "warnings"}` |
 | DELETE | `/api/admin/forms/{id}` | Delete (409 while a definition uses it) |
 | POST | `/api/admin/forms/lint` | Check a form without saving: `{"errors", "warnings"}` |
-| POST | `/api/admin/forms/preview-options` | `{"source", "q"}` (next release: and `"directory"`): **Test search** for a directory-search drop-down (options, truncated, filter, duration, error) |
+| POST | `/api/admin/forms/preview-options` | `{"source", "q"}` (v0.0.6: and `"directory"`): **Test search** for a directory-search drop-down (options, truncated, filter, duration, error) |
 
 ### Directory definitions and directory tools
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/admin/definitions` | List definitions (next release: each with `directory`) |
-| POST | `/api/admin/definitions` | Create. Next release: optional `directory` (none: the first directory; unknown: 400; not enabled by the license: 403) |
+| GET | `/api/admin/definitions` | List definitions (v0.0.6: each with `directory`) |
+| POST | `/api/admin/definitions` | Create. v0.0.6: optional `directory` (none: the first directory; unknown: 400; not enabled by the license: 403) |
 | PUT | `/api/admin/definitions/{id}` | Update |
 | DELETE | `/api/admin/definitions/{id}` | Delete (also removes its grants) |
-| POST | `/api/admin/preview` | `{"baseDn", "scope": "base|one|sub", "filter", "attributes"}` (next release: and `"directory"`): **Test namespace** |
-| GET | `/api/admin/browse` | `base` (next release: and `directory`): child entries for the DN browser |
-| GET | `/api/admin/directories` | Next release. The configured LDAP directories: `{"directories": [{id, name, primary, servers, serverSelection, currentServer, reachable, error, enabled, baseDn, x509, sso}], "multiDirectoryLicensed", "notice"}`. `health=false` skips asking each directory whether it answers. Never a password |
+| POST | `/api/admin/preview` | `{"baseDn", "scope": "base|one|sub", "filter", "attributes"}` (v0.0.6: and `"directory"`): **Test namespace**. From v0.0.9 password attributes are never returned, and a filter that tests one is refused (400) |
+| GET | `/api/admin/browse` | `base` (v0.0.6: and `directory`): child entries for the DN browser |
+| GET | `/api/admin/directories` | v0.0.6. The configured LDAP directories: `{"directories": [{id, name, primary, servers, serverSelection, currentServer, reachable, error, enabled, baseDn, x509, sso}], "multiDirectoryLicensed", "notice"}`. `health=false` skips asking each directory whether it answers. Never a password |
 
 ### Permissions
 
 | Method | Path | Description |
 |---|---|---|
 | GET | `/api/admin/grants` | `definitionId` (optional): list grants |
-| POST | `/api/admin/grants` | `{"definitionId", "subjectType": "user|group", "subject", "subjectLabel", "access": "read|write"}` (next release: and `"directory"`, the subject's; none: the definition's): create or replace |
+| POST | `/api/admin/grants` | `{"definitionId", "subjectType": "user|group", "subject", "subjectLabel", "access": "read|write"}` (v0.0.6: and `"directory"`, the subject's; none: the definition's): create or replace |
 | DELETE | `/api/admin/grants/{id}` | Revoke |
-| GET | `/api/admin/subjects` | `q`, `type` (`user`/`group`), next release `directory`: search users and groups (up to 25 users) |
+| GET | `/api/admin/subjects` | `q`, `type` (`user`/`group`), v0.0.6 `directory`: search users and groups (up to 25 users) |
 
 ### Dashboards
 
@@ -317,7 +356,7 @@ description}`]).
 | Method | Path | Description |
 |---|---|---|
 | GET | `/api/license` | Any signed-in user: the mode, state, message, evaluation flag and every feature with whether it is enabled. Administrators also get `details` (licensee, edition, dates, size, this installation's id) and the renewal warning |
-| POST | `/api/admin/license` | Install a license: the file as the request body (`text/plain`), or the multipart field `file`. Says why a file is refused |
+| POST | `/api/admin/license` | Install a license: the file as the request body (`text/plain`), or the multipart field `file`. Says why a file is refused: 400 with `"code": "license_refused"` and `"state"` (for example `WRONG_PRODUCT`, `WRONG_INSTALLATION`, `SUPERSEDED`, or from v0.0.9 `NOT_IN_EFFECT`: not yet valid or already expired while the installed license is in full effect, which stays in force) |
 
 ### Audit log
 
@@ -328,8 +367,8 @@ These work whatever the license says.
 | GET | `/api/admin/audit` | `q`, `category`, `action`, `outcome`, `severity`, `actor`, `target`, `ip`, `definitionId`, `from`, `to` (`YYYY-MM-DD` or ISO instant), `page`, `pageSize` (1–200, default 50) | Search all retained history, newest first. A search reads at most `ENS_AUDIT_QUERY_MAX_SCAN` events and says when it stopped |
 | GET | `/api/admin/audit/actions` | — | The filter choices: categories, outcomes, severities and known actions |
 | GET | `/api/admin/audit/export` | `format` (`csv` or `ndjson`) plus the search filters | The current filter's events (up to 100,000), oldest first. Audited as `audit.exported` |
-| POST | `/api/admin/audit/verify` | — | Recompute the hash chain. Audited as `audit.verified` |
+| POST | `/api/admin/audit/verify` | — | Recompute the hash chain. Audited as `audit.verified`. From v0.0.9 the oldest retained event must follow the last event retention deleted; otherwise the answer names the missing events |
 | GET | `/api/admin/audit/status` | — | Each output's delivery state, the retention setting and the chain's extent |
 | GET, POST | `/api/admin/audit/tokens` | `{"name"}` to create | List or create pull-API tokens. A new token's value is shown once |
 | DELETE | `/api/admin/audit/tokens/{id}` | — | Revoke a token |
-| GET | `/api/audit/events` | `after` (seq), `limit` (1–1000, default 500) | The pull API: `Authorization: Bearer <token>`, no session or CSRF header. NDJSON in seq order, or `{"events": [...], "next": <seq>}` with `Accept: application/json`. See [Audit logging](../audit-logging.md#the-pull-api) |
+| GET | `/api/audit/events` | `after` (seq), `limit` (1–1000, default 500) | The pull API: `Authorization: Bearer <token>`, no session or CSRF header. NDJSON in seq order, or `{"events": [...], "next": <seq>}` with `Accept: application/json`. From v0.0.9 a wrong or revoked token (401) is recorded as a failed `auth.login` with `method` `api-token`. See [Audit logging](../audit-logging.md#the-pull-api) |

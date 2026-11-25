@@ -24,14 +24,14 @@ Where to set them:
 
 | Variable | Property | Default | Description |
 |---|---|---|---|
-| `DIRECTORY_MODE` | `portal.directory-mode` | `memory` | `memory` starts the embedded demo LDAP server; `ldap` connects to `LDAP_URL`. From the next release `memory` starts only with `DEMO_MODE=true` or an API that listens on a loopback address only (`SERVER_ADDRESS=127.0.0.1`); otherwise the API refuses to start and logs why at ERROR. A bare jar or image run with the default must set `DIRECTORY_MODE=ldap` or `DEMO_MODE=true` |
-| `DEMO_MODE` (next release) | `portal.demo-mode` | `false` | `true` says this installation is a demo: the built-in directory's credentials (`admin`/`password`) are public. Required for `DIRECTORY_MODE=memory`. `install.sh --demo`, `docker-compose.demo.yml` and the chart with `directory.mode: memory` set it; the package's `env.template` has `DEMO_MODE=false` |
-| `LDAP_URL` | `portal.ldap.url` | `ldap://localhost:389` | `ldap://` or `ldaps://` URL of the directory server. From the next release, several servers of the same directory (replicas), separated by commas or spaces: they are tried in order, the first that answers is used, and the pool goes back to the first once it answers again. Failover needs no license feature |
-| `LDAP_SERVER_SELECTION` (next release) | `portal.ldap.server-selection` | `failover` | `failover` (the servers of `LDAP_URL` in order) or `round-robin` (in turn; every URL must then use the same scheme) |
-| `DIRECTORY_NAME` (next release) | `portal.directory-name` | `Directory` | The directory's display name; its id is `default`. See [Several directories](#several-directories) |
+| `DIRECTORY_MODE` | `portal.directory-mode` | `memory` | `memory` starts the embedded demo LDAP server; `ldap` connects to `LDAP_URL`. From v0.0.4 `memory` starts only with `DEMO_MODE=true` or an API that listens on a loopback address only (`SERVER_ADDRESS=127.0.0.1`); otherwise the API refuses to start and logs why at ERROR. A bare jar or image run with the default must set `DIRECTORY_MODE=ldap` or `DEMO_MODE=true` |
+| `DEMO_MODE` (v0.0.4) | `portal.demo-mode` | `false` | `true` says this installation is a demo: the built-in directory's credentials (`admin`/`password`) are public. Required for `DIRECTORY_MODE=memory`. `install.sh --demo`, `docker-compose.demo.yml` and the chart with `directory.mode: memory` set it; the package's `env.template` has `DEMO_MODE=false` |
+| `LDAP_URL` | `portal.ldap.url` | `ldap://localhost:389` | `ldap://` or `ldaps://` URL of the directory server. From v0.0.6, several servers of the same directory (replicas), separated by commas or spaces: they are tried in order, the first that answers is used, and the pool goes back to the first once it answers again. Failover needs no license feature |
+| `LDAP_SERVER_SELECTION` (v0.0.6) | `portal.ldap.server-selection` | `failover` | `failover` (the servers of `LDAP_URL` in order) or `round-robin` (in turn; every URL must then use the same scheme) |
+| `DIRECTORY_NAME` (v0.0.6) | `portal.directory-name` | `Directory` | The directory's display name; its id is `default`. See [Several directories](#several-directories) |
 | `LDAP_STARTTLS` | `portal.ldap.start-tls` | `false` | Upgrade plain `ldap://` connections with StartTLS |
-| `LDAP_TLS_REJECT_UNAUTHORIZED` | `portal.ldap.tls-reject-unauthorized` | `true` | Verify the server certificate against the JVM trust store and check the host name. `false` trusts any certificate (testing only) |
-| `LDAP_TIMEOUT_MS` | `portal.ldap.timeout-ms` | `10000` | Connect and response timeout in milliseconds |
+| `LDAP_TLS_REJECT_UNAUTHORIZED` | `portal.ldap.tls-reject-unauthorized` | `true` | Verify the server certificate and check the host name, for `ldaps://` and StartTLS alike. The certificate must chain to a CA in the trust store given to the JVM, or in the JDK's own `cacerts` when none is given; see [LDAPS with a private CA](#ldaps-with-a-private-ca). `false` trusts any certificate (testing only) |
+| `LDAP_TIMEOUT_MS` | `portal.ldap.timeout-ms` | `10000` | Connect and response timeout in milliseconds. From v0.0.9, while the directory can't be reached, requests don't each wait for it: after a failed attempt to connect, every call to that directory fails at once with the same error for 5 seconds, then one request tries again while the others still fail at once |
 | `LDAP_POOL_SIZE` | `portal.ldap.pool-size` | `10` | Maximum connections in the service-account pool |
 | `LDAP_BIND_DN` | `portal.ldap.bind-dn` | *(empty)* | Service account used for every read and write. The portal enforces its own permissions on top |
 | `LDAP_BIND_PASSWORD` | `portal.ldap.bind-password` | *(empty)* | Password of the service account |
@@ -50,32 +50,70 @@ logs a warning at startup while it is set.
 
 ### LDAPS with a private CA
 
-Certificates are verified against the **JVM default trust store**. For a private CA, provide a
-trust store that holds every CA the API must trust:
+For `ldaps://` and StartTLS, the directory server's certificate must chain to a CA the JVM trusts:
+the CAs in the **trust store given to the JVM** (`-Djavax.net.ssl.trustStore`), or the JDK's own
+`cacerts` when none is given. A directory whose certificate comes from a private (corporate) CA
+needs a trust store that holds that CA.
+
+!!! warning "Before v0.0.10 the given trust store was not used for LDAPS"
+    Up to v0.0.9 the API checked directory certificates against the JDK's `cacerts` only, whatever
+    `-Djavax.net.ssl.trustStore` (or the Helm chart's `ldap.truststore`) said, so a directory whose
+    CA was only in that trust store failed with `certificate_unknown` / `PKIX path building
+    failed`. Upgrade to v0.0.10 or later; nothing else changes, and the settings below stay the same.
+
+**1. Build the trust store** with `keytool`, one `-importcert` per CA (the issuing CA and its
+root; with [several directories](#several-directories), every directory's CA, because one trust
+store serves them all):
+
+```bash
+keytool -importcert -noprompt -alias corp-ca -file corp-ca.pem \
+  -keystore truststore.p12 -storetype PKCS12 -storepass '<store-password>'
+keytool -list -keystore truststore.p12 -storepass '<store-password>'
+# corp-ca, ..., trustedCertEntry,
+```
+
+Each CA must be listed as a `trustedCertEntry`. Don't build the file with
+`openssl pkcs12 -export -nokeys`: Java opens such a file but finds no trusted certificate in it.
+The trust store **replaces** the JDK's `cacerts`: if the API also reaches servers with public
+certificates over TLS (Splunk HEC, a SAML metadata URL, an OIDC provider, webhook receivers), add
+their CAs too.
+
+**2. Give it to the JVM, with its password.** A PKCS12 trust store read without its password
+opens, but empty.
 
 === "Docker package"
 
-    Put the trust store in the data volume and point Java at it in `.env`:
+    Put the trust store in the data volume and point Java at it in `.env`, then `./portal.sh up`:
 
     ```ini
-    JAVA_TOOL_OPTIONS=-Djavax.net.ssl.trustStore=/data/truststore.p12 -Djavax.net.ssl.trustStorePassword=changeit
+    JAVA_TOOL_OPTIONS=-Djavax.net.ssl.trustStore=/data/truststore.p12 -Djavax.net.ssl.trustStorePassword=<store-password>
     ```
 
 === "Native package"
 
-    Put the trust store where user `dsp` can read it, and set in `portal.env`:
+    Put the trust store where user `dsp` can read it, set in `portal.env`, and restart the
+    service:
 
     ```ini
-    JAVA_TOOL_OPTIONS=-Djavax.net.ssl.trustStore=/etc/directory-services-portal/truststore.p12 -Djavax.net.ssl.trustStorePassword=changeit
+    JAVA_TOOL_OPTIONS=-Djavax.net.ssl.trustStore=/etc/directory-services-portal/truststore.p12 -Djavax.net.ssl.trustStorePassword=<store-password>
     ```
 
 === "Helm"
 
-    Put the trust store in a Secret and set `ldap.truststore.existingSecret` (and the password's
-    Secret in `ldap.truststore.password`). See [Installation → Secrets](install.md#secrets).
+    Put the trust store in a Secret and set `ldap.truststore.existingSecret`, and the password
+    in `ldap.truststore.password` (`.value`, or `.existingSecret` and `.existingSecretKey`). The
+    chart mounts the file and passes `-Djavax.net.ssl.trustStore`, `-Djavax.net.ssl.trustStoreType`
+    (`ldap.truststore.type`, `PKCS12`) and the password to the JVM in `JAVA_OPTS`. See
+    [Installation → Secrets](install.md#secrets).
 
 `JAVA_TOOL_OPTIONS` is listed in the package `env.template` and can also carry heap settings such as `-Xmx2g`.
+The JVM prints its value in the API log at startup (`Picked up JAVA_TOOL_OPTIONS: ...`), the
+trust store's password included; a trust store holds only CA certificates, which are public.
 The container image starts Java with `-XX:MaxRAMPercentage=75.0`.
+
+If the directory still isn't reached, the error (in the API log, and for administrators on
+*Admin → LDAP directories* and in `error` of `/api/info`) says which step is wrong: see
+[Operator guide → LDAPS certificate errors](operator-guide.md#ldaps-certificate-errors).
 
 ## Users, groups and administrators
 
@@ -116,7 +154,7 @@ bind.
     This is an illustration built from the documented placeholders. The portal also reads
     `memberOf` from the user entry.
 
-## Several directories (next release) { #several-directories }
+## Several directories (v0.0.6) { #several-directories }
 
 One portal can serve several LDAP directories (several forests, a directory per enclave). It needs
 the license feature `multi-directory` (Enterprise); without it only the first directory is used and
@@ -201,7 +239,8 @@ working.
 | `PORT` | `server.port` | `3001` (`8443` with the `mtls` profile) | HTTP port of the API |
 | `SERVER_ADDRESS` | `server.address` | *(all interfaces)* | Standard Spring Boot bind address. The native package sets `127.0.0.1` |
 | `ENS_COOKIE_SECURE` | `ens.cookie.secure` | `false` | Always mark the `DSP_SESSION` cookie `Secure`. Set to `true` whenever browsers reach the portal over HTTPS through a TLS-terminating proxy. Over direct TLS (the `mtls` profile) the cookie is `Secure` anyway. `COOKIE_SECURE` is the older name and still works |
-| `SERVER_FORWARD_HEADERS_STRATEGY` | `server.forward-headers-strategy` | `none` | Spring Boot's own setting. `framework` honours `X-Forwarded-*` from a reverse proxy that overwrites them; the compose files, the native package and the Helm chart set it. With X.509 header mode use `framework` or `none`, never `native`. `FORWARD_HEADERS_STRATEGY` is the older name and still works. With `none` behind a proxy, the per-address limits (sign-in lockout, bad-token and single sign-on start limits) see only the proxy's address, so one client can get everybody behind it refused. From the next release the API logs a startup WARN when it is evidently behind a proxy (`X509_SOURCE=header`, or `SERVER_ADDRESS` on loopback) while this is `none` |
+| `SERVER_FORWARD_HEADERS_STRATEGY` | `server.forward-headers-strategy` | `none` | Spring Boot's own setting. `framework` honours `X-Forwarded-*` from a reverse proxy that overwrites them; the compose files, the native package and the Helm chart set it. With X.509 header mode use `framework` or `none`, never `native`. `FORWARD_HEADERS_STRATEGY` is the older name and still works. With `none` behind a proxy, the per-address limits (sign-in lockout, bad-token and single sign-on start limits) see only the proxy's address, so one client can get everybody behind it refused. From v0.0.4 the API logs a startup WARN when it is evidently behind a proxy (`X509_SOURCE=header`, or `SERVER_ADDRESS` on loopback) while this is `none`. A proxy in front of the web tier hides the clients the same way unless it is listed in `WEB_TRUSTED_PROXIES` |
+| `WEB_TRUSTED_PROXIES` (v0.0.9) | *(environment only)* | *(empty)* | A setting of the [web tier](#web-tier-nginx): the addresses or CIDRs of the proxies in front of it whose `X-Forwarded-For` names the client. The API reads it only to decide whether to warn: while single sign-on is on and it is unset, the API logs a startup WARN, because behind such a proxy every user would share one per-address limit. Give it to the API and the web tier alike (the packages and the chart do) |
 | `ENS_CSP_REPORT_ONLY` | `ens.csp.report-only` | `false` | `true` sends `Content-Security-Policy-Report-Only` instead of `Content-Security-Policy`. Set it on the API **and** the web tier. An escape hatch for a page the policy breaks; report the page and turn it off again |
 | `MAX_HTTP_REQUEST_HEADER_SIZE` | `server.max-http-request-header-size` | `32KB` | Largest request header block. Leaves room for a forwarded client certificate and large SSO cookies |
 | `DATA_DIR` | `portal.data-dir` | `./data` | Where `portal-config.json`, `audit/` and `analysis-results/` are stored. The container image sets `/data` |
@@ -220,7 +259,7 @@ API through the same origin.
 | `ENS_SESSION_ADMIN_IDLE_TIMEOUT` | `ens.session.admin-idle-timeout` | *(empty: the idle timeout)* | A shorter idle timeout for administrators. DISA STIG suggests `15m` |
 | `ENS_SESSION_ABSOLUTE_TIMEOUT` | `ens.session.absolute-timeout` | `12h` | A session ends this long after sign-in, whatever its activity |
 | `ENS_SESSION_MAX_PER_USER` | `ens.session.max-per-user` | `0` (no limit) | Concurrent sessions per user. Signing in once more ends the **oldest** session. DISA STIG suggests `3` |
-| `GROUP_REFRESH_INTERVAL` | `portal.group-refresh-interval` | `5m` | How often a signed-in user's groups and administrator status are read again from the directory, checked on their next request. `0`: only at sign-in. If the directory can't be reached, the session keeps its groups; if the account no longer exists, its sessions end |
+| `GROUP_REFRESH_INTERVAL` | `portal.group-refresh-interval` | `5m` | How often a signed-in user's groups and administrator status are read again from the directory, checked on their next request. `0`: only at sign-in. If the directory can't be reached, the session keeps its groups; if the account no longer exists, its sessions end. From v0.0.9 they also end when the directory marks the account disabled or locked (`nsAccountLock: true`, Active Directory's ACCOUNTDISABLE flag in `userAccountControl`, or `pwdAccountLockedTime`), as for [API tokens](api-reference.md#api-tokens): within this interval, on the user's next request |
 | `LOGIN_MAX_FAILURES` | `portal.login.max-failures` | `8` | Failed password sign-ins for one user name from one client address before further attempts are refused (HTTP 429, audited as `auth.lockout`). DISA STIG suggests `3` |
 | `LOGIN_LOCKOUT_WINDOW` | `portal.login.lockout-window` | `15m` | The window the failures are counted in, from the first failure. The refusal lasts until the window ends |
 
@@ -229,8 +268,8 @@ API through the same origin.
   An open but unattended tab therefore still times out.
 - **Expiry.** An expired session answers `401` with `"code": "session_expired"`, and the browser
   shows the sign-in page with the reason. Each expiry is audited as `auth.session-expired` with the
-  reason `idle`, `absolute`, `concurrent` or `account-removed`. A session ended by the concurrent
-  limit gets a plain 401 on its next request.
+  reason `idle`, `absolute`, `concurrent`, `account-removed` or (from v0.0.9) `account-disabled`. A
+  session ended by the concurrent limit gets a plain 401 on its next request.
 - **Lockout counters are held in memory** without a shared database, so a restart clears them.
   With `DSP_DATABASE_URL` they are in the database and count across instances, like the sessions.
 
@@ -331,7 +370,7 @@ in every ENS application. They are described in [Audit logging](../audit-logging
 | Variable | Property | Default | Description |
 |---|---|---|---|
 | `METRICS_MAX_ENTRIES` | `portal.metrics.max-entries` | `100000` | Most entries one chart or analysis source reads. Larger results are marked partial/truncated |
-| `METRICS_CACHE_SECONDS` | `portal.metrics.cache-seconds` | `60` | How long computed charts are reused. `0` disables the cache; **Refresh** always recomputes |
+| `METRICS_CACHE_SECONDS` | `portal.metrics.cache-seconds` | `60` | How long the server reuses computed charts. `0` disables the cache; **Refresh** always recomputes. From v0.0.11 the web client keeps the results of the metrics home page, the overviews and the dashboards itself until the user clicks **Refresh** (or reloads the browser page), so for those pages this setting only matters after a reload; the explorer and the dashboard editor's preview use it as before |
 | `METRICS_WAIT_MILLIS` | `portal.metrics.wait-millis` | `2000` | Metrics that take longer continue as a background task and notify when ready |
 | `ANALYSIS_MAX_ISSUES` | `portal.metrics.max-issues` | `50000` | Most individual findings an analysis run keeps. Counts always cover every entry |
 
@@ -345,6 +384,11 @@ in every ENS application. They are described in [Audit logging](../audit-logging
 | `JOBS_RETAIN_MINUTES` | `portal.jobs.retain-minutes` | `1440` | How long finished tasks and their results are kept in memory |
 | *(none in `application.yml`)* | `portal.jobs.max-jobs` | `500` | Upper bound on tasks kept in memory (minimum 50). Can be set through Spring's relaxed binding, for example `PORTAL_JOBS_MAX_JOBS` |
 
+With the shared database, from v0.0.9, the tasks of an API instance that stops (an upgrade, a crash)
+are marked failed about 30 seconds later ("The server running it stopped before it finished") and
+no longer count against `JOBS_MAX_ACTIVE_PER_USER`. See
+[High availability](availability-and-sizing.md#with-a-shared-database-several-api-instances).
+
 ## Single sign-on
 
 OpenID Connect and SAML 2.0, each off until configured: OIDC turns on with `SSO_OIDC_ISSUER_URI` and
@@ -352,13 +396,14 @@ OpenID Connect and SAML 2.0, each off until configured: OIDC turns on with `SSO_
 `portal.sso.public-url`) is required for SAML and recommended for OIDC; give the web tier
 `PUBLIC_HOST` too. `PASSWORD_LOGIN_ENABLED=false` leaves only single sign-on and certificates.
 Every `SSO_*` variable, the addresses to register and provider walkthroughs are in
-[Single sign-on](single-sign-on.md#settings). The next release adds `SSO_START_LIMIT_PER_MINUTE`
-(`30`) and `SSO_MAX_PENDING_REQUESTS` (`10000`), and warns at startup about an
+[Single sign-on](single-sign-on.md#settings). v0.0.4 adds `SSO_START_LIMIT_PER_MINUTE`
+(`30`; `600` from v0.0.9) and `SSO_MAX_PENDING_REQUESTS` (`10000`), and warns at startup about an
 `SSO_OIDC_USERNAME_CLAIM` that a provider lets be changed; with the shared database the start
 limit is counted across replicas. It also adds `SSO_OIDC_PROVIDER_LOGOUT` and
 `SSO_SAML_SINGLE_LOGOUT` (sign out at the provider too; `false` unless set, `true` in new
 installations); see [Single sign-on → Settings](single-sign-on.md#settings) and
-[Signing out](single-sign-on.md#signing-out).
+[Signing out](single-sign-on.md#signing-out). v0.0.9 adds `SSO_SAML_METADATA_REFRESH` (`1h`): how
+long the identity provider's SAML metadata is used before it is read again.
 
 ## Integration API, webhooks, import and export
 
@@ -366,9 +411,9 @@ installations); see [Single sign-on → Settings](single-sign-on.md#settings) an
 |---|---|---|---|
 | `API_TOKEN_MAX_DAYS` | `portal.integration.api.max-token-days` | `365` | The longest lifetime an administrator may give an API token |
 | `API_RATE_LIMIT_PER_MINUTE` | `portal.integration.api.rate-limit-per-minute` | `120` | Requests per minute per token, unless the token sets its own; counted per API replica |
-| `API_FAILED_TOKEN_LIMIT_PER_MINUTE` | `portal.integration.api.failed-token-limit-per-minute` | `30` | Bad tokens one client address may present a minute before getting 429. From the next release counted across replicas with the shared database (`dsp_rate_limit`) |
-| `DSP_SECRETS_KEY`, `DSP_SECRETS_KEY_FILE` (next release) | `portal.secrets.key`, `portal.secrets.key-file` | empty; new installations get one | The key webhook signing secrets are stored encrypted with: 32 random bytes in base64 (`openssl rand -base64 32`). Every replica needs the same key; keep a copy apart from your backups. See [Webhooks → Encrypted signing secrets](webhooks.md#encrypted-signing-secrets-next-release) |
-| `WEBHOOKS_ENABLED` | `portal.integration.webhooks.enabled` | `true` | `false` stops sending (deliveries stay queued) and creating webhooks |
+| `API_FAILED_TOKEN_LIMIT_PER_MINUTE` | `portal.integration.api.failed-token-limit-per-minute` | `30` | Bad tokens one client address may present a minute before getting 429. From v0.0.4 counted across replicas with the shared database (`dsp_rate_limit`) |
+| `DSP_SECRETS_KEY`, `DSP_SECRETS_KEY_FILE` (v0.0.4) | `portal.secrets.key`, `portal.secrets.key-file` | empty; new installations get one | The key webhook signing secrets are stored encrypted with: 32 random bytes in base64 (`openssl rand -base64 32`). Every replica needs the same key; keep a copy apart from your backups. See [Webhooks → Encrypted signing secrets](webhooks.md#encrypted-signing-secrets) |
+| `WEBHOOKS_ENABLED` | `portal.integration.webhooks.enabled` | `true` | `false` stops sending and creating webhooks. Deliveries already queued stay queued. From v0.0.9, changes made while it is `false` are not queued (they are never sent, also not after it is turned on again), and finished deliveries are still removed after `WEBHOOK_LOG_RETENTION` |
 | `WEBHOOK_ALLOWED_HOSTS` | `portal.integration.webhooks.allowed-hosts` | *(empty)* | Host names (or `*.example.com`, `;`-separated) whose webhooks may reach internal addresses |
 | `WEBHOOK_MAX_ATTEMPTS` | `portal.integration.webhooks.max-attempts` | `8` | Attempts per delivery |
 | `WEBHOOK_CONNECT_TIMEOUT`, `WEBHOOK_READ_TIMEOUT`, `WEBHOOK_SEND_TIMEOUT` | `portal.integration.webhooks.*` | `5s`, `10s`, `20s` | Per attempt; the send timeout bounds the whole attempt |
@@ -531,8 +576,8 @@ web tier passes TLS straight through to the API.
 
 The `web` image renders `${NGINX_ENVSUBST_TEMPLATE_DIR}/*.template` into
 `/opt/app-root/etc/dsp.d/` at start. Only `${API_URL}`, `${HTTPS_PORT_SUFFIX}`,
-`${NGINX_LOCAL_RESOLVERS}` and the proxy headers built from the X.509 settings below are
-substituted. The rendered files hold the proxy secret, so only their owner can read them.
+`${NGINX_LOCAL_RESOLVERS}`, the proxy headers built from the X.509 settings below and the
+directives built from `WEB_TRUSTED_PROXIES` are substituted. The rendered files hold the proxy secret, so only their owner can read them.
 
 | Variable | Default | Description |
 |---|---|---|
@@ -546,6 +591,7 @@ substituted. The rendered files hold the proxy secret, so only their owner can r
 | `ENS_CSP_REPORT_ONLY` | `false` | `true` sends `Content-Security-Policy-Report-Only` instead of `Content-Security-Policy`. Set the same value on the API |
 | `MAX_BODY_SIZE` | `5m` | The largest request body (schema and entry imports), an nginx size such as `10m`. Raise it with the API's `IMPORT_MAX_BYTES`. The container exits if it is not a size |
 | `PUBLIC_HOST` | *(empty)* | The host[:port] users open (the host of `PORTAL_PUBLIC_URL`), sent to the API as `X-Forwarded-Host` instead of the browser's `Host`. Set it with single sign-on. The container exits if it is not a host name with an optional port |
+| `WEB_TRUSTED_PROXIES` (v0.0.9) | *(empty)* | Addresses or CIDRs, separated by commas or spaces, of the proxies **in front of the web tier** (an ingress controller's pod CIDR, a load balancer, a TLS proxy on the Docker host as the web container sees it) whose `X-Forwarded-For` names the client. nginx then takes the client's address from that header (`set_real_ip_from`, `real_ip_header X-Forwarded-For`, `real_ip_recursive on`), for its access log and for what it forwards to the API. See [Behind another proxy](#behind-another-proxy) |
 
 Behaviour of the bundled server configuration:
 
@@ -554,18 +600,48 @@ Behaviour of the bundled server configuration:
 | Listen | `8080` (HTTP); `8443 ssl` in the mTLS template |
 | Request body limit | `client_max_body_size` from `MAX_BODY_SIZE` (default `5m`; schema and entry imports). The native package's nginx site keeps `5m`; edit it there |
 | Header buffers | `large_client_header_buffers 4 32k` (matches the API's 32 KB) |
-| `/api/` proxy | `proxy_read_timeout 120s`; overwrites `X-Forwarded-For` with `$remote_addr`, sets `X-Forwarded-Proto` and `X-Forwarded-Host`; sets `X-DSP-Proxy-Secret`. On plain HTTP, removes `X-SSL-Client-Cert` and `X509_HEADER` from client requests, unless `X509_EDGE_TERMINATION=true`. In the mTLS template, sets `X509_HEADER` to the verified certificate |
+| `/api/` proxy | `proxy_read_timeout 120s`; overwrites `X-Forwarded-For` with `$remote_addr` (the connecting peer, or behind a proxy listed in `WEB_TRUSTED_PROXIES` the client that proxy names), sets `X-Forwarded-Proto` and `X-Forwarded-Host`; sets `X-DSP-Proxy-Secret`. On plain HTTP, removes `X-SSL-Client-Cert` and `X509_HEADER` from client requests, unless `X509_EDGE_TERMINATION=true`. In the mTLS template, sets `X509_HEADER` to the verified certificate |
 | Security headers | The set in [Security headers](#security-headers). On `/api/` the API's copies are hidden, so each header appears once |
-| Caching | `/assets/` expires after 1 year; the app shell (`/` → `index.html`) is never cached |
+| Caching | `/assets/` expires after 1 year; the app shell (`/`, every client route and `/index.html`) is sent with `Cache-Control: no-cache`, so a browser picks up a new version's files after an upgrade |
 | Logs | Access log to stdout, error log to stderr |
 
 The container exits at start with a `dsp-entrypoint:` error when the proxy secret contains other
-characters, `X509_PROXY_SECRET_FILE` cannot be read, `X509_HEADER` is not a header name, or
-`X509_EDGE_TERMINATION` or `ENS_CSP_REPORT_ONLY` is neither `true` nor `false`.
+characters, `X509_PROXY_SECRET_FILE` cannot be read, `X509_HEADER` is not a header name,
+`X509_EDGE_TERMINATION` or `ENS_CSP_REPORT_ONLY` is neither `true` nor `false`, or
+`WEB_TRUSTED_PROXIES` holds something that is not an address or CIDR, or a catch-all such as
+`0.0.0.0/0`.
 
 !!! tip "Kubernetes"
     nginx doesn't apply DNS search domains, so give `API_URL` a fully qualified service name
     (for example `http://dsp-api.portal.svc.cluster.local:3001`).
+
+### Behind another proxy
+
+From v0.0.9. When an ingress controller, a load balancer or a TLS-terminating proxy sits in front of
+the web tier, the web tier sees that proxy's address on every connection. Unless told otherwise it
+forwards that address to the API as the client's, so every user has the same address: in the audit
+trail, for the sign-in lockout (`LOGIN_MAX_FAILURES`), for the failed API token limit and for the
+single sign-on start limit, which they then all share.
+
+Set `WEB_TRUSTED_PROXIES` to the addresses that proxy connects from, as the web tier sees them
+(the first field of the web tier's access log):
+
+| Deployment | Where | Typical value |
+|---|---|---|
+| Docker package | `WEB_TRUSTED_PROXIES` in `.env`, then `./portal.sh up` | For a proxy on the same host, the compose network's gateway, for example `172.18.0.1` (read it from `./portal.sh logs web`) |
+| Native package | `WEB_TRUSTED_PROXIES` in `portal.env`, then run `install.sh` again (it writes the directives into the nginx site and reloads nginx) and restart the API, which reads `portal.env` at start | `127.0.0.1` for a proxy on the same host |
+| Helm | `web.trustedProxies` (a list); the chart gives it to the web pods and the API | The ingress controller's pod CIDR, or the load balancer's addresses |
+
+- **List only proxies.** `X-Forwarded-For` from a listed address is believed, so anything that can
+  connect from one can name any client. A catch-all (`/0`) is refused: the web container exits,
+  the chart's schema rejects it, and the native `install.sh` ignores the entry and says so. With
+  Helm, `networkPolicy.webIngressFrom` keeps everything but the ingress controller away from the
+  web pods.
+- **Unset**, as on an upgrade, nothing changes: every user behind the proxy keeps the proxy's
+  address. While single sign-on is on, the API then logs a WARN at startup that names
+  `WEB_TRUSTED_PROXIES`.
+- It does not replace `SERVER_FORWARD_HEADERS_STRATEGY=framework` on the API, which makes the API
+  use the address the web tier forwards.
 
 ### Docker package deployment settings (`.env`)
 
@@ -575,24 +651,28 @@ characters, `X509_PROXY_SECRET_FILE` cannot be read, `X509_HEADER` is not a head
 | `CONTAINER_ENGINE` | The engine `install.sh` used | `docker` or `podman`. The `CONTAINER_ENGINE` environment variable wins |
 | `COMPOSE_PROJECT_NAME` | `directory-services-portal` | Compose project (and volume name prefix) |
 | `API_IMAGE`, `WEB_IMAGE`, `OPENLDAP_IMAGE` | Package image names | Images to run |
-| `WEB_BIND` | `0.0.0.0`; from the next release `127.0.0.1` for plain HTTP, `0.0.0.0` with `--https` | Host address to publish on. `0.0.0.0` is every interface; `127.0.0.1` keeps it to this host. An `.env` without `WEB_BIND` publishes on every interface. From the next release `install.sh` warns when plain HTTP is published beyond this host, or `ENS_COOKIE_SECURE` is not `true` there |
+| `WEB_BIND` | `127.0.0.1` for plain HTTP, `0.0.0.0` with `--https` (before v0.0.4: `0.0.0.0`) | Host address to publish on. `0.0.0.0` is every interface; `127.0.0.1` keeps it to this host. An `.env` without `WEB_BIND` publishes on every interface. From v0.0.4 `install.sh` warns when plain HTTP is published beyond this host, or `ENS_COOKIE_SECURE` is not `true` there |
 | `WEB_PORT` | `8080` | HTTP port (`docker-compose.yml`) |
 | `HTTPS_PORT` | `8443` | HTTPS port (mTLS overlay) |
 | `HTTPS_PORT_SUFFIX` | `:<HTTPS_PORT>`, empty for 443 | Port shown in redirects |
 | `API_MEMORY_LIMIT` | `1536m` | Memory limit of the API container. The JVM's heap is 75% of it (`-XX:MaxRAMPercentage=75.0`) |
 | `WEB_MEMORY_LIMIT` | `256m` | Memory limit of the web container |
-| `JAVA_TOOL_OPTIONS` | *(empty)* | Extra JVM options for the API |
+| `JAVA_TOOL_OPTIONS` | *(empty)* | Extra JVM options for the API, for example the [trust store for LDAPS](#ldaps-with-a-private-ca) |
+| `WEB_TRUSTED_PROXIES` | *(empty)* | Proxies in front of the web tier whose `X-Forwarded-For` names the client; given to the web container and the API. See [Behind another proxy](#behind-another-proxy) |
 | `X509_PROXY_SECRET` | 64 hex characters, generated by `install.sh` | The X.509 proxy secret, given to both the API and the web container. To change it, set a new value (at least 32 characters) and run `./portal.sh up` |
 
 The packaged compose file fixes `DATA_DIR=/data`, `PORT=3001` and
 `SERVER_FORWARD_HEADERS_STRATEGY=framework` for the API, and passes everything else from `.env`.
 
-The native package's `portal.env` has one deployment setting of its own from the next release:
+The native package's `portal.env` has one deployment setting of its own from v0.0.4:
 `NGINX_LISTEN`, where the packaged nginx site listens (plain HTTP). A new `portal.env` sets
 `127.0.0.1:8080` (this host only); `8080` alone is every interface. `install.sh` writes it into
 the site, so run it again after a change. A `portal.env` without it keeps `8080`, every interface.
-The web container gets `ENS_CSP_REPORT_ONLY`, `X509_PROXY_SECRET`, `X509_HEADER` and
-`X509_EDGE_TERMINATION` from `.env`; the mTLS overlay fixes the last two (`X-SSL-Client-Cert`,
+From v0.0.9 `install.sh` also reads `WEB_TRUSTED_PROXIES` from `portal.env` and writes it into the
+site the same way.
+
+In the Docker package, the web container gets `ENS_CSP_REPORT_ONLY`, `WEB_TRUSTED_PROXIES`, `X509_PROXY_SECRET`,
+`X509_HEADER` and `X509_EDGE_TERMINATION` from `.env`; the mTLS overlay fixes the last two (`X-SSL-Client-Cert`,
 `false`).
 
 Both containers run with all capabilities dropped, `no-new-privileges`, a read-only root file
@@ -607,13 +687,13 @@ the UI, and it is persisted as one JSON document: `$DATA_DIR/portal-config.json`
 
 | Key | Content |
 |---|---|
-| `version` | Store format version: `2` from the next release (definitions and grants name their directory; a version 1 document is upgraded at the first start, giving them `default`, and written back once). Back up `DATA_DIR`, or the database, before upgrading if you may roll back |
+| `version` | Store format version: `2` from v0.0.6 (definitions and grants name their directory; a version 1 document is upgraded at the first start, giving them `default`, and written back once). Back up `DATA_DIR`, or the database, before upgrading if you may roll back |
 | `customSchema` | Attribute types and object classes defined or overridden in the portal |
 | `schemaCache` | The last schema pulled from the (primary) directory |
-| `schemaCaches` | Next release: the last schema pulled from each other directory, by id |
+| `schemaCaches` | v0.0.6: the last schema pulled from each other directory, by id |
 | `forms` | Form definitions |
-| `definitions` | Directory definitions, each with its `directory` (next release) |
-| `grants` | Permission grants, each with the `directory` of its subject (next release) |
+| `definitions` | Directory definitions, each with its `directory` (v0.0.6) and, for a directory of groups, its [group access](admin-guide.md#group-access) settings (`groups`) |
+| `grants` | Permission grants, each with the `directory` of its subject (v0.0.6) |
 | `dashboards` | Metric dashboards |
 | `analyses` | Saved analyses, including a summary of their last run |
 
@@ -633,7 +713,14 @@ Other files in `DATA_DIR`:
 | `audit/audit-state.json` | How far each audit output (Splunk HEC, syslog) has delivered |
 | `audit/audit-api-tokens.json` | The pull API's tokens, stored as SHA-256 hashes |
 | `audit/legacy/` | Audit files in the portal's earlier format, moved here unchanged when the store was upgraded (only on installations that had them) |
+| `audit/audit-pruned` | From v0.0.9: how far audit retention has deleted (the last sequence number and that event's hash), which **Verify integrity** checks the oldest retained event against. Present once retention has run |
 | `analysis-results/<analysis-id>.json` | Latest result of each saved analysis |
+| `group-access-requests.json` | [Group access](admin-guide.md#group-access) requests: open ones, and closed ones for a year (at most 5,000) |
+| `group-membership-expiries.json` | From v0.0.11: the end dates of the group memberships the portal granted for a limited time |
+
+With the shared database all of these are in the database instead (the group access requests as a
+shared document, the end dates in the table `dsp_group_membership_expiry`). The other files of the data
+directory are listed in [Operator guide → Data and backups](operator-guide.md#data-and-backups).
 
 ## Complete example (`.env.example`)
 

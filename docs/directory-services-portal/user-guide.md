@@ -23,7 +23,7 @@ can't sign in until you do. You see it again before each sign-in.
       it), further attempts from your address are refused for that username for a while ("Too many
       failed login attempts. Try again later.").
     - If the portal cannot reach the directory, the page shows **Directory unreachable**.
-    - From the next release, a portal that serves **several directories** shows a **Directory**
+    - From v0.0.6, a portal that serves **several directories** shows a **Directory**
       list above the username: choose the directory that holds your account (for example your
       forest or enclave). The browser remembers your choice for next time. With one directory there
       is no list. The same username in two directories is two different accounts, each with its own
@@ -36,7 +36,7 @@ can't sign in until you do. You see it again before each sign-in.
     as the directory holds exactly one account for you (with several directories, you sign in to
     the first directory, in the order your organisation set, that holds an account for you). **Sign out** ends your portal session only,
     not your session at the identity provider, unless your organisation has set the portal to sign
-    you out there too (from the next release); you then come back to the sign-in page.
+    you out there too (from v0.0.4); you then come back to the sign-in page.
 
 === "Certificate (smart card)"
 
@@ -54,7 +54,9 @@ Your session ends:
   Leaving the portal open in a tab doesn't keep you signed in;
 - a fixed time after you signed in, whatever you are doing (12 hours by default);
 - when you sign in somewhere else, if your organisation limits how many sessions you may have:
-  the oldest one ends.
+  the oldest one ends;
+- within a few minutes of your directory account being removed or, from v0.0.9, disabled or
+  locked.
 
 The sign-in page then tells you why you were signed out. Use the **Sign out** button in the top
 bar to end your session yourself.
@@ -125,11 +127,21 @@ are shown next to the field.
 
 - **Edit** opens the form with the current values. Only attributes you changed are sent to the
   directory.
-- Changing the value of the naming attribute (for example `uid`) **renames** the entry.
+- Changing the value of the naming attribute (for example `uid`) **renames** the entry. From
+  v0.0.9 your other changes are made first and the rename last. If the directory refuses the
+  rename (for example because the name is taken), the message says *The other changes were saved,
+  but the entry was not renamed* and gives the entry's name as it is now: the other changes are
+  kept.
+- If somebody else changes the entry while you have its form open, the form says *This entry
+  changed since you opened it* (v0.0.9). Saving sends only the fields you changed, so their
+  change is kept; **Discard my changes and load the current entry** starts again from the entry
+  as it is now.
 - **Delete** asks for confirmation (*Delete entry?*) and then removes the entry from the directory.
 
 You can only read and write entries inside the directory's namespace. The portal rejects anything
-outside it. Read-only (white pages) directories can never be edited, not even by administrators.
+outside it. From v0.0.9 that includes a value that would take the entry out of the directory: if the
+directory only lists, say, the Sales department, an entry can't be saved there with another
+department (*it would not match the directory's filter*). Read-only (white pages) directories can never be edited, not even by administrators.
 
 ## My profile
 
@@ -146,7 +158,7 @@ outside it. Read-only (white pages) directories can never be edited, not even by
 
 If no directory can locate you, the page shows *No directories can locate you*.
 
-From the next release, a directory that finds you by an attribute (such as your `uid` or `mail`)
+From v0.0.4, a directory that finds you by an attribute (such as your `uid` or `mail`)
 shows a message instead of your entries when that match is not safe: when it finds more than one
 entry for you, or when users can edit one of the matched attributes in self service. Ask an
 administrator to fix the directory's set-up.
@@ -166,17 +178,64 @@ on for a directory of groups. It shows the groups of the directory you signed in
   The menu shows how many requests are waiting. You can't decide your own request.
 - **Owners** open a group to add people (search by name, login or e-mail) and remove members.
 
-Some groups can be looked up but don't take requests; ask their owners or an administrator. Group
-access comes with your organisation's license for the directory editor or for **My profile**.
+Some groups can be looked up but don't take requests (**Closed to requests**); ask their owners or
+an administrator. Group access comes with your organisation's license for the directory editor or
+for **My profile**.
+
+From v0.0.11, depending on how your administrator has set the directory up:
+
+- **Open groups.** A group marked **Open to join** has a **Join** button instead of **Request
+  access**: you are a member at once, without anyone's approval.
+- **Access until a date.** When you ask to join, **Access until (optional)** is the last day you
+  need the access. The owner who approves may shorten it. Your groups then show **Member until**
+  that day: you belong to the group through it, and the portal removes you shortly after it has
+  passed (days are counted in UTC). Some directories limit how long any membership lasts; you then
+  get an end date even when you ask for none. To stay longer, ask the owners to move the date, or
+  ask again afterwards.
+- **Requests that nobody answers** may expire after a number of days. **My requests** then shows
+  *Nobody answered within N days. You can ask again.*
+
+### If you own a group
+
+Open the group from **Group access** (or from a request in **To review**). From v0.0.11 its page
+has more for owners:
+
+- **Requests to join** lists the open requests. With several, tick the ones you want (or **Select
+  all shown**) and use **Approve selected** or **Reject selected** with one note for all, at most
+  50 at once. If one of them could not be decided (somebody else answered it meanwhile, for
+  example), the result says which and why; the others are decided.
+- When you approve a request that asks for access until a date, you can set an earlier date under
+  **Access until (optional)**, not a later one.
+- **Members.** Besides adding people one by one:
+    - **End date for people you add (optional)** gives the people you add a last day in the group.
+    - **End date** next to a member sets, changes or removes theirs. Where the directory limits
+      how long memberships last, a date can be moved within that limit but not removed.
+    - **Add from a list**: paste logins, e-mail addresses or DNs, one per line (at most 200), and
+      choose **Check the list**. You see who was found, who is already a member, which lines nobody
+      matches and which match several people (use their login or DN instead). Nothing is added
+      until you confirm with **Add N people**.
+    - **Export CSV** downloads the members with their name, login, e-mail, DN and end date (when
+      your organisation's license includes the directory editor).
+- **Owners.** Where the directory allows it, **Make owner** adds a person as an owner and
+  **Remove** takes an owner away. The last owner can't be removed: add another one first.
+- **Past requests** lists the group's decided, withdrawn and expired requests of the last year,
+  newest first: who asked and why, who decided, when, and the note.
 
 ## Metrics
 
-**Metrics** (`/metrics`) offers statistics and charts computed live from the directories you can
+**Metrics** (`/metrics`) offers statistics and charts computed from the directories you can
 read. Every chart reads one directory, so it covers only entries you're allowed to see.
+
+From v0.0.11 the metrics home page, the directory overviews and the dashboards **keep their
+results until you refresh them**. Going to another page and coming back shows the same numbers
+again, with the time they were computed, instead of computing them again. Use **Refresh** on an
+overview or a dashboard, or **Refresh counts** on the home page, for current numbers. Reloading
+the page in the browser also fetches them again.
 
 ### Metrics home
 
-- **Entries per directory**: an entry count for each directory you can read.
+- **Entries per directory**: an entry count for each directory you can read. **Refresh counts**
+  counts again; *Counted at* says when the numbers shown were counted.
 - **Directory overviews**: a ready-made dashboard for each directory.
 - **Dashboards**: dashboards that administrators have shared with all signed-in users. Dashboards
   that are not shared are marked **Admins only** and are visible to administrators only.
@@ -199,10 +258,11 @@ Generated automatically from the directory's form. It shows:
 | **Show table** / **Show chart** | Toggle between the chart and its data table |
 | **Download CSV** | Save the chart's data as a CSV file |
 | **Open in the explorer** / **Customize in the explorer** | Open the chart in the explorer to change it |
-| **Refresh** (dashboards) | Recompute instead of using cached results |
+| **Refresh** (overviews and dashboards) | Compute the page's charts again. Until you do, the page shows the results it has, with the time each was computed |
 
-Results are cached briefly (60 seconds by default). A chart marked as partial read more entries
-than the configured limit allows, so its numbers cover only part of the directory.
+In the explorer a chart is computed as you change its settings; the server reuses a result for a
+short time (60 seconds by default). A chart marked as partial read more entries than the configured
+limit allows, so its numbers cover only part of the directory.
 
 ### Explorer
 
@@ -242,7 +302,8 @@ the background. The **bell** in the top bar lists your recent tasks:
 - Asking for the same result while it is computing joins the running task. Opening a result
   shortly after it finished shows it without computing it again.
 - Each user can have a limited number of tasks running or queued at once (5 by default). Tasks are
-  lost if the server restarts.
+  lost if the server restarts; where the portal runs on several servers, a task whose server
+  stopped shows as failed (*The server running it stopped before it finished*). Run it again.
 
 ## Exporting data
 
@@ -253,7 +314,7 @@ the background. The **bell** in the top bar lists your recent tasks:
 | Custom schema (administrators) | **Export custom** on the Schema page (`.schema` file) |
 | A single entry | **Show raw attributes** on the entry page, then copy the text |
 | A directory's entries | **Export CSV** or **Export LDIF** on the directory page: the entries matching your search (all of them without one), up to 10,000 by default, with the form's fields and never passwords |
-| A group's members | **Export** on the group's page (CSV or LDIF) |
+| A group's members | **Export** on the group's page (CSV or LDIF). Owners can also use **Export CSV** on the group's page under **Group access** (v0.0.11), which adds each member's end date |
 
 ## Importing entries and changing members in bulk
 
@@ -261,7 +322,9 @@ Where you may write to a directory:
 
 - **Import** takes a CSV in the export's layout or an LDIF file. **Check file** first shows, row by
   row, what would be created, updated, left unchanged or refused, without writing anything; then
-  **Import** writes. Every entry is checked like a form you saved yourself.
+  **Import** writes. Every entry is checked like a form you saved yourself. If the page loses
+  contact with the server during a long import, it says that the import may still be running or
+  have finished: check the task in the bell menu before you import again.
 - On a group, **Change members in bulk** adds and removes many members at once (one per line).
 
 See [Import and export](import-export.md) for the file formats and limits.
@@ -272,8 +335,13 @@ See [Import and export](import-export.md) for the file formats and limits.
 |---|---|
 | *You do not have access to this directory* | No view permission for that directory |
 | *This directory is read only* | Writes through a white pages directory are not allowed |
+| *The other changes were saved, but the entry was not renamed ...* | The directory refused the new name; your other changes are kept. See [Editing and deleting](#editing-and-deleting) |
+| *... (it would not match the directory's filter ...)* | With these values the entry would no longer belong to this directory, so it was not saved |
+| *This group is open: join it without a request* | Use **Join** on the group |
+| *The access asked for can be shortened, not extended* | An approval's end date can't be later than the day the requester asked for |
+| *Memberships here have an end date* | This directory limits how long memberships last, so a member's end date can be moved but not removed |
 | *You can only edit your own entry* | A self-service edit was attempted on another entry |
 | *Authentication required* | You are not signed in, or your session has ended; sign in again |
-| **Signed out**, on the sign-in page | Your session timed out (idle, or the maximum session length), or ended because you signed in elsewhere; the notice says which. Sign in again |
+| **Signed out**, on the sign-in page | Your session timed out (idle, or the maximum session length), or ended because you signed in elsewhere; the notice says which. Sign in again. *Your session has ended* without a reason means your directory account was removed, disabled or locked: if you can't sign in again, ask whoever manages your account |
 | *... is not included in this portal's license* | That feature isn't licensed for your organisation; ask your administrator |
 | *Page not found* | The address doesn't match any screen |

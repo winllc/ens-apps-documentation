@@ -10,7 +10,7 @@ The login page shows one button per configured provider.
 The provider asserts an identity: an OIDC claim, or a SAML attribute or the NameID.
 `SSO_OIDC_USER_FILTER` or `SSO_SAML_USER_FILTER`, with `{{value}}` replaced by that identity
 (filter-escaped), must match **exactly one** directory entry; none or several refuses the sign-in.
-From the next release, with [several directories](configuration.md#several-directories), every
+From v0.0.6, with [several directories](configuration.md#several-directories), every
 directory whose `SSO` setting is on is searched in configured order (each with its
 `SSOUSERFILTER`, if set): the first directory with a match wins and must hold exactly one entry.
 If later directories also hold a match, the user signs in to the first, the API logs a WARN naming
@@ -30,7 +30,7 @@ can be renamed or handed to someone else. An `email` claim is used only when `em
 true. Also restrict who may use the application at the provider (Entra *Assignment required*, Okta
 assignments, AD FS access control policy).
 
-!!! info "From the next release: a warning for a claim that can be changed"
+!!! info "A warning for a claim that can be changed (from v0.0.4)"
     The API logs a WARN at startup when `SSO_OIDC_USERNAME_CLAIM` is a claim a provider lets be
     changed (`preferred_username`, `email`, `upn`, `unique_name`, `name`, ...). Sign-in is
     unchanged. The API's default stays `preferred_username`, so that upgraded installations keep
@@ -69,6 +69,14 @@ it is filled in, so fill it for everyone first. The startup WARN then goes away.
     are checked. **Identity-provider-initiated** (unsolicited) responses are refused, and each
     assertion id is accepted only once.
 
+    From v0.0.9 the identity provider's metadata (its signing certificates and endpoints) is read
+    again every `SSO_SAML_METADATA_REFRESH` (`1h`), and at once when a response's signature fails
+    (at most once a minute per API instance); a response that failed is then checked once more
+    against the new certificates. So when the provider rolls its signing certificate, as AD FS and
+    Entra ID do routinely, sign-ins carry on without restarting the API. A read that fails keeps
+    the last good copy and is tried again a minute later. Before v0.0.9 the metadata was read once,
+    and a rolled certificate needed a restart of every API instance.
+
 Sign-in requests in flight are kept on the server under a one-time handle in a short-lived `DSP_SSO`
 cookie, because the provider's answer never carries the `SameSite=Strict` session cookie. SAML's
 cross-site POST needs that cookie to be `SameSite=None; Secure`, so **SAML requires HTTPS** (set
@@ -80,7 +88,7 @@ only the portal user.
 - Every sign-on and refusal is audited as `auth.login` with `method` `oidc` or `saml` (refusals with
   a `reasonCode`); the user is sent back to `/login?sso_error=<code>` with a message.
 - **Sign-out ends the portal session only**, not the provider's, unless signing out at the provider
-  is turned on (next release; see [Signing out](#signing-out)).
+  is turned on (v0.0.4; see [Signing out](#signing-out)).
 - Administrator rights granted by `SSO_*_ADMIN_GROUPS` are not re-checked with the provider during a
   session. Such a session ends after `SSO_IDP_ADMIN_SESSION_LIFETIME` (or the absolute timeout, if
   shorter), so a removal at the provider takes effect by then. Rights from the directory are read
@@ -90,10 +98,10 @@ only the portal user.
 
 ## Signing out
 
-Signing out of the portal always ends the portal's session first. Up to the current release that is
+Signing out of the portal always ends the portal's session first. Up to v0.0.3 that is
 all, and the provider's session stays: the next sign-on on that browser needs no password.
 
-From the next release, two settings also sign out at the provider. `POST /api/auth/logout` then
+From v0.0.4, two settings also sign out at the provider. `POST /api/auth/logout` then
 answers `{ok, consentRequired}` with a `redirect`: the web client goes there next (a plain
 navigation), and the provider sends the browser back to `/login?signed_out`.
 
@@ -133,8 +141,8 @@ navigation), and the provider sends the browser back to `/login?signed_out`.
 | OIDC redirect URI | `https://<portal>/api/auth/sso/callback/oidc` |
 | SAML entity id and service provider metadata | `https://<portal>/api/auth/sso/saml/metadata` |
 | SAML assertion consumer service (HTTP-POST) | `https://<portal>/api/auth/sso/saml/acs/saml` |
-| OIDC post-logout redirect URI (next release, with `SSO_OIDC_PROVIDER_LOGOUT`) | `https://<portal>/login?signed_out` |
-| SAML single logout service (next release, HTTP-Redirect, with `SSO_SAML_SINGLE_LOGOUT`; listed in the service provider metadata) | `https://<portal>/api/auth/sso/saml/logout` |
+| OIDC post-logout redirect URI (v0.0.4, with `SSO_OIDC_PROVIDER_LOGOUT`) | `https://<portal>/login?signed_out` |
+| SAML single logout service (v0.0.4, HTTP-Redirect, with `SSO_SAML_SINGLE_LOGOUT`; listed in the service provider metadata) | `https://<portal>/api/auth/sso/saml/logout` |
 
 The web tier already forwards `/api/`, so nothing changes in nginx.
 
@@ -144,18 +152,18 @@ The web tier already forwards `/api/`, so nothing changes in nginx.
 |---|---|---|
 | `PORTAL_PUBLIC_URL` | empty | The address users open, e.g. `https://portal.example.com`. The redirect URI, SAML entity id and assertion consumer are built from it, never from the request's `Host`. **Required for SAML** (unless `SSO_SAML_ENTITY_ID` is set), recommended for OIDC. Give the web tier `PUBLIC_HOST` (its host[:port]) too |
 | `SSO_IDP_ADMIN_SESSION_LIFETIME` | `1h` | A session whose administrator rights come only from the provider's groups ends this long after sign-in |
-| `SSO_START_LIMIT_PER_MINUTE` (next release) | `30` | Sign-ons one client address may start per minute, counted across replicas with the shared database (else per API replica), the address as resolved with `SERVER_FORWARD_HEADERS_STRATEGY`. Each start keeps a sign-in request for 10 minutes; further starts are sent back to `/login?sso_error=busy` with `Retry-After`, and the login page says to wait a minute |
-| `SSO_MAX_PENDING_REQUESTS` (next release) | `10000` | Sign-in requests in flight kept in memory at most, without the shared database (with it they are rows, and expired ones are deleted every minute). When full, new starts get `sso_error=busy`. Expired requests are now removed every minute (was five) |
+| `SSO_START_LIMIT_PER_MINUTE` (v0.0.4) | `600` from v0.0.9 (`30` before) | Sign-ons one client address may start per minute, counted across replicas with the shared database (else per API replica), the address as resolved with `SERVER_FORWARD_HEADERS_STRATEGY`. Each start keeps a sign-in request for 10 minutes; further starts are sent back to `/login?sso_error=busy` with `Retry-After`, and the login page says to wait a minute. Behind a proxy in front of the web tier that is not in `WEB_TRUSTED_PROXIES`, every user has the proxy's address and all share this limit, which is why the default is high; the API logs a WARN at startup while single sign-on is on and `WEB_TRUSTED_PROXIES` is unset. A release-package `.env` or `portal.env` from v0.0.4 to v0.0.8 sets `30` and keeps it |
+| `SSO_MAX_PENDING_REQUESTS` (v0.0.4) | `10000` | Sign-in requests in flight kept in memory at most, without the shared database (with it they are rows, and expired ones are deleted every minute). When full, new starts get `sso_error=busy`. Expired requests are now removed every minute (was five) |
 | `SSO_OIDC_ISSUER_URI` | empty | The issuer |
 | `SSO_OIDC_CLIENT_ID` | empty | With the issuer, turns OpenID Connect on |
 | `SSO_OIDC_CLIENT_SECRET_FILE` / `SSO_OIDC_CLIENT_SECRET` | empty | The client secret (prefer the file); empty makes a public client |
 | `SSO_OIDC_SCOPES` | `openid profile email` | |
-| `SSO_OIDC_USERNAME_CLAIM` | `preferred_username` (next release's package `env.template`: `sub`) | The claim mapped through the user filter; `email` is used only when `email_verified` is true. From the next release the API warns at startup about a claim a provider lets be changed; see [Moving to an immutable claim](#moving-to-an-immutable-claim) |
+| `SSO_OIDC_USERNAME_CLAIM` | `preferred_username` (the release package's `env.template`, from v0.0.4: `sub`) | The claim mapped through the user filter; `email` is used only when `email_verified` is true. From v0.0.4 the API warns at startup about a claim a provider lets be changed; see [Moving to an immutable claim](#moving-to-an-immutable-claim) |
 | `SSO_OIDC_USER_FILTER` | `(&(objectClass=inetOrgPerson)(uid={{value}}))` | Must match exactly one entry |
 | `SSO_OIDC_GROUPS_CLAIM` | `groups` | The claim listing the person's groups |
 | `SSO_OIDC_ADMIN_GROUPS` | empty | Provider groups that grant administrator (`;`-separated) |
 | `SSO_OIDC_LABEL` | `Sign in with single sign-on` | Button text |
-| `SSO_OIDC_PROVIDER_LOGOUT` (next release) | `false` (new installs: `true`) | Signing out also signs out at the provider. See [Signing out](#signing-out) |
+| `SSO_OIDC_PROVIDER_LOGOUT` (v0.0.4) | `false` (new installs: `true`) | Signing out also signs out at the provider. See [Signing out](#signing-out) |
 | `SSO_SAML_METADATA` | empty | The identity provider's metadata: an `https://` URL or a file. Turns SAML on |
 | `SSO_SAML_ENTITY_ID` | `https://<portal>/api/auth/sso/saml/metadata` | This service provider's entity id |
 | `SSO_SAML_USERNAME_ATTRIBUTE` | empty (the NameID) | The attribute mapped through the user filter |
@@ -164,12 +172,13 @@ The web tier already forwards `/api/`, so nothing changes in nginx.
 | `SSO_SAML_ADMIN_GROUPS` | empty | Provider groups that grant administrator |
 | `SSO_SAML_LABEL` | `Sign in with SAML single sign-on` | Button text |
 | `SSO_SAML_CLOCK_SKEW` | `2m` | Tolerated clock difference (at most `10m`) |
+| `SSO_SAML_METADATA_REFRESH` (v0.0.9) | `1h` | How long the identity provider's metadata (its signing certificates, endpoints) is used before it is read again. `0`: once, until the API restarts. A response whose signature fails also has it read again at once (at most once a minute), so a rolled certificate is picked up without a restart. A failed read keeps the last good copy |
 | `SSO_SAML_SIGNING_KEY_FILE` / `SSO_SAML_SIGNING_CERT_FILE` | empty | PKCS#8 PEM key and certificate, for providers that require signed requests, and for single logout |
-| `SSO_SAML_SINGLE_LOGOUT` (next release) | `false` (new installs: `true`) | SAML single logout when signing out; needs the signing key and certificate. See [Signing out](#signing-out) |
+| `SSO_SAML_SINGLE_LOGOUT` (v0.0.4) | `false` (new installs: `true`) | SAML single logout when signing out; needs the signing key and certificate. See [Signing out](#signing-out) |
 
 In the Helm chart these are `server.publicUrl` and the `sso.*` values (`sso.oidc.issuerUri`,
 `sso.oidc.clientSecret.existingSecret`, `sso.saml.metadataUrl` or `sso.saml.metadataXml`,
-`sso.saml.signing.existingSecret`, ...); with its NetworkPolicy on, `networkPolicy.egress.sso` must
+`sso.saml.metadataRefresh`, `sso.saml.signing.existingSecret`, ...); with its NetworkPolicy on, `networkPolicy.egress.sso` must
 reach the provider. The release bundle's `env.template` and the native package's `portal.env` list
 the same variables.
 
@@ -219,6 +228,9 @@ rights through `ADMIN_GROUPS` instead.
    `SSO_SAML_ADMIN_GROUPS=Portal Admins`.
 4. AD FS signs assertions by default. If it requires signed requests, give the portal a key
    (`SSO_SAML_SIGNING_*`) and re-import the metadata.
+5. AD FS replaces its token-signing certificate by itself (automatic certificate rollover). With
+   `SSO_SAML_METADATA` set to the federation metadata URL, the portal picks the new certificate up
+   from v0.0.9; with a metadata file, replace the file.
 
 OIDC on AD FS: **Application Groups** > *Server application accessing a web API*;
 `SSO_OIDC_ISSUER_URI=https://<adfs>/adfs`, `SSO_OIDC_USERNAME_CLAIM=upn`.
@@ -233,7 +245,7 @@ conditional access apply) or certificate sign-in (CAC/PIV), and set `PASSWORD_LO
 Nothing changes until `SSO_*` is set. The login page gets a button per provider, and
 `/api/auth/sso/**` is new; the web tier already forwards `/api/`.
 
-From the next release:
+From v0.0.4:
 
 - Single sign-on starts are limited per client address (`SSO_START_LIMIT_PER_MINUTE`, `30`; with the
   shared database counted across replicas in `dsp_rate_limit`, Flyway V4, otherwise per replica),
@@ -246,3 +258,15 @@ From the next release:
   installations. Register `https://<portal>/login?signed_out` at an OIDC provider first (not Okta);
   for SAML set the signing key and certificate and give the provider the metadata again. See
   [Signing out](#signing-out).
+
+From v0.0.9:
+
+- **`SSO_START_LIMIT_PER_MINUTE` defaults to `600`** (was `30`). A release-package `.env` or
+  `portal.env` that sets `30` keeps it: raise it, or set `WEB_TRUSTED_PROXIES`.
+- **`WEB_TRUSTED_PROXIES`** (Helm `web.trustedProxies`): when an ingress controller, a load balancer
+  or a TLS proxy is in front of the web tier, list its addresses, so that the start limit and the
+  audit trail see each user's own address instead of the proxy's. Unset, the API logs a WARN at
+  startup while single sign-on is on. See
+  [Configuration → Behind another proxy](configuration.md#behind-another-proxy).
+- **SAML metadata is read again** every `SSO_SAML_METADATA_REFRESH` (`1h`; Helm
+  `sso.saml.metadataRefresh`) and after a signature failure. Nothing to configure.

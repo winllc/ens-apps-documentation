@@ -32,13 +32,11 @@ reading logs, backing up its data, monitoring, upgrading, and troubleshooting.
     ./portal.sh status             # containers, health and where to open the portal
     ./portal.sh logs [service]     # follow the logs (api, web or openldap); last 200 lines first
     ./portal.sh backup [file]      # archive the portal data
-    ./portal.sh restore <file>     # replace the portal data with a backup
+    ./portal.sh restore <file>     # replace the portal data with a backup (the archive is checked first)
     ./portal.sh version
     ```
     `up` waits up to about three minutes for the API container's health check to become
     `healthy`, and fails with a pointer to `./portal.sh logs api` if it does not.
-
->>>
 
 === "Native (systemd)"
 
@@ -85,7 +83,9 @@ The API uses Spring Boot's probes. They need no sign-in and no license.
 - **Not through the web tier.** The web tier publishes only `/api`, so browsers can't reach the
   actuator paths. Check readiness on the API host or pod.
 - **`/api/info` is no longer a readiness check.** Anonymous callers get only whether the directory
-  answers (`connected`); the LDAP URL and the error text are shown to administrators only.
+  answers (`connected`); the LDAP URL and the error text are shown to administrators only. From
+  v0.0.9 it asks the directory at most every 10 seconds and answers from the last check in between,
+  so `connected` can lag a change by that long.
 
 Where each deployment checks readiness:
 
@@ -103,6 +103,12 @@ curl -s http://localhost:3001/readyz
 
 A pod or container is not ready while LDAP is unreachable, the audit store can't be written, or
 the data disk has under 10 MB free.
+
+From v0.0.9, while a directory can't be reached, requests that need it fail at once instead of each
+waiting for the connect timeout (`LDAP_TIMEOUT_MS`): after a failed attempt to connect, calls to
+that directory fail with the same error for 5 seconds, then one request tries again. The portal's
+other pages stay responsive meanwhile, and it reconnects by itself within seconds of the directory
+coming back.
 
 ## Logs
 
@@ -131,6 +137,12 @@ Useful API log messages:
 | `Ignoring <header> header from <ip>: X-DSP-Proxy-Secret is missing or wrong (X509_PROXY_SECRET)` | Certificate header from a trusted address without the right proxy secret; refused and audited |
 | `Cannot read X509_PROXY_SECRET_FILE <path>: <error>` | The API cannot read the proxy secret file, so it refuses every forwarded certificate |
 | `Group lookup failed: ...` | `LDAP_GROUP_FILTER` search failed; the user signs in with `memberOf` groups only |
+| `The account of <user> is disabled or locked (...); ending its session` | From v0.0.9: the directory marks a signed-in user's account disabled or locked, so the session ended (audited as `auth.session-expired`, reason `account-disabled`) |
+| `Single sign-on starts are limited to <n> a minute per client address (SSO_START_LIMIT_PER_MINUTE), and WEB_TRUSTED_PROXIES is not set: ...` (WARN at startup) | From v0.0.9: single sign-on is on and `WEB_TRUSTED_PROXIES` is unset. Harmless when nothing sits in front of the web tier; behind an ingress controller, a load balancer or a TLS proxy, set it ([Configuration](configuration.md#behind-another-proxy)) |
+| `Job <id> failed: the replica running it stopped` | From v0.0.9, with the shared database: a background task of an API instance that stopped was marked failed |
+| `Closed <n> group access request(s) nobody answered in time` | From v0.0.11: the request expiry job closed requests ([Scheduled jobs](#scheduled-jobs)) |
+| `Removed <n> group member(s) whose end date had passed` | From v0.0.11: the membership expiry job removed members |
+| `Could not remove <member> from <group> after its end date <date>: ...` (WARN) | From v0.0.11: the directory refused to remove a member whose end date passed (for example the last member of a group that requires one). Audited as a failed `group.membership-expired`; tried again a day later |
 | A warning naming DISA STIG at startup | Certificate sign-in is on with `ENS_X509_REVOCATION=off` |
 | A warning naming FIPS at startup | `LDAP_TLS_REJECT_UNAUTHORIZED=false` or `ENS_AUDIT_SPLUNK_INSECURE=true` is set |
 
@@ -145,11 +157,13 @@ installation id).
 | Path | Content | Notes |
 |---|---|---|
 | `portal-config.json` | Forms, directory definitions, grants, custom schema, schema cache, dashboards, analyses | Read at startup, written atomically on every admin change |
-| `audit/` | The audit store: `audit-YYYY-MM.jsonl` (hash-chained `ens-audit/1` events), `audit-state.json` (output cursors), `audit-api-tokens.json` (pull API token hashes) | Appended and synced to disk in the request that caused the event. Only the retention job (`ENS_AUDIT_RETENTION_DAYS`) removes events |
+| `audit/` | The audit store: `audit-YYYY-MM.jsonl` (hash-chained `ens-audit/1` events), `audit-state.json` (output cursors), `audit-api-tokens.json` (pull API token hashes) and, from v0.0.9 once retention has run, `audit-pruned` (how far retention has deleted) | Appended and synced to disk in the request that caused the event. Only the retention job (`ENS_AUDIT_RETENTION_DAYS`) removes events. Back up and restore the directory as a whole: **Verify integrity** checks the oldest event against `audit-pruned` |
 | `analysis-results/<id>.json` | Latest result of each saved analysis | Re-creatable by running the analysis again |
 | `api-tokens.json` | [API tokens](api-reference.md#api-tokens) (SHA-256 hashes only) | Owner-readable only |
-| `webhooks.json`, `webhook-deliveries.json` | [Webhooks](webhooks.md), **with their signing secrets**, and pending deliveries | Owner-readable only. Protect the backups that contain them. From the next release the secrets can be encrypted with `DSP_SECRETS_KEY`: back the key up apart from these files |
-| License directory (`/var/lib/ens/directory-portal`) | The license file and the installation id | Not in `DATA_DIR`. Losing it gives the installation a new id; bound licenses must then be re-bound |
+| `webhooks.json`, `webhook-deliveries.json` | [Webhooks](webhooks.md), **with their signing secrets**, and pending deliveries | Owner-readable only. Protect the backups that contain them. From v0.0.4 the secrets can be encrypted with `DSP_SECRETS_KEY`: back the key up apart from these files |
+| `group-access-requests.json` | [Group access](admin-guide.md#group-access) requests: open ones, and closed ones for a year (at most 5,000) | The audit trail keeps every request and decision for good |
+| `group-membership-expiries.json` (v0.0.11) | The end dates of the group memberships the portal granted for a limited time | Without it the portal no longer knows those end dates: the members stay in their groups until someone removes them. Restore it together with the rest of `DATA_DIR` |
+| License directory (`/var/lib/ens/directory-portal`) | The license file, the installation id and, from v0.0.9, `latest-time-seen` (the latest time this installation has seen, so that a clock set back doesn't bring an expired license back) | Not in `DATA_DIR`. Losing it gives the installation a new id; bound licenses must then be re-bound |
 
 Directory data stays on your LDAP server and must be backed up there.
 
@@ -161,7 +175,13 @@ Directory data stays on your LDAP server and must be backed up there.
     ./portal.sh restore /backups/dsp-2026-10-01.tar.gz   # asks for confirmation, stops the API meanwhile
     ```
     The backup runs `tar` over `/data` in a one-off API container while the portal keeps running,
-    so it includes the configuration, the audit store and analysis results. The data volume is
+    so it includes the configuration, the audit store and analysis results. From v0.0.9 it is
+    written to `<file>.part` and renamed when complete, so a backup that failed part-way (a full
+    disk) leaves no file that looks like a good archive. `restore` checks the archive before it
+    asks or stops anything (`<file> is not a complete backup (gzip-compressed tar); nothing was
+    changed`), extracts it next to the data, and replaces the data only once the whole archive is
+    out. If that fails, the data is left as it was and the API is started again (`Could not
+    restore <file> (see above); the API was started again`). The data volume is
     `directory-services-portal_portal-data`. The backup does **not** include the license volume
     (`directory-services-portal_ens-license`); keep a copy of your license file, and see
     [Disaster recovery](availability-and-sizing.md#disaster-recovery) for the installation id.
@@ -194,12 +214,40 @@ startup, logs `Audit file ... ended in a partial line (interrupted write); it is
 continues the chain from the last complete event. For a backup without that, stop the API first
 (`./portal.sh down`, `systemctl stop`, or scale the Deployment to 0).
 
+From v0.0.9 an event that could not be written completely while the API runs (a full disk) is
+removed from the month file again, so the next event starts on its own line and **Verify
+integrity** is not thrown off by the fragment. The pull API, searches, verification and retention
+read the month files as a stream, so a SIEM that pulls the whole history from the start does not
+need memory the size of a month file.
+
 !!! tip "Audit retention"
     By default the audit store keeps every event. Set `ENS_AUDIT_RETENTION_DAYS` to have a daily
     job remove older events once every enabled output (Splunk HEC, syslog) has delivered them; it
     never removes the newest event and records `audit.pruned`. The audit page searches all
     retained history. Treat the audit files as sensitive: they hold changed values and the names
     people tried to sign in with.
+
+## Scheduled jobs
+
+The API runs this work by itself; there is nothing to schedule. With several API instances (a
+shared database), audit retention, the license check and the two group access jobs each run on one
+instance at a time, under a cluster lock.
+
+| Job | Runs | What it does |
+|---|---|---|
+| Audit retention | Daily at 03:17 (the API's time zone), only with `ENS_AUDIT_RETENTION_DAYS` above 0 | Removes older audit events every enabled output has delivered, never the newest; records `audit.pruned` and how far it deleted |
+| License check | Every minute, at startup and after an upload | Records `license.mode-changed` when the mode changes |
+| Expired sessions and single sign-on requests | Every minute | Removes them |
+| Group access: request expiry (v0.0.11) | Every 15 minutes, first 2 minutes after the API starts | Closes open requests nobody answered within the definition's **Requests expire after (days)** as *expired*, and records `group.access-expired` for each. Does nothing while no definition sets it (the default) |
+| Group access: membership expiry (v0.0.11) | Every hour, first 3 minutes after the API starts | Removes members whose end date has passed (dates are whole days in UTC, so a member is removed within the hour after their last day), with the usual `entry.update`, the `group.membership_changed` webhook and a `group.membership-expired` event. A member the directory won't let go is recorded as a failed `group.membership-expired` and tried again a day later |
+
+!!! warning "The group access jobs pause unless the license is in full effect"
+    Both run only while the license is valid (or in its grace period) and covers group access
+    (`directory-editor` or `self-service-profile`). While the portal is read-only or unlicensed,
+    requests don't expire and **no member is removed at their end date**. Nothing is lost: the
+    first run after the license is back in effect catches up, so memberships that ended meanwhile
+    are removed then. Watch `ens_license_mode` and renew in time. See
+    [Admin guide → Group access](admin-guide.md#group-access).
 
 ## Monitoring
 
@@ -252,7 +300,10 @@ memory (`API_MEMORY_LIMIT` in the Docker package, `api.resources` in Helm) or se
     `upgrade.sh` copies `.env`, `license/` and `certs/` across, loads the new images, generates
     `X509_PROXY_SECRET` if `.env` has none, backs up the data to `backups/` and restarts. The data
     and license volumes are reused, because the compose project name stays
-    `directory-services-portal`. See
+    `directory-services-portal`. With the shared database (`DSP_DATABASE_URL` in `.env`), that
+    backup holds none of the configuration, audit store or license state, and the new version may
+    update the database's tables as it starts: back the database up first (`pg_dump`). From
+    v0.0.9 `upgrade.sh` warns about it and, run from a terminal, asks before going on. See
     [Installation → Upgrade](install.md#upgrade).
 
 === "Native"
@@ -311,7 +362,7 @@ exists until an administrator creates one, and every new setting has a safe defa
 | [Accessibility](accessibility.md) | Darker secondary text, underlined links in text, 3:1 form-field borders, a skip link and a title per page |
 | New variables | The release bundle's `env.template` lists `SSO_*`, `API_*`, `WEBHOOK*`, `EXPORT_*`, `IMPORT_*`, `BULK_MAX_MEMBERS` and `MAX_BODY_SIZE`; `upgrade.sh` keeps your `.env`, so add them only if you use them |
 
-### Upgrading to the next release
+### Upgrading to v0.0.4
 
 What changes for an upgraded installation, and what to do (nothing, unless a line says so):
 
@@ -320,14 +371,37 @@ What changes for an upgraded installation, and what to do (nothing, unless a lin
 | `DIRECTORY_MODE=memory` (the built-in demo directory) needs `DEMO_MODE=true`, or an API listening on loopback only (`SERVER_ADDRESS=127.0.0.1`, as the native package does); otherwise the API refuses to start (ERROR in the log) | Docker package: `install.sh` (also run by `upgrade.sh`) adds `DEMO_MODE=true` to an `.env` that sets `DIRECTORY_MODE=memory` and has no `DEMO_MODE` line. Helm: the chart sets it for `directory.mode: memory`. `docker-compose.demo.yml` sets it. A bare jar or image run with the default mode must now set `DIRECTORY_MODE=ldap` or `DEMO_MODE=true`. New in `env.template`: `DEMO_MODE=false` |
 | Docker package: plain HTTP on this host only for new installs | A new `.env` without `--bind` gets `WEB_BIND=127.0.0.1` (with `--https`, `0.0.0.0` and `ENS_COOKIE_SECURE=true` as before); `--bind 0.0.0.0` publishes plain HTTP on every interface. An existing `.env` is never rewritten: it keeps its `WEB_BIND` (none: every interface), and `install.sh` warns when plain HTTP is published beyond the host or `ENS_COOKIE_SECURE` is not `true` |
 | Native package: nginx listens on `NGINX_LISTEN` | New installs: `127.0.0.1:8080`. An upgraded `portal.env` without it keeps `8080` (every interface) |
-| Single sign-on starts are limited per client address | `SSO_START_LIMIT_PER_MINUTE` (`30`; across replicas with the shared database, else per replica); in-memory sign-in requests are capped at `SSO_MAX_PENDING_REQUESTS` (`10000`), and expired ones are removed every minute (was five). A refused start lands on the login page with "wait a minute" |
+| Single sign-on starts are limited per client address | `SSO_START_LIMIT_PER_MINUTE` (`30`, and `600` from v0.0.9; across replicas with the shared database, else per replica); in-memory sign-in requests are capped at `SSO_MAX_PENDING_REQUESTS` (`10000`), and expired ones are removed every minute (was five). A refused start lands on the login page with "wait a minute" |
 | A startup WARN when the API is evidently behind a proxy (`X509_SOURCE=header`, or a loopback `SERVER_ADDRESS`) while `SERVER_FORWARD_HEADERS_STRATEGY` is `none` | The per-address limits then see only the proxy's address. Set it to `framework` (every package and the chart do) |
 | A startup WARN when `SSO_OIDC_USERNAME_CLAIM` is a claim a provider lets be changed | Sign-in is unchanged. Move to `sub` or Entra ID's `oid` when you can ([how](single-sign-on.md#moving-to-an-immutable-claim)). New release-package `.env` files get `SSO_OIDC_USERNAME_CLAIM=sub`; the Helm chart's default stays `preferred_username`: set it yourself |
 | Self-service matching by an attribute is refused while users can edit either attribute in self service, or when the user's value matches more than one entry | Check definitions that match by `mail` or similar: make the field not self-editable, or match on an attribute users can't change. The form linter warns about it. See [Directory definitions](admin-guide.md#directory-definitions) |
 | Webhooks with the shared database: an entry change's deliveries are written in the transaction of its audit event, so both are stored or neither is; a change made while the database can't store them is answered `503` | Nothing to configure. See [Webhooks → Storage](webhooks.md#storage) |
-| Webhook signing secrets can be stored encrypted: `DSP_SECRETS_KEY` or `DSP_SECRETS_KEY_FILE` | An upgrade gets no key: secrets stay as they are, with a WARN at every start. To encrypt them, add `DSP_SECRETS_KEY=$(openssl rand -base64 32)` to `.env` (native: a `secrets-key` file and `DSP_SECRETS_KEY_FILE`, as `install.sh` prints; Helm: `integrations.webhooks.secretsKey.value` or `.existingSecret`) and restart. New installations get one. Keep a copy apart from your backups; every replica needs the same; the API refuses to start with another key, or with none once secrets are encrypted. No re-keying. See [Webhooks → Encrypted signing secrets](webhooks.md#encrypted-signing-secrets-next-release) |
+| Webhook signing secrets can be stored encrypted: `DSP_SECRETS_KEY` or `DSP_SECRETS_KEY_FILE` | An upgrade gets no key: secrets stay as they are, with a WARN at every start. To encrypt them, add `DSP_SECRETS_KEY=$(openssl rand -base64 32)` to `.env` (native: a `secrets-key` file and `DSP_SECRETS_KEY_FILE`, as `install.sh` prints; Helm: `integrations.webhooks.secretsKey.value` or `.existingSecret`) and restart. New installations get one. Keep a copy apart from your backups; every replica needs the same; the API refuses to start with another key, or with none once secrets are encrypted. No re-keying. See [Webhooks → Encrypted signing secrets](webhooks.md#encrypted-signing-secrets) |
 | Failed API tokens and single sign-on starts are counted in the database | With the shared database, Flyway V4 adds `dsp_rate_limit` at start, and `API_FAILED_TOKEN_LIMIT_PER_MINUTE` and `SSO_START_LIMIT_PER_MINUTE` then hold across replicas. Alone, nothing changes |
 | Signing out at the identity provider: `SSO_OIDC_PROVIDER_LOGOUT`, `SSO_SAML_SINGLE_LOGOUT` | `false` on an upgrade (a startup WARN while OIDC is on and its setting is `false`); `true` in new `.env` files and new Helm releases. Before turning them on, register `https://<portal>/login?signed_out` as a post-logout redirect URI at the OIDC provider (not with Okta, which needs `id_token_hint`), or set the SAML signing key and certificate and give the identity provider the metadata again. See [Single sign-on → Signing out](single-sign-on.md#signing-out) |
+
+### Upgrading to v0.0.9, v0.0.10 and v0.0.11
+
+Nothing has to change before these upgrades. What is different afterwards, and what to check:
+
+| Release | Change | What to do |
+|---|---|---|
+| v0.0.9 | The single sign-on start limit's default rises from 30 to 600 a minute per client address | A Docker package `.env` or a native `portal.env` written by v0.0.4 to v0.0.8 sets `SSO_START_LIMIT_PER_MINUTE=30` and keeps it. Behind a proxy in front of the web tier every user shares that limit: raise it to `600` (or remove the line), or set `WEB_TRUSTED_PROXIES`. Helm releases get the new default unless `api.extraEnv` sets the variable |
+| v0.0.9 | New `WEB_TRUSTED_PROXIES` (Helm `web.trustedProxies`): the proxies in front of the web tier whose `X-Forwarded-For` names the client | Unset, as after an upgrade, nothing changes: everyone behind such a proxy still has its address, in the audit trail and for the per-address limits. While single sign-on is on, the API logs a WARN at startup. Set it when an ingress controller, a load balancer or a TLS proxy is in front ([how](configuration.md#behind-another-proxy)) |
+| v0.0.9 | Sessions of accounts the directory disables or locks end within `GROUP_REFRESH_INTERVAL` (5 minutes), as those of deleted accounts did | Nothing. Expect `auth.session-expired` events with the reason `account-disabled` |
+| v0.0.9 | A write through a definition is refused (400) when the entry would no longer match the definition's filter afterwards | Nothing. Integrations and imports that wrote such entries now get 400 where they got an entry they could not read back |
+| v0.0.9 | An update that renames an entry makes its other changes first, then the rename. If the directory refuses the rename, the other changes stay and the answer has `"code": "partially_saved"` | Integrations that rename through `PATCH /api/v1/directories/{id}/entry` should handle that code ([API reference](api-reference.md#directories-and-entries)) |
+| v0.0.9 | `WEBHOOKS_ENABLED=false` no longer queues the changes made meanwhile | If you turned sending off expecting the events later: they are not sent. Deliveries queued before stay queued |
+| v0.0.9 | SAML: the identity provider's metadata is read again every `SSO_SAML_METADATA_REFRESH` (`1h`), and at once when a response's signature fails | Nothing. A signing certificate the provider rolls is picked up without a restart. When `SSO_SAML_METADATA` is a URL, the API must stay able to reach it (with a NetworkPolicy, `networkPolicy.egress.sso`); a failed read keeps the last good copy |
+| v0.0.9 | With the shared database: background tasks of an instance that stops are marked failed about 30 seconds later, and Flyway V12 adds a column to `ens_license_installation` at the first start | Nothing. The migration is additive, so instances still on the previous release keep working during a rolling upgrade |
+| v0.0.9 | Docker package: `./portal.sh backup` writes `<file>.part` first; `./portal.sh restore` checks the archive before stopping anything; `upgrade.sh` warns when `DSP_DATABASE_URL` is set, and asks before going on when run from a terminal | With the shared database, back it up (`pg_dump`) before `upgrade.sh`. A scripted upgrade (no terminal) is not asked |
+| v0.0.9 | License: a clock set back more than a day no longer brings an expired license back; an upload that is not yet valid or already expired is refused while the installed license is in full effect (`NOT_IN_EFFECT`) | Nothing. Upload next term's license once its start date has come. An `ENS_LICENSE` that is refused this way is logged at WARN (`ENS_LICENSE (...) was refused: ...`). If the license store can't be read when the API starts (the database is still starting), `ENS_LICENSE` is now tried again 30 seconds later instead of only at the next restart |
+| v0.0.10 | Directories over `ldaps://` or StartTLS trust the CAs in the trust store given to the JVM (Helm `ldap.truststore`; `-Djavax.net.ssl.trustStore` in `JAVA_TOOL_OPTIONS`). Before, only the JDK's own `cacerts` counted and such directories failed with `certificate_unknown` | If you set `LDAP_TLS_REJECT_UNAUTHORIZED=false` to get past that, set it back to `true` after the upgrade. The trust store must hold the directory's CA as a trusted certificate and be given with its password: see [LDAPS certificate errors](#ldaps-certificate-errors) |
+| v0.0.11 | [Group access](admin-guide.md#group-access): owners manage owners, requests expire, open groups, memberships with an end date, adding members from a list, deciding several requests at once, member export, past requests | Nothing: every new setting is off or empty until an administrator sets it on a definition, and stored definitions and requests are read as before |
+| v0.0.11 | End dates of memberships are kept in `DATA_DIR/group-membership-expiries.json`, or with the shared database in the new table `dsp_group_membership_expiry` (Flyway V13, created at the first start) | Nothing to configure. It is part of the data directory backup, or of the database's |
+| v0.0.11 | Two [scheduled jobs](#scheduled-jobs) close expired requests (every 15 minutes) and remove members after their end date (hourly). They pause unless the license is in full effect | Renew the license in time where end dates matter |
+| v0.0.11 | New audit actions `group.access-expired`, `group.membership-end-date` and `group.membership-expired`; new `details.via` values on `entry.update` (`group-owners`, `group-join`, `group-membership-expired`); the `group.membership_changed` webhook is also sent when a membership ends, with no user as its actor | Update SIEM searches and webhook receivers that list actions or expect an actor ([Webhooks](webhooks.md#events)) |
+| v0.0.11 | Metrics: the home page, the overviews and the dashboards keep their results in the browser until **Refresh** (**Refresh counts** on the home page) | Tell users that the numbers are as old as the time shown with them. `METRICS_CACHE_SECONDS` now matters only after a browser reload |
 
 To go back to the previous release, see
 [Rolling back an upgrade](availability-and-sizing.md#rolling-back-an-upgrade).
@@ -342,10 +416,10 @@ To go back to the previous release, see
 | Symptom | Likely cause | Action |
 |---|---|---|
 | API exits at startup with `Invalid banner configuration: ...` | `BANNER_TEXT` longer than 200 characters, or an invalid `BANNER_FOREGROUND`/`BANNER_BACKGROUND` | Fix the value (hex, `rgb()`/`hsl()` or a CSS color name) |
-| API exits with `Refusing to start: DIRECTORY_MODE=memory runs the embedded demo directory ...` (next release) | `DIRECTORY_MODE` is `memory` (its default) without `DEMO_MODE=true`, and the API listens beyond loopback | For a real directory set `DIRECTORY_MODE=ldap` and `LDAP_URL`; for a demo set `DEMO_MODE=true` (or `SERVER_ADDRESS=127.0.0.1` to keep it to this host) |
-| Single sign-on lands back on the login page with "wait a minute" (`sso_error=busy`, next release) | More than `SSO_START_LIMIT_PER_MINUTE` (30) sign-on starts from one client address in a minute, or `SSO_MAX_PENDING_REQUESTS` sign-in requests in flight | Wait a minute. If everybody gets it, check `SERVER_FORWARD_HEADERS_STRATEGY=framework` behind your proxy (the startup log warns otherwise), so the limit sees each client's address |
-| API exits with `Refusing to start: webhook signing secrets are stored encrypted with key ..., but DSP_SECRETS_KEY is ...` (next release) | `DSP_SECRETS_KEY` is not set, or is another key than the one the stored secrets were encrypted with (for example a replica without it, or a `.env` replaced without carrying the key over) | Set `DSP_SECRETS_KEY` (or `DSP_SECRETS_KEY_FILE`) to the key they were stored with, the same on every replica. See [Webhooks → Encrypted signing secrets](webhooks.md#encrypted-signing-secrets-next-release) |
-| Signing out lands on the provider's error page about the redirect URI (next release) | `SSO_OIDC_PROVIDER_LOGOUT=true` and `https://<portal>/login?signed_out` is not registered at the provider, or the provider requires `id_token_hint` (Okta), which the portal does not send | Register the address, or set `SSO_OIDC_PROVIDER_LOGOUT=false` |
+| API exits with `Refusing to start: DIRECTORY_MODE=memory runs the embedded demo directory ...` (v0.0.4) | `DIRECTORY_MODE` is `memory` (its default) without `DEMO_MODE=true`, and the API listens beyond loopback | For a real directory set `DIRECTORY_MODE=ldap` and `LDAP_URL`; for a demo set `DEMO_MODE=true` (or `SERVER_ADDRESS=127.0.0.1` to keep it to this host) |
+| Single sign-on lands back on the login page with "wait a minute" (`sso_error=busy`, v0.0.4) | More than `SSO_START_LIMIT_PER_MINUTE` sign-on starts from one client address in a minute (600 from v0.0.9; 30 before, and still 30 where an older `.env` or `portal.env` sets it), or `SSO_MAX_PENDING_REQUESTS` sign-in requests in flight | Wait a minute. If everybody gets it, every user has the same address: check `SERVER_FORWARD_HEADERS_STRATEGY=framework` on the API, and, behind an ingress controller, a load balancer or a TLS proxy in front of the web tier, set `WEB_TRUSTED_PROXIES` ([how](configuration.md#behind-another-proxy)); the startup log warns about both. Raise `SSO_START_LIMIT_PER_MINUTE` if an old settings file still says `30` |
+| API exits with `Refusing to start: webhook signing secrets are stored encrypted with key ..., but DSP_SECRETS_KEY is ...` (v0.0.4) | `DSP_SECRETS_KEY` is not set, or is another key than the one the stored secrets were encrypted with (for example a replica without it, or a `.env` replaced without carrying the key over) | Set `DSP_SECRETS_KEY` (or `DSP_SECRETS_KEY_FILE`) to the key they were stored with, the same on every replica. See [Webhooks → Encrypted signing secrets](webhooks.md#encrypted-signing-secrets) |
+| Signing out lands on the provider's error page about the redirect URI (v0.0.4) | `SSO_OIDC_PROVIDER_LOGOUT=true` and `https://<portal>/login?signed_out` is not registered at the provider, or the provider requires `id_token_hint` (Okta), which the portal does not send | Register the address, or set `SSO_OIDC_PROVIDER_LOGOUT=false` |
 | API exits with `Could not read .../portal-config.json` | Corrupt or hand-edited config store | Restore from backup, or fix the JSON |
 | API exits with `Invalid LDAP connection settings for <url>` | Malformed `LDAP_URL` | Use `ldap://host:port` or `ldaps://host:port` |
 | API exits with `Cannot read trusted CA file ...` / `No certificates found in ...` | `X509_TRUSTED_CA_FILE` path or content wrong | Mount a PEM bundle and check the path |
@@ -357,13 +431,20 @@ To go back to the previous release, see
 | API exits with `Cannot read ENS_CONSENT_BANNER_FILE ...` | The banner text file is missing or not readable by the API's user | Fix the path or permissions, or use `ENS_CONSENT_BANNER_TEXT` |
 | Container or pod not ready; `./portal.sh up` says the API is not ready | `/readyz` is `DOWN`: the directory doesn't answer, the audit store can't be written, or the data disk has under 10 MB free | Read the API log for the failing part. Free disk space in `DATA_DIR`, fix the audit directory's permissions, or fix the directory connection |
 | Login page shows **Directory unreachable** / `/api/info` has `connected:false` | LDAP server down, firewall, wrong URL, TLS failure, bad service account | Sign in as an administrator and read `error` from `/api/info`, or read the API log. Test with `ldapsearch` from the API host. Check `LDAP_BIND_DN` and the bind password (`LDAP_BIND_PASSWORD_FILE` or `LDAP_BIND_PASSWORD`) |
-| LDAPS fails with a certificate error | Private CA not in the JVM trust store, or host name mismatch | Add a trust store (see [LDAPS with a private CA](configuration.md#ldaps-with-a-private-ca); with Helm, `ldap.truststore`). Use `LDAP_TLS_REJECT_UNAUTHORIZED=false` only for testing |
+| LDAPS or StartTLS fails with `certificate_unknown` or `PKIX path building failed: ... unable to find valid certification path to requested target` | The directory's CA is not in the trust store the JVM uses, or the release is older than v0.0.10, which ignored the given trust store for directories | Upgrade to v0.0.10 or later, and give the JVM a trust store that holds the CA. See [LDAPS certificate errors](#ldaps-certificate-errors) |
+| LDAPS or StartTLS fails with `the trustAnchors parameter must be non-empty` | Java opened the trust store but found no trusted certificate in it: a PKCS12 store read without its password, or one built with `openssl pkcs12 -export -nokeys` | Give the password, or rebuild the store with `keytool -importcert`. See [LDAPS certificate errors](#ldaps-certificate-errors) |
+| LDAPS or StartTLS fails although the CA is trusted | The certificate doesn't name the host in `LDAP_URL` (the host name is checked too), or it has expired | Use the name the certificate was issued for in `LDAP_URL`, or have the certificate reissued. Use `LDAP_TLS_REJECT_UNAUTHORIZED=false` only for testing |
 | "Invalid username or password" for valid users | `LDAP_USER_FILTER`/`LDAP_USER_SEARCH_BASE` finds zero or more than one entry, or the login name contains disallowed characters | Check the audit log: `Unknown user` versus `Wrong password`. Test the filter with `ldapsearch` |
-| HTTP 429 "Too many failed login attempts" | `LOGIN_MAX_FAILURES` failures (8 by default) for the same client address and username within `LOGIN_LOCKOUT_WINDOW` (15 minutes) | Wait for the window to end, or, without a shared database, restart the API (the counters are in memory; with one they are in `dsp_login_failure`). Make sure `SERVER_FORWARD_HEADERS_STRATEGY` is set behind a proxy, so the API doesn't see every user as the proxy's address |
+| HTTP 429 "Too many failed login attempts" | `LOGIN_MAX_FAILURES` failures (8 by default) for the same client address and username within `LOGIN_LOCKOUT_WINDOW` (15 minutes) | Wait for the window to end, or, without a shared database, restart the API (the counters are in memory; with one they are in `dsp_login_failure`). Make sure `SERVER_FORWARD_HEADERS_STRATEGY` is set behind a proxy, and `WEB_TRUSTED_PROXIES` when another proxy is in front of the web tier, so the API doesn't see every user as the proxy's address |
+| The audit log shows the same source address for every user | A proxy in front of the web tier (an ingress controller, a load balancer, a TLS proxy) that is not in `WEB_TRUSTED_PROXIES` | Set `WEB_TRUSTED_PROXIES` (Helm `web.trustedProxies`) to the address it connects from. See [Configuration → Behind another proxy](configuration.md#behind-another-proxy) |
+| Web container exits with `dsp-entrypoint: WEB_TRUSTED_PROXIES must be IP addresses or CIDRs ...` or `WEB_TRUSTED_PROXIES: <value> is not an address or CIDR of a proxy` | A host name, or a catch-all such as `0.0.0.0/0`, in `WEB_TRUSTED_PROXIES` | List addresses or CIDRs only, separated by commas or spaces, and only those of proxies |
 | Signed in but immediately signed out, or a 401 loop over HTTP | `ENS_COOKIE_SECURE=true` while users reach the portal over plain HTTP | Use HTTPS, or set `ENS_COOKIE_SECURE=false` |
 | Users are signed out sooner than before | The idle timeout default is now `30m`; administrators may have a shorter `ENS_SESSION_ADMIN_IDLE_TIMEOUT`; `ENS_SESSION_ABSOLUTE_TIMEOUT` ends every session 12 hours after sign-in | Set the session values you want (see [Configuration](configuration.md#sessions-and-sign-in-lockout)). The audit log's `auth.session-expired` gives the reason |
+| A user is signed out in the middle of a session, or within minutes of a single sign-on or certificate sign-in; `auth.session-expired` with the reason `account-disabled` | From v0.0.9: the directory marks the account disabled or locked (`nsAccountLock: true`, Active Directory's ACCOUNTDISABLE flag, or `pwdAccountLockedTime`), for example after too many wrong passwords elsewhere | Enable or unlock the account in the directory |
 | 403 `consent_required` on sign-in | The consent banner is enabled and this browser session has not acknowledged it | Users click **I agree**. A script must `POST /api/auth/consent` first |
 | Entry changes fail with 503 | The audit store is not writable, or its disk has under 1 MB free | Free disk space in `DATA_DIR` (or `AUDIT_DIR`), and check the directory's permissions |
+| Saving an entry answers *The other changes were saved, but the entry was not renamed: ... The entry is now `<dn>`.* (`"code": "partially_saved"`) | From v0.0.9: the directory refused the rename (a changed naming value) after the entry's other changes were made | The other changes are saved and audited (`entry.update` with `details.partial`). Fix what the directory objects to (for example a name already taken) and change the naming value again |
+| Creating or saving an entry answers 400 *... (it would not match the directory's filter `<filter>`)* | From v0.0.9: with these values the entry would fall outside the definition's filter, where nobody could read it through the definition | Correct the value the filter tests, or widen the definition's filter (*Admin → Directory definitions*) |
 | 403 `Missing request verification header` | A client or proxy strips the `X-DSP-Request` header, or a script calls the API without it | Send `X-DSP-Request: 1` on POST/PUT/DELETE |
 | 502 Bad Gateway from the web tier | API not running, or nginx can't resolve `API_URL` | `./portal.sh logs api`. Check `NGINX_LOCAL_RESOLVERS`; in Kubernetes, use a fully qualified `API_URL` |
 | Web container exits with `no nameserver in /etc/resolv.conf; set NGINX_LOCAL_RESOLVERS` | Unusual DNS setup | Set `NGINX_LOCAL_RESOLVERS` |
@@ -376,7 +457,60 @@ To go back to the previous release, see
 | Schema import fails with 413 | Body over nginx `client_max_body_size 5m` | Split the import, or raise the limit in your proxy |
 | A chart or analysis is marked partial (truncated) | Directory larger than `METRICS_MAX_ENTRIES` | Narrow with a filter, or raise the limit (watch heap) |
 | HTTP 429 "You already have N computations running" | `JOBS_MAX_ACTIVE_PER_USER` reached | Wait or cancel tasks from the bell menu, or raise the limit |
+| A background task failed with *The server running it stopped before it finished* | The API instance running it was restarted or stopped (an upgrade, a crash, a pod eviction) | Run it again. From v0.0.9, with the shared database, such tasks are marked failed about 30 seconds after the instance stops and no longer count against `JOBS_MAX_ACTIVE_PER_USER` |
+| A metrics page shows old numbers | From v0.0.11 the home page, the overviews and the dashboards keep their results until the user refreshes them; the time they were computed is shown with them | **Refresh** on the page (**Refresh counts** on the metrics home page) |
+| A member is still in a group after their end date | The membership expiry job runs hourly and removes a member within the hour after their last day (UTC). It pauses unless the license is in full effect, and a member the directory won't let go (the last member of a group that requires one) is tried again only a day later | Check the license mode. Search the audit log for a failed `group.membership-expired` and the API log for `Could not remove ...`; remove the member by hand, or add another member first |
+| Group access requests don't expire | **Requests expire after (days)** is empty on the definition (the default), or the license is not in full effect | Set it under *Admin → Directory definitions → Group access*; check the license |
+| Webhook receivers got nothing for changes made while `WEBHOOKS_ENABLED=false` | From v0.0.9 changes made while sending is off are not queued | Expected. Have the receiver read the entries again, for example through the [integration API](api-reference.md#integration-api-apiv1) |
+| `./portal.sh restore` stops with `<file> is not a complete backup (gzip-compressed tar); nothing was changed` | The archive is truncated or not a backup. Nothing was stopped or deleted | Use another backup |
+| The license upload is refused with `"state": "NOT_IN_EFFECT"` | From v0.0.9: the uploaded license is not yet valid, or already expired, while the installed one is in full effect, which therefore stays in force | Upload it once its start date has come |
+| The license message ends *(This server's clock is behind a time this installation has already seen, so the license is checked as of `<date>`.)* | From v0.0.9: the host's clock was set back more than a day | Correct the clock |
 | Demo OpenLDAP is missing entries you expected | The demo LDIF is loaded only into an empty database | `./portal.sh down`, `docker volume rm directory-services-portal_ldap-data`, then `./portal.sh up` (destroys the demo directory's data) |
 | Users lose sessions after a deploy | Without a shared database, sessions are in memory | Expected. Schedule restarts outside working hours, or give the API a shared database (`DSP_DATABASE_URL`), which keeps sessions across restarts |
 | No `/actuator/prometheus` | `MANAGEMENT_SERVER_PORT` is not set, or you are asking the main port | Set it, and scrape that port |
 | SELinux denies nginx → API (native) | `httpd_can_network_connect` is off | `setsebool -P httpd_can_network_connect 1` |
+
+### LDAPS certificate errors
+
+The error is in the API log, on *Admin → LDAP directories* (**Unreachable**, with the error), and
+for administrators in `error` of `/api/info`. The directory server's own log usually shows the
+same failed handshake as the TLS alert `certificate_unknown`.
+
+| Error | Meaning | Fix |
+|---|---|---|
+| `certificate_unknown`, or `PKIX path building failed: ... unable to find valid certification path to requested target` | The API does not trust the CA that issued the directory server's certificate | Up to v0.0.9 the API ignored the trust store given to the JVM for directories and trusted the JDK's own `cacerts` only: upgrade to v0.0.10 or later. From v0.0.10: the CA is not in the trust store, or the JVM is not using the store you think (below) |
+| `the trustAnchors parameter must be non-empty` | Java opened the trust store and found **no trusted certificate** in it | The store was read without its password (a PKCS12 file then opens, but empty): set `-Djavax.net.ssl.trustStorePassword`, or with Helm `ldap.truststore.password`. Or the store was built with `openssl pkcs12 -export -nokeys`, which Java does not read as trusted certificates: rebuild it with `keytool -importcert` |
+| `keystore password was incorrect` | The password given is not the store's | A wrong password is a different error from a missing one. Give the store's password |
+
+Check the trust store, with its password:
+
+```bash
+keytool -list -keystore truststore.p12 -storepass '<store-password>'
+```
+
+Every CA must appear as a `trustedCertEntry`. `Your keystore contains 0 entries` means the file
+holds no trusted certificate (or `-storepass` was left out); rebuild it:
+
+```bash
+keytool -importcert -noprompt -alias corp-ca -file corp-ca.pem \
+  -keystore truststore.p12 -storetype PKCS12 -storepass '<store-password>'
+```
+
+Then check what the JVM is given:
+
+- **Docker and native packages**: `JAVA_TOOL_OPTIONS` in `.env` or `portal.env` with both
+  `-Djavax.net.ssl.trustStore=<path>` and `-Djavax.net.ssl.trustStorePassword=<password>`; the API
+  log's `Picked up JAVA_TOOL_OPTIONS: ...` line shows what the JVM got. In the Docker package the
+  path is the one inside the API container (`/data/...`). The file must be readable by the API's
+  user (uid 185 in the container, `dsp` in the native package).
+- **Helm**: `ldap.truststore.existingSecret`, `.key` (the file's key in the Secret, default
+  `truststore.p12`), `.type` (`PKCS12`) and `ldap.truststore.password`. See
+  [Installation → Secrets](install.md#secrets).
+- **A path that doesn't exist is not an error for Java.** It then falls back to the JDK's own
+  `cacerts` without saying so, and the private CA is not trusted: check the path when the first
+  error persists.
+- One trust store serves every directory, and it replaces the JDK's `cacerts`: it must hold the
+  CA of each directory, and of every other TLS server the API calls (Splunk HEC, the identity
+  provider, webhook receivers).
+
+See [Configuration → LDAPS with a private CA](configuration.md#ldaps-with-a-private-ca).
