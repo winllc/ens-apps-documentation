@@ -12,7 +12,9 @@ the console is down.
 
 - **People** come from one view of one engine. The console keeps a copy of a few
   attributes of each person (the *projection*), refreshed every 15 minutes by default.
-- A **system** is a publication of an engine: the target whose access is governed.
+- A **system** is a publication of an engine: the target whose access is governed. A
+  **manual system** is one syncd does not write to: its accounts come from CSV imports and
+  people make its changes, through tasks or tickets.
 - An **entitlement** is something a person can hold in a system: a group membership,
   an attribute value, or a *scope* (a key the publication's filter can test).
 - An **assignment** is the decision that a person holds an entitlement, from a date to a
@@ -33,6 +35,7 @@ the console is down.
 | The Directory Services Portal: its group requests decided here (governed mode), and its owners' changes reported here | `governance:delegate` tokens; `POST /api/v1/governance/ingest/dsp` |
 | Policies: separation of duties and rules over the person, a scan, violations, remediation and exceptions, and the check when access is asked for | Console: Policies, Violations, My policy violations |
 | Lifecycle: rules for joiners, movers and leavers; emergency termination and reinstatement | Console: Lifecycle; Terminate on a person's card; the engine's reserved `terminated` scope |
+| Manual systems: CSV imports, fulfilment tasks for the system's owner, tickets in ServiceNow, Jira or a webhook receiver | Console: Governance (Import CSV), Fulfilment, My tasks |
 | The Governance pack | Licensing |
 
 ## Setting a publication up for grants
@@ -319,6 +322,71 @@ container, with an end date and a sponsor who is told before the end and can ext
 reads the container as a source and ends their accounts on the date with `effective_until`.
 `examples/contractors-from-ldap.yaml` in syncd shows the configuration.
 
+## Manual systems and tickets
+
+Some systems syncd does not write to: an application without an API, a mainframe, a SaaS
+product an administrator changes by hand. Add one as a **manual system** (Governance → Add a
+system → Manual), with an owner and, optionally, a ticket system.
+
+### Importing accounts
+
+**Import CSV** on the system reads a file with a header row and one row per account (or per
+account and entitlement):
+
+| Column | |
+|---|---|
+| `account` | The account's name in the system: required |
+| `login` | The person's login, to link the account (never over a link made by hand) |
+| `state` | `enabled`, `disabled`, `locked` or empty |
+| `entitlement` | What the account holds; several split by `;` |
+| anything else | An attribute of the account, which correlation rules can match |
+
+```csv
+account,login,state,entitlement,department
+jdoe,jdoe,enabled,Payroll Admin;Viewer,Finance
+svc-batch,,disabled,Batch,
+```
+
+An import is an inventory run: what is in the file is upserted, and accounts, entitlements
+and holdings that are not are marked gone, unless the file has far fewer accounts than are
+known (more than the system's limit, 10 % by default, would go), in which case nothing is
+swept and the run is `suspect`. Files up to 64 MiB and 200,000 rows; the API takes the file
+as a `text/csv` body, so a script or a scheduled job can send it.
+
+### Tasks
+
+Access granted on a manual system (by an administrator, an approved request, or a policy's
+remediation) is a **task** for the system's owner, or for the governance administrators when
+it has none: "Give Payroll Admin to jdoe in Payroll". Access ended is a task to remove it;
+ending access whose task to give it is still open cancels that task. The owner sees their
+tasks on **My tasks** and marks each done, with a note; the assignment becomes active and
+the request completes. The next import that finds the change made also completes the task.
+**Fulfilment** lists every task.
+
+### Ticket systems
+
+With a **ticket system** on the system (Fulfilment → Add a ticket system), each task is also
+opened as a ticket within a minute:
+
+| Kind | Settings | Done when |
+|---|---|---|
+| ServiceNow | The instance URL, the table (`sc_task`), the states that mean done (3, 6, 7), a user and password or an OAuth token | The ticket's state is one of them |
+| Jira | The site URL, the project key, the issue type (Task), an account email and API token (Cloud) or a personal access token (Data Center) | The status category is Done |
+| Webhook | The receiver's URL and a signing secret | The receiver completes the task through the API |
+
+ServiceNow and Jira tickets are read back every ten minutes; a ticket done completes its task
+and the request. A webhook receiver gets a `POST` signed as [webhooks](webhooks.md) are
+(`X-Syncd-Signature`), with `type: governance.fulfilment-task` and the task; it may answer
+`{"id", "url"}` to show its ticket on the task. Ticket systems are held to the same address
+rules as webhooks (`https://` only, no private addresses unless allowed). Credentials are
+encrypted with the console's master key and never shown again. A ticket that cannot be
+opened keeps its error on the task and is tried again ten minutes later.
+
+The ServiceNow and Jira adapters follow those products' documented APIs and are tested
+against stand-ins; try them against your instance before relying on them, and add any field
+your instance requires (an assignment group, a component) under the adapter's `fields`
+mapping.
+
 ## API
 
 | Method and path | Who | What |
@@ -359,6 +427,10 @@ reads the container as a source and ends their accounts on the date with `effect
 | `GET /api/v1/my/violations`; `POST .../{vid}/remediate`, `/exception` | the policy's owner | Their policies' violations |
 | `GET`, `POST /api/v1/governance/lifecycle-rules`; `PUT`, `DELETE .../{lid}`; `GET /api/v1/governance/lifecycle-runs` | readers; writers | Lifecycle rules and what they did |
 | `POST /api/v1/governance/identities/{gid}/terminate`, `/reinstate` | writers | Emergency termination, with a reason |
+| `POST /api/v1/governance/systems/{sid}/import` | writers | A manual system's CSV (`text/csv`) |
+| `GET`, `POST /api/v1/governance/ticket-adapters`; `PUT`, `DELETE .../{aid}` | readers; writers | Ticket systems |
+| `GET /api/v1/governance/fulfilment-tasks`; `POST .../{tid}/complete` | readers; writers | Tasks of manual systems (`state`, `system_id`) |
+| `GET /api/v1/my/tasks`; `POST .../{tid}/complete` | the system's owner | Their tasks |
 | `GET /api/v1/my/identity`, `/my/access` | every signed-in role | The signed-in person, and what they hold |
 
 Writes need the Governance pack. Reads never do: what was recorded stays visible after
@@ -384,6 +456,10 @@ a license lapses.
 | `governance.lifecycle.updated` | configuration |
 | `governance.lifecycle.triggered`, `governance.identity.reinstated` | authorization |
 | `governance.identity.terminated` (severity alert) | authorization |
+| `governance.ticket_adapter.saved` | configuration |
+| `governance.system.imported` | data |
+| `governance.fulfilment.completed` | authorization |
+| `governance.fulfilment.ticket_opened` | system |
 | `governance.projection.halted`, `governance.inventory.completed`, `governance.inventory.suspect` | system |
 
 ## What the console stores about people
@@ -420,5 +496,9 @@ each change the projection saw, the attributes' old and new values.
 - Lifecycle: integration tests (leaver, mover review and its grace period, joiner mail,
   termination and reinstatement), engine tests of the `terminated` scope, and a termination
   case in the engine's end-to-end script against OpenLDAP.
+- Manual systems: integration tests (an import fills a system, links by login, sweeps or
+  stops as an inventory does, and finds tasks done; owners' tasks; tickets opened, read back
+  and closed against stand-ins for ServiceNow, Jira and a webhook receiver). Not yet run
+  against real ServiceNow or Jira instances.
 - Not built yet: holding grants in change windows and thresholds, correlation rules in
-  the API, and roles.
+  the API, SQL and REST targets, and roles.
