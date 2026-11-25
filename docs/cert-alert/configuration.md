@@ -36,7 +36,7 @@ The release package and the chart set `SPRING_PROFILES_ACTIVE=postgres` for you.
 | `spring.datasource.username` | `CERT_ALERT_DB_USER` *(postgres)* | `sa`; postgres: `certalert` | Database user |
 | `spring.datasource.password` | `CERT_ALERT_DB_PASSWORD` *(postgres)* | empty | Database password |
 | `spring.datasource.driver-class-name` | | `org.h2.Driver`; postgres: `org.postgresql.Driver` | JDBC driver |
-| `spring.datasource.hikari.maximum-pool-size` | `CERT_ALERT_DB_POOL_SIZE` *(postgres)* | `10` | Connection pool size |
+| `spring.datasource.hikari.maximum-pool-size` | `CERT_ALERT_DB_POOL_SIZE` *(postgres)* | `10` | Connection pool size. Web requests, the scheduled jobs and the changelog polls share it; see [Scheduler threads](#scheduler-threads) |
 | `spring.flyway.enabled` | | `true` | Flyway migrates the schema on startup (`classpath:db/migration`) |
 | `spring.jpa.hibernate.ddl-auto` | | `validate` | Hibernate only checks the mapping against the schema |
 | `spring.jpa.properties.hibernate.jdbc.batch_size` | | `50` | JDBC batch size for sync writes |
@@ -72,7 +72,7 @@ to plain text without saying so.
 | `page-size` | | `500` | Entries per LDAP page |
 | `paged` | | `true` | Use the paged-results control. Turn off only for servers without it |
 | `batch-size` | | `200` | Entries written per database transaction |
-| `count-limit` | | `0` | Client-side cap on entries per search; `0` = none |
+| `count-limit` | | `0` | Client-side cap on entries per search; `0` = none. With `0`, a search the directory cuts short at its own size limit **fails the sweep** (from 0.0.4) instead of ending early as if it had read everything. Above `0`, stopping at the limit is expected and is not an error |
 | `search-timeout` | | `10m` | Per-search time limit |
 | `binary-certificate-option` | `CERT_ALERT_LDAP_BINARY_CERTIFICATE_OPTION` | `true` | Request `userCertificate;binary` (RFC 4522). Set `false` for virtual directories (e.g. Radiant Logic FID 7.4) that return nothing for the qualified name |
 
@@ -157,6 +157,16 @@ to plain text without saying so.
 
 All schedules are UTC. See [Operator guide → Scheduled jobs](operator-guide.md#scheduled-jobs).
 
+### Scheduler threads
+
+| Property | Env var | Helm | Default | Description |
+|---|---|---|---|---|
+| `spring.task.scheduling.pool.size` | `CERT_ALERT_SCHEDULER_THREADS` | `schedulerThreads` | `8` | The threads the scheduled jobs share on each replica: the sweeps, refresh, revocation, round-up, prune and clean-ups, and the mail and webhook outboxes, the audit flush and the session sweep. From 0.0.4; earlier releases ran them all on one thread, so a long sweep held up the rest |
+
+Each job that is running can hold a database connection, so raising the threads may need a larger
+`CERT_ALERT_DB_POOL_SIZE` (Helm `database.poolSize`) too. A run started by hand reports that it is
+still going from a thread of its own, outside this pool.
+
 ### Sweeps (`cert-alert.ldap.sync`)
 
 | Property | Default | Description |
@@ -173,6 +183,19 @@ All schedules are UTC. See [Operator guide → Scheduled jobs](operator-guide.md
 | `enabled` | `false` | Whether the scheduled prune deletes stale entries |
 | `cron` | `0 0 6 * * SUN` | Prune schedule |
 | `after` | `30d` | How long an entry may go unseen by sweeps before deletion. Keep well beyond the sweep interval |
+| `max-share` | `0.10` | The largest share of one kind of entry (people, or servers) one prune may delete. A prune that would delete more leaves that kind in place. From 0.0.4 |
+
+From 0.0.4 a prune, scheduled or started by hand, deletes the unseen entries of a kind only when
+both of these hold; otherwise it leaves that kind in place, logs a warning that says why, and the
+run is recorded as `COMPLETED_WITH_ERRORS`:
+
+- a sweep of that kind (`USERS` or `SERVERS`) has finished as `COMPLETED`, with no errors, since
+  the newest of those entries was last seen, so every entry deleted was missing from a whole, clean
+  sweep;
+- the entries are no more than `max-share` of that kind.
+
+`max-share` has no named environment variable or Helm value: set
+`CERT_ALERT_LDAP_PRUNE_MAX_SHARE` in `.env` or `extraEnv`, like the other prune settings.
 
 ### Certificate clean-up (`cert-alert.ldap.certificate-cleanup`)
 
@@ -185,8 +208,8 @@ The only job that **writes to the directory**: it deletes finished certificates 
 | `remove-expired` | `true` | Delete certificates expired for longer than `expired-after` |
 | `expired-after` | `90d` | Grace period after expiry |
 | `remove-revoked` | `true` | Delete revoked certificates |
-| `revoked-after` | `7d` | Grace period after a revocation is found |
-| `max-per-run` | `500` | Cap on removals per run; revoked certificates go first |
+| `revoked-after` | `7d` | Grace period after a revocation is first found. From 0.0.4 it is counted from the check that first found the certificate revoked, not from the latest nightly check, so a revoked certificate that is still current becomes old enough to remove |
+| `max-per-run` | `500` | Cap on removals per run; revoked certificates go first. From 0.0.4 a certificate a run could not remove (the entry gone from the directory, the modify refused) waits behind everything not yet tried, so such certificates cannot use up every run |
 
 ### Changelog connector (`cert-alert.ldap.changelog`)
 
@@ -215,7 +238,7 @@ The only job that **writes to the directory**: it deletes finished certificates 
 | Property | Default | Description |
 |---|---|---|
 | `warning-threshold-days` | `30` | Inside this window a certificate is `EXPIRING_SOON` |
-| `critical-threshold-days` | `7` | Inside this window alert severity becomes `CRITICAL` |
+| `critical-threshold-days` | `7` | Inside this window alert severity becomes `CRITICAL`. From 0.0.4 a certificate alerted on as a `WARNING` when it came into the warning window is alerted on once more, as `CRITICAL`, when the hourly refresh finds it inside this window (unless it has been renewed) |
 
 ## Credentials and risk
 
@@ -235,13 +258,29 @@ The only job that **writes to the directory**: it deletes finished certificates 
 | `default-ocsp-url` | `CERT_ALERT_DEFAULT_OCSP_URL` | unset | Responder for certificates that name none. The certificate's own always wins |
 | `default-crl-url` | `CERT_ALERT_DEFAULT_CRL_URL` | unset | Distribution point for certificates that name none. Prefer this over the OCSP fallback |
 | `workers` | | `8` | Concurrent OCSP requests (`1` = one at a time) |
-| `allow-unverified-crl` | | `true` | Believe a CRL whose signature could not be checked. `false` makes those results *Unknown* |
-| `crl-cache-ttl` | | `6h` | Ceiling on how long a fetched CRL is reused (also bounded by its `nextUpdate`) |
+| `allow-unverified-crl` | | `true` | Believe a CRL whose signature could not be checked because no issuer certificate is configured. `false` makes those results *Unknown*. Such a list must still name the certificate's issuer as its own, and a list whose signature fails against a configured issuer certificate is *Unknown* whatever this says (see below) |
+| `crl-cache-ttl` | | `6h` | Ceiling on how long a fetched CRL is reused (also bounded by its `nextUpdate`); it is fetched again after that |
 | `max-crl-bytes` | | `16777216` | Larger CRLs are refused |
 | `connect-timeout` | | `10s` | Connecting to a distribution point or responder |
 | `read-timeout` | | `30s` | Each wait for one to answer |
 | `max-fetch-time` | | `60s` | The whole of one download, redirects included |
 | `allowed-hosts` | `CERT_ALERT_REVOCATION_ALLOWED_HOSTS` | empty | When set, the only hosts CRLs and OCSP answers are fetched from, comma-separated: host names, `*.example.gov` (the domain and everything under it), or IP addresses and CIDR ranges such as `10.20.0.0/16` |
+
+**When a CRL does not count (from 0.0.4).** A certificate that a list does not name is *Not
+revoked* only if the list is the issuer's and still current. Otherwise the result is *Unknown*:
+
+- the list is past its `nextUpdate` (a certificate the list does name is still *Revoked*);
+- an issuer certificate is configured (`issuer-directory`) and the list's signature does not
+  verify against it, whatever `allow-unverified-crl` says;
+- no issuer certificate is configured and the list names another authority as its issuer, which
+  is how a `default-crl-url` that belongs to a different CA is caught.
+
+A distribution point that does not answer, or serves a list already past its `nextUpdate`, is left
+alone for two minutes rather than asked again for every certificate that names it. A check that
+needs a list another check is already downloading waits for that download no longer than a fetch
+of its own would take. A check that gets no answer never clears a revocation already found: the
+certificate stays *Revoked*, with its date and reason, and its detail says the last check got no
+answer.
 
 **What a certificate can make CertAlert fetch.** Distribution points and responder addresses come
 out of certificates, so every fetch is limited:
@@ -279,12 +318,12 @@ Per-person notifications and the daily expiry round-up email.
 | `digest.enabled` | | `true` | Whether the scheduled round-up runs |
 | `digest.cron` | | `0 0 7 * * *` | Round-up schedule |
 | `digest.window` | | `30d` | Initial lead time. **Overridden** once an administrator sets it on the Notifications page (stored in `notification_setting`); clamped to 1–365 days |
-| `digest.include-expired` | | `true` | Include already-expired certificates in the round-up. They are read separately from the ones about to expire, so they cannot crowd those out. An expired certificate on an entry that holds a current one is left out |
+| `digest.include-expired` | | `true` | Include already-expired certificates in the round-up. They are read separately from the ones about to expire, so they cannot crowd those out. A server's expired certificate is left out while the server holds a current one. A person's is left out only once it has been replaced (a newer certificate with the same subject and use): from 0.0.4, the half of a signing and encryption pair that lapsed and was not renewed stays in the round-up although the other half is current |
 | `digest.scan-limit` | | `10000` | The most certificates one run reads of each kind: those about to expire (read first) and, with `include-expired`, expired ones still relied on. A run that reaches it logs a `WARN` naming which read it was, and leaves earlier round-ups in place rather than clearing them |
 | `email.enabled` | | `false` | Send the round-up by email. Requires `spring.mail.*` |
 | `email.from` | | `cert-alert@localhost` | Sender address |
 | `email.subject-prefix` | | `"[cert-alert] "` | Subject prefix |
-| `email.max-per-run` | | `500` | Cap on messages per run |
+| `email.max-per-run` | | `500` | Cap on messages per run. From 0.0.4, where it binds, the soonest expiries are mailed first and the longest-expired wait; the run's result says how many messages were held back (`notMailed`) and a `WARN` is logged on every such run. Everybody is still told on the Notifications page |
 | `email.dry-run` | `CERT_ALERT_EMAIL_DRY_RUN` | `false` | Build every message and send none; write no notifications |
 | `email.template-directory` | `CERT_ALERT_NOTIFICATIONS_EMAIL_TEMPLATE_DIRECTORY` | **absent** | Directory of override templates (`<dir>/email/expiring-user.html` etc.). Must be absent, not empty, to be off |
 | `retention.enabled` | | `false` | Delete *read* notifications older than `retention.after` (runs after each round-up) |
@@ -427,13 +466,19 @@ A newer round-up to the same address replaces one still waiting, so a mail serve
 after a weekend delivers the latest round-up rather than three. A notification is marked emailed
 when its message is actually sent, not when it is queued.
 
+From 0.0.4 a round-up sends **one message per address**: where several entries publish the same
+address (a person's second account, or a person and a contact added by address), their
+certificates go out in one message, each credential once. A round-up's own delivery, like a
+background pass, stops after three failures in a row and leaves the rest queued for the next pass
+instead of waiting out every message's timeout.
+
 ## Security (`cert-alert.security`)
 
 See [Security](security.md) for how these interact.
 
 | Property | Default | Description |
 |---|---|---|
-| `enabled` | `true` | `false` removes the application's security configuration. Local development only: from the next release the application refuses to start with `false` unless the `dev` profile is active |
+| `enabled` | `true` | `false` removes the application's security configuration. Local development only: from 0.0.3 the application refuses to start with `false` unless the `dev` profile is active |
 | `admin-identifiers` | `[]` | Values granting `ROLE_ADMIN`, matched against a person's `uid` and entry DN only. An e-mail address is ignored, with a startup warning naming the uid to use, and `cn`, `displayName` and `preferredName` never match. A DN contains commas: name it as a YAML list item, or as `CERT_ALERT_SECURITY_ADMIN_IDENTIFIERS_0`, `_1`, … with `CERT_ALERT_SECURITY_ADMIN_IDENTIFIERS` itself unset |
 | `contact-editors` | `ADMIN` | `ADMIN` or `AUTHENTICATED`. Who may edit a person's added addresses and create/edit projects; also lets anyone signed in manage any server's contacts when `AUTHENTICATED` |
 | `x509.enabled` | `true` | Accept client certificates |
@@ -446,7 +491,7 @@ See [Security](security.md) for how these interact.
 | `groups.admin`, `groups.auditor` | `[]` | Directory group DNs whose members get `ROLE_ADMIN` or `ROLE_AUDITOR` (`CERT_ALERT_SECURITY_GROUPS_ADMIN_0`, ...) |
 | `groups.directory` | `true` | Read the person's groups (`memberOf`) from the directory at sign-in |
 | `groups.member-of-attribute` | `memberOf` | The attribute listing a person's groups |
-| `groups.cache-for` | `5m` | How long a certificate sign-in's groups are remembered |
+| `groups.cache-for` | `5m` | How long a certificate sign-in's groups are remembered. From 0.0.4 a read of `memberOf` that fails is remembered for 10 seconds only: that request gets no role from a group, and the roles are back soon after the directory is |
 
 See [Single sign-on and roles](single-sign-on.md#roles) for how the roles combine.
 
@@ -477,18 +522,18 @@ See [Exports, saved views and scheduled reports](exports-and-reports.md).
 | `requests-per-minute` | `300` | Per token, per replica; `0` turns the limit off |
 | `max-lifetime` | `365d` | The longest a token lives; `0` removes the limit |
 | `use-audit-interval` | `1h` | A token's reads are audited once per interval |
-| `max-page-size` | `500` | The largest page a list returns |
-| `creator-roles-cache-for` | `1m` | How long a token creator's live directory check is reused |
+| `max-page-size` | `500` | The largest page a list returns. From 0.0.4 it also caps a page of the People, Servers and audit tables (`/api/v1/datatables/*`) |
+| `creator-roles-cache-for` | `1m` | How long a token creator's live directory check is reused. A refusal is never reused; from 0.0.4 a directory that cannot be read is asked again after 10 seconds rather than on every request |
 
 `cert-alert.ldap.lockout.assumed-duration` (unset) is the lockout length to assume where the
 directory does not say; see [API reference → API tokens](api-reference.md#api-tokens).
 
 ## Webhooks (`cert-alert.webhooks`)
 
-`enabled` (`true`), `allowed-hosts` (empty), `block-private-networks` (`false`; unset from the
-next release, which refuses private addresses for webhooks saved from then on) and `secret-key`
-(unset; set it before creating webhooks; generated on new installs from the next release), plus
-timeouts, retry and retention settings. All of them are in [Webhooks → Settings](webhooks.md#settings)
+`enabled` (`true`), `allowed-hosts` (empty), `block-private-networks` (unset from 0.0.3, which
+refuses private addresses for webhooks saved from then on; `false` before) and `secret-key`
+(unset; set it before creating webhooks; generated on new installs from 0.0.3), the egress proxy
+(`proxy.*`, from 0.0.3), plus timeouts, retry and retention settings. All of them are in [Webhooks → Settings](webhooks.md#settings)
 and [Webhooks → Private networks](webhooks.md#private-networks).
 
 ## Client certificates (`ens.x509`)
@@ -503,13 +548,13 @@ in with certificates. They add to `cert-alert.security.x509` above. See
 | `ENS_X509_OCSP_RESPONDER_URL` | none | `x509.ocspResponderUrl` | Ask this responder instead of the one the certificate names, for example a local OCSP relay |
 | `ENS_X509_CRL_DIR` | none | (`extraEnv`, with `extraVolumes`) | A directory of CRL files (DER or PEM), re-read when they change. With it set, no distribution point is fetched: the air-gapped option |
 | `ENS_X509_REVOCATION_FAIL` | `open` while `ENS_X509_REVOCATION` is unset, otherwise `closed` | `x509.revocationFail` | `closed` refuses a certificate whose status cannot be found; `open` allows it, with a warning (and a startup warning when set explicitly) |
-| `ENS_X509_REVOCATION_CACHE` | `10m` | `x509.revocationCache` | How long a good or revoked answer is reused, per issuer and serial number. No answer is reused for 30 seconds |
+| `ENS_X509_REVOCATION_CACHE` | `10m` | `x509.revocationCache` | How long a good or revoked answer is reused, per issuer and serial number. No answer is reused for 30 seconds; from 0.0.4 that doubles while the certificate stays unanswered, up to 2 minutes, and requests for a certificate that is being checked wait for that check instead of asking again |
 | `ENS_X509_ALLOWED_ISSUERS` | none: any issuer the trust store accepts | `x509.allowedIssuers` | Issuer DNs separated by `;`. A certificate from any other issuer is refused. Compared as names, so spacing and case don't matter |
 | `ENS_X509_USER_FILTER` | none | `x509.userFilter` | An LDAP filter that finds the holder of a certificate the directory does not publish, with `{upn}`, `{edipi}`, `{email}` and `{uuid}` filled in, for example `(uid={edipi})`. Used only with `cert-alert.security.x509.require-known-certificate: false`, instead of the uid and address matching |
 | `ENS_X509_SOURCE` | `servlet` | `x509.source` | `servlet`: the certificate comes from the TLS handshake CertAlert terminates. `header`: a proxy terminates TLS and forwards it |
 | `ENS_X509_HEADER` | `X-SSL-Client-Cert` | `x509.header` | Header mode: the header holding the certificate, URL-encoded PEM as nginx's `$ssl_client_escaped_cert` sends it (ingress-nginx: `ssl-client-cert`) |
-| `ENS_X509_TRUSTED_PROXIES` | `127.0.0.1/32,::1/128` | `x509.trustedProxies` (`10.0.0.0/8,172.16.0.0/12,192.168.0.0/16`) | Header mode: the addresses (CIDRs) the header is accepted from, separated by `,`, `;` or spaces. IPv4 ranges never match IPv6 addresses |
-| `ENS_X509_PROXY_SECRET_FILE` / `ENS_X509_PROXY_SECRET` | none | `x509.proxySecret.*` | Header mode: the secret, at least 32 characters, that the proxy sends in `X-ENS-Proxy-Secret`. The file wins |
+| `ENS_X509_TRUSTED_PROXIES` | `127.0.0.1/32,::1/128` | `x509.trustedProxies` (`""`: not set, so loopback; every private range before 0.0.4) | The addresses (CIDRs) of the proxy in front, separated by `,`, `;` or spaces. Header mode: the only addresses the certificate header is accepted from. From 0.0.4, in any source mode with `SERVER_FORWARD_HEADERS_STRATEGY=framework`: the proxies whose `X-Forwarded-For` hops are followed to find the client's address (see [The client's address behind a proxy](#the-clients-address-behind-a-proxy)). List only the proxy, never a whole private range. IPv4 ranges never match IPv6 addresses |
+| `ENS_X509_PROXY_SECRET_FILE` / `ENS_X509_PROXY_SECRET` | none | `x509.proxySecret.*` | Header mode: the secret, at least 32 characters, that the proxy sends in `X-ENS-Proxy-Secret`. The file wins, and from 0.0.4 is read again when its modification time or size changes |
 | `ENS_X509_TRUSTED_CA_FILE` | none | `x509.trustedCa.*` | PEM certificates of the CAs a forwarded certificate must chain to. Also searched for an issuer when checking revocation |
 
 | Placeholder | Value |
@@ -526,7 +571,30 @@ not synced signs nobody in.
 **CertAlert refuses to start in header mode** without a proxy secret of 32 characters or more,
 without `ENS_X509_TRUSTED_CA_FILE`, or with `SERVER_FORWARD_HEADERS_STRATEGY=native` (use
 `framework`). The Helm chart refuses to render header mode without `x509.proxySecret` and
-`x509.trustedCa`.
+`x509.trustedCa` and, from 0.0.4, without `x509.trustedProxies`.
+
+### The client's address behind a proxy
+
+With `SERVER_FORWARD_HEADERS_STRATEGY=framework`, the client's address (in the audit trail, an API
+token's last-used address and the per-address limits) is worked out from `X-Forwarded-For` and
+`ENS_X509_TRUSTED_PROXIES`. From 0.0.4 it is the **rightmost hop that is not a trusted proxy**:
+starting from the connection's own address, the header is followed leftwards only while the
+address in hand is in `ENS_X509_TRUSTED_PROXIES`. A connection from any other address is the
+client, whatever the header says. Earlier releases took the leftmost value, which a client can
+write.
+
+| Deployment | Set `ENS_X509_TRUSTED_PROXIES` to | Until you do |
+|---|---|---|
+| Release package behind a proxy on the host, or a proxy container on the compose network | The compose network's subnet only, for example `172.18.0.0/16`. Find it with `docker network inspect cert-alert_default --format '{{(index .IPAM.Config 0).Subnet}}'` | The audit trail records the proxy's address (the Docker network's gateway) for every request |
+| Helm behind an ingress or an edge or reencrypt Route | `x509.trustedProxies`: the ingress controller's or router's pod network, for example `10.42.0.0/16` | The audit trail records the controller's address; the chart's NOTES say so after each install or upgrade |
+| No proxy, or TLS passed through to CertAlert | Leave it unset | |
+
+!!! warning "List the proxy and nothing wider"
+    A client whose own address is inside a trusted range is passed over for the hop to its left,
+    which it wrote itself. That is why the Helm chart no longer trusts every private range by
+    default, and why the release package's `env.template` suggests the Docker network's subnet
+    rather than `172.16.0.0/12`. For the client's address, an entry that is not an address or a
+    CIDR range is ignored, with a warning at startup.
 
 ## TLS (`server.ssl`)
 
@@ -543,8 +611,8 @@ without `ENS_X509_TRUSTED_CA_FILE`, or with `SERVER_FORWARD_HEADERS_STRATEGY=nat
 | `server.ssl.trust-store-password` | `CERT_ALERT_TRUSTSTORE_PASSWORD` | empty | |
 | `server.ssl.trust-store-type` | `CERT_ALERT_TRUSTSTORE_TYPE` | `PKCS12` | |
 | (release package) | `CERT_ALERT_BIND_ADDRESS`, `CERT_ALERT_PORT` | `0.0.0.0`, `8080` | The host interface and port the UI is published on. `127.0.0.1` keeps it to the host, behind a reverse proxy of your own. With TLS off and every interface published, `install.sh` and `upgrade.sh` warn that passwords and cookies would cross the network in clear text |
-| (release package, next release) | `CERT_ALERT_ALLOW_PLAIN_HTTP` | `false` in a new `.env`; absent in an upgraded one | With TLS off on an address other than `127.0.0.1`, `install.sh` refuses to start CertAlert unless this is `true` (and warns every run when it is). An `.env` that does not mention it (written before the next release) is only warned about. See [Install → Choose where it listens](install.md#4-choose-where-it-listens) |
-| `server.forward-headers-strategy` | `SERVER_FORWARD_HEADERS_STRATEGY` | unset | `framework` behind a proxy that terminates TLS and sets `X-Forwarded-*` itself: redirects stay on https, HSTS and the `Secure` cookie follow the browser's request, and the audit trail records the client's address. The Helm chart sets it whenever its ingress or an edge or reencrypt Route terminates TLS. Never `native` with header mode |
+| (release package, from 0.0.3) | `CERT_ALERT_ALLOW_PLAIN_HTTP` | `false` in a new `.env`; absent in an upgraded one | With TLS off on an address other than `127.0.0.1`, `install.sh` refuses to start CertAlert unless this is `true` (and warns every run when it is). An `.env` that does not mention it (written before 0.0.3) is only warned about. See [Install → Choose where it listens](install.md#4-choose-where-it-listens) |
+| `server.forward-headers-strategy` | `SERVER_FORWARD_HEADERS_STRATEGY` | unset | `framework` behind a proxy that terminates TLS and sets `X-Forwarded-*` itself: redirects stay on https, HSTS and the `Secure` cookie follow the browser's request, and the audit trail records the client's address once `ENS_X509_TRUSTED_PROXIES` names the proxy (see [The client's address behind a proxy](#the-clients-address-behind-a-proxy)). Only `X-Forwarded-Proto` and `-Port` are believed as sent; `Forwarded`, `X-Forwarded-Host` and `X-Forwarded-Prefix` are ignored. The Helm chart sets it whenever its ingress or an edge or reencrypt Route terminates TLS. Never `native` with header mode |
 
 ## Security headers, banner and sessions
 
@@ -559,7 +627,7 @@ The ENS platform baseline, the same in every ENS product. See
 | `ENS_SESSION_ADMIN_IDLE_TIMEOUT` | empty: the idle timeout | `session.adminIdleTimeout` | The same for an administrator's session. DISA STIG suggests `15m` |
 | `ENS_SESSION_ABSOLUTE_TIMEOUT` | `12h` | `session.absoluteTimeout` | A session ends this long after sign-in, however busy |
 | `ENS_SESSION_MAX_PER_USER` | `0` (no limit) | `session.maxPerUser` | Sessions one person may hold at once. Signing in beyond it ends their oldest session. DISA STIG suggests `3` |
-| `ENS_CONSENT_BANNER_ENABLED` | `false` | `consentBanner.enabled` | Show the DoD notice-and-consent banner before sign-in, enforced by the server |
+| `ENS_CONSENT_BANNER_ENABLED` | `false` | `consentBanner.enabled` | Show the DoD notice-and-consent banner before sign-in, enforced by the server. From 0.0.4 an agreement is recorded once per session, and one client address may agree at most 10 times a minute (a further one gets `429`) |
 | `ENS_CONSENT_BANNER_TITLE` | empty: `U.S. Government (USG) Information System (IS) Notice and Consent` | `consentBanner.title` | Its heading |
 | `ENS_CONSENT_BANNER_TEXT` | empty: the standard DoD notice-and-consent text | `consentBanner.text` | Plain text: blank lines separate paragraphs, lines starting `- ` make a list. Shown as written, never as markup |
 | `ENS_CONSENT_BANNER_FILE` | none | (`extraEnv`, with `extraVolumes`) | Read the text from a file instead; wins over `_TEXT`. Read at startup: a file that can't be read stops CertAlert starting. In the release package, put it in `tls/` (mounted at `/etc/cert-alert/tls`) |
@@ -581,7 +649,8 @@ Helm chart's `audit.*` values set them. Two CertAlert settings remain:
 
 `ENS_AUDIT_RETENTION_DAYS` above `0` takes precedence over `retention.enabled` and `after`.
 Either way, pruning removes only events every forwarding output has delivered, and never the
-newest. CertAlert has no `ENS_AUDIT_QUERY_MAX_SCAN`: the audit page's search runs in the
+newest. From 0.0.4 retention records how far it pruned, and **Verify integrity** reports events
+missing from either end of the trail that retention did not remove. CertAlert has no `ENS_AUDIT_QUERY_MAX_SCAN`: the audit page's search runs in the
 database, and **Export** takes up to 100,000 events of the current filter.
 
 ## Classification banner (`cert-alert.banner`)
@@ -715,6 +784,7 @@ database, and **Export** takes up to 100,000 events of the current filter.
         prune:
           enabled: true
           after: 30d
+          max-share: 0.10
         certificate-cleanup:
           enabled: true
           expired-after: 90d
@@ -723,4 +793,5 @@ database, and **Export** takes up to 100,000 events of the current filter.
     ```
 
     Check `GET /api/v1/sync/prune/preview` and `GET /api/v1/sync/certificate-cleanup/preview`
-    first. The service account needs write access to the certificate attribute for clean-up.
+    first (as an administrator or auditor). The service account needs write access to the
+    certificate attribute for clean-up.

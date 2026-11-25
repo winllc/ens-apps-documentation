@@ -66,6 +66,9 @@ The package includes PostgreSQL (`postgres:17.11-alpine`). You do not need your 
     gpg --verify SHA256SUMS.asc SHA256SUMS       # when signed, with the ENS release key imported
     ```
 
+CertAlert 0.0.3 and 0.0.4 were not published as release packages: the release package after 0.0.2
+is 0.0.5, and it includes everything these pages mark *from 0.0.3* or *from 0.0.4*.
+
 The files are delivered from ENS Solutions' own storage, not from GitHub Releases. Importing the
 release key and verifying the cosign signatures of the image and the chart are described in
 [Releases and downloads](../releases.md).
@@ -106,7 +109,7 @@ Then, if you use them:
 
 - SMTP (`SPRING_MAIL_*`) and its timeouts (`CERT_ALERT_MAIL_*_TIMEOUT_MS`);
 - TLS (`CERT_ALERT_TLS_*`, with the keystores in `tls/`);
-- how the UI is reached (see [step 4](#4-choose-where-it-listens)). From the next release,
+- how the UI is reached (see [step 4](#4-choose-where-it-listens)). From 0.0.3,
   `install.sh` will not start CertAlert serving plain HTTP to other hosts until you choose;
 - sessions (`ENS_SESSION_*`) and the notice-and-consent banner (`ENS_CONSENT_BANNER_*`);
 - client certificates (`ENS_X509_*`): revocation at sign-in, allowed issuers, mapping, and
@@ -115,6 +118,8 @@ Then, if you use them:
   (`CERT_ALERT_REVOCATION_ALLOWED_HOSTS`);
 - JSON logs (`LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs`) and a metrics port
   (`MANAGEMENT_SERVER_PORT`);
+- the threads the scheduled jobs share (`CERT_ALERT_SCHEDULER_THREADS`, 8 by default; from 0.0.4)
+  and the database pool they draw on (`CERT_ALERT_DB_POOL_SIZE`);
 - the classification banner, the expiry thresholds and the audit outputs (`ENS_AUDIT_*`).
 
 Every setting is described in `.env`. Any setting from [Configuration](configuration.md) can be
@@ -122,7 +127,7 @@ added as its environment variable: `cert-alert.ldap.page-size` is `CERT_ALERT_LD
 
 !!! note "Keep .env private"
     `.env` holds passwords. `install.sh` makes it readable by its owner only (`0600`). Values that
-    contain spaces, `#` or `$` go in single quotes. From the next release the first run also
+    contain spaces, `#` or `$` go in single quotes. From 0.0.3 the first run also
     generates `CERT_ALERT_WEBHOOKS_SECRET_KEY`, the key webhook secrets are encrypted with: keep a
     copy of `.env` with your backups, because the webhooks' stored secrets and URLs cannot be read
     without it.
@@ -140,6 +145,13 @@ Choose one:
 - **The license screen.** Upload it at **Administration → License** (`/admin/license`) after the
   first start.
 
+From 0.0.4 a license that is not yet valid, or has already expired, is not installed over a license
+that is in full effect: the upload is refused with the reason (*This license starts on …*, or
+*This license expired on …*), recorded as `license.rejected`, and the installed license stays in
+force. Upload next term's license on or after its start date. A newer revision of the installed
+license given through `ENS_LICENSE` or the drop-in is refused the same way, with a warning in the
+log. With no license in full effect, such a file is installed as before.
+
 The image sets `ENS_LICENSE_FILE` and `ENS_LICENSE_STATE_DIR` to `/var/lib/ens/certalert`, the
 `ens-license` volume; leave them as they are. See [Licensing](../licensing.md) for binding,
 expiry and the rest.
@@ -152,26 +164,49 @@ A new install publishes the UI on **every interface** (`CERT_ALERT_BIND_ADDRESS=
 | You want | Set |
 |---|---|
 | TLS in CertAlert, reachable from the network | `CERT_ALERT_TLS_ENABLED=true`, keystore and trust store in `tls/` |
-| A reverse proxy on this host | `CERT_ALERT_BIND_ADDRESS=127.0.0.1`, `SERVER_FORWARD_HEADERS_STRATEGY=framework`, `ENS_COOKIE_SECURE=true`. Point the proxy at `http://127.0.0.1:8080` |
-| A reverse proxy container on the compose network | `cp docker-compose.no-ports.yml docker-compose.override.yml`. Nothing is published; the proxy joins `cert-alert_default` and forwards to `http://cert-alert:8080`. Needs Docker Compose 2.24+ or podman-compose 1.4.0+ (`!reset`); with an older podman-compose the scripts refuse it: set `CERT_ALERT_BIND_ADDRESS=127.0.0.1` instead |
+| A reverse proxy on this host | `CERT_ALERT_BIND_ADDRESS=127.0.0.1`, `SERVER_FORWARD_HEADERS_STRATEGY=framework`, `ENS_COOKIE_SECURE=true`, and `ENS_X509_TRUSTED_PROXIES` set to the compose network's subnet (see below). Point the proxy at `http://127.0.0.1:8080` |
+| A reverse proxy container on the compose network | `cp docker-compose.no-ports.yml docker-compose.override.yml`. Nothing is published; the proxy joins `cert-alert_default` and forwards to `http://cert-alert:8080`. Set `SERVER_FORWARD_HEADERS_STRATEGY=framework` and `ENS_X509_TRUSTED_PROXIES` as for a proxy on the host. Needs Docker Compose 2.24+ or podman-compose 1.4.0+ (`!reset`); with an older podman-compose the scripts refuse it: set `CERT_ALERT_BIND_ADDRESS=127.0.0.1` instead |
 | Another port | `CERT_ALERT_PORT`. Rootless Podman needs 1024 or above |
-| Plain HTTP to other hosts anyway: a lab, or a network that encrypts for you (next release) | `CERT_ALERT_ALLOW_PLAIN_HTTP=true`. `install.sh` warns every time it runs |
+| Plain HTTP to other hosts anyway: a lab, or a network that encrypts for you (from 0.0.3) | `CERT_ALERT_ALLOW_PLAIN_HTTP=true`. `install.sh` warns every time it runs |
 
 !!! warning "Plain HTTP on 0.0.0.0"
     With TLS off and the UI on any address other than `127.0.0.1`, CertAlert is reachable over
     plain HTTP: directory passwords and session cookies cross the network in clear text.
-    Up to the current release, `install.sh` and `upgrade.sh` warn every time they run. Turn TLS
+    Before 0.0.3, `install.sh` and `upgrade.sh` only warn every time they run. Turn TLS
     on, or put a TLS-terminating proxy in front and bind to `127.0.0.1`.
 
-!!! info "From the next release: plain HTTP to other hosts is refused on new installs"
+!!! info "From 0.0.3: plain HTTP to other hosts is refused on new installs"
     A new `.env` sets `CERT_ALERT_ALLOW_PLAIN_HTTP=false`, and `install.sh` refuses to start
     CertAlert with TLS off on an address other than `127.0.0.1` until `.env` turns TLS on
     (`CERT_ALERT_TLS_ENABLED=true`), sets `CERT_ALERT_BIND_ADDRESS=127.0.0.1` behind your own
     TLS-terminating proxy, or sets `CERT_ALERT_ALLOW_PLAIN_HTTP=true`. An upgrade keeps its `.env`
-    as it is: one that does not mention the setting (written before the next release) is warned
+    as it is: one that does not mention the setting (written before 0.0.3) is warned
     about, not refused, and the warning says to add `CERT_ALERT_ALLOW_PLAIN_HTTP=true` or move to
     TLS. An `.env` that sets `CERT_ALERT_ALLOW_PLAIN_HTTP=false` itself (from the release that
     briefly defaulted to `127.0.0.1`) is held to it.
+
+!!! warning "Behind a proxy: name the Docker network in `ENS_X509_TRUSTED_PROXIES`"
+    From 0.0.4, `X-Forwarded-For` is followed only from the proxies in `ENS_X509_TRUSTED_PROXIES`,
+    which is loopback by default. A proxy on this host reaches the container from the compose
+    network's gateway, and a proxy container from its own address on that network, so until that
+    network is listed the audit trail records the proxy's address for every request, not the
+    client's. Look the subnet up and list it, and nothing wider:
+
+    ```bash
+    docker network inspect cert-alert_default --format '{{(index .IPAM.Config 0).Subnet}}'
+    ```
+
+    ```bash
+    ENS_X509_TRUSTED_PROXIES=172.18.0.0/16
+    ```
+
+    With Podman, read the subnet from `podman network inspect cert-alert_default`.
+
+    Do not list a whole private range such as `172.16.0.0/12`: a client inside a trusted range
+    could have an address it wrote into `X-Forwarded-For` taken as its own. Header mode
+    (`ENS_X509_SOURCE=header`) uses the same list for the addresses the certificate header is
+    accepted from. See
+    [Configuration → The client's address behind a proxy](configuration.md#the-clients-address-behind-a-proxy).
 
 ### 5. Start it
 
@@ -228,9 +263,9 @@ release means restoring that backup.
     - **Address and port.** It keeps `CERT_ALERT_BIND_ADDRESS` and `CERT_ALERT_PORT` from `.env`.
       An install on `127.0.0.1` stays there. If `.env` was written for the release that listened
       on `127.0.0.1` by default and does not set the address, the upgrade adds
-      `CERT_ALERT_BIND_ADDRESS=127.0.0.1`. In the current release `CERT_ALERT_ALLOW_PLAIN_HTTP`
-      is not read; from the next release it is read again (see [step 4](#4-choose-where-it-listens)),
-      and an `.env` that does not mention it is only warned about.
+      `CERT_ALERT_BIND_ADDRESS=127.0.0.1`. From 0.0.3 `CERT_ALERT_ALLOW_PLAIN_HTTP` is read (see
+      [step 4](#4-choose-where-it-listens)), and an `.env` that does not mention it is only warned
+      about.
     - **Administrators.** `CERT_ALERT_SECURITY_ADMIN_IDENTIFIERS` now matches uids and entry DNs
       only. Replace any e-mail address with the uid that the startup warning names.
     - **License.** The license, the installation id and the revisions seen are now kept in the
@@ -240,11 +275,23 @@ release means restoring that backup.
     - **Revocation.** With `ENS_X509_REVOCATION` unset, client certificates are now checked at
       sign-in, soft-fail. `ENS_X509_REVOCATION=off` restores the old behaviour.
 
-    From the next release, `.env` is still never rewritten by an upgrade, and:
+    Upgrading from 0.0.2 to 0.0.5, `.env` is still never rewritten, and:
 
+    - **The client's address behind a proxy.** With `SERVER_FORWARD_HEADERS_STRATEGY=framework`,
+      set `ENS_X509_TRUSTED_PROXIES` to the compose network's subnet, or the audit trail records
+      the proxy's address instead of the client's (see [step 4](#4-choose-where-it-listens)). An
+      `.env` in header mode that lists `172.16.0.0/12`, as the old `env.template` suggested, keeps
+      working: narrow it to the subnet.
+    - **Scheduled jobs** share eight threads instead of one (`CERT_ALERT_SCHEDULER_THREADS`).
+      Nothing to set; raise `CERT_ALERT_DB_POOL_SIZE` if requests wait for connections while
+      several jobs run.
+    - **Sweeps and prune.** A sweep the directory cuts short at its size limit now fails instead
+      of ending early, and a prune deletes only after a clean sweep has missed the entries, and
+      never more than a tenth of the people or of the servers at once. See
+      [Operator guide → Upgrading to 0.0.5](operator-guide.md#upgrading-to-005).
     - **Backups.** `upgrade.sh` takes its backup through the new `backup.sh`; `backup.sh` and
       `restore.sh` also run on demand (see
-      [Operator guide → Backups](operator-guide.md#backup-and-restore-scripts-next-release)).
+      [Operator guide → Backups](operator-guide.md#backup-and-restore-scripts)).
     - **Webhooks.** Private addresses are refused for webhooks saved from then on unless
       `CERT_ALERT_WEBHOOKS_ALLOWED_HOSTS` names the host; existing webhooks keep their address until
       their URL changes (named in a startup warning). `CERT_ALERT_WEBHOOKS_BLOCK_PRIVATE_NETWORKS=false`
@@ -334,12 +381,14 @@ one is missing.
 | `tls.*` | TLS in the pod, for client-certificate sign-in |
 | `caTruststore.*` | A private CA for the directory, SMTP or Splunk |
 | `x509.*` | Client certificates: `source` (`servlet` or `header`), `header`, `trustedProxies`, `proxySecret.*`, `trustedCa.*`, `revocation`, `ocspResponderUrl`, `revocationFail`, `revocationCache`, `allowedIssuers`, `userFilter` |
+| `x509.trustedProxies` | The ingress controller's or router's pod network (CIDRs, for example `10.42.0.0/16`), and nothing wider. Empty by default from 0.0.4. Behind an ingress or an edge or reencrypt Route, set it so the audit trail records the client's address rather than the controller's; with `x509.source: header` it is required. See [step 5](#5-reaching-it-ingress-openshift-and-mtls) |
 | `session.*` | `idleTimeout`, `adminIdleTimeout`, `absoluteTimeout`, `maxPerUser`. Empty keeps the defaults |
 | `consentBanner.*` | `enabled`, `title`, `text`. For `ENS_CONSENT_BANNER_FILE`, mount the file with `extraVolumes` and pass it in `extraEnv` |
 | `banner.*`, `thresholds.*` | Look, expiry windows |
 | `revocation.*` | `defaultOcspUrl`, `defaultCrlUrl`, `allowedHosts` (the only hosts CRLs and OCSP answers are fetched from) |
 | `metrics.*` | `enabled` (default `true`) gives the actuator its own port, `port` (`9090`), plain HTTP, with health and Prometheus open there and the probes moved to it. `serviceMonitor.*` renders a Prometheus Operator ServiceMonitor; `allowFrom` admits your Prometheus through the NetworkPolicy |
 | `logFormat` | `json` (default): ECS JSON logs. `text`: Spring Boot's ordinary lines |
+| `schedulerThreads` | `null` (8): the threads the scheduled jobs share (`CERT_ALERT_SCHEDULER_THREADS`, from 0.0.4). Raising it may need a larger `database.poolSize` |
 | `audit.*` | Audit logging to stdout, a file, Splunk or syslog. See [Audit logging](../audit-logging.md). |
 | `extraEnv`, `extraEnvFrom` | Any other setting, as its environment variable |
 
@@ -360,7 +409,7 @@ chart writes to its own Secret, or an `existingSecret` and `existingSecretKey`:
 | Trust store password | `tls.truststore.password` | `truststore-password` |
 | Private CA trust store password | `caTruststore.password` | `ca-truststore-password` |
 | Splunk HEC token | `audit.splunk.token` | `splunk-hec-token` |
-| Webhook secret key | `webhooks.secretKey` (from the next release generated on a new install when neither is given: `webhooks.generateSecretKey`, default `true`) | `webhooks-secret-key` |
+| Webhook secret key | `webhooks.secretKey` (from 0.0.3 generated on a new install when neither is given: `webhooks.generateSecretKey`, default `true`) | `webhooks-secret-key` |
 | Header-mode proxy secret | `x509.proxySecret.value` | `proxy-secret` |
 | Header-mode CA certificates | `x509.trustedCa.value` | `ca.pem` |
 
@@ -415,6 +464,18 @@ kubectl -n cert-alert port-forward svc/cert-alert 8080:8080    # then http://loc
     ```
 
     TLS ends at the Ingress. Users sign in with their directory password.
+
+    The chart sets `SERVER_FORWARD_HEADERS_STRATEGY=framework` here. Also tell CertAlert which
+    addresses are the ingress controller's, or the audit trail records the controller's address
+    for every request instead of the client's:
+
+    ```yaml
+    x509:
+      trustedProxies: "10.42.0.0/16"          # the ingress controller's pod network, nothing wider
+    ```
+
+    The same applies to an OpenShift edge or reencrypt Route (the router's pod network). While it
+    is empty, the chart's NOTES remind you after every install and upgrade.
 
 === "OpenShift"
 
@@ -498,11 +559,14 @@ kubectl -n cert-alert port-forward svc/cert-alert 8080:8080    # then http://loc
     ingress-nginx, `proxy_set_header X-ENS-Proxy-Secret "<secret>";` in a configuration snippet
     (where your controller allows snippets) or in the controller's `proxy-set-headers` ConfigMap.
     Use `networkPolicy` so only the controller reaches the pod. The chart refuses to render header
-    mode without the proxy secret and the CA, and sets `SERVER_FORWARD_HEADERS_STRATEGY=framework`
-    whenever its ingress or an edge or reencrypt Route terminates TLS.
+    mode without `x509.trustedProxies` (from 0.0.4, when its default became empty), the proxy
+    secret and the CA, and sets `SERVER_FORWARD_HEADERS_STRATEGY=framework` whenever its ingress
+    or an edge or reencrypt Route terminates TLS.
 
-    If the controller reaches pods over IPv6, add its IPv6 range to `trustedProxies`: IPv4 ranges
-    never match IPv6 addresses.
+    `trustedProxies` is also the list of proxies whose `X-Forwarded-For` hops are followed for the
+    client's address in the audit trail. Name the controller's pod network only: a client inside
+    a trusted range could have an address it wrote taken as its own. If the controller reaches
+    pods over IPv6, add its IPv6 range: IPv4 ranges never match IPv6 addresses.
 
 ### 6. Upgrade
 
@@ -530,10 +594,20 @@ Migrations are not undone by `helm rollback`: going back means restoring the bac
     - **Metrics and logs.** `metrics.enabled` is `true` (the actuator and the probes on port
       `9090`, plain HTTP) and `logFormat` is `json`.
 
-!!! note "Before you upgrade to the next release"
+!!! note "Before you upgrade to 0.0.5"
+    - **Trusted proxies.** `x509.trustedProxies` now defaults to `""` (loopback only) instead of
+      every private range (`10.0.0.0/8,172.16.0.0/12,192.168.0.0/16`), because those proxies'
+      `X-Forwarded-For` hops now decide the client's address in the audit trail. Set it to the
+      ingress controller's or router's pod network, for example `10.42.0.0/16`. **With
+      `x509.source: header` the chart does not render until it is set**, so a header-mode release
+      that relied on the old default must add it before `helm upgrade`. Behind an ingress without
+      it, the audit trail records the controller's address. Setting the old value back restores
+      the old behaviour, including a client on a private address being able to forge its address.
+    - **Scheduled jobs** share eight threads instead of one. `schedulerThreads` changes that;
+      raising it may need a larger `database.poolSize`.
     - **Backups.** `upgradeBackup.enabled=true` adds a `pre-upgrade` hook that dumps the database
       onto a volume before every `helm upgrade` and stops the upgrade if it cannot. It is off by
-      default; see [Operator guide → Backups](operator-guide.md#backup-and-restore-scripts-next-release).
+      default; see [Operator guide → Backups](operator-guide.md#backup-and-restore-scripts).
     - **Webhooks.** `webhooks.blockPrivateNetworks` defaults to `""`: webhooks saved after the
       upgrade may not go to a private address unless `webhooks.allowedHosts` names the host; the
       existing ones keep theirs (startup warning) until their URL changes. `false` keeps the old
@@ -546,6 +620,9 @@ Migrations are not undone by `helm rollback`: going back means restoring the bac
       `sso.saml.signingSecret`.
     - **Webhook proxy.** `webhooks.proxy` is new and empty: webhooks keep connecting directly until
       `webhooks.proxy.host` is set (let the pod reach it with `networkPolicy.egress.extra`).
+
+    The behaviour changes that need no setting are in
+    [Operator guide → Upgrading to 0.0.5](operator-guide.md#upgrading-to-005).
 
 ### 7. Uninstall
 

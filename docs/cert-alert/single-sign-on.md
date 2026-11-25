@@ -37,7 +37,7 @@ the person or a tenant administrator.
     - The provider's discovery document is read when first needed, so a provider that is down does
       not stop CertAlert starting.
     - No access or refresh token is kept.
-    - **Entra ID group overage (next release).** For somebody in more groups than fit in a token
+    - **Entra ID group overage (from 0.0.3).** For somebody in more groups than fit in a token
       (200 in a JWT), Entra ID leaves the groups claim out and points at Microsoft Graph instead
       (`_claim_names.groups`). Signing them in without it would quietly leave out the
       administrator or auditor role a group grants, so such a sign-in is refused, recorded as a
@@ -48,7 +48,9 @@ the person or a tenant administrator.
 === "SAML 2.0"
 
     - The response or its assertion must be signed by a key in the identity provider's metadata;
-      unsigned is refused.
+      unsigned is refused. From 0.0.4 the metadata is read again every `metadata-refresh` (an
+      hour), so a provider that rolls its signing certificate is followed without a restart; see
+      [Settings](#settings).
     - The issuer must be that provider; the audience and destination this service provider; the
       conditions in date, with `clock-skew` allowed.
     - Every response must answer (`InResponseTo`) a request CertAlert sent and has not seen answered.
@@ -66,10 +68,10 @@ held at the banner like any other sign-in.
 
 ### Signing out
 
-Signing out ends the CertAlert session. Up to the current release it does not sign the person out
-of the identity provider, and signing out at the provider does not end the CertAlert session.
+Signing out ends the CertAlert session. Before 0.0.3 it never signs the person out of the
+identity provider, and signing out at the provider does not end the CertAlert session.
 
-From the next release, with OpenID Connect and `cert-alert.sso.oidc.provider-logout: true`
+From 0.0.3, with OpenID Connect and `cert-alert.sso.oidc.provider-logout: true`
 (`CERT_ALERT_SSO_OIDC_PROVIDER_LOGOUT`, Helm `sso.oidc.providerLogout`), signing out also signs the
 person out at the provider: the browser is sent to the `end_session_endpoint` the provider's
 discovery document names, with the ID token as `id_token_hint` and `<public-url>/login?logout` as
@@ -84,9 +86,9 @@ provider that names no `end_session_endpoint` is skipped.
   access, as Argo CD does).
 - Signing out at the provider does not end CertAlert sessions in other browsers.
 
-#### SAML single logout (next release)
+#### SAML single logout
 
-From the next release, with SAML and `cert-alert.sso.saml.single-logout: true`
+From 0.0.3, with SAML and `cert-alert.sso.saml.single-logout: true`
 (`CERT_ALERT_SSO_SAML_SINGLE_LOGOUT`, Helm `sso.saml.singleLogout`), CertAlert does SAML single logout,
 both ways, at `<public-url>/logout/saml2/slo` (HTTP-Redirect binding, named in the service provider
 metadata):
@@ -134,9 +136,11 @@ SAML entity id (unless set) and the assertion consumer are built from it, never 
 to start with a missing or templated value.
 
 With `SERVER_FORWARD_HEADERS_STRATEGY=framework` (set by the chart behind an ingress), CertAlert
-believes only `X-Forwarded-Proto`, `-Port` and `-For`; `Forwarded`, `X-Forwarded-Host` and
-`X-Forwarded-Prefix` are ignored. Have the proxy overwrite `X-Forwarded-For` and `X-Forwarded-Proto`
-rather than append to a client's.
+believes only `X-Forwarded-Proto` and `-Port`, and from 0.0.4 `X-Forwarded-For` hop by hop from
+trusted proxies only (see
+[Security → The client's address behind a proxy](security.md#the-clients-address-behind-a-proxy));
+`Forwarded`, `X-Forwarded-Host` and `X-Forwarded-Prefix` are ignored. Have the proxy overwrite
+`X-Forwarded-Proto` with its own value rather than pass on a client's.
 
 Addresses to give the provider:
 
@@ -145,7 +149,7 @@ Addresses to give the provider:
 | Redirect URI / assertion consumer | `<public-url>/login/oauth2/code/oidc` | `<public-url>/login/saml2/sso/saml` (HTTP-POST) |
 | Service provider metadata | | `<public-url>/saml2/service-provider-metadata/saml` |
 | Entity id | | `<public-url>/saml2/service-provider-metadata/saml`, unless `entity-id` is set |
-| Sign-out (next release) | `<public-url>/login?logout`, the post-logout redirect URI (with `provider-logout`) | `<public-url>/logout/saml2/slo`, single logout service, HTTP-Redirect (with `single-logout`) |
+| Sign-out (from 0.0.3) | `<public-url>/login?logout`, the post-logout redirect URI (with `provider-logout`) | `<public-url>/logout/saml2/slo`, single logout service, HTTP-Redirect (with `single-logout`) |
 
 ## Settings
 
@@ -171,6 +175,7 @@ cert-alert:
       enabled: true
       display-name: Sign in with ADFS
       metadata-location: https://adfs.example.gov/FederationMetadata/2007-06/FederationMetadata.xml
+      metadata-refresh: 1h             # read again this often; 0: once, until restart
       entity-id: ""                    # empty: <public-url>/saml2/service-provider-metadata/saml
       signing-key-location: file:/etc/cert-alert/saml/signing.key          # optional
       signing-certificate-location: file:/etc/cert-alert/saml/signing.crt
@@ -192,11 +197,12 @@ cert-alert:
 | `oidc.username-claim` | `preferred_username` | The claim matched to the directory |
 | `oidc.groups-claim` | empty | The claim listing the person's groups at the provider |
 | `oidc.jws-algorithm` | `RS256` | The ID token's signature algorithm |
-| `oidc.provider-logout` | `false` (next release; `true` in new installations' settings) | Signing out signs out at the provider too, back to `<public-url>/login?logout`. See [Signing out](#signing-out) |
+| `oidc.provider-logout` | `false` (from 0.0.3; `true` in new installations' settings) | Signing out signs out at the provider too, back to `<public-url>/login?logout`. See [Signing out](#signing-out) |
 | `saml.metadata-location` | none | The identity provider's metadata: an `https://` URL or `file:/path` |
+| `saml.metadata-refresh` | `1h` (from 0.0.4) | How often the metadata is read again (`CERT_ALERT_SSO_SAML_METADATA_REFRESH`; with Helm, in `extraEnv`). `0` reads it once and keeps it until a restart, as releases before 0.0.4 did. A read that fails keeps the copy that last worked, logs a warning and is tried again a minute later. A response whose signature does not verify brings the next read forward, at most once every five minutes, and is checked once more against what was read |
 | `saml.entity-id` | empty | This service provider's entity id, an absolute URI; empty uses the metadata address above |
 | `saml.signing-key-location`, `saml.signing-certificate-location` | none | PEM (PKCS#8) key and certificate, for a provider that requires signed requests, and for single logout |
-| `saml.single-logout` | `false` (next release; `true` in new installations' settings) | SAML single logout, both ways, at `<public-url>/logout/saml2/slo`. Needs the signing key and a provider with a `SingleLogoutService`. See [SAML single logout](#saml-single-logout-next-release) |
+| `saml.single-logout` | `false` (from 0.0.3; `true` in new installations' settings) | SAML single logout, both ways, at `<public-url>/logout/saml2/slo`. Needs the signing key and a provider with a `SingleLogoutService`. See [SAML single logout](#saml-single-logout) |
 | `saml.username-attribute` | empty (the NameID) | The attribute matched to the directory |
 | `saml.groups-attribute` | empty | The attribute listing the person's groups |
 | `*.match` | `UID` | `UID` or `DN`: what the value is matched against |
@@ -223,12 +229,12 @@ come from `sso.oidc.existingSecret`, and the SAML signing pair from `sso.saml.si
    the user principal name: use it with `match: UID` only where your directory's uids are the UPNs.
    Otherwise add a claim carrying the on-premises `samAccountName` or DN (directory extension
    attributes, or claims mapping) and name it in `username-claim`.
-4. **Groups for everybody (next release).** Somebody in more than 200 groups gets no groups claim
-   (group overage), and from the next release their sign-in is refused. Under **Token
+4. **Groups for everybody (from 0.0.3).** Somebody in more than 200 groups gets no groups claim
+   (group overage), and from 0.0.3 their sign-in is refused. Under **Token
    configuration**, send only the groups assigned to the application
    (`groupMembershipClaims: ApplicationGroup` in the manifest), and assign the groups that grant
    roles to the enterprise application.
-5. **Sign-out (next release).** To use `provider-logout`, add `https://<host>/login?logout` as a
+5. **Sign-out (from 0.0.3).** To use `provider-logout`, add `https://<host>/login?logout` as a
    redirect URI and as the front-channel logout URL.
 
 ### Okta (OIDC)
@@ -253,11 +259,15 @@ come from `sso.oidc.existingSecret`, and the SAML signing pair from `sso.saml.si
    *Token-Groups - Qualified by Domain Name* or the group DNs as the attribute in
    `groups-attribute`, and list the ones that grant a role in `admin-groups` / `auditor-groups`.
 3. ADFS signs the assertion with its token-signing certificate, which is in its metadata
-   (`https://<adfs>/FederationMetadata/2007-06/FederationMetadata.xml`). Where ADFS requires signed
-   requests, set `signing-key-location` and `signing-certificate-location`.
+   (`https://<adfs>/FederationMetadata/2007-06/FederationMetadata.xml`). From 0.0.4 the metadata is
+   read again every `metadata-refresh` (an hour), and at once, at most every five minutes, when a
+   response's signature does not verify, so a rolled token-signing certificate is picked up
+   without a restart. Before 0.0.4, restart CertAlert after ADFS rolls it. Where ADFS requires
+   signed requests, set `signing-key-location` and `signing-certificate-location`.
 4. For an ADFS CertAlert cannot reach, save the metadata and use
-   `metadata-location: file:/path/to/metadata.xml` (Helm: `sso.saml.metadataConfigMap`).
-5. **Single logout (next release).** Set `signing-key-location` and `signing-certificate-location`
+   `metadata-location: file:/path/to/metadata.xml` (Helm: `sso.saml.metadataConfigMap`). The file
+   is read again on the same schedule, so replacing it after a certificate roll is enough.
+5. **Single logout (from 0.0.3).** Set `signing-key-location` and `signing-certificate-location`
    and `single-logout: true`, then update the relying party trust from the metadata again (or, by
    hand: **Endpoints → Add SAML → SAML Logout**, binding **Redirect**, URL
    `https://<host>/logout/saml2/slo`, and the signing certificate on the **Signature** tab).
@@ -295,7 +305,7 @@ marking a notification read.
 
 The only exceptions read or concern the session: the search tables (which `POST` their query),
 verifying the audit chain, saved views (an auditor keeps views of their own), signing in and out, and
-agreeing to the consent banner. From the next release the inventory export is one of them too (a
+agreeing to the consent banner. From 0.0.3 the inventory export is one of them too (a
 `POST` for its CSRF token, audited as `inventory.exported`): an auditor may export the rows they can
 already read. The pages hide what an auditor cannot use, and the account menu reads
 **Auditor**.
@@ -329,7 +339,9 @@ environment, use indexed variables, for example `CERT_ALERT_SECURITY_GROUPS_ADMI
 `security.groups.admin` and `security.groups.auditor`. OpenLDAP's `memberOf` overlay and 389
 Directory Server's MemberOf plugin maintain the attribute; a directory without it grants nothing by
 group. A group change counts at the person's next sign-in, or within `cache-for` for a client
-certificate.
+certificate. Where `memberOf` cannot be read, that sign-in gets no role from a group; from 0.0.4
+the failure is remembered for 10 seconds rather than `cache-for`, so a certificate holder has
+their roles back on a request soon after the directory answers again.
 
 A provider's groups grant a role only through that provider's own `admin-groups` and
 `auditor-groups`. They are never matched against `security.groups`, so a group somebody can create at
@@ -339,6 +351,9 @@ the provider, named like a directory group's DN, grants nothing.
     An [API token](api-reference.md#api-tokens) counts only the roles the **directory** gives its
     creator (`admin-identifiers`, `auditor-identifiers` or `security.groups`), never an identity
     provider's groups. Give people who create tokens their administrator role in the directory.
+    The creator's next sign-in narrows their tokens too, never widens them: from 0.0.4 to the
+    roles the live directory gives them at that moment, and never because a sign-in could not
+    read their groups.
 
 ## Upgrading
 
@@ -346,7 +361,7 @@ Nothing changes until `cert-alert.sso.*`, `auditor-identifiers` or `security.gro
 certificate and password sign-in work as before. Turning single sign-on on needs
 `CERT_ALERT_SSO_PUBLIC_URL`; SAML needs HTTPS.
 
-From the next release:
+From 0.0.3:
 
 - An Entra ID sign-in with group overage is refused (`sso_error=groups`); see
   [What is checked](#what-is-checked).
@@ -358,5 +373,13 @@ From the next release:
   certificate, and the identity provider must be given the service provider metadata again. With it
   on, a SAML sign-in's session also keeps the NameID and `SessionIndex`, and signing out keeps the
   `LogoutRequest` in the new session until the provider answers. See
-  [SAML single logout](#saml-single-logout-next-release).
+  [SAML single logout](#saml-single-logout).
 - An auditor may export the inventory (a `POST`, audited as `inventory.exported`).
+
+From 0.0.4:
+
+- The SAML identity provider's metadata is read again every hour
+  (`cert-alert.sso.saml.metadata-refresh`), so a rolled signing certificate no longer needs a
+  restart.
+- `X-Forwarded-For` is followed only through the proxies in `ENS_X509_TRUSTED_PROXIES`; the
+  addresses given to the provider still come from `public-url` alone.

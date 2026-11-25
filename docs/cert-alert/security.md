@@ -28,10 +28,16 @@ session):
    certificate's status is checked before it is matched to anybody. A revoked certificate is
    refused (`certificate revoked`); one whose status cannot be found is refused
    (`revocation unknown`) unless `ENS_X509_REVOCATION_FAIL=open`. Good and revoked answers are
-   reused for `ENS_X509_REVOCATION_CACHE` (10 minutes), no answer for 30 seconds.
+   reused for `ENS_X509_REVOCATION_CACHE` (10 minutes), no answer for 30 seconds. From 0.0.4 that
+   doubles while the certificate stays unanswered, up to 2 minutes, and requests for a certificate
+   that is already being checked wait for that check rather than asking again.
 3. **Fingerprint.** CertAlert computes the **SHA-256 fingerprint of its DER** and looks it up in
    `cached_certificate`. If it belongs to an **IC Person**, that person is signed in, unless
-   step 4 refuses it. Certificates belonging to servers never authenticate.
+   step 4 refuses it. Certificates belonging to servers never authenticate. From 0.0.4 a
+   certificate that **more than one person** publishes (a regular and a privileged account
+   carrying one card, a shared mailbox certificate) is refused
+   (`certificate published by more than one person`): nothing says which of them is holding it.
+   Earlier releases signed in whichever of them the database returned first.
 4. **Cached state.** A published certificate that the nightly
    [revocation check](configuration.md#revocation-cert-alertrevocation) has found **revoked**, or
    whose validity dates do not cover the present moment, is refused even though the directory
@@ -64,7 +70,11 @@ by the JDK's path validator; a CRL counts only if it is signed by the issuer and
 update. Fetches have 5 s to connect, 10 s to answer and 20 s in all, are subject to the same
 [fetch policy](configuration.md#revocation-cert-alertrevocation) as the nightly check, and share
 its CRL cache. `ENS_X509_OCSP_RESPONDER_URL` sends every OCSP request to one responder;
-`ENS_X509_CRL_DIR` reads CRLs from files and fetches nothing.
+`ENS_X509_CRL_DIR` reads CRLs from files and fetches nothing. From 0.0.4 the check runs before
+the database transaction that matches the certificate to a person, so a slow responder holds no
+database connection; a sign-in that needs a CRL the nightly check is downloading waits for it no
+longer than a fetch of its own would take; and under soft-fail the warning is logged once per
+answer, not on every request.
 
 !!! warning "`client-auth: want`, never `need`"
     With `need`, a browser without a certificate fails the TLS handshake and never reaches the
@@ -97,9 +107,12 @@ header only when:
 
 - the connection itself comes from an address in `ENS_X509_TRUSTED_PROXIES` (never an address a
   forwarded-for header claims);
-- it carries the secret, compared in constant time;
+- it carries the secret, compared in constant time (from 0.0.4 a secret file is read again when
+  its modification time or size changes, so it can be rotated without a restart);
 - the certificate chains to a CA in `ENS_X509_TRUSTED_CA_FILE`, is in date, and is not restricted
-  to a use other than client authentication.
+  to a use other than client authentication. From 0.0.4 a chain that validated is reused for the
+  same header for a minute, never past the expiry of a certificate in it or a change to the CA
+  file.
 
 Anything else is refused and audited as a failed `auth.login` (`certificate header not from a
 trusted proxy`, `certificate not trusted`). In header mode a certificate from CertAlert's own TLS
@@ -114,10 +127,14 @@ proxy_set_header X-ENS-Proxy-Secret "<the secret>";
 proxy_set_header X-Forwarded-Proto  $scheme;
 ```
 
-!!! warning "Trusted proxies over IPv6"
-    IPv4 ranges match only IPv4 addresses. The Helm chart's default `x509.trustedProxies`
-    (`10.0.0.0/8,172.16.0.0/12,192.168.0.0/16`) is IPv4 only: if your ingress controller reaches
-    pods over IPv6, add its IPv6 range, for example `fd00::/8`.
+!!! warning "Trusted proxies: the proxy's addresses only"
+    `ENS_X509_TRUSTED_PROXIES` also decides whose `X-Forwarded-For` hops are believed for the
+    client's address (see [The client's address behind a proxy](#the-clients-address-behind-a-proxy)),
+    so list the proxy's own addresses and nothing wider. From 0.0.4 the Helm chart's
+    `x509.trustedProxies` is empty by default (it was `10.0.0.0/8,172.16.0.0/12,192.168.0.0/16`),
+    and the chart refuses to render header mode until it names the ingress controller's pod
+    network. IPv4 ranges match only IPv4 addresses: if your ingress controller reaches pods over
+    IPv6, list its IPv6 range.
 
 ### Directory password (LDAP bind)
 
@@ -139,11 +156,14 @@ provider's own `admin-groups` and `auditor-groups`. OIDC uses the authorization 
 and checks the ID token's signature, issuer, audience, authorized party, expiry and nonce. SAML
 requires a signed response or assertion that answers a request this browser started, once. Every
 address given to the provider is built from `cert-alert.sso.public-url`, never from request headers.
-From the next release, an Entra ID sign-in whose groups were left out of the token (group overage)
+From 0.0.3, an Entra ID sign-in whose groups were left out of the token (group overage)
 is refused rather than signed in without the roles its groups grant, and
 `cert-alert.sso.oidc.provider-logout` also signs the person out at an OIDC provider, and
 `cert-alert.sso.saml.single-logout` does SAML single logout both ways (signed messages, a
-`LogoutRequest` from the provider honoured only for the NameID the session signed in with). See [Single sign-on and roles](single-sign-on.md).
+`LogoutRequest` from the provider honoured only for the NameID the session signed in with). From
+0.0.4 the SAML identity provider's metadata is read again every hour, and at once (at most every
+five minutes) when a response's signature does not verify, so a rolled signing certificate is
+followed without a restart. See [Single sign-on and roles](single-sign-on.md).
 
 ### API tokens
 
@@ -151,8 +171,10 @@ is refused rather than signed in without the roles its groups grant, and
 administrators with scopes and an expiry (a year at most by default), stored as SHA-256, shown once,
 re-checked against the creator's live directory entry on every use (fail-closed on disabled or
 locked accounts), rate-limited per token, and never kept in a session; no token can manage tokens or
-webhooks. Token requests have no session and need no CSRF token. See
-[API reference → API tokens](api-reference.md#api-tokens).
+webhooks. Token requests have no session and need no CSRF token. From 0.0.4 a write that a token's
+scopes do not cover is audited as denied under the token (`api.request` with outcome `denied`, and
+`access.denied` with the actor `api-token:<id>`); earlier releases recorded it as a successful
+request. See [API reference → API tokens](api-reference.md#api-tokens).
 
 ### Notice and consent banner
 
@@ -160,6 +182,12 @@ With `ENS_CONSENT_BANNER_ENABLED=true`, every request from a browser session tha
 **I agree** is sent to `/consent` before any sign-in filter runs, so no sign-in of any kind, form
 or certificate, succeeds first. An API call gets a 401 instead. The agreement is kept in the
 session, so signing out shows the banner again. It is audited as `auth.consent-acknowledged`.
+
+`/consent` is open to anybody, so from 0.0.4 an agreement is recorded once per session (a session
+that has already agreed is sent on without a new record), and one client address may agree at most
+10 times a minute, counted on each replica. Beyond that the agreement is refused with `429` rather
+than accepted unrecorded. The address is the client's as CertAlert sees it: behind a proxy that is
+not in `ENS_X509_TRUSTED_PROXIES` it is the proxy's, shared by every browser.
 
 Exempt: `/consent` itself, the static files, `/favicon.ico`, `/error`, the health endpoints
 (`/actuator/health/**`, `/livez`, `/readyz`), `/actuator/prometheus` on the management port, and
@@ -176,6 +204,10 @@ the SIEM pull API (`/api/audit/**`, bearer tokens).
   `auth.session-expired` with its reason, `idle`, `absolute` or `concurrent`.
 - For someone signing in with a certificate, an ended session means a new one on the next request
   (and, with the consent banner on, agreeing to it again).
+- From 0.0.4, somebody else signing in on a session that is already signed in (a password over
+  another person's live session, or another certificate with that session's cookie) takes the
+  session over: its limits, its place in `ENS_SESSION_MAX_PER_USER` and its audit records are the
+  new person's from then on. Earlier releases kept the first person's idle limit and name.
 - With `cert-alert.session.store=jdbc`, the default with PostgreSQL that the chart and the release
   package use, sessions are kept in the database (`spring_session`): any replica serves any
   request, the session controls are enforced across replicas, and a restart or rolling update signs
@@ -188,7 +220,32 @@ the SIEM pull API (`/api/audit/**`, bearer tokens).
   it with their own requests.
 - Two kinds of bearer token exist, and neither opens a session: [API tokens](#api-tokens) on
   `/api/v1/**`, scoped and never more than their creator, and the SIEM pull API's tokens on
-  `/api/audit/**`, which read the audit trail and nothing else. There is no HTTP Basic.
+  `/api/audit/**`, which read the audit trail and nothing else. There is no HTTP Basic. From 0.0.4
+  a wrong or revoked token on the pull API is recorded as a failed `auth.login` (`details.method`
+  `api-token`, with the client's address and never the token), collapsed per address.
+- Every `403` is audited as `access.denied`. From 0.0.4 the first refusal is recorded at once;
+  identical ones (same actor, path and reason) in the next 60 seconds are one more event with
+  `details.count` and `details.collapsed`. Earlier releases wrote one event when the minute ended.
+
+### The client's address behind a proxy
+
+The audit trail's `source.ip`, an API token's last-used address and the per-address limits use the
+connection's own address unless `SERVER_FORWARD_HEADERS_STRATEGY=framework` is set. With it, from
+0.0.4, the client's address is the rightmost `X-Forwarded-For` hop that is not a trusted proxy:
+starting from the connection's address, the header is followed leftwards only while the address in
+hand is in `ENS_X509_TRUSTED_PROXIES`. A connection from anywhere else is the client, whatever it
+says. Earlier releases took the leftmost value, which a client behind an appending proxy can
+write, and so could choose the address the trail recorded.
+
+- `ENS_X509_TRUSTED_PROXIES` is loopback by default. Until it names the proxy in front, the trail
+  records the proxy's address.
+- Name the proxy's addresses and nothing wider: a client inside a trusted range is passed over for
+  the hop to its left, which it wrote.
+- Only `X-Forwarded-Proto` and `-Port` are believed as sent. `Forwarded`, `X-Forwarded-Host` and
+  `X-Forwarded-Prefix` are ignored.
+
+What to set for the release package and the Helm chart is in
+[Configuration → The client's address behind a proxy](configuration.md#the-clients-address-behind-a-proxy).
 
 ### Security headers and cookies
 
@@ -243,7 +300,7 @@ Two further, **per-server** rights derive from data rather than configuration:
 |---|:-:|:-:|:-:|:-:|:-:|
 | View People, Servers, Certificates, details, Metrics, own Notifications | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Keep saved views of the Certificates page | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Export the inventory (CSV, Excel; auditors from the next release, audited as `inventory.exported`) | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Export the inventory (CSV, Excel; auditors from 0.0.3, audited as `inventory.exported`) | ✓ | ✓ | ✓ | ✓ | ✓ |
 | View an entry's audit history | ✓ | ✓ | ✓ | ✓ | ✓ |
 | View the Admin page, the audit log (`/admin/audit`) and the license screen | | | | ✓ | ✓ |
 | View Integrations (API tokens, webhooks, deliveries) and scheduled reports | | | | ✓ | ✓ |
@@ -258,6 +315,8 @@ Two further, **per-server** rights derive from data rather than configuration:
 | Define editable attributes / set values | | | | | ✓ |
 | Trigger sync, refresh, prune, clean-up, changelog poll | | | | | ✓ |
 | View job runs started by hand (`/api/v1/jobs`) | | | | ✓ | ✓ |
+| View sweep runs and the prune and clean-up previews (`/api/v1/sync/runs`, `/sync/prune/preview`, `/sync/certificate-cleanup/preview`; any signed-in user before 0.0.4) | | | | ✓ | ✓ |
+| See the changelog connector's last error (`lastError` in `/api/v1/changelog`; the status itself is open to everyone) | | | | ✓ | ✓ |
 | Run revocation check | | | | | ✓ |
 | Run / dry-run the round-up | | | | | ✓ |
 | Change round-up lead days | | | | | ✓ |
@@ -290,7 +349,7 @@ token as well as a session. Everything else requires signing in.
 | CRL distribution points / OCSP responders (HTTP or `ldap://`) | The nightly revocation check, and the check at sign-in | `cert-alert.revocation.enabled`, `ENS_X509_REVOCATION`, and the fetch policy (`cert-alert.revocation.allowed-hosts`) |
 | Server TLS endpoints | Endpoint probe (user-initiated) | `cert-alert.probe.enabled` |
 | Splunk HEC, syslog | Audit outputs | `ENS_AUDIT_SPLUNK_*`, `ENS_AUDIT_SYSLOG_*` |
-| Identity provider | OIDC discovery document and signing keys; SAML metadata (when given as a URL) | `cert-alert.sso.*` |
+| Identity provider | OIDC discovery document and signing keys; SAML metadata (when given as a URL; from 0.0.4 read again every `cert-alert.sso.saml.metadata-refresh`, an hour) | `cert-alert.sso.*` |
 | Webhook receivers (HTTPS) | Expiry alerts and job results, signed | Admin > Integrations; `cert-alert.webhooks.*` (see [Webhooks](webhooks.md#where-a-webhook-may-go)) |
 
 Every distribution point and responder address comes out of a certificate, so fetches never go to
@@ -298,6 +357,10 @@ link-local or cloud metadata addresses, go to loopback only when it is named in 
 follow at most three redirects (http and https only), and are limited in size and time. With
 `allowed-hosts` set, nothing else is fetched from. See
 [Configuration → Revocation](configuration.md#revocation-cert-alertrevocation).
+
+`serverURL` is free text from the directory. From 0.0.4 a server's page links it (the **Open**
+button) only when it is an `http://` or `https://` address, so a value with another scheme cannot
+become a link that runs in CertAlert's origin.
 
 The endpoint probe connects only to the host named by the entry (`serverURL`, then
 `icServerAddress`); a caller chooses only the port. The handshake deliberately accepts any chain
@@ -332,6 +395,9 @@ See [FIPS 140-3 and DISA STIG](fips-and-stig.md).
 - Behind a TLS-terminating proxy: `SERVER_FORWARD_HEADERS_STRATEGY=framework`, and
   `ENS_COOKIE_SECURE=true` if the proxy does not send `X-Forwarded-Proto`. In the release package,
   `CERT_ALERT_BIND_ADDRESS=127.0.0.1`. Never set `CERT_ALERT_ALLOW_PLAIN_HTTP=true` outside a lab.
+- Behind any proxy, set `ENS_X509_TRUSTED_PROXIES` (Helm `x509.trustedProxies`) to the proxy's own
+  addresses: the compose network's subnet, or the ingress controller's pod network. Never a whole
+  private range.
 - In header mode, let only the proxy reach CertAlert, and keep the proxy secret in a file or
   Secret.
 - Keep the management port off every ingress, route and published port.
@@ -339,20 +405,22 @@ See [FIPS 140-3 and DISA STIG](fips-and-stig.md).
 - Keep `x509.require-known-certificate: true`.
 - Keep `admin-identifiers` short; keep `contact-editors: ADMIN` unless servers' owners are expected
   to curate projects and addresses themselves.
-- Never set `cert-alert.security.enabled: false` outside local development. From the next
-  release the application refuses to start with it unless the `dev` profile is active.
+- Never set `cert-alert.security.enabled: false` outside local development. From 0.0.3 the
+  application refuses to start with it unless the `dev` profile is active.
 - Keep keystores out of the image: in the release package's `tls/` directory (mounted
   read-only), or in Kubernetes Secrets with Helm.
 - Set `revocation.allow-unverified-crl: false` once `issuer-directory` is populated.
+- Leave prune's safeguards as they are (`cert-alert.ldap.prune.max-share`), and keep people who
+  share one certificate out of certificate sign-in: such a certificate is refused.
 - Leave `server.error.include-message: never`.
 - Configure the classification banner where policy requires it.
 - With single sign-on, map on a claim people cannot change, and serve CertAlert over HTTPS (SAML
   requires it).
 - Before creating webhooks, set `cert-alert.webhooks.secret-key` (the same on every replica; new
-  installations of the next release get one generated), keep it with your backups, and narrow
+  installations of 0.0.3 and later get one generated), keep it with your backups, and narrow
   their destinations with `allowed-hosts`. Leave `block-private-networks` unset or `true`, and
   name internal receivers in `allowed-hosts` instead of setting it to `false`.
-- With OIDC single sign-on, turn on `cert-alert.sso.oidc.provider-logout` (next release) so signing
+- With OIDC single sign-on, turn on `cert-alert.sso.oidc.provider-logout` (from 0.0.3) so signing
   out also ends the session at the provider; with SAML, `cert-alert.sso.saml.single-logout` with a
   signing key.
 - Give API tokens the fewest scopes and the shortest expiry that serve the integration; revoke the

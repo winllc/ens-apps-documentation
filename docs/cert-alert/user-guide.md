@@ -32,13 +32,16 @@ Some deployments first show a **notice and consent** page (the DoD banner). Read
 CertAlert then offers up to three ways in:
 
 1. **Client certificate**: if your browser presents a certificate that the directory publishes for
-   you, you are signed in without a form.
+   you, you are signed in without a form. A certificate that the directory publishes for more than
+   one person signs in nobody (from 0.0.4): use the password form or single sign-on, and ask your
+   administrator.
 2. **Directory password**: otherwise you see the **Sign in** page. Enter your directory username
    and password; they are checked by binding to the directory and never stored.
 3. **Single sign-on**: where your organization has set it up, the **Sign in** page also shows a
    button for its identity provider (for example *Sign in with Entra ID*). You sign in there and
    come back signed in, provided the directory holds an entry for you. Signing out of CertAlert
-   does not sign you out of the identity provider.
+   signs you out of the identity provider only where your organization has turned that on (from
+   0.0.3); otherwise you stay signed in there.
 
 Messages on the sign-in page:
 
@@ -196,7 +199,7 @@ Risk badges:
 
 | Card | Contents |
 |---|---|
-| Header | Name, DN, status, and **Open** (the server's URL) |
+| Header | Name, DN, status, and **Open** (the server's URL). From 0.0.4 the button is shown only when the directory's `serverURL` is an `http://` or `https://` address; any other value is shown as text among the attributes |
 | **IC Non-Person Entity** / **Organization** | Directory attributes |
 | **Points of contact** | Directory `serverPOC` (read-only) and contacts **added here**; editor if you may manage this server |
 | **Directory attributes** | Attributes an administrator made editable; only shown if any are defined. Administrators can change values here; they are written to the directory |
@@ -261,7 +264,7 @@ and **Email** columns, paged with **Previous** / **Next**. Kinds:
 
 | Kind | When it appears |
 |---|---|
-| **Certificate status** | A certificate you are responsible for crossed into *expiring soon* or *expired*. Not repeated for the same certificate and state within a week |
+| **Certificate status** | A certificate you are responsible for crossed into *expiring soon* or *expired*. Not repeated for the same certificate and state within a week. From 0.0.4 you are told once more, with **Severity** *critical*, when an expiring certificate comes within the critical window (7 days by default), and not at all about an old certificate that has already been renewed |
 | **Expiry summary** | The daily round-up: everything of yours expiring within the configured number of days. You have **one** of these; it is updated when something changes (and becomes unread again), and removed when everything in it has been dealt with |
 | **Certificate revoked** | The revocation check found one of your certificates revoked |
 
@@ -271,7 +274,9 @@ You are responsible for a certificate if it is your own, or if it belongs to a s
 are a point of contact (directory or added here, including via a group address), or to a server in
 a project you run. A person's signing/encryption pair is reported as **one** line, dated by the
 sooner of the two. A certificate that has been replaced by a newer one with the same subject and
-use drops out of the round-up.
+use drops out of the round-up. From 0.0.4 one that expired and was **not** replaced stays in it,
+even when the other half of your pair is still current, and the round-up email is one message per
+address: if several entries share your address, their certificates arrive together.
 
 The settings card at the top shows **Email the round-up this many days before expiry** and who set
 it. If email sending is off, the card says so: the round-up then appears only on this page.

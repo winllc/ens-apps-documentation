@@ -86,7 +86,7 @@ CertAlert logs to standard output (no file appender is configured). The applicat
 `com.winllc.certalert` is at `INFO`. Change it with `logging.level.com.winllc.certalert` and a
 restart, or at runtime through the standard Spring Boot `/actuator/loggers` endpoint
 (`POST /actuator/loggers/com.winllc.certalert` with `{"configuredLevel":"DEBUG"}`), which requires
-an administrator's session. From the next release, every level change made through `loggers` is
+an administrator's session. From 0.0.3, every level change made through `loggers` is
 recorded in the audit trail as `logging.level-changed` (category `configuration`: who, which
 logger, the old and the new level) before it takes effect; if the trail cannot be written, the
 level is left as it was.
@@ -97,11 +97,13 @@ lines (logger `ens.audit`) are raw `ens-audit/1` JSON either way; filter on
 `"schema":"ens-audit/1"` to separate them.
 
 !!! note "Calling the API from scripts"
-    Apart from the SIEM pull API's bearer tokens (`/api/audit/events`), CertAlert has no HTTP
-    Basic or token authentication: callers sign in with a client certificate or through the
-    `/login` form, and `POST`/`PUT`/`DELETE` requests carry Spring Security's CSRF token (the pages
-    read it from the `_csrf` meta tags), so a script fetches a page in the same session first to
-    obtain it. `GET` requests need only the session. See [API reference](api-reference.md#conventions).
+    A script calls `/api/v1/**` with an [API token](api-reference.md#api-tokens)
+    (`Authorization: Bearer cat_…`), which needs no session and no CSRF token; the SIEM pull API
+    (`/api/audit/events`) has bearer tokens of its own. There is no HTTP Basic. A script that
+    uses a browser session instead (a client certificate or the `/login` form, as the `curl -b`
+    examples on this page do) sends Spring Security's CSRF token with every `POST`, `PUT` and
+    `DELETE`; the pages carry it in the `_csrf` meta tags, so the script fetches a page in the
+    same session first. See [API reference](api-reference.md#conventions).
 
 Log lines worth knowing:
 
@@ -109,20 +111,30 @@ Log lines worth knowing:
 |---|---|
 | `Skipping the scheduled <JOB> job: it is running, or has just run, on this replica or another` | Overlap guard: the job's lock is held, by a run that outlasted its interval or by another replica |
 | `Scheduled <JOB> job failed` | A job threw; the scheduler stays alive for the next firing |
+| `<JOB> sync failed`, with `SizeLimitExceededException` | From 0.0.4: the directory cut the search short at its size limit, so the sweep failed rather than ending early. See [Troubleshooting](troubleshooting.md#syncing) |
+| `Failed to write a batch of N <JOB> entries; writing them one at a time: ...` | From 0.0.4: a batch could not be written, and is written again an entry at a time |
+| `Failed to write <JOB> entry '<dn>'` | That entry could not be written and was skipped; it counts as one error on the run. Its neighbours were written |
+| `Prune: left N unseen <kind> entr(ies) of M in place: ...` | From 0.0.4: the prune did not delete that kind. The line says whether no sweep has completed without errors since they were last seen, or they are more than `prune.max-share` |
 | `The expiry digest failed` | The round-up threw |
 | `Expiry digest: more than N certificate(s) expire in the next D day(s); ...` | The read of certificates about to expire stopped at `digest.scan-limit`; the rest wait for a later run |
 | `Expiry digest: more than N expired certificate(s) are still published by entries holding nothing current; ...` | The read of expired certificates stopped at `digest.scan-limit`; older ones are left out |
 | `Expiry digest: round-ups that no longer apply were left in place, ...` | A run stopped at `digest.scan-limit`, so it did not clear earlier round-ups |
+| `Expiry digest: stopped at the N message cap for one run; M message(s) were not sent this run. ...` | From 0.0.4, on every run where `email.max-per-run` binds. The soonest expiries were mailed; the longest-expired wait |
 | `... has N 'serverPOC' value(s) that are not email addresses, ignoring them` | `require-email-poc` dropped values; fix at source or set it `false` |
 | `Email alerts are enabled but no recipients are configured` | `cert-alert.alerts.email.to` is empty |
 | `Rejecting client certificate ...: the directory publishes no such certificate` | X.509 sign-in failed the fingerprint match |
 | `Refusing client certificate '...' published by '...': its authority revoked it` (or `it expired on ...`, `it is not valid until ...`) | X.509 sign-in refused a published certificate that is revoked or outside its validity dates |
+| `Refusing client certificate '...': N different directory entries publish it, so it cannot say which of them is signing in` | From 0.0.4: more than one person publishes the certificate presented, so it signs in nobody (`certificate published by more than one person`) |
 | `[...] name N different directory entries; matching none of them` | With `require-known-certificate: false`, a certificate's `uid` and addresses name more than one person, so it signs in nobody |
 | `Refused to add <address> to <dn> for <user>: it is named in cert-alert.security.admin-identifiers` | Someone tried to add an administrator's identifier as a person's address |
 | `Email templates will be read from <dir> before the packaged ones` | Template override directory in use |
 | `X.509 sign-in is on and ENS_X509_REVOCATION is off: ...` | Startup: certificates sign in without a live revocation check. DISA STIG requires one |
 | `ENS_X509_REVOCATION_FAIL=open: ...` | Startup: a certificate whose revocation status cannot be found signs in anyway |
 | `Refusing client certificate '...': revoked (...)`, `...: its revocation status is unknown: ...`, `...: its issuer '...' is not in ENS_X509_ALLOWED_ISSUERS` | A certificate refused at sign-in |
+| `Allowing client certificate '...' although no OCSP responder or CRL answered for it (soft-fail; ...)` | Soft-fail let a certificate in without a revocation answer. From 0.0.4 it is logged once per answer, not on every request |
+| `ENS_X509_TRUSTED_PROXIES entry '...' is not an address or CIDR` | Startup, with `SERVER_FORWARD_HEADERS_STRATEGY=framework`: that entry is ignored when the client's address is worked out |
+| `Could not read the SAML identity provider's metadata from ... again; keeping the copy read at ...` | From 0.0.4: a scheduled re-read of the metadata failed. The last copy that worked stays in use, and the read is tried again a minute later |
+| `The clock reads ..., before ..., the latest time this installation has seen: licenses are checked as of ...` | From 0.0.4: the host's clock is more than a day behind a time CertAlert has already recorded. Correct the clock |
 | `Could not send the <kind> email "..." to ... (attempt N); trying again at ...` | The mail server refused or did not answer; the message stays in the outbox |
 | `Gave up on the <kind> email "..." to ... after N attempt(s) over 3d: ...` | A message reached `give-up-after` and will not be sent |
 | `Email is queued but no mail server is configured (spring.mail.host); it waits until one is` | Email is enabled without `SPRING_MAIL_HOST` |
@@ -134,17 +146,22 @@ Log lines worth knowing:
 All jobs run inside the application process, in UTC, and are guarded against overlapping
 themselves by a lock in the database (`shedlock`), which a run started by hand takes too, on this
 replica or another. Directory jobs are recorded in the `sync_run` table and readable at
-`GET /api/v1/sync/runs`.
+`GET /api/v1/sync/runs` by administrators and auditors (from 0.0.4; any signed-in user before).
+
+From 0.0.4 the jobs below, the webhook outbox, the audit flush and the session sweep share eight
+scheduler threads on each replica (`CERT_ALERT_SCHEDULER_THREADS`, Helm `schedulerThreads`), so a
+long sweep no longer holds up the mail outbox, the hourly refresh or the others. Earlier releases
+ran them all on one thread. See [Configuration → Scheduler threads](configuration.md#scheduler-threads).
 
 | Job | Default cron | Config | Default state | What it does |
 |---|---|---|---|---|
 | **users** | `0 0 2 * * *` | `cert-alert.ldap.sync.users-cron` | on | Sweep IC Persons |
 | **servers** | `0 0 4 * * *` | `cert-alert.ldap.sync.servers-cron` | on | Sweep IC Non-Person Entities |
-| **refresh** | `0 15 * * * *` | `cert-alert.ldap.sync.refresh-cron` | on | Re-evaluate expiry status of cached certificates; no LDAP reads |
+| **refresh** | `0 15 * * * *` | `cert-alert.ldap.sync.refresh-cron` | on | Re-evaluate expiry status of cached certificates; no LDAP reads. From 0.0.4 it also escalates: a certificate alerted on as a `WARNING` is alerted on once more, as `CRITICAL`, when it comes inside `critical-threshold-days` |
 | **revocation** | `0 30 5 * * *` | `cert-alert.revocation.cron` | on | CRL/OCSP check of current certificates |
 | **expiry round-up** | `0 0 7 * * *` | `cert-alert.notifications.digest.cron` | on | Per-person round-up (+ email if enabled), then notification retention |
 | **certificate clean-up** | `0 0 3 * * SAT` | `cert-alert.ldap.certificate-cleanup.cron` | **off** | Delete expired/revoked certificates from the directory |
-| **prune** | `0 0 6 * * SUN` | `cert-alert.ldap.prune.cron` | **off** | Delete cached entries unseen for `prune.after` |
+| **prune** | `0 0 6 * * SUN` | `cert-alert.ldap.prune.cron` | **off** | Delete cached entries unseen for `prune.after`, once a clean sweep has missed them and never more than `prune.max-share` of a kind; see [What a prune will not delete](#what-a-prune-will-not-delete) |
 | **audit retention** | `0 30 3 * * *` (daily) | `cert-alert.audit.retention.cron` | **off** | Prune audit events older than `ENS_AUDIT_RETENTION_DAYS`, or, while that is `0`, older than `cert-alert.audit.retention.after` with `retention.enabled`. Only events every output has delivered |
 | **changelog connector** | continuous | `cert-alert.ldap.changelog.*` | **off** | Follow `cn=changelog` |
 | **mail outbox** | every 30 s | `cert-alert.mail.outbox.*` | on | Send queued email and retry failures; see [When the mail server is down](#when-the-mail-server-is-down) |
@@ -157,6 +174,23 @@ replica or another. Directory jobs are recorded in the `sync_run` table and read
 Every directory job run has a status: `RUNNING`, `COMPLETED`, `COMPLETED_WITH_ERRORS` or
 `FAILED`, with counts (entries seen/created, certificates cached/removed, alerts raised, entries
 pruned, errors) and duration.
+
+What the statuses mean for a sweep, from 0.0.4:
+
+- **`errors` counts entries.** A batch that cannot be written is written again one entry at a
+  time, so only the entry that cannot be stored is skipped, and it is named in the log
+  (`Failed to write <JOB> entry '<dn>'`). Earlier releases dropped the whole batch of 200 and
+  counted batches. Values longer than their database column are cut to fit (an address longer
+  than an address column is dropped), and a DN that appears twice in a batch is written once, so
+  an over-long title or description no longer costs an entry.
+- **`FAILED` with `SizeLimitExceededException`** means the directory cut the search short at its
+  size limit. Some servers count that limit across all the pages of a search (389 Directory Server
+  has `nsslapd-pagedsizelimit` and OpenLDAP `size.prtotal` for this; check your server's
+  documentation). Earlier releases
+  ended such a sweep as a success after the first few thousand entries. Raise the service
+  account's size limit in the directory. A `count-limit` set above `0` still ends quietly at that
+  limit.
+- Only a sweep that ends `COMPLETED` lets the prune delete what it did not see.
 
 ```bash
 curl -s -b cookies.txt https://cert-alert/api/v1/sync/runs?limit=10 | jq '.[] | {job,status,startedAt,errors,message}'
@@ -182,6 +216,35 @@ Administrators can run any job immediately through the API (see
     `POST /api/v1/sync/prune` calls the prune service directly; the `enabled` flag only governs
     the schedule. Check `GET /api/v1/sync/prune/preview` before calling it. Manual certificate
     clean-up, by contrast, does nothing unless `certificate-cleanup.enabled` is `true`.
+
+### What a prune will not delete
+
+From 0.0.4 a prune, scheduled or started by hand, looks at people and servers separately and
+deletes the entries of a kind that have gone unseen for `prune.after` only when:
+
+- a sweep of that kind has finished `COMPLETED`, with no errors, since the newest of them was last
+  seen. A month of failed or short sweeps (an expired bind password, a size limit, a lapsed
+  license) therefore deletes nothing;
+- they are at most `prune.max-share` (10%) of that kind.
+
+Otherwise that kind is left in place, the log says why
+(`Prune: left N unseen user entr(ies) of M in place: ...`), and the run is recorded as
+`COMPLETED_WITH_ERRORS` with one error for each kind left. `GET /api/v1/sync/prune/preview` still
+counts every unseen entry, whether or not a prune would delete it now. To prune after a genuine
+large removal from the directory, run the sweeps until they complete without errors, and raise
+`cert-alert.ldap.prune.max-share` for that one run if more than a tenth of a kind has gone. A
+pruned entry takes its added contacts, addresses and project memberships with it, which no sweep
+brings back.
+
+### What certificate clean-up waits for
+
+- `revoked-after` (7 days) is counted from the check that first found the certificate revoked.
+  Before 0.0.4 it was counted from the latest nightly check, so a revoked certificate that was
+  still current was never old enough to remove. The upgrade starts the count for certificates
+  already revoked at their last check.
+- A certificate a run could not remove (its entry is gone from the directory, or the directory
+  refused the modify) goes behind everything not yet tried in the next run, so such certificates
+  cannot use up `max-per-run` every week.
 
 ## The changelog connector
 
@@ -223,11 +286,11 @@ Everything else (`directory_user`, `directory_server`, `cached_certificate`, ide
 can be rebuilt by a sweep.
 
 !!! note "No scheduled backup is included"
-    The release package and the Helm chart have no backup CronJob. Up to the current release the
-    only automatic backup is the one `upgrade.sh` takes before an upgrade, and the commands below
-    are scheduled with your own tools. From the next release the release package adds
+    The release package and the Helm chart have no backup CronJob. Before 0.0.3 the only
+    automatic backup is the one `upgrade.sh` takes before an upgrade, and the commands below
+    are scheduled with your own tools. From 0.0.3 the release package adds
     `backup.sh` and `restore.sh`, and the chart an optional pre-upgrade backup hook; see
-    [Backup and restore scripts](#backup-and-restore-scripts-next-release).
+    [Backup and restore scripts](#backup-and-restore-scripts).
 
 **Keep the configuration with the dumps.** The database does not hold `.env`, the chart's values or
 its Secrets, and in particular not the webhook secret key (`CERT_ALERT_WEBHOOKS_SECRET_KEY`,
@@ -278,11 +341,13 @@ up as carefully as the dumps.
     The chart's evaluation database (`database.embedded.enabled`) is not backed up. Do not keep
     data you need in it.
 
-### Backup and restore scripts (next release)
+### Backup and restore scripts
+
+From 0.0.3.
 
 === "Release package"
 
-    The release package's directory gains two scripts:
+    The release package's directory has two scripts:
 
     ```bash
     ./backup.sh                              # backups/cert-alert-<UTC time>.sql.gz
@@ -378,6 +443,9 @@ once that has committed. When the mail server is down:
 
 - a message stays queued and is tried again a minute later, then two, four and so on up to an
   hour apart, each failure logged as a warning with the mail server's reason;
+- a round-up, like a background pass of the outbox, stops after three failures in a row and
+  leaves the rest queued for the next pass (from 0.0.4; before, a round-up waited out every
+  message's timeout while holding its lock);
 - a newer round-up to the same address replaces one still waiting;
 - after three days a message is given up on, with an error in the log;
 - the Notifications page says the round-up's messages "could not be sent and are queued to try
@@ -386,6 +454,21 @@ once that has committed. When the mail server is down:
 
 Watch `ens_certalert_mail_outbox{state="pending"}` and `{state="failed"}`. The settings are in
 [Configuration → Mail outbox](configuration.md#mail-outbox-cert-alertmailoutbox).
+
+### The round-up's message cap
+
+A round-up sends at most `cert-alert.notifications.email.max-per-run` (500) messages, one per
+address. From 0.0.4, where that binds:
+
+- messages go out most urgent first: the soonest to expire, then what has expired, most recently
+  first. Earlier releases mailed the longest-expired first, so above the cap the same people were
+  mailed every day and nobody with an upcoming expiry was;
+- the Notifications page says so after **Run the expiry round-up** (*Stopped at the 500 message cap
+  for one run …; N message(s) were not sent this run*), the result carries the number as
+  `notMailed`, and a `WARN` is logged on every run the cap binds;
+- everybody is still told on the Notifications page.
+
+Raise `max-per-run`, or remove long-expired certificates that nobody needs from the directory.
 
 ## Monitoring
 
@@ -416,11 +499,14 @@ The counts are read from the database at most once a minute.
 
 - **Liveness/readiness** probes as above; **aggregate health** for directory reachability.
 - **Job runs**: alert if the most recent `USERS`/`SERVERS` run in `GET /api/v1/sync/runs` is not
-  `COMPLETED` or is older than ~25 hours.
+  `COMPLETED` or is older than ~25 hours. The call needs an administrator or auditor, or an API
+  token with `jobs:read`. A `PRUNE` run that is `COMPLETED_WITH_ERRORS` left a kind of entry in
+  place; see [What a prune will not delete](#what-a-prune-will-not-delete).
 - **Changelog**: alert on growing `lag`, non-null `lastError`, or `running: false`
   (`GET /api/v1/changelog`).
 - **Revocation**: `GET /api/v1/revocation` returns counts; a large *Not checked* or *Unknown*
-  count means the check is not reaching the authorities.
+  count means the check is not reaching the authorities or, from 0.0.4, that an authority is
+  serving a CRL past its `nextUpdate` or the configured `default-crl-url` belongs to another CA.
 - **Directory health and certificate posture**: `GET /api/v1/metrics` (what the Metrics page shows).
 - **Operator alerts**: enable `cert-alert.alerts.email` with a team list, or scrape the log for
   alert lines.
@@ -454,8 +540,8 @@ The counts are read from the database at most once a minute.
    person's credentials), revocation endpoints, and risky-name flags (the migration backfills
    these from stored names). Run **Sync directory** after an upgrade to refresh them.
 
-Migrations shipped: `V1` (directory tables) through `V28`, and `V29` from the next release. The
-later ones:
+Migrations shipped: `V1` (directory tables) through `V28`; `V29` from 0.0.3; and `V30` to `V32`,
+`V37` and `V39` from 0.0.4 (the numbers between are not used). The later ones:
 
 | Migration | What it does |
 |---|---|
@@ -471,12 +557,17 @@ later ones:
 | `V26__create_api_token_and_webhook` | `api_token`, `webhook_endpoint`, `webhook_delivery`: [API tokens](api-reference.md#api-tokens) and [webhooks](webhooks.md) |
 | `V27__create_saved_view_and_scheduled_report` | `saved_view`, `scheduled_report`, and three attachment columns on `outbound_email`: [saved views and scheduled reports](exports-and-reports.md) |
 | `V28__webhook_url_encrypted_and_report_owner_dn` | A wider, encryptable webhook URL and a scheduled report owner's DN |
-| `V29__webhook_private_networks_allowed` (next release) | `webhook_endpoint.private_networks_allowed`, set for every webhook that exists at the upgrade, so it keeps a private address until its URL changes (see [Webhooks → Private networks](webhooks.md#private-networks)) |
+| `V29__webhook_private_networks_allowed` (0.0.3) | `webhook_endpoint.private_networks_allowed`, set for every webhook that exists at the upgrade, so it keeps a private address until its URL changes (see [Webhooks → Private networks](webhooks.md#private-networks)) |
+| `V30__cache_certificate_revocation_found_at` (0.0.4) | `cached_certificate.revocation_found_at`: when a certificate was first found revoked, which the clean-up's `revoked-after` is counted from. Certificates already revoked take their last check |
+| `V31__cache_certificate_last_alert_severity` (0.0.4) | `cached_certificate.last_alert_severity`, for the escalation to `CRITICAL`. Certificates expiring more than 7 days ahead are taken to have had their `WARNING`, so they escalate in their turn; those already inside 7 days are left alone, so the upgrade sends no burst of alerts |
+| `V32__cache_certificate_cleanup_attempted_at` (0.0.4) | `cached_certificate.cleanup_attempted_at`: when the clean-up last tried and could not remove a certificate |
+| `V37__audit_pruned_through` (0.0.4) | `audit_chain_head.pruned_through_seq` and `.pruned_through_hash`: how far audit retention has pruned, which **Verify integrity** now checks. An installation that has already pruned starts from the sequence number before its oldest event |
+| `V39__ens_license_latest_time_seen` (0.0.4) | `ens_license_installation.latest_seen_ms`: the latest time the installation has seen, so a clock set back does not bring an expired license back |
 
 Migrations are written **expand-only**: tables, nullable or defaulted columns and indexes are
 added in a release, and anything dropped, renamed or narrowed goes at least one release after the
 code stops using it. So with several replicas, the old pods keep serving on the migrated schema
-during a rolling update. `V21` to `V29` are all expand-only. `helm rollback` and starting an older
+during a rolling update. `V21` to `V39` are all expand-only. `helm rollback` and starting an older
 release still do not undo a migration: the way back is the backup taken before the upgrade.
 
 ### Upgrading to the platform-baseline release
@@ -493,10 +584,53 @@ release still do not undo a migration: the way back is the backup taken before t
 Migrations are not undone. Going back to an older release means restoring the backup taken before
 the upgrade; see [Rolling back an upgrade](availability-and-sizing.md#rolling-back-an-upgrade).
 
-### Upgrading to the next release
+### Upgrading to 0.0.5
 
-These changes come with the next release. Nothing stops working on the upgrade; the ones marked
-*new installs* change the default only for an installation made with the next release.
+0.0.3 and 0.0.4 were not published as release packages: the release package after 0.0.2 is 0.0.5,
+and it brings the changes of all three at once. On this site, *from 0.0.3* and *from 0.0.4* say
+which version a change came in; 0.0.5 itself changes nothing in the application. Two changes need
+a decision before or right after the upgrade. The ones marked *new installs* change the default
+only for an installation made with the new release.
+
+**From 0.0.4: check before you upgrade**
+
+| Change | What to do |
+|---|---|
+| Helm: `x509.trustedProxies` defaults to `""` (loopback) instead of every private range | Set it to the ingress controller's or router's pod network, for example `10.42.0.0/16`. With `x509.source: header` the chart **does not render** without it. See [Install → Upgrade](install.md#6-upgrade) |
+| The client's address behind a proxy comes from `ENS_X509_TRUSTED_PROXIES` | With `SERVER_FORWARD_HEADERS_STRATEGY=framework`, the address in the audit trail and an API token's last-used address is the rightmost `X-Forwarded-For` hop that is not a trusted proxy, no longer the leftmost one, which a client could write. Until the list names the proxy in front (the compose network's subnet for the release package, `x509.trustedProxies` with Helm), the trail records the proxy's address. See [Configuration → The client's address behind a proxy](configuration.md#the-clients-address-behind-a-proxy) |
+
+**From 0.0.4: behaviour that changes without a setting**
+
+| Change | What to do |
+|---|---|
+| Scheduled jobs share eight threads | Nothing. `CERT_ALERT_SCHEDULER_THREADS` (Helm `schedulerThreads`) changes it; several jobs can now hold database connections at once, so watch `hikaricp_connections_pending` and raise `CERT_ALERT_DB_POOL_SIZE` if requests wait |
+| A sweep the directory cuts short at its size limit fails | Before, it ended as a success after the entries below the limit. If a sweep now ends `FAILED` with `SizeLimitExceededException`, raise the service account's size limit in the directory; see [Troubleshooting](troubleshooting.md#syncing) |
+| A failed sweep batch is written an entry at a time | A run's `errors` now counts entries, not batches of 200, and over-long values are cut to fit. Entries that used to be skipped with their batch every night are written at the next sweep |
+| Prune deletes only after a clean sweep, and at most `prune.max-share` (10%) of a kind | A prune that would have deleted more now leaves that kind in place and ends `COMPLETED_WITH_ERRORS`. See [What a prune will not delete](#what-a-prune-will-not-delete) |
+| Certificate clean-up counts `revoked-after` from when the revocation was found | Revoked certificates that are still current now become removable. With clean-up on, check `GET /api/v1/sync/certificate-cleanup/preview` after the upgrade |
+| A revocation survives an unanswered check | A night with the CRL host or responder unreachable no longer turns *Revoked* into *Unknown* and announces the revocation again when the authority answers |
+| An out-of-date CRL, or another authority's, no longer answers *Not revoked* | Certificates not on a list past its `nextUpdate`, or covered only by a list that names another issuer, become *Unknown* at the next revocation check. Expect the *Unknown* count to rise where an authority publishes late or `default-crl-url` is another CA's; see [Configuration → Revocation](configuration.md#revocation-cert-alertrevocation) |
+| An expiring certificate escalates to `CRITICAL` | One more alert per certificate, on every alert channel, as a notification and as a `certificate.expiring` webhook with `severity` `CRITICAL`, when the hourly refresh finds it inside `critical-threshold-days`. Certificates already inside the window at the upgrade are not alerted on |
+| No alert for a certificate already renewed | An old certificate that lapses beside its renewal no longer raises an operator alert or a notification. The status change is still in the entry's history |
+| The round-up: one message per address, soonest expiries first, the cap reported | See [The round-up's message cap](#the-round-ups-message-cap). A person whose signing or encryption certificate lapsed and was not renewed stays in the round-up although the other half is current. A round-up about a single credential is no longer marked unread every night; it is marked unread once more, on the first run after the upgrade |
+| A client certificate that more than one person publishes is refused | Before, it signed in whichever of them the database returned first. Give each person a certificate of their own, or have those people use the password form or single sign-on; see [Troubleshooting](troubleshooting.md#signing-in) |
+| `GET /api/v1/sync/runs`, `/sync/prune/preview` and `/sync/certificate-cleanup/preview` need an administrator or auditor | A monitoring script that read them as an ordinary user gets `403`: give it an auditor, or an API token with `jobs:read` (runs) or `admin` (previews). `GET /api/v1/changelog` stays open and leaves `lastError` out for everybody else |
+| The table endpoints (`/api/v1/datatables/*`) return at most 500 rows a page | A script that posted `length=-1` for every row gets `400`. Use the paged [public API](api-reference.md#public-api) instead |
+| The consent banner records an agreement once per session, at most 10 a minute from one address | Behind a proxy that is not in `ENS_X509_TRUSTED_PROXIES`, every browser shares the proxy's address and that limit: set the trusted proxies (first table) |
+| A license not yet valid, or expired, is not installed over one in full effect | Upload next term's license on or after its start date. See [Install → Add the license](install.md#3-add-the-license) |
+| A clock set back does not bring an expired license back | Nothing, with a correct clock. A host whose clock is more than a day behind a time CertAlert has recorded has its license checked as of that time less a day, and the license screen says the clock is behind |
+| **Verify integrity** checks both ends of the audit trail | The first retained event must be the one right after the last event retention pruned, and the newest must be the chain head. A trail whose events were deleted by other means than CertAlert's retention is now reported as broken; see [Troubleshooting](troubleshooting.md#audit-trail) |
+| `access.denied` is recorded at the first refusal | The first refusal is written at once with `details.count` 1; identical ones in the next 60 seconds are one more event with their count and `details.collapsed`. A SIEM rule that summed `details.count` still gets the total |
+| A wrong or revoked SIEM pull-API token is recorded | As a failed `auth.login` with `details.method` `api-token` and the client's address, never the token; repeats from one address are collapsed as for `access.denied`. Before, it left no trace |
+| Syslog over `tcp` and `tls` reconnects, and may repeat a batch | After a collector restart the last batch written is sent again, so de-duplicate on the event `id`. Where no event may be missing, use Splunk HEC or the pull API |
+| SAML: the identity provider's metadata is read again every hour | A rolled signing certificate is picked up without a restart. `cert-alert.sso.saml.metadata-refresh: 0` reads it once, as before |
+| A disabled webhook's queued deliveries are given up on | Before, they were still posted for up to a day. Disabling or renaming a webhook no longer needs its host to resolve |
+| Audit outputs wait out their backoff; the export is consistent | While Splunk or syslog is down, a new event no longer ends the wait after a failed delivery, so there is one attempt and one warning per backoff rather than one per event. **Export** on the audit page no longer repeats or drops events recorded while it runs |
+| Expired sessions nobody signed in to are removed in bulk | Nothing. A `spring_session` table that grew under traffic without cookies (health checks against pages, scanners) shrinks again |
+| API tokens are narrowed only by what the live directory says | Tokens that stopped working after their creator signed in during a directory outage stay narrowed: create new ones. See [Troubleshooting](troubleshooting.md#signing-in) |
+| The **Open** button on a server's page needs an `http://` or `https://` `serverURL` | Any other value is shown as text only |
+
+**From 0.0.3**
 
 | Change | What to do |
 |---|---|
@@ -506,13 +640,16 @@ These changes come with the next release. Nothing stops working on the upgrade; 
 | OIDC: Entra ID group overage refused | A sign-in whose token names `_claim_names.groups` instead of carrying the groups is refused (`/login?sso_error=groups`, a failed `auth.login`). Send only the groups assigned to the application; see [Single sign-on](single-sign-on.md#microsoft-entra-id-oidc) |
 | OIDC: signing out at the provider | `CERT_ALERT_SSO_OIDC_PROVIDER_LOGOUT` (Helm `sso.oidc.providerLogout`) is off on upgrade, with a startup warning while OIDC is on, and on for *new installs*. Register `<public-url>/login?logout` as a post-logout redirect URI before turning it on |
 | Webhooks: optional egress proxy | New and unset: webhooks keep connecting directly. `CERT_ALERT_WEBHOOKS_PROXY_HOST` and `_PORT` (Helm `webhooks.proxy.host` and `.port`) send them through an HTTP forward proxy with `CONNECT` to the address CertAlert resolved and checked, so the host still needs DNS for the receivers. A proxy setting that cannot work stops the start. See [Webhooks → Through an egress proxy](webhooks.md#through-an-egress-proxy) |
-| SAML single logout | `CERT_ALERT_SSO_SAML_SINGLE_LOGOUT` (Helm `sso.saml.singleLogout`) is off on upgrade, with a startup warning while SAML is on, and on for *new installs*. It needs the service provider's signing key and an identity provider with a `SingleLogoutService`; give the provider the service provider metadata again so it learns `<public-url>/logout/saml2/slo`. See [SAML single logout](single-sign-on.md#saml-single-logout-next-release) |
+| SAML single logout | `CERT_ALERT_SSO_SAML_SINGLE_LOGOUT` (Helm `sso.saml.singleLogout`) is off on upgrade, with a startup warning while SAML is on, and on for *new installs*. It needs the service provider's signing key and an identity provider with a `SingleLogoutService`; give the provider the service provider metadata again so it learns `<public-url>/logout/saml2/slo`. See [SAML single logout](single-sign-on.md#saml-single-logout) |
 | Auditors may export the inventory | `POST /api/v1/certificates/export` is open to the auditor role, audited as `inventory.exported` |
 | `cert-alert.security.enabled=false` needs the `dev` profile | The application refuses to start with it otherwise. It was never meant for anything but local development |
 | Log-level changes are audited | Changing a level through `/actuator/loggers` records `logging.level-changed` (category `configuration`) |
 | Sign-in log lines stay on one line | Certificate subjects and issuers, identity-provider usernames and sign-in identifiers are logged with line breaks as spaces and other control characters as `?`. A log search for an exact subject containing such characters no longer matches it verbatim |
-| Backups | The release package adds `backup.sh` and `restore.sh`; the chart adds `upgradeBackup` (off). See [Backup and restore scripts](#backup-and-restore-scripts-next-release) |
-| Migration `V29` | Adds `webhook_endpoint.private_networks_allowed` on the first start (expand-only) |
+| Backups | The release package adds `backup.sh` and `restore.sh`; the chart adds `upgradeBackup` (off). See [Backup and restore scripts](#backup-and-restore-scripts) |
+| Migrations `V29` to `V32`, `V37` and `V39` | Run on the first start; all add columns only (expand-only). The list is under [Upgrades](#upgrades) |
+
+After the upgrade, run **Sync directory** and look at the result: sweeps that used to end early or
+drop batches now say so.
 
 ### Upgrading to the release with single sign-on, the public API and exports
 
@@ -543,13 +680,15 @@ inert until someone uses it.
   `search-timeout` if a single page search is slow.
 - **Memory**: the heap follows the container limit (`MaxRAMPercentage=75`).
 - **Database pool**: `CERT_ALERT_DB_POOL_SIZE` (default 10).
+- **Scheduler threads**: `CERT_ALERT_SCHEDULER_THREADS` (default 8, from 0.0.4), per replica. More
+  threads let more jobs run at once and draw on the same database pool.
 - **Revocation throughput**: `cert-alert.revocation.workers` (default 8) concurrent OCSP requests.
 
 ## Routine checklist
 
 | Frequency | Task |
 |---|---|
-| Daily | Check last sweep runs succeeded; glance at the Notifications round-up status |
+| Daily | Check last sweep runs are `COMPLETED`, without errors; glance at the Notifications round-up status |
 | Weekly | Review the audit log (`/admin/audit`) for unexpected activity, and **Verify integrity**; check revocation *Unknown* counts and the mail outbox |
 | Monthly | Review `serverPOC` warnings in logs; confirm the round-up lead days are still right |
 | Per release | Back up, run `upgrade.sh` or `helm upgrade`, run Sync directory |

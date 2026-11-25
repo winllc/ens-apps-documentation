@@ -98,7 +98,7 @@ certificates, in [Configuration → Client certificates](configuration.md#client
 
 | Control | Setting | Default | STIG deployment |
 |---|---|---|---|
-| Notice and consent banner | `ENS_CONSENT_BANNER_ENABLED` | `false` | `true`. The standard DoD text is the default; use `ENS_CONSENT_BANNER_FILE` for your site's own |
+| Notice and consent banner | `ENS_CONSENT_BANNER_ENABLED` | `false` | `true`. The standard DoD text is the default; use `ENS_CONSENT_BANNER_FILE` for your site's own. Each agreement is audited, from 0.0.4 once per session |
 | Idle timeout | `ENS_SESSION_IDLE_TIMEOUT` | `30m` | Your policy's value |
 | Administrator idle timeout | `ENS_SESSION_ADMIN_IDLE_TIMEOUT` | the idle timeout | `15m` is the suggested value |
 | Absolute session lifetime | `ENS_SESSION_ABSOLUTE_TIMEOUT` | `12h` | Your policy's value |
@@ -109,13 +109,14 @@ certificates, in [Configuration → Client certificates](configuration.md#client
 | Certificate-only sign-in | `cert-alert.security.ldap.enabled` | `true` | `false` where only CAC/PIV sign-in is allowed |
 | Failed password sign-ins | The directory's password policy | | CertAlert adds no lockout of its own: a password sign-in is a bind as the user, so the directory's lockout applies. Repeated failures for one name are audited at `alert` severity |
 | Secure session cookie | `ENS_COOKIE_SECURE` | `false` | `true` whenever TLS ends at a proxy that does not send `X-Forwarded-Proto` |
+| Client address in the audit trail behind a proxy | `SERVER_FORWARD_HEADERS_STRATEGY`, `ENS_X509_TRUSTED_PROXIES` | unset; loopback | `framework`, and the proxy's own addresses (never a whole private range). From 0.0.4 `X-Forwarded-For` is believed only through these proxies; until they are listed the trail records the proxy's address. See [Configuration](configuration.md#the-clients-address-behind-a-proxy) |
 | Security headers and CSRF | always on | | `ENS_CSP_REPORT_ONLY` must stay `false` |
-| Audit trail | `ENS_AUDIT_*` | stored in the database, stdout | Forward to your SIEM, and set `ENS_AUDIT_RETENTION_DAYS` to your retention policy ([Audit logging](../audit-logging.md)) |
+| Audit trail | `ENS_AUDIT_*` | stored in the database, stdout | Forward to your SIEM, and set `ENS_AUDIT_RETENTION_DAYS` to your retention policy ([Audit logging](../audit-logging.md)). Syslog over `tcp` or `tls` is best effort (no acknowledgement; from 0.0.4 it reconnects and resends the last batch after the collector closes): where no event may be missing, use Splunk HEC or the pull API |
 | Revocation fetches | `CERT_ALERT_REVOCATION_ALLOWED_HOSTS` | anywhere a certificate names, except link-local and metadata addresses | Your PKI's hosts |
 | Classification banner | `CERT_ALERT_BANNER_ENABLED`, `CERT_ALERT_BANNER_TEXT` | off | Your system's marking |
 
 Already in place without settings: every sign-in, refusal, session end and change is audited with
 the user and client address; certificate sign-in binds to the exact certificate the directory
-publishes; the management port, when set, serves Prometheus apart from the application port; the
+publishes, and from 0.0.4 refuses one that more than one person publishes; the management port, when set, serves Prometheus apart from the application port; the
 Helm chart runs CertAlert as non-root (uid 185) with a read-only root file system, no
 capabilities and the `RuntimeDefault` seccomp profile.
