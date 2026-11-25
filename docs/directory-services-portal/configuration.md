@@ -383,6 +383,40 @@ Helm: `integrations.api.*`, `integrations.webhooks.*` and `integrations.transfer
 [API reference](api-reference.md#integration-api-apiv1), [Webhooks](webhooks.md) and
 [Import and export](import-export.md).
 
+## Entry expiry (next release) { #entry-expiry }
+
+For entries that end on a date, such as contractors and guests. In the form, give the end
+date field the format **Date** (`yyyy-mm-dd`; a generalized time such as `20261231000000Z` is
+read too), and have a field holding the sponsor's DN (the format **Distinguished name**, or a
+directory drop down of DNs). On the directory definition, under **Entry expiry**, choose:
+
+| Setting | Default | What |
+|---|---|---|
+| End date field | *(off)* | The form's date field |
+| Sponsor field | | The form's DN field naming the sponsor |
+| Days of warning | `14` | From this many days before the end, the sponsor is told daily |
+| Longest extension | `180` | A sponsor may set the end date at most this many days from today |
+
+Each day at 06:07 UTC, on one replica, the sponsor of every entry ending within the days of
+warning is mailed, the [`entry.expiring`](webhooks.md) webhook event is sent, and the notice is
+audited as `entry.expiring`. Sponsors find their entries under **Sponsored entries** and move
+the end date out, never in and no further than the longest extension, without write access to
+the definition; the change is audited as `entry.update` with `details.via =
+"sponsor-renewal"`.
+
+Mail needs an SMTP server:
+
+| Variable | Default | Description |
+|---|---|---|
+| `SMTP_HOST` | *(empty: no mail)* | The mail server; without it, notices are only audited and sent as webhook events |
+| `SMTP_PORT` | `587` | |
+| `SMTP_USERNAME`, `SMTP_PASSWORD` | *(empty)* | When the server needs a sign-in |
+| `SMTP_STARTTLS` | `true` | |
+| `MAIL_FROM` | `directory-portal@localhost` | The sender |
+
+With the Helm chart, set them in `api.extraEnv`. The mail server is not part of the portal's
+health checks.
+
 ## Governed mode (next release) { #governed-mode }
 
 With the ENS identity governance console (syncd's console, see

@@ -32,6 +32,7 @@ the console is down.
 | Access requests: approval workflows, requests for oneself or a direct report, approvals, end dates, overrides | Console: Request access, My requests, My approvals, My team; Workflows and Requests for administrators |
 | The Directory Services Portal: its group requests decided here (governed mode), and its owners' changes reported here | `governance:delegate` tokens; `POST /api/v1/governance/ingest/dsp` |
 | Policies: separation of duties and rules over the person, a scan, violations, remediation and exceptions, and the check when access is asked for | Console: Policies, Violations, My policy violations |
+| Lifecycle: rules for joiners, movers and leavers; emergency termination and reinstatement | Console: Lifecycle; Terminate on a person's card; the engine's reserved `terminated` scope |
 | The Governance pack | Licensing |
 
 ## Setting a publication up for grants
@@ -274,6 +275,50 @@ person would newly violate:
 Giving an assignment directly that would violate a policy is refused unless the call says
 `override_policy` with a reason, recorded as `governance.policy.overridden`.
 
+## Lifecycle
+
+The projection notes what happens to each person: **joined**, **changed** (with each
+attribute's old and new value), **left**, **returned**. **Lifecycle rules** (Governance →
+Lifecycle) act on these, each once per event:
+
+| Action | What happens |
+|---|---|
+| Review (for movers) | The person's (new) manager reviews the access they keep, in a one-person campaign of everything no rule gives; what is undecided after the grace period (14 days) is revoked |
+| Tell the manager (for joiners) | Once the person has an account and nothing of theirs is pending, or after a day, their manager is mailed the accounts by system and what is still being set up. Never a password |
+| End assignments (for leavers) | Every assignment ends; the person's open tasks go to their manager (or to the governance administrators); whatever they owned (entitlements, systems, policies, a workflow's fallback) gets a task for a new owner |
+
+A rule may have a condition: CEL over the person as `e`, and for a change
+`e.previous_<attribute>` too. For example a mover rule on **changed** with
+`e.department != e.previous_department`. Every installation starts with one rule: leavers'
+assignments end. **What they did** lists each run.
+
+A person who **returns** gets back what rules give (with roles); access they had asked for is
+not restored: they ask again.
+
+### Emergency termination
+
+**Terminate** on a person's card (Governance → Assignments), with a reason, acts everywhere at
+once: every assignment ends; in each governed publication where the person has an account the
+engine is sent a `terminated` scope grant, which takes the person out of the publication's
+scope whatever its filter says, so the leaver policy applies (under a staged policy the
+account is disabled at once); and group memberships found in place are revoked. It is recorded
+as `governance.identity.terminated` with the severity **alert**, and raises the webhook event
+`governance.identity-terminated`.
+
+**Reinstate** ends the `terminated` grants: the engine brings the accounts back as it does for
+a rehire. Assignments that ended with the termination stay ended.
+
+A publication must have a `grants` section for the engine to take the grant (see
+[Setting a publication up for grants](#setting-a-publication-up-for-grants)).
+
+### Contractors
+
+Contractors are often not in the HR system. The [Directory Services
+Portal](../directory-services-portal/configuration.md#entry-expiry) can keep their records in a
+container, with an end date and a sponsor who is told before the end and can extend it; syncd
+reads the container as a source and ends their accounts on the date with `effective_until`.
+`examples/contractors-from-ldap.yaml` in syncd shows the configuration.
+
 ## API
 
 | Method and path | Who | What |
@@ -312,6 +357,8 @@ Giving an assignment directly that would violate a policy is refused unless the 
 | `POST /api/v1/governance/policies/scan` | writers | Scan now |
 | `GET /api/v1/governance/violations`; `POST .../{vid}/remediate`, `/exception` | readers; writers | Violations (`policy`, `state`, `severity`, `identity`) |
 | `GET /api/v1/my/violations`; `POST .../{vid}/remediate`, `/exception` | the policy's owner | Their policies' violations |
+| `GET`, `POST /api/v1/governance/lifecycle-rules`; `PUT`, `DELETE .../{lid}`; `GET /api/v1/governance/lifecycle-runs` | readers; writers | Lifecycle rules and what they did |
+| `POST /api/v1/governance/identities/{gid}/terminate`, `/reinstate` | writers | Emergency termination, with a reason |
 | `GET /api/v1/my/identity`, `/my/access` | every signed-in role | The signed-in person, and what they hold |
 
 Writes need the Governance pack. Reads never do: what was recorded stays visible after
@@ -334,6 +381,9 @@ a license lapses.
 | `governance.assignment.conflict` | authorization |
 | `governance.policy.created`, `.updated`, `.deleted` | configuration |
 | `governance.violation.detected`, `.remediated`, `.excepted`; `governance.policy.overridden` | authorization |
+| `governance.lifecycle.updated` | configuration |
+| `governance.lifecycle.triggered`, `governance.identity.reinstated` | authorization |
+| `governance.identity.terminated` (severity alert) | authorization |
 | `governance.projection.halted`, `governance.inventory.completed`, `governance.inventory.suspect` | system |
 
 ## What the console stores about people
@@ -367,5 +417,8 @@ each change the projection saw, the attributes' old and new values.
   with one set only is not; an exception hides a violation until it runs out; remediation
   resolves it; simulation writes nothing; a broken condition is refused; a request is
   blocked, warned or gains the owner's step; a direct assignment needs an override).
+- Lifecycle: integration tests (leaver, mover review and its grace period, joiner mail,
+  termination and reinstatement), engine tests of the `terminated` scope, and a termination
+  case in the engine's end-to-end script against OpenLDAP.
 - Not built yet: holding grants in change windows and thresholds, correlation rules in
   the API, and roles.
