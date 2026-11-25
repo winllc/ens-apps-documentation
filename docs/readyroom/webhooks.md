@@ -119,16 +119,16 @@ def verify(secret: str, header: str, body: bytes) -> bool:
 - The check runs when a webhook is saved and again on every delivery, and the connection is made to
   the address just checked (TLS still verifies the certificate against the host name), so a name that
   later resolves somewhere internal (DNS rebinding) is not sent to.
-- Webhooks connect directly unless an [egress proxy](#through-an-egress-proxy) is set (next
-  release); the JVM's proxy settings are not used, and its trust store applies. With the Helm
+- Webhooks connect directly unless an [egress proxy](#through-an-egress-proxy) is set (from
+  0.0.3); the JVM's proxy settings are not used, and its trust store applies. With the Helm
   chart's NetworkPolicy on, egress to port 443 is opened for webhooks (`webhooks.ports`), and to the
   proxy's port when `webhooks.proxy.address` is set.
 
 ## Through an egress proxy
 
-!!! info "From the next release"
-    Up to the current release webhooks always connect directly. The proxy setting is new and unset:
-    webhooks keep connecting directly until you set it.
+!!! info "From 0.0.3"
+    Before 0.0.3 webhooks always connected directly. The proxy setting is unset by default: webhooks
+    keep connecting directly until you set it.
 
 Where the only way out is an HTTP proxy, set `APPLICATION_WEBHOOKS_PROXY` to its `host:port` (Helm
 `webhooks.proxy.address`).
@@ -155,8 +155,8 @@ Where the only way out is an HTTP proxy, set `APPLICATION_WEBHOOKS_PROXY` to its
 |---|---|---|
 | `APPLICATION_WEBHOOKS_SECRETKEY` | (none: webhooks off) | The key the signing secrets are encrypted with in the database (AES-256-GCM), 32 characters or more, **the same on every replica and across upgrades** (Helm: `webhooks.enabled` and `webhooks.secretKey`; never generated). If it changes, existing webhooks must be added again |
 | `APPLICATION_WEBHOOKS_ALLOWEDCIDRS` | (none) | Internal ranges webhooks may be sent to (Helm `webhooks.allowedCidrs`) |
-| `APPLICATION_WEBHOOKS_PROXY` (next release) | (none: direct) | `host:port` of an HTTP proxy webhooks are tunnelled through (Helm `webhooks.proxy.address`) |
-| `APPLICATION_WEBHOOKS_PROXYCREDENTIALS`, `_PROXYCREDENTIALSFILE` (next release) | (none) | `user:password` for that proxy, or a file holding it (the file wins); never logged (Helm `webhooks.proxy.credentials.*`) |
+| `APPLICATION_WEBHOOKS_PROXY` (from 0.0.3) | (none: direct) | `host:port` of an HTTP proxy webhooks are tunnelled through (Helm `webhooks.proxy.address`) |
+| `APPLICATION_WEBHOOKS_PROXYCREDENTIALS`, `_PROXYCREDENTIALSFILE` (from 0.0.3) | (none) | `user:password` for that proxy, or a file holding it (the file wins); never logged (Helm `webhooks.proxy.credentials.*`) |
 | `APPLICATION_WEBHOOKS_MAXATTEMPTS` | `8` | Tries per delivery |
 | `APPLICATION_WEBHOOKS_DELIVERYLOGDAYS` | `30` | Days delivered and failed deliveries are kept |
 | `APPLICATION_WEBHOOKS_CONNECTTIMEOUT`, `_READTIMEOUT` | `5s`, `10s` | |

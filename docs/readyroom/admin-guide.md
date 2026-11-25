@@ -285,7 +285,7 @@ who set them:
 | *An administrator* | Set on the details page, or reviewed | **Change** (opens the details page), **Remove** |
 | *The person, to review* | Chosen by the person themselves, before administrators managed delegates | **Keep**, **Change**, **Remove** |
 
-Delegates people chose for themselves before this release were kept, so the upgrade changed nobody's
+Delegates people chose for themselves before administrators managed them were kept, so that upgrade changed nobody's
 alerts, and they still receive alerts and may approve requests until you review them. **Only
 those to review** filters the list. While any are waiting, ReadyRoom logs at startup how many
 people have delegates chosen before administrators managed them. Keeping them is audited as

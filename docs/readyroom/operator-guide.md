@@ -74,7 +74,7 @@ checking off; or `ENS_CSP_REPORT_ONLY` is on.
 | Path | Includes |
 |---|---|
 | `/actuator/health/liveness` | ReadyRoom's own state only, so an outage elsewhere never restarts it |
-| `/actuator/health/readiness` | Also the database (`db`), the directory (`ldap`) and whether the audit trail can be written (`auditStore`; from the next release its details also give `pending`, the audit events stored but not yet chained, and `oldestPending`, and `quarantined`, `newestQuarantined` and an `attention` flag for events set aside because they could not be chained; those keep it UP, since restarting or removing replicas would not help). Never the mail server |
+| `/actuator/health/readiness` | Also the database (`db`), the directory (`ldap`) and whether the audit trail can be written (`auditStore`; from 0.0.6 its details also give `pending`, the audit events stored but not yet chained, and `oldestPending`, and `quarantined`, `newestQuarantined` and an `attention` flag for events set aside because they could not be chained; those keep it UP, since restarting or removing replicas would not help). Never the mail server |
 | `/actuator/health` | The aggregate, including the mail server unless `MANAGEMENT_HEALTH_MAIL_ENABLED=false` |
 
 All three are open without sign-in and show the status only; component details are shown to `ADMIN`
@@ -104,8 +104,8 @@ Never publish that port through an ingress, route or the host. With the Promethe
 | `ens_license_days_remaining` | gauge | Days until the license (or its grace period) ends; no value for a perpetual license |
 | `ens_audit_events_total{category,outcome}` | counter | Audit events stored |
 | `ens_audit_forward_failures_total{output}` | counter | Failed deliveries to an audit output (`splunk`, `syslog`) |
-| `ens_audit_pending` (next release) | gauge | Audit events recorded and not yet chained; normally near 0 |
-| `ens_audit_quarantined` (next release) | gauge | Audit events that could not be chained and were set aside; see [Troubleshooting](troubleshooting.md#audit-trail) |
+| `ens_audit_pending` (from 0.0.6) | gauge | Audit events recorded and not yet chained; normally near 0 |
+| `ens_audit_quarantined` (from 0.0.6) | gauge | Audit events that could not be chained and were set aside; see [Troubleshooting](troubleshooting.md#audit-trail) |
 | `ens_auth_attempts_total{method,outcome}` | counter | Sign-ins by method (`ldap`, `x509`, `sso`, `api-token`, `session-id`) and outcome, the Windows client's included |
 | `ens_readyroom_checkins_total{action}` | counter | The Windows client's events recorded (`in`, `lock`, `unlock`, `out`) |
 | `ens_readyroom_people_in` | gauge | People whose latest event today is a check-in or unlock (refreshed at most once a minute) |
@@ -122,7 +122,7 @@ old (`time() - max(ens_readyroom_checkout_last_success_seconds) > 600`; the job 
 value stands still, while the license does not include attendance tracking or is not in full effect);
 `ens_license_mode{mode="full"}` at 0, or `ens_license_days_remaining` under 30;
 `ens_audit_forward_failures_total` rising; `ens_audit_quarantined` above 0, or `ens_audit_pending` rising for
-minutes (next release); `ens_readyroom_webhook_deliveries_total{outcome="failed"}` rising; no new backup in a day.
+minutes; `ens_readyroom_webhook_deliveries_total{outcome="failed"}` rising; no new backup in a day.
 
 ### Request diagnostics
 
@@ -259,8 +259,8 @@ What the auto check-out job does beyond the plain limit, from 0.0.11:
   again a minute later. `ens_readyroom_checkout_last_success_seconds` says when it last ran
   without an error.
 
-!!! note "Demo mode (next release)"
-    In demo mode (`demo.enabled`) the jobs that write attendance data do not run: the directory
+!!! note "Demo mode"
+    From 0.0.3, in demo mode (`demo.enabled`) the jobs that write attendance data do not run: the directory
     refresh, auto check-out, absence alerts and scheduled reports (each logs once that it is
     skipping), and the retention purge. Audit retention, the clean-up of ended sessions, the
     license mode check and the service heartbeat keep running.
@@ -370,8 +370,8 @@ deletes what is older than the cutoff:
   per month (`attendance_summaries` and `attendance_summary_statuses`): days checked in, time in
   (first check-in to last check-out each day, as the reports count it), days per status, and the
   month's working days for the person (their working days from their start date, less holidays,
-  counted when the purge first reaches the month; months the purge finished before the next
-  release have no count). A later run adds to a month already summarised; nothing is counted twice;
+  counted when the purge first reaches the month; months the purge finished before
+  0.0.6 have no count). A later run adds to a month already summarised; nothing is counted twice;
 - **check-in records an administrator voided**, without a summary (they count for nothing), once
   they are a day older than the cutoff;
 - **absence alerts**, by the day they were raised, and **status requests**, once their last day is
@@ -423,16 +423,16 @@ package nor the Helm chart carries scripts. Developer notes on adding a migratio
 | `V8__ens_license_state` | `ens_license_*`: the license, installation id and revisions in the database, imported from the license volume at the first start |
 | `V9__public_api` | `api_tokens`, `webhook_endpoints` (signing secrets encrypted) and `webhook_deliveries`, for the [public API](api-reference.md#public-api-apiv1) and [webhooks](webhooks.md). New tables only |
 | `V10__reports` | `user_records.time_zone` and `report_schedules`, for [time zones and scheduled reports](exports.md) |
-| `V11__rate_limit_windows` (next release) | `rate_limit_windows`: the rate limits' counts (public API tokens, refused logoffs), shared by every replica. A new table only |
-| `V12__alert_read_and_emailed` (next release) | `notification_records.read_at` (an alert marked read, which no longer counts as answered) and `notification_records.emailed_at` (when its email went out, so the next alert run resends today's unsent ones). Existing alerts count as emailed, and ones marked read before stay off the list |
-| `V13__cache_invalidations` (next release) | `cache_invalidations`: the group cache evictions made on Settings, which every replica applies. A new table only |
-| `V14__alert_answered_by_request` (next release) | `notification_records.status_response_request_id`: the approved status request that answered an absence alert (its days' alerts take the request's status as their answer). A request the retention purge or an erasure deletes clears the link and leaves the answer. One new column only |
-| `V16__work_schedules` (next release) | `user_records.working_days` (`MTWTF..`; empty for Monday to Friday), `user_records.start_date`, `user_records.created_at`, and `attendance_summaries.working_days`, for [working days and start dates](admin-guide.md#working-days-and-start-dates). `created_at` is filled for existing people with the earliest of their check-ins and monthly summaries (empty for someone with neither). Nobody's schedule changes |
-| `V17__record_corrections` (next release) | `check_in_out_records`: `voided_at`, `voided_by`, `void_reason`, `note`, `noted_by`, `noted_at`, `added_by`, `added_at`, `added_reason`, for [corrections to check-in records](admin-guide.md#correcting-check-in-records); and `notification_records.original_response`, `original_response_by_dn`, `original_response_date`, the alert answer an approved request superseded. New empty columns only: existing records are neither void nor corrected |
-| `V18__audit_pending` (next release) | `audit_pending`: audit events stored with the action they record and waiting, normally under a second, for their place in the hash chain, which a chainer on each replica gives them in batches. Also `audit_quarantine`, where an event that can never be chained through its own fault is set aside, exactly as stored, with an `audit.chain-failed` event in its place in the chain; append-only (a trigger refuses UPDATE and DELETE). New tables only: `audit_events`, its rows and `audit_chain_head` are unchanged, and the trail verifies as before |
-| `V19__training_status_and_leave_time` | Lets the status columns hold `TRAINING` (the four checks that list the statuses are replaced), and adds `leave_at_time`, an early leave's time of leaving, to `user_event_records` and `status_requests`. Empty on existing rows |
-| `V20__status_recorded_by_decider` | `user_event_records.recorded_by_decider`: a status a manager, delegate or administrator recorded. `false` on existing days, which are read as before |
-| `V21__last_sign_in` | `user_records.last_sign_in_at`: when each person last signed in to the web pages, shown in the page header. Empty until their next sign-in |
+| `V11__rate_limit_windows` (0.0.3) | `rate_limit_windows`: the rate limits' counts (public API tokens, refused logoffs), shared by every replica. A new table only |
+| `V12__alert_read_and_emailed` (0.0.6) | `notification_records.read_at` (an alert marked read, which no longer counts as answered) and `notification_records.emailed_at` (when its email went out, so that unsent ones are sent again). Existing alerts count as emailed, and ones marked read before stay off the list |
+| `V13__cache_invalidations` (0.0.6) | `cache_invalidations`: the group cache evictions made on Settings, which every replica applies. A new table only |
+| `V14__alert_answered_by_request` (0.0.6) | `notification_records.status_response_request_id`: the approved status request that answered an absence alert (its days' alerts take the request's status as their answer). A request the retention purge or an erasure deletes clears the link and leaves the answer. One new column only |
+| `V16__work_schedules` (0.0.6) | `user_records.working_days` (`MTWTF..`; empty for Monday to Friday), `user_records.start_date`, `user_records.created_at`, and `attendance_summaries.working_days`, for [working days and start dates](admin-guide.md#working-days-and-start-dates). `created_at` is filled for existing people with the earliest of their check-ins and monthly summaries (empty for someone with neither). Nobody's schedule changes |
+| `V17__record_corrections` (0.0.6) | `check_in_out_records`: `voided_at`, `voided_by`, `void_reason`, `note`, `noted_by`, `noted_at`, `added_by`, `added_at`, `added_reason`, for [corrections to check-in records](admin-guide.md#correcting-check-in-records); and `notification_records.original_response`, `original_response_by_dn`, `original_response_date`, the alert answer an approved request superseded. New empty columns only: existing records are neither void nor corrected |
+| `V18__audit_pending` (0.0.6) | `audit_pending`: audit events stored with the action they record and waiting, normally under a second, for their place in the hash chain, which a chainer on each replica gives them in batches. Also `audit_quarantine`, where an event that can never be chained through its own fault is set aside, exactly as stored, with an `audit.chain-failed` event in its place in the chain; append-only (a trigger refuses UPDATE and DELETE). New tables only: `audit_events`, its rows and `audit_chain_head` are unchanged, and the trail verifies as before |
+| `V19__training_status_and_leave_time` (0.0.7) | Lets the status columns hold `TRAINING` (the four checks that list the statuses are replaced), and adds `leave_at_time`, an early leave's time of leaving, to `user_event_records` and `status_requests`. Empty on existing rows |
+| `V20__status_recorded_by_decider` (0.0.7) | `user_event_records.recorded_by_decider`: a status a manager, delegate or administrator recorded. `false` on existing days, which are read as before |
+| `V21__last_sign_in` (0.0.10) | `user_records.last_sign_in_at`: when each person last signed in to the web pages, shown in the page header. Empty until their next sign-in |
 | `V22__check_in_machine` (0.0.11) | `check_in_out_records.machine`: the workstation's computer name the Windows client sends with each event, so a lock on one workstation is not hidden by a later lock or logoff on another. One new empty column: existing records, and clients that do not send it, are read as before |
 | `V23__alerts_awaiting_answer_index` (0.0.11) | `ix_notifications_awaiting_for_dn`, an index of the unanswered alerts by recipient and time, for the bell and Home's **Awaiting your response**. A new index only |
 | `V30__audit_pruned_through` (0.0.11) | `audit_chain_head.pruned_through_seq` and `pruned_through_hash`: how far audit retention has pruned, which **Verify integrity** now checks the oldest retained event against. An installation that has already pruned starts from the event before its oldest one. Two new columns and one `UPDATE` of the single chain head row |
@@ -518,7 +518,12 @@ stored, and audited as a failed `auth.login` with the reason *unknown session*. 
    `%ProgramData%\InOutWorker`. From 0.0.11 it stops, changing nothing, on a workstation whose
    configuration has no `BaseUrl`: pass `-BaseUrl` there.
 
+The sections below say, release by release and oldest first, what changes for an installation that
+upgrades. An upgrade across several releases takes every section in between.
+
 ### Upgrading to the approvals and retention release
+
+These changes are in 0.0.1.
 
 | Change | What to do |
 |---|---|
@@ -535,7 +540,8 @@ upgrade.
 
 ### Upgrading to the release with single sign-on, the public API and exports
 
-Nothing to do by hand: Flyway adds the tables above, and nothing existing changes.
+These changes are in 0.0.2. Nothing to do by hand: Flyway adds the tables above (`V6` to `V10`), and
+nothing existing changes.
 
 | Change | What to do |
 |---|---|
@@ -546,21 +552,29 @@ Nothing to do by hand: Flyway adds the tables above, and nothing existing change
 | Site time zones | Set `APPLICATION_REPORTS_SITETIMEZONES` where people work in more than one zone; until then reports look as before |
 | Calendar colours | The organization calendar's and requested statuses' default colours are darker ([Accessibility](accessibility.md)); colours you configured are kept |
 
-### Upgrading to the next release
+### Upgrading to 0.0.3
 
-New tables and columns (Flyway `V11` to `V14` and `V16` to `V20`; there is no `V15`), added at the
-first start, in that order. Sign-in keeps working for every installation that kept its settings;
-check the points below.
+One new table (Flyway `V11`), added at the first start. Sign-in keeps working for every installation
+that kept its settings; check the points below.
 
 | Change | What to do |
 |---|---|
-| Client-certificate revocation is checked by default: with `ENS_X509_REVOCATION` unset (Helm `x509.revocation.mode` now defaults to `""`), OCSP then CRL, soft-fail | A revoked certificate is refused (audited `certificate revoked`); one no responder answers for still signs in, with a WARN. An installation that set `ENS_X509_REVOCATION` (or `x509.revocation.mode`) keeps exactly what it set, `off` included. `ENS_X509_REVOCATION_FAIL` now defaults to `open` while the mode is unset and to `closed` once a mode is set; `closed` set without a mode is honoured, so make sure ReadyRoom reaches your OCSP responders and CRL distribution points, or set `ENS_X509_CRL_DIR`, or set the mode to `off`. With the chart's NetworkPolicy on and certificate sign-in on, egress to ports 80 and 443 is opened unless the mode is `off` (or `crl` with `crlConfigMap`). Where a firewall silently drops the traffic, a sign-in can wait up to 5 s per responder and distribution point; see [Revocation from the next release](install.md#revocation-from-the-next-release) |
+| Client-certificate revocation is checked by default: with `ENS_X509_REVOCATION` unset (Helm `x509.revocation.mode` now defaults to `""`), OCSP then CRL, soft-fail | A revoked certificate is refused (audited `certificate revoked`); one no responder answers for still signs in, with a WARN. An installation that set `ENS_X509_REVOCATION` (or `x509.revocation.mode`) keeps exactly what it set, `off` included. `ENS_X509_REVOCATION_FAIL` now defaults to `open` while the mode is unset and to `closed` once a mode is set; `closed` set without a mode is honoured, so make sure ReadyRoom reaches your OCSP responders and CRL distribution points, or set `ENS_X509_CRL_DIR`, or set the mode to `off`. With the chart's NetworkPolicy on and certificate sign-in on, egress to ports 80 and 443 is opened unless the mode is `off` (or `crl` with `crlConfigMap`). Where a firewall silently drops the traffic, a sign-in can wait up to 5 s per responder and distribution point; see [Revocation checking by default](install.md#revocation-checking-by-default) |
 | Single sign-on trust material over HTTPS only | `ENS_SSO_SAML_IDP_METADATA` must be `https://` or a file, and `ENS_SSO_OIDC_ISSUER_URI` (with the endpoints and key set its discovery document names) `https://`; `http://` stops startup naming the setting. Serve the metadata over https or download it to a file |
 | SAML needs an `https://` `APPLICATION_BASE_URL` | With `ENS_SSO_SAML_ENABLED=true` and an `http://` `APPLICATION_BASE_URL` (Helm `publicUrl`), startup stops instead of warning. SAML could not have worked there: its browser-binding cookie is never sent over HTTP |
 | Demo mode runs no writing jobs, and refuses Windows sign-in | Production installations (demo mode off) are not affected |
 | Release package: `env.template` has a *Single sign-on* block | Copy the `ENS_SSO_*` lines into an older `.env` to use single sign-on |
 | Rate limits hold across replicas | A public API token's requests a minute and refused logoffs per client address (`application.logoff.refused-per-minute`) are counted in the database for all replicas together. With N replicas a token now gets its rate, not up to N times it, so an integration that relied on the multiplied rate may see `429` sooner: raise its token's rate if so. See [Availability](availability-and-sizing.md#high-availability) |
 | Webhooks through an egress proxy | New and unset: webhooks keep connecting directly. `APPLICATION_WEBHOOKS_PROXY` (`host:port`; Helm `webhooks.proxy.address`), with `APPLICATION_WEBHOOKS_PROXYCREDENTIALS` or `APPLICATION_WEBHOOKS_PROXYCREDENTIALSFILE`, sends them through an HTTP proxy. See [Webhooks → Through an egress proxy](webhooks.md#through-an-egress-proxy) |
+| Signing out of the identity provider too | `ENS_SSO_OIDC_END_SESSION` and `ENS_SSO_SAML_SINGLE_LOGOUT` (Helm `sso.oidc.endSession`, `sso.saml.singleLogout`) default to `false`, so an upgraded installation signs out exactly as before; the release bundle's `env.template` sets both to `true` for new installs. Before turning them on, register `<base>/signed-out` as a post-logout redirect URI at the OIDC provider; for SAML set the SP key and certificate and re-import the SP metadata at the IdP. See [Single sign-on → Signing out](single-sign-on.md#signing-out) |
+
+### Upgrading to 0.0.6
+
+New tables and columns (Flyway `V12` to `V14` and `V16` to `V18`; there is no `V15`), added at the
+first start, in that order.
+
+| Change | What to do |
+|---|---|
 | **Settings** is for administrators only | People with only the `MANAGER` role no longer see it: the organization calendar, parse rules and group cache apply to everyone |
 | Only administrators set a group's alternate managers, each someone in the directory; `POST /api/permissions/update` is removed | Groups' managers no longer see the **Group Managers** card. Access to groups follows directory membership, as it already did. Update scripts that called the endpoint |
 | `ADMIN` is never given from a person's page, and the last administrator keeps it | Name administrators in `application.super-user-dns`. **Administration → Privacy** lists them |
@@ -568,20 +582,26 @@ check the points below.
 | **Mark All Read** marks alerts read without answering them | Alerts stay under **Awaiting your response** and in the bell until answered. Alerts marked read before the upgrade stay off the list |
 | Erasure also deletes webhook deliveries about the person, revokes their API tokens, disables their webhooks and ends their sessions | See [Privacy → Erasure](privacy.md#erasure) |
 | LDAP referrals are ignored explicitly (`spring.ldap.referral`, default `ignore`), and so is the partial result they leave | Nothing to do: an Active Directory searched from its domain root now returns its entries instead of failing. `follow` chases referrals instead (the other servers must accept the same bind account) |
-| Signing out of the identity provider too | `ENS_SSO_OIDC_END_SESSION` and `ENS_SSO_SAML_SINGLE_LOGOUT` (Helm `sso.oidc.endSession`, `sso.saml.singleLogout`) default to `false`, so an upgraded installation signs out exactly as before; the release bundle's `env.template` sets both to `true` for new installs. Before turning them on, register `<base>/signed-out` as a post-logout redirect URI at the OIDC provider; for SAML set the SP key and certificate and re-import the SP metadata at the IdP. See [Single sign-on → Signing out](single-sign-on.md#signing-out) |
 | Each person's day is their own: in their time zone (profile, else site, else `APPLICATION_TIMEZONE`), from their site's day start, else `APPLICATION_DAYSTART` (midnight) | Check-ins, the absence alert, Home, My Reports, the org chart, group reports, downloads and the public API's event `date` now follow each person's zone, not only the times on reports. Where sites work in other zones, set `APPLICATION_REPORTS_SITETIMEZONES`; where a site's shifts cross midnight, give it a day start (`APPLICATION_SITEDAYSTARTS`; Helm `dayStart`, `siteDayStarts`). **Settings → Days and Time Zones** shows the result. See [Configuration](configuration.md#time-zone-and-day-start). No migration |
 | Per-person working days and start dates; leave left out of the 30-day attendance | Nobody's schedule changes: everyone keeps Monday to Friday. Set part-timers' and weekend workers' working days on their details pages (managers, delegates or administrators). Attendance figures may read higher once leave days are left out. See [Administration](admin-guide.md#working-days-and-start-dates) |
 | Administrators correct check-in records (void, note, add), audited as `record.voided`, `record.annotated` and `record.added` | Tell administrators that the person sees each correction and its reason, and is e-mailed when a record is voided or added. Correct records only once every replica runs the new release: a replica of the previous release does not know a record is void. See [Administration](admin-guide.md#correcting-check-in-records) |
 | People are e-mailed when a manager, delegate or administrator records a status that does not excuse the day (Absent, Absent Unexcused, Unscheduled Leave, Late Arrival, Early Leave), on their calendar or by answering an absence alert | Tell managers and users. Needs a mail server, with the same settings as absence alerts |
-| An alert answer that an approved request superseded is kept and shown beside the request | Only for answers superseded from this release on. Earlier ones keep the old answer only in their `absence.alert-superseded` audit event |
+| An alert answer that an approved request superseded is kept and shown beside the request | Only for answers superseded from 0.0.6 on. Earlier ones keep the old answer only in their `absence.alert-superseded` audit event |
 | The personal data export adds `statusHistory` and `recordCorrections` from the audit trail, void records with their corrections, and the person's working days and start date | Update anything that reads the export. See [Privacy → Export](privacy.md#export) |
+| Audit events are added to the hash chain in the background (`V18`) | Nothing to do; a rolling update is safe. An audited action no longer waits for the one audit chain head row, so audited actions stop queuing behind each other. Each event is stored with its action as before, and joins the trail, the audit page, exports, the pull API and the outputs within about a second (`ENS_AUDIT_CHAIN_MILLIS`, see [Configuration](configuration.md#audit-trail)). Events already stored are untouched and verify as before. While old and new replicas run side by side, both add to the same chain under the same row lock, so it stays gapless. Each event's line goes to the stdout and audit file of the replica that chained it, not necessarily the one that recorded it (its `host` still names that one). A [rollback](availability-and-sizing.md#rolling-back-an-upgrade) restores the pre-upgrade backup, as for any release. If you instead start the previous release on this database, stop every replica of this one first (stopping chains what is waiting) and check that `SELECT count(*) FROM audit_pending` returns 0: the previous release does not read that table, so events left in it would stay out of the trail |
+
+### Upgrading to 0.0.7
+
+New columns, and new checks on the status columns (Flyway `V19` and `V20`), added at the first start.
+
+| Change | What to do |
+|---|---|
 | *TDY* is shown as *Temporary Duty* (TDY), and *Training* (`TRAINING`) is a new status, treated as Temporary Duty: requested and approved by default, it excuses an absence and stays a working day (`V19` lets the status columns hold it) | Tell users and managers. Codes are unchanged in the API, webhooks, configuration and the database. If you set `APPLICATION_EVENTS_REQUESTSTATUSES`, add `TRAINING` to it for Training to need approval (otherwise people set it themselves, and startup warns). During a rolling update an older replica cannot read a Training day: let the update finish before people use it |
 | An *Early Leave* can carry the time the person leaves (optional; `leave_at_time`, `V19`) | Nothing to do. It is shown on calendars, on **Approvals**, in the person's notice e-mail, in the API's absences (`leaveAtTime`) and in the personal data export (`leaveAtTime`), and changes nothing else: an early leave still excuses nothing |
 | The user tables (Users, My Reports, the org chart's people) show a calendar status by its name (*Work From Home*, *Temporary Duty*) instead of its code (`WORK_FROM_HOME`, `TDY`) | Nothing to do: the people export's **Status today** column and the API keep the codes |
 | A lock at or after an *Early Leave*'s time of leaving is checked out at once, not after `check-out-after-minutes` | Tell managers. Audited as `record.auto-checked-out` |
 | An absence alert can be answered with any status that accounts for the day, Work From Home, Temporary Duty, Training and the other leave and work-elsewhere statuses included, listed by name in two groups; a status a manager, delegate or administrator records is their word on the day whatever it is (`recorded_by_decider`, `V20`) | Tell managers. Existing calendar days are read as before |
 | Request e-mails and `GET /api/v1/absences/requests` carry a late arrival's and an early leave's time | Update anything that reads the leave-request items (`loginByTime`, `leaveAtTime`) |
-| Audit events are added to the hash chain in the background (`V18`) | Nothing to do; a rolling update is safe. An audited action no longer waits for the one audit chain head row, so audited actions stop queuing behind each other. Each event is stored with its action as before, and joins the trail, the audit page, exports, the pull API and the outputs within about a second (`ENS_AUDIT_CHAIN_MILLIS`, see [Configuration](configuration.md#audit-trail)). Events already stored are untouched and verify as before. While old and new replicas run side by side, both add to the same chain under the same row lock, so it stays gapless. Each event's line goes to the stdout and audit file of the replica that chained it, not necessarily the one that recorded it (its `host` still names that one). A [rollback](availability-and-sizing.md#rolling-back-an-upgrade) restores the pre-upgrade backup, as for any release. If you instead start the previous release on this database, stop every replica of this one first (stopping chains what is waiting) and check that `SELECT count(*) FROM audit_pending` returns 0: the previous release does not read that table, so events left in it would stay out of the trail |
 
 ### Upgrading to 0.0.11
 

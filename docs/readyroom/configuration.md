@@ -108,7 +108,7 @@ opens it, and the startup log says
 | `application.ldap.max-pages` | – | `1000` | The most pages one paged search reads before it logs a warning and returns what it has. This protects against a directory or proxy that keeps returning a paging cookie. |
 | `application.ldap.search-max-results` | – | `500` | The most people a name search (*Find a user*) lists (`APPLICATION_LDAP_SEARCHMAXRESULTS`). The directory is asked for one more, so the page can say there are more and ask for more of the name. From 0.0.11 it also bounds the name search behind the **Add a delegate** and **Add a manager** pickers. Keep it below the directory's size limit if paging is off. |
 | `application.ldap.search-max-download` | – | `5000` | The most people a download of a name search holds (`APPLICATION_LDAP_SEARCHMAXDOWNLOAD`); a search matching more is refused with `400` (`too_many_matches`). |
-| `application.ldap.user-cache-size` | – | `150000` | The most directory users kept in memory for sign-in, reports and alerts (`APPLICATION_LDAP_USERCACHESIZE`), about 1 KB of heap each. Keep it at or above the number of people who check in. Below that, check-ins and large group reports read the directory for nearly every person. Up to the current release it was fixed at 5,000. |
+| `application.ldap.user-cache-size` | – | `150000` | The most directory users kept in memory for sign-in, reports and alerts (`APPLICATION_LDAP_USERCACHESIZE`), about 1 KB of heap each. Keep it at or above the number of people who check in. Below that, check-ins and large group reports read the directory for nearly every person. Before 0.0.6 it was fixed at 5,000. |
 | `application.ldap.group-membership-cache-seconds` | `300` | `300` | How long a user's group memberships are cached. Permission checks read them on every request, so a directory change can take this long to show. `0` disables the cache. |
 | `application.ldap.pool-max-size` | `0` | `0` | The most pooled directory connections (`APPLICATION_LDAP_POOLMAXSIZE`). `0` sizes the pool for the request threads: `server.tomcat.threads.max` plus `spring.task.scheduling.pool.size` (216 with the defaults), never fewer than 20. Every sign-in reads the directory, so a pool smaller than the request threads makes a burst of check-ins wait for a connection, and a wait longer than the connect timeout fails the read. Connections are opened only when needed and closed after 5 idle minutes. Lower it if the directory limits connections per client; raise it together with `server.tomcat.threads.max`. The startup log says `LDAP connection pooling enabled for ..., at most <n> connections`. |
 | `application.ldap.sign-in-retries` | `2` | `2` | How many more times a sign-in reads the directory when it does not answer (a time-out, or no free pooled connection), 200 ms and then 400 ms later, before the request is answered `503` with `Retry-After: 5` (`APPLICATION_LDAP_SIGNINRETRIES`). A directory that cannot be asked is never taken for "no such user": that is still a `401`, at once. |
@@ -344,7 +344,7 @@ OpenID Connect and SAML 2.0, each off until enabled (`ENS_SSO_OIDC_ENABLED`,
 user filter (`ENS_SSO_OIDC_USER_FILTER`, `ENS_SSO_SAML_USER_FILTER`). `ENS_SSO_ROLE_MAPPING` maps the
 provider's groups to `MANAGER` or `ADMIN`. Every `ENS_SSO_*` setting, the addresses to register and
 provider walkthroughs are in [Single sign-on](single-sign-on.md#settings); with Helm, the `sso.*`
-values. From the next release the issuer and the SAML metadata must be `https://` (or a file), SAML
+values. From 0.0.3 the issuer and the SAML metadata must be `https://` (or a file), SAML
 needs an `https://` `APPLICATION_BASE_URL`, and the release package's `env.template` lists every
 `ENS_SSO_*` setting.
 
@@ -376,7 +376,7 @@ ENS application; see [Audit logging → Settings](../audit-logging.md#settings).
 
 | Env var | Default | Description |
 |---|---|---|
-| `ENS_AUDIT_CHAIN_MILLIS` (next release) | `500` | Each audit event is stored in the same transaction as the action it records, without waiting for its place in the hash chain; a chainer on each replica then adds stored events to the chain in batches, in the order they were recorded. A replica chains its own events as soon as they commit; this is how often, in milliseconds, it also looks for events still to be chained (those another replica recorded, or left by a crash). Until it is chained, an event is in no list, export, verification, pull-API answer or output; **Audit log** says how many are waiting. Helm: `extraEnv` |
+| `ENS_AUDIT_CHAIN_MILLIS` (from 0.0.6) | `500` | Each audit event is stored in the same transaction as the action it records, without waiting for its place in the hash chain; a chainer on each replica then adds stored events to the chain in batches, in the order they were recorded. A replica chains its own events as soon as they commit; this is how often, in milliseconds, it also looks for events still to be chained (those another replica recorded, or left by a crash). Until it is chained, an event is in no list, export, verification, pull-API answer or output; **Audit log** says how many are waiting. Helm: `extraEnv` |
 
 ## Security headers, banner and sessions
 

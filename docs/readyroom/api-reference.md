@@ -110,14 +110,14 @@ Administrators create and revoke tokens on *Administration → Integrations*
 - **Bearer tokens only.** The API's security chain accepts bearer tokens and nothing else: it reads
   and creates no session, so it needs no CSRF token, and a browser's session cookie signs nothing in
   on it.
-- **Rate limit** per token; past it, `429` with `Retry-After`. From the next release the counts are
+- **Rate limit** per token; past it, `429` with `Retry-After`. From 0.0.3 the counts are
   kept in the database (table `rate_limit_windows`, Flyway `V11`), once for all replicas: with N
   replicas behind the Service a token gets its rate, not N times it, and the one request that goes
   over is audited once. Window times are the database's clock. If the database cannot count for a
   moment, each replica counts in its own memory meanwhile (a WARN at most once a minute) rather than
   refuse requests. The same holds for `application.logoff.refused-per-minute` per client address.
-  Up to the current release the counts are in each replica's memory, so a token may make up to N
-  times its rate.
+  Before 0.0.3 the counts were in each replica's memory, so a token could make up to N times its
+  rate.
 - **Audited**: `api.token-created` and `api.token-revoked` (with scopes, expiry and owner); each read
   as `data.exported` (`details.via` `api`, the actor the token); refused tokens as a failed
   `auth.login` (method `public-api-token`, with the reason); and a token's first request over its
@@ -439,7 +439,7 @@ need the `attendance` license feature. See
 | `STANDARD` | normal | Set by the person | (clears a status) |
 | `OUT_OF_OFFICE` | Out of Office | Requested | ✓ once approved |
 | `WORK_FROM_HOME` | Work From Home | Requested | ✓ once approved |
-| `TDY` | Temporary Duty (shown as *TDY* before this release) | Requested | ✓ once approved |
+| `TDY` | Temporary Duty (shown as *TDY* before 0.0.7) | Requested | ✓ once approved |
 | `TRAINING` | Training | Requested | ✓ once approved |
 | `SCHEDULED_LEAVE` | Scheduled Leave | Requested | ✓ once approved |
 | `EARLY_LEAVE` | Early Leave | Set by the person | – (an optional time of leaving is shown only) |
@@ -457,8 +457,8 @@ A manager, delegate or administrator can record any of them for someone else, at
 |---|---|---|
 | `/`, `/app` | – | Redirect to `/app/home` |
 | `/login` | Open | Sign-in form (`POST /login` processes it; `POST /logout` signs out). A failed sign-in goes to `/login?error`. From 0.0.11, after too many failed password sign-ins in a minute from the client's address or for the username, `POST /login` goes to `/login?throttled` without asking the directory (see [Security](security.md#ldap-username-and-password)) |
-| `/signed-out` (next release) | Open | After signing out with `ENS_SSO_OIDC_END_SESSION` or `ENS_SSO_SAML_SINGLE_LOGOUT`: continues to the identity provider (and shows a **Continue** button); also the OIDC post-logout redirect URI. See [Single sign-on → Signing out](single-sign-on.md#signing-out) |
-| `/logout/saml2/slo` (next release) | Open | SAML single logout service (HTTP-Redirect): the provider's `LogoutResponse` and `LogoutRequest` |
+| `/signed-out` (from 0.0.3) | Open | After signing out with `ENS_SSO_OIDC_END_SESSION` or `ENS_SSO_SAML_SINGLE_LOGOUT`: continues to the identity provider (and shows a **Continue** button); also the OIDC post-logout redirect URI. See [Single sign-on → Signing out](single-sign-on.md#signing-out) |
+| `/logout/saml2/slo` (from 0.0.3) | Open | SAML single logout service (HTTP-Redirect): the provider's `LogoutResponse` and `LogoutRequest` |
 | `/oauth2/authorization/oidc`, `/login/oauth2/code/oidc` | Open, with OIDC on | Start a single sign-on, and its redirect URI. See [Single sign-on](single-sign-on.md) |
 | `/saml2/authenticate/saml`, `/login/saml2/sso/saml`, `/saml2/service-provider-metadata/saml` | Open, with SAML on | Start a single sign-on, the assertion consumer service, and this service provider's metadata |
 | `/api/v1/openapi`, `/api/v1/openapi.yaml` | Open | The public API's OpenAPI document |

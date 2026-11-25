@@ -43,15 +43,15 @@ flowchart TD
   searches with that filter instead, filled from the certificate (`{upn}`, `{edipi}`, `{email}`,
   `{uuid}`, `{subject}`, `{cn}`, all LDAP-escaped), and exactly one entry must match.
 - When `ENS_X509_ALLOWED_ISSUERS` is set, only certificates from those issuers sign in.
-- **Revocation** (`ENS_X509_REVOCATION`: `ocsp`, `crl` or `ocsp-then-crl`; `off` by default) is
+- **Revocation** (`ENS_X509_REVOCATION`: `off`, `ocsp`, `crl` or `ocsp-then-crl`) is
   checked per sign-in by the JDK's PKIX validator, with fetches bounded (5 s connect, 10 s read, no
-  redirects, 1 MB OCSP and 20 MB CRL, never link-local or cloud-metadata addresses). With
-  `ENS_X509_REVOCATION_FAIL=closed` (the default), a certificate whose status can't be determined is
-  refused. A CRL directory (`ENS_X509_CRL_DIR`) or a local OCSP responder serves air-gapped sites.
-  **From the next release** revocation is on by default: with `ENS_X509_REVOCATION` unset,
-  `ocsp-then-crl`, soft-fail (a revoked certificate is refused; one no responder answers for signs
-  in with a WARN). A mode set explicitly fails closed unless `ENS_X509_REVOCATION_FAIL=open`. See
-  [Install → Revocation from the next release](install.md#revocation-from-the-next-release).
+  redirects, 1 MB OCSP and 20 MB CRL, never link-local or cloud-metadata addresses). It is on by
+  default (from 0.0.3; `off` before): with `ENS_X509_REVOCATION` unset, `ocsp-then-crl`, soft-fail
+  (a revoked certificate is refused; one no responder answers for signs in with a WARN). A mode
+  set explicitly fails closed, refusing a certificate whose status can't be determined, unless
+  `ENS_X509_REVOCATION_FAIL=open`. A CRL directory (`ENS_X509_CRL_DIR`) or a local OCSP responder
+  serves air-gapped sites. See
+  [Install → Revocation checking by default](install.md#revocation-checking-by-default).
   From 0.0.11 an OCSP responder or CRL distribution point that could not be reached is not asked
   again for 60 seconds; meanwhile its answer is unknown at once, and `ENS_X509_REVOCATION_FAIL`
   decides as before. Revocation is checked on every certificate sign-in, each check-in, lock and
@@ -353,10 +353,10 @@ never limited.
   sign-in go on), and grants `MANAGER` or `ADMIN` from the provider's
   groups only through `ENS_SSO_ROLE_MAPPING`. Every address given to the provider is built from
   `APPLICATION_BASE_URL`, never from request headers. No access or refresh token is kept; the OIDC
-  ID token stays in the server-side session until sign-out. From the next release signing out can
+  ID token stays in the server-side session until sign-out. From 0.0.3 signing out can
   also end the provider's session (`ENS_SSO_OIDC_END_SESSION`, `ENS_SSO_SAML_SINGLE_LOGOUT`), and
   the ID token is then sent to the provider's end-session endpoint as `id_token_hint`.
-  From the next release the OIDC issuer (with the endpoints and keys it names) and the SAML metadata
+  From 0.0.3 the OIDC issuer (with the endpoints and keys it names) and the SAML metadata
   are read over `https://` only (or, for SAML, from a file), and SAML refuses to start without an
   `https://` `APPLICATION_BASE_URL`. See [Single sign-on](single-sign-on.md).
 - **API tokens** are SHA-256 hashed, shown once, scoped per endpoint, expiring, rate-limited (for
@@ -427,9 +427,9 @@ See [FIPS 140-3 and DISA STIG](fips-and-stig.md).
       "WINLLC DEV CA" must not be trusted anywhere, because its private keys were published.
 - [ ] With certificates in use: `ENS_X509_REVOCATION` other than `off`, and
       `ENS_X509_ALLOWED_ISSUERS` if only some trusted CAs issue user certificates. For DISA STIG,
-      set the mode explicitly with `ENS_X509_REVOCATION_FAIL=closed`: the next release's default
-      (mode unset) is soft-fail.
-- [ ] Never run demo mode (`demo.enabled`) against production data; from the next release it cannot
+      set the mode explicitly with `ENS_X509_REVOCATION_FAIL=closed`: the default (mode unset)
+      is soft-fail.
+- [ ] Never run demo mode (`demo.enabled`) against production data; from 0.0.3 it cannot
       be combined with Windows sign-in.
 - [ ] For DoD systems: `ENS_CONSENT_BANNER_ENABLED=true`, and session limits as your policy requires
       (DISA STIG suggests `ENS_SESSION_ADMIN_IDLE_TIMEOUT=15m` and `ENS_SESSION_MAX_PER_USER=3`).

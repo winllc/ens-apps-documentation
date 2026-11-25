@@ -141,6 +141,6 @@ is the person's own day.
 Until `APPLICATION_REPORTS_SITETIMEZONES` is set, reports look as before (everyone in
 `APPLICATION_TIMEZONE`). Flyway `V10` adds `user_records.time_zone` and `report_schedules`.
 
-From the next release, a person's profile or site zone also decides their day on every page and
+From 0.0.6, a person's profile or site zone also decides their day on every page and
 for the absence alert, not only in reports. Until a day start is set, days start at midnight, as
 before.

@@ -117,14 +117,14 @@ The template also lists optional blocks, commented out: the consent banner, sess
 reverse-proxy settings, client certificates (`ENS_X509_*`), audit outputs (`ENS_AUDIT_*`), JSON
 logs, the management port, statuses that need approval, the calendars' employee-type choices
 (`APPLICATION_CALENDAR_EMPLOYEETYPEFILTERS_n_LABEL` and `_VALUES`), privacy and retention, reports,
-the public API and webhooks. From 0.0.11 it also lists, commented out with their defaults, the
-database timeouts and pool size (`DB_SOCKET_TIMEOUT`, `DB_STATEMENT_TIMEOUT`, `DB_LOCK_TIMEOUT`,
-`DB_POOL_SIZE`), the groups' object class and member attribute, the password sign-in limits
-(`APPLICATION_LOGIN_*`), `APPLICATION_EVENTS_MAXVIEWDAYS`, `APPLICATION_HA_MAXCHECKOUTPOSTPONEMENT`
-and the end-of-day check-out (`APPLICATION_ENDOFDAY_*`). From the next release it also has a *Single sign-on* block (`ENS_SSO_*`, OpenID
+the public API and webhooks. From 0.0.3 it also has a *Single sign-on* block (`ENS_SSO_*`, OpenID
 Connect and SAML 2.0): the issuer and the SAML metadata must be `https://` (or the metadata a file in
 `tls/`), and SAML needs an `https://` `APPLICATION_BASE_URL`; see
-[Single sign-on](single-sign-on.md). See [Configuration](configuration.md).
+[Single sign-on](single-sign-on.md). From 0.0.11 it also lists, commented out with their defaults,
+the database timeouts and pool size (`DB_SOCKET_TIMEOUT`, `DB_STATEMENT_TIMEOUT`, `DB_LOCK_TIMEOUT`,
+`DB_POOL_SIZE`), the groups' object class and member attribute, the password sign-in limits
+(`APPLICATION_LOGIN_*`), `APPLICATION_EVENTS_MAXVIEWDAYS`, `APPLICATION_HA_MAXCHECKOUTPOSTPONEMENT`
+and the end-of-day check-out (`APPLICATION_ENDOFDAY_*`). See [Configuration](configuration.md).
 
 `.env` holds the database, directory and mail passwords. `install.sh` makes it mode 600; keep it
 private. List settings are numbered (`APPLICATION_SUPERUSERDNS_0`, `_1`, ...). Any other setting
@@ -315,14 +315,14 @@ If `.env` has `SSL_ENABLED=true`, `COMPOSE_FILE` must include `docker-compose.tl
 
     The full list is in [Operations → Upgrading to 0.0.11](operator-guide.md#upgrading-to-0011).
 
-!!! note "Upgrading to the next release"
+!!! note "Upgrading to 0.0.3"
     - **Revocation.** Client certificates are checked at sign-in when `.env` does not set
       `ENS_X509_REVOCATION`: OCSP, then the CRL, soft-fail (a revoked certificate is refused; one no
       responder answers for still signs in, with a warning). A `.env` that sets
       `ENS_X509_REVOCATION` keeps it, `off` included. If your `.env` sets
       `ENS_X509_REVOCATION_FAIL=closed` without a mode, that is honoured: make sure ReadyRoom reaches
       your OCSP responders and CRLs, or set `ENS_X509_CRL_DIR`, or `ENS_X509_REVOCATION=off`. See
-      [Revocation from the next release](#revocation-from-the-next-release).
+      [Revocation checking by default](#revocation-checking-by-default).
     - **Single sign-on.** An `http://` `ENS_SSO_SAML_IDP_METADATA` or `ENS_SSO_OIDC_ISSUER_URI`, and
       SAML with an `http://` `APPLICATION_BASE_URL`, stop startup.
     - **`env.template`** has a *Single sign-on* block with the `ENS_SSO_*` settings; copy it into
@@ -338,7 +338,7 @@ If `.env` has `SSL_ENABLED=true`, `COMPOSE_FILE` must include `docker-compose.tl
       or `_PROXYCREDENTIALSFILE`) is new; unset, webhooks connect directly as before. See
       [Webhooks → Through an egress proxy](webhooks.md#through-an-egress-proxy).
 
-!!! note "Upgrading to the release with Docker and Podman support"
+!!! note "Upgrading to 0.0.2: Docker and Podman support"
     - `.env` is copied as it is, so an existing installation keeps its `READYROOM_BIND_ADDRESS` and
       `READYROOM_PORT`: one published on `127.0.0.1` stays so. A `.env` without
       `READYROOM_BIND_ADDRESS` publishes on `0.0.0.0`, as earlier releases did. `upgrade.sh` prints
@@ -347,12 +347,12 @@ If `.env` has `SSL_ENABLED=true`, `COMPOSE_FILE` must include `docker-compose.tl
       container and volume names are the same. The PostgreSQL image is now named
       `docker.io/library/postgres:16`, the same image as `postgres:16`.
 
-!!! note "Upgrading to the release with the license in the database"
+!!! note "Upgrading to 0.0.2: the license in the database"
     Keep the license volume mounted for the first start (the package's compose file always mounts
     it): that start imports the license and the installation id into the database. Everyone signs
     in again once.
 
-!!! note "The first upgrade to a release with Flyway"
+!!! note "The first upgrade to a release with Flyway (0.0.1 or later)"
     Flyway finds tables but no `flyway_schema_history`, records the existing schema as version 0, and
     runs `V1`. `V1` adds the missing indexes and constraints and the audit trail's append-only
     trigger, merges user rows whose DNs differ only by letter case, and rebuilds an index an
@@ -653,14 +653,14 @@ migration Job and the `migrations.enabled` value are gone.
     The full list is in [Operations → Upgrading to 0.0.11](operator-guide.md#upgrading-to-0011).
 
 !!! note "Notes for upgrades"
-    - **To the release with the license in the database:** keep your values. The first start
+    - **To 0.0.2 (the license in the database):** keep your values. The first start
       imports the license claim; then see [License](#helm-license) to turn it off. Everyone signs in
       again once.
     - **With `tls.enabled`:** set `tls.truststore.secretName` (or `tls.clientAuth: none`); the chart
       does not render without it.
     - **With `metrics.enabled`** (`true` by default): the probes move to the management port, 9090,
       and the log lines become JSON unless `logFormat: text`.
-    - **To the next release:** client-certificate revocation is checked unless
+    - **To 0.0.3:** client-certificate revocation is checked unless
       `x509.revocation.mode` is set. Empty, the new default, is `ocsp-then-crl`, soft-fail; values
       that set `mode` (including `"off"`) keep it, and a release that relied on the chart's old
       default `"off"` moves to checking. If your values set `x509.revocation.fail: closed` without a
@@ -739,7 +739,7 @@ role.
     The demo's credentials are on its login page, so anything those accounts can see is readable by
     anyone who reaches it. Keep only the mock data in it.
 
-From the next release, demo mode (`demo.enabled`) does not run the scheduled jobs that write
+From 0.0.3, demo mode (`demo.enabled`) does not run the scheduled jobs that write
 attendance data: the directory sync, auto check-out, absence alerts and scheduled reports (each logs
 once that it is skipping), and the retention purge. Webhooks have nothing to send. The jobs that
 look after the server's own state keep running: the audit trail (and its retention), the clean-up
@@ -995,15 +995,15 @@ For example `(userPrincipalName={upn})` for Active Directory and CAC, or
 |---|---|---|---|
 | `ENS_X509_USER_FILTER` | none: the subject DN is the directory DN | `x509.userFilter` | The LDAP filter template that finds the user |
 | `ENS_X509_ALLOWED_ISSUERS` | none: any trusted CA | `x509.allowedIssuers` | Issuer DNs whose certificates may sign in, `;` separated; others are refused even when a trusted CA chains to them |
-| `ENS_X509_REVOCATION` | `off`; from the next release unset, meaning `ocsp-then-crl`, soft-fail | `x509.revocation.mode` (`"off"`; from the next release `""`) | `off`, `ocsp`, `crl` or `ocsp-then-crl`. With certificates in use and revocation `off`, startup logs that DISA STIG requires it. See [Revocation from the next release](#revocation-from-the-next-release) |
+| `ENS_X509_REVOCATION` | unset, meaning `ocsp-then-crl`, soft-fail (`off` before 0.0.3) | `x509.revocation.mode` (`""`; `"off"` before 0.0.3) | `off`, `ocsp`, `crl` or `ocsp-then-crl`. With certificates in use and revocation `off`, startup logs that DISA STIG requires it. See [Revocation checking by default](#revocation-checking-by-default) |
 | `ENS_X509_OCSP_RESPONDER_URL` | the certificate's AIA | `x509.revocation.ocspResponderUrl` | A responder to ask instead, for example a local OCSP relay |
 | `ENS_X509_CRL_DIR` | none | `x509.revocation.crlConfigMap` | A directory of CRL files (DER or PEM), re-read when they change. With it set, distribution points are never fetched: the air-gapped option |
-| `ENS_X509_REVOCATION_FAIL` | `closed`; from the next release unset: `open` while `ENS_X509_REVOCATION` is unset, `closed` once a mode is set | `x509.revocation.fail` (`closed`; from the next release `""`) | `closed` refuses a certificate whose status can't be determined; `open` allows it with a warning |
+| `ENS_X509_REVOCATION_FAIL` | unset: `open` while `ENS_X509_REVOCATION` is unset, `closed` once a mode is set (`closed` before 0.0.3) | `x509.revocation.fail` (`""`; `closed` before 0.0.3) | `closed` refuses a certificate whose status can't be determined; `open` allows it with a warning |
 | `ENS_X509_REVOCATION_CACHE` | `10m` | `x509.revocation.cache` | How long a good or revoked answer is kept, per issuer and serial |
 
-#### Revocation from the next release
+#### Revocation checking by default
 
-From the next release, revocation is checked by default. With `ENS_X509_REVOCATION` unset (the Helm
+From 0.0.3, revocation is checked by default. With `ENS_X509_REVOCATION` unset (the Helm
 chart's `x509.revocation.mode` defaults to `""`, and the package's `env.template` leaves it commented
 out), ReadyRoom asks OCSP and then the CRL (`ocsp-then-crl`) for every certificate sign-in,
 **soft-fail**:
