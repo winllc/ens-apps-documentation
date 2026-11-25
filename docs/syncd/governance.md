@@ -28,6 +28,7 @@ the console is down.
 | Systems, entitlements, assignments | Console: Governance and Assignments pages; API under `/api/v1/governance` |
 | A person's own page | Console: My access (`/my`); API under `/api/v1/my` |
 | The entitlement catalog: each system's accounts, groups and holdings, read daily from its target (`ListInventory`, `syncd inventory`) | Console: Catalog page, and "What they hold" on Assignments |
+| Access certifications: campaigns, reviewer queues, revocations the engine carries out, sign-off and the evidence report | Console: Access reviews (`/governance/campaigns`) and My reviews (`/my/reviews`) |
 | The Governance pack | Licensing |
 
 ## Setting a publication up for grants
@@ -133,6 +134,55 @@ A run that would mark more than 20 % of a system's accounts gone marks nothing a
 shown as **suspect** (`governance.inventory.suspect`); a run that cannot read the target
 is **failed** and changes nothing.
 
+## Access certifications
+
+A **campaign** asks reviewers to keep or revoke what people hold. A **campaign definition**
+says what is reviewed and by whom:
+
+- **Reviewers**: each person's manager, each entitlement's owner (then the system's), or
+  each system's owner. When that reviewer is missing or is the person reviewed, the
+  person's manager reviews, then the definition's **fallback reviewer**. Nobody reviews
+  their own access; a campaign with an item nobody can review does not start.
+- **Scope**: some systems or all, privileged entitlements only, only access nothing
+  explains, and the people a CEL expression selects, over `login`, `display_name`, `mail`,
+  `status` and the projected attributes (for example `e.department == "Finance"`).
+  Computed groups are left out unless included, and then can be kept or flagged only: a
+  rule would add a revoked member again.
+- **Timing**: days to review, reminder days, what an item nobody decides becomes (keep or
+  revoke), whether revocations are carried out as each is decided or all at the close, and
+  an optional schedule (start every so many days).
+
+Starting a campaign snapshots the [catalog](#the-entitlement-catalog) as the last inventory
+read it: run an inventory first. **Preview** gives the counts without starting anything.
+
+What each decision does:
+
+| Decision | Access an assignment explains | Access nothing explains |
+|---|---|---|
+| Keep | Recorded | Also recorded as an assignment with origin `certification`, so it reads as explained from then on |
+| Revoke | The assignments that give it end; the engine removes what it added | The engine removes the group membership once (a revoke grant). Other kinds of access cannot be revoked this way: flag them |
+| Flag | Recorded and listed in the report for whoever designs the configuration | The same |
+
+A revocation needs a reason, and so does keeping a privileged entitlement.
+
+When a campaign closes (by hand, or by itself seven days after its due date), undecided
+items take the definition's default and queued revocations are carried out. Each
+revocation is confirmed twice: by the engine's grant states, then by the next inventory of
+its system. If the inventory still finds the access, the revocation is marked failed,
+`governance.review.revocation_failed` is recorded, and a task appears under **Needs
+attention** on the Access reviews page. **Sign off** is possible once every revocation is
+confirmed or failed; after it, the database refuses any change to the campaign's items.
+
+The campaign's report (CSV, Excel or PDF) has one row per item: person, account,
+entitlement, system, explained, privileged, reviewer, decision, who decided and when, the
+reason, and the revocation's state.
+
+Reviewers are mailed when a campaign starts, on each reminder day while items are
+undecided, and their manager once when their task is overdue. Mail goes only to the
+allowed recipient domains, and links to the console when `CONSOLE_PUBLIC_URL` is set. The
+webhook events `governance.campaign-started` and `governance.review-overdue` are raised as
+well.
+
 ## API
 
 | Method and path | Who | What |
@@ -152,6 +202,14 @@ is **failed** and changes nothing.
 | `POST /api/v1/governance/systems/{sid}/inventory` | writers | Run a system's inventory now |
 | `GET /api/v1/governance/inventory-runs` | readers | Inventory runs, newest first |
 | `POST /api/v1/governance/assignments/adopt` | writers | Adopt up to 1,000 holdings found in place |
+| `GET`, `POST /api/v1/governance/campaign-definitions`; `PUT`, `DELETE .../{did}` | readers; writers | Campaign definitions |
+| `POST /api/v1/governance/campaign-definitions/{did}/preview` | readers | What a campaign would hold now |
+| `GET`, `POST /api/v1/governance/campaigns`; `GET .../{cid}` | readers; writers | Campaigns, and one with its progress by reviewer |
+| `POST /api/v1/governance/campaigns/{cid}/reassign`, `/close`, `/sign-off` | writers | Move a reviewer's items, close, sign off |
+| `GET /api/v1/governance/campaigns/{cid}/report?format=csv\|xlsx\|pdf` | readers | The evidence report |
+| `GET /api/v1/governance/tasks`; `POST .../tasks/{tid}/done` | readers; writers | Tasks for the governance administrators |
+| `GET /api/v1/my/reviews`, `/my/reviews/{tid}/items` | every signed-in role | The signed-in person's review tasks and their items |
+| `POST /api/v1/my/reviews/{tid}/decisions`, `/delegate`, `/complete`; `GET /api/v1/my/people` | every signed-in role | Decide, hand items to someone else, finish |
 | `GET /api/v1/my/identity`, `/my/access` | every signed-in role | The signed-in person, and what they hold |
 
 Writes need the Governance pack. Reads never do: what was recorded stays visible after
@@ -165,6 +223,10 @@ a license lapses.
 | `governance.system.created`, `governance.entitlement.created` | configuration |
 | `governance.assignment.granted`, `governance.assignment.revoked` | authorization |
 | `governance.entitlement.updated`, `governance.account.linked`, `governance.account.unlinked` | configuration |
+| `governance.campaign_definition.saved`, `governance.campaign_definition.deleted` | configuration |
+| `governance.campaign.created`, `governance.campaign.closed`, `governance.campaign.approved` (sign-off) | authorization |
+| `governance.review.decided` (one per submission), `governance.review.delegated` | authorization |
+| `governance.review.revocation_failed` | system |
 | `governance.projection.halted`, `governance.inventory.completed`, `governance.inventory.suspect` | system |
 
 ## What the console stores about people
@@ -186,5 +248,9 @@ each change the projection saw, the attributes' old and new values.
   reads far less).
 - The inventory: an end-to-end script against OpenLDAP 2.6; not yet against Active
   Directory, SCIM providers or Microsoft Graph.
+- Certifications: integration tests (a manager campaign end to end with the stand-in
+  engine, revocations at the close, the clock). A campaign of 200,000 items starts in about
+  9 seconds; a page of a reviewer's queue answers in about 25 ms. Not yet an end-to-end
+  script with OpenLDAP.
 - Not built yet: holding grants in change windows and thresholds, correlation rules in
-  the API, certifications, requests, policies and roles.
+  the API, requests, policies and roles.
