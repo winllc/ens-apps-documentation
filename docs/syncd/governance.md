@@ -27,6 +27,7 @@ the console is down.
 | The identity source and its projection | Console: Governance page |
 | Systems, entitlements, assignments | Console: Governance and Assignments pages; API under `/api/v1/governance` |
 | A person's own page | Console: My access (`/my`); API under `/api/v1/my` |
+| The entitlement catalog: each system's accounts, groups and holdings, read daily from its target (`ListInventory`, `syncd inventory`) | Console: Catalog page, and "What they hold" on Assignments |
 | The Governance pack | Licensing |
 
 ## Setting a publication up for grants
@@ -97,6 +98,41 @@ A projection pass that would mark more than `max_gone_percent` (10 % by default)
 people gone stops and changes nothing, and records `governance.projection.halted`: an
 engine answering with half its view must not look like half the company leaving.
 
+## The entitlement catalog
+
+To know what people hold now, and not only what governance gave them, the console reads
+each system's target once a day: every account, every group and its members, and the
+values of attributes that are entitlements. The publication says where to look:
+
+```yaml
+grants:
+  memberships:
+    bases: ["OU=Groups,DC=corp,DC=example,DC=com"]
+  inventory:
+    account_bases: ["OU=Staff,DC=corp,DC=example,DC=com"]  # default: the dn's fixed end
+    group_bases: []                     # default: memberships.bases
+    attributes: [title, department]     # kept with each account, at most 20
+    entitlement_attributes: [eduPersonEntitlement]
+```
+
+`syncd inventory --publication people_to_ad --kind groups` shows what a run will read.
+The engine reads the target and never writes it.
+
+Each account is linked to its person: the engine's own export links it (`managed`);
+otherwise a correlation rule may match exactly one person (`rule`); otherwise someone
+links it on the **Catalog** page (`manual`, kept by later runs). Accounts nobody owns are
+listed there for review.
+
+Each holding is **explained** when an open assignment gives it, or when a rule of the
+engine's configuration decides the group (a computed group). On go-live, what was found
+in place is unexplained; on a person's "What they hold" card, **Adopt** records it as the
+baseline (an assignment with origin `import`), without changing the system. Ending an
+adopted membership later has the engine remove it once.
+
+A run that would mark more than 20 % of a system's accounts gone marks nothing and is
+shown as **suspect** (`governance.inventory.suspect`); a run that cannot read the target
+is **failed** and changes nothing.
+
 ## API
 
 | Method and path | Who | What |
@@ -108,6 +144,14 @@ engine answering with half its view must not look like half the company leaving.
 | `GET`, `POST /api/v1/governance/entitlements` | readers; writers | Entitlements |
 | `GET`, `POST /api/v1/governance/assignments` | readers; writers | Assignments (`identity`, `open`) |
 | `POST /api/v1/governance/assignments/{aid}/end` | writers | End one, with a reason |
+| `GET /api/v1/governance/accounts` | readers | Accounts found (`system`, `identity`, `link`, `q`, `gone`) |
+| `POST /api/v1/governance/accounts/{acid}/link`, `/unlink` | writers | Link an account to a person by hand, or unlink it |
+| `PATCH /api/v1/governance/entitlements/{eid}` | writers | Describe an entitlement: name, description, owner, privileged, requestable |
+| `GET /api/v1/governance/entitlements/{eid}/members` | readers | Who holds it, explained or not |
+| `GET /api/v1/governance/identities/{gid}/access` | readers | What a person holds everywhere |
+| `POST /api/v1/governance/systems/{sid}/inventory` | writers | Run a system's inventory now |
+| `GET /api/v1/governance/inventory-runs` | readers | Inventory runs, newest first |
+| `POST /api/v1/governance/assignments/adopt` | writers | Adopt up to 1,000 holdings found in place |
 | `GET /api/v1/my/identity`, `/my/access` | every signed-in role | The signed-in person, and what they hold |
 
 Writes need the Governance pack. Reads never do: what was recorded stays visible after
@@ -120,7 +164,8 @@ a license lapses.
 | `governance.settings.changed` | configuration |
 | `governance.system.created`, `governance.entitlement.created` | configuration |
 | `governance.assignment.granted`, `governance.assignment.revoked` | authorization |
-| `governance.projection.halted` | system |
+| `governance.entitlement.updated`, `governance.account.linked`, `governance.account.unlinked` | configuration |
+| `governance.projection.halted`, `governance.inventory.completed`, `governance.inventory.suspect` | system |
 
 ## What the console stores about people
 
@@ -136,6 +181,10 @@ each change the projection saw, the attributes' old and new values.
   yet against Active Directory, SCIM providers or Microsoft Graph.
 - The console: integration tests against PostgreSQL with a stand-in engine (an
   assignment becomes a grant and is delivered; ending it removes it; a participant
-  reaches only their own page; a projection that would lose most people stops).
-- Not built yet: holding grants in change windows and thresholds, the entitlement
-  catalog read from the targets, certifications, requests, policies and roles.
+  reaches only their own page; a projection that would lose most people stops; an
+  inventory fills the catalog, links accounts, adopts found access, and stops when a run
+  reads far less).
+- The inventory: an end-to-end script against OpenLDAP 2.6; not yet against Active
+  Directory, SCIM providers or Microsoft Graph.
+- Not built yet: holding grants in change windows and thresholds, correlation rules in
+  the API, certifications, requests, policies and roles.
