@@ -63,6 +63,16 @@ Each version holds these files:
 | ReadyRoom | `readyroom` | `oci://ghcr.io/winllc/charts/readyroom` |
 | RSA Operations Portal | `rsa-operations-portal` | `oci://ghcr.io/winllc/charts/rsa-operations-portal` |
 
+The newest version tagged in each product's repository, as of 25 November 2026. The **Downloads**
+page is the authority on what is available:
+
+| Product | Newest version | Notes |
+|---|---|---|
+| CertAlert | 0.0.5 | 0.0.3 and 0.0.4 were tagged but have no download: see [below](#versions-without-a-download) |
+| Directory Services Portal | 0.0.11 | |
+| ReadyRoom | 0.0.11 | |
+| RSA Operations Portal | 0.0.3 | |
+
 ### Verifying
 
 Check the download before installing it:
@@ -81,11 +91,23 @@ configured with it. `gpg` should report a good signature from the ENS Solutions 
 its fingerprint against the one ENS Solutions gave you separately, not against anything in the
 download itself.
 
+**A release with no `SHA256SUMS.asc`** was built without ENS Solutions' signing key: the release
+pipeline then uploads `SHA256SUMS` unsigned. Step 2 still shows that each file arrived complete
+and matches the checksums, but nothing in the download proves who made them. Ask ENS Solutions to
+confirm the checksums over another channel before installing, and verify the images and the chart
+with cosign (next section), which does not depend on that key.
+
 ### Verifying the images and the chart
 
 On a release tag, CI also signs each published image and the Helm chart with cosign: keyless
 signatures (Sigstore), made with the release workflow's GitHub identity, always by digest. Each
 image also gets its SPDX SBOM attached as a signed attestation.
+
+The digest signed is the one the registry holds for the version tag: after pushing, CI reads it
+back from `ghcr.io` (`docker buildx imagetools inspect`) and signs `<image>@<digest>`; the chart is
+signed by the digest `helm push` printed. So the digest you look up for a tag, as in the example
+below, is the digest that was signed. A tag can be moved; a digest cannot, so deploy and mirror by
+digest where you can.
 
 | Product | Images | Chart | Repository in the signing identity |
 |---|---|---|---|
@@ -118,6 +140,24 @@ cosign verify ghcr.io/winllc/charts/readyroom@<digest> \
 For the other products, use their names and repository from the table. By default cosign
 contacts Sigstore's public services to verify a keyless signature, so on an air-gapped network,
 verify on a connected machine before you mirror the images.
+
+CertAlert's image also carries a signed build-provenance attestation (which workflow, commit and
+runner built it), which the GitHub CLI checks:
+
+```bash
+gh attestation verify oci://ghcr.io/winllc/cert-alert@<digest> --repo winllc/cert-alert
+```
+
+#### Versions without a download
+
+CertAlert 0.0.3 and 0.0.4 were tagged, and their release runs pushed the image
+`ghcr.io/winllc/cert-alert` under those version tags, but both runs stopped at the signing step:
+they took the digest from the build machine instead of the registry and found none to sign. Those
+two images, and the charts pushed in the step before, are therefore **unsigned** (`cosign verify`
+fails for them), and no bundle, SBOM or checksum file was uploaded, so neither version is on the
+**Downloads** page. Use 0.0.5 or later, whose release signs by the registry's digest. 0.0.5 is
+0.0.4's code with that one change to the release pipeline, so everything these pages say arrived
+in CertAlert 0.0.4 reaches a release-package installation with 0.0.5.
 
 ### Installing
 
@@ -184,12 +224,39 @@ cosign, and uploads everything to the private release bucket under
 The licensing portal's **Downloads** page lists the new version within a few minutes (its listing
 cache, `RELEASES_LISTING_TTL`, five minutes by default).
 
+The bucket then holds, for each product (`<product>` as in the customers' table above):
+
+```
+<product>/latest.txt                               the newest final version, one line, such as 0.0.11
+<product>/<version>/<product>-<version>.tar.gz     the deployment bundle
+<product>/<version>/<product>-<version>.tgz        the Helm chart (ReadyRoom: readyroom-helm-<version>.tgz)
+<product>/<version>/sbom-<image>.spdx.json         one per image in the bundle, a bundled database image included
+<product>/<version>/SHA256SUMS                     over the files above
+<product>/<version>/SHA256SUMS.asc                 only when the signing key is configured
+```
+
+The Directory Services Portal adds `directory-services-portal-<version>-native.tar.gz`.
+`latest.txt` is left alone by a pre-release (`1.4.0-rc.1`), and the checksum file is made before
+signing, so `SHA256SUMS.asc` is not listed in it.
+
 A release reaches customers from the bucket only. On a release tag the image job first checks that
-the bucket is configured (`RELEASE_S3_BUCKET` and the AWS credentials below; from the next release
-CertAlert checks the bucket only, the others the role or, until it exists, the access keys) and fails, before anything is built or published,
-when it is not.
-Every pull request builds a dry-run bundle (`0.0.0-pr<n>`) as a workflow artifact, without signing
-or uploading, so packaging problems show up before a release.
+the bucket is configured (`RELEASE_S3_BUCKET` and the AWS credentials below; CertAlert's image job
+checks the bucket only and its `release` job the credentials, the others check the role or, until
+it exists, the access keys) and fails, before anything is built or published, when it is not.
+
+The images are pushed first; the chart is pushed and the images and the chart are signed next;
+the checksums are signed and the bundle is uploaded last. A run that fails part-way therefore
+leaves the earlier steps' results behind: images or a chart in the registry without signatures,
+and nothing in the bucket, as happened with
+[CertAlert 0.0.3 and 0.0.4](#versions-without-a-download). Read the run's summary (it says what
+was published, signed and uploaded), fix the cause, and tag the next version; say on this page
+which version has no download.
+
+Pull requests build a dry-run bundle (`0.0.0-pr<n>`) as a workflow artifact, without signing or
+uploading, so packaging problems show up before a release: every pull request for CertAlert and
+the Directory Services Portal, and for ReadyRoom and the RSA Operations Portal those that change
+the image, the bundle or the chart. The RSA Operations Portal also builds one on every push to
+`main` (`0.0.0-main.<run>`).
 
 ### One-time setup
 
@@ -201,20 +268,24 @@ whole organization:
 | `RELEASE_S3_BUCKET` | variable | Bucket name |
 | `RELEASE_S3_ENDPOINT` | variable | Only for Cloudflare R2 or MinIO, such as `https://<account>.r2.cloudflarestorage.com` |
 | `RELEASE_S3_REGION` | variable | Defaults to `us-east-1`; `auto` for R2 |
-| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | secrets | Credentials that can write to the bucket, and to nothing else. From the next release a fallback only, while `AWS_RELEASE_ROLE_ARN` is unset (below) |
-| `AWS_RELEASE_ROLE_ARN` (next release) | variable | The IAM role the upload assumes through GitHub OIDC (below) |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | secrets | Credentials that can write to the bucket, and to nothing else. A fallback only, while `AWS_RELEASE_ROLE_ARN` is unset (below) |
+| `AWS_RELEASE_ROLE_ARN` | variable | The IAM role the upload assumes through GitHub OIDC (below) |
 | `RELEASE_GPG_PRIVATE_KEY` | secret | ASCII-armored private signing key |
 | `RELEASE_GPG_PASSPHRASE` | secret | Its passphrase, if it has one |
 
 Without the bucket settings a release tag fails (see above). The signing key is optional: without
-it, releases are unsigned (no `SHA256SUMS.asc`), and the job summary says so.
+it the release is still uploaded, with `SHA256SUMS` unsigned and no `SHA256SUMS.asc`, and the job
+summary says the release is not signed and names the missing `RELEASE_GPG_PRIVATE_KEY` secret.
+Customers are then told to confirm the checksums with ENS Solutions (see
+[Verifying](#verifying)), so set the key before a release that customers will install.
 
 Keep the bucket **private**: no public access and no website hosting. Customers only ever get
 pre-signed links.
 
-### Upload role and the `release` environment (next release)
+### Upload role and the `release` environment
 
-From the next release, each product's pipeline signs and uploads in the GitHub environment
+Each product's pipeline (CertAlert from 0.0.3, the Directory Services Portal from 0.0.4, ReadyRoom
+from 0.0.3 and the RSA Operations Portal from 0.0.2) signs and uploads in the GitHub environment
 `release`, only on a `v*` tag (pull-request dry runs and branch pushes never use it), and the upload
 prefers short-lived credentials for an IAM role assumed through GitHub's OIDC provider
 (`aws-actions/configure-aws-credentials`, pinned by commit SHA) over the stored access keys.

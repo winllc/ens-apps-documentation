@@ -62,6 +62,12 @@ The secret (`whsec_...`) is shown once, when the webhook is made or its secret r
   mid-send): de-duplicate on `X-Ens-Event-Id`.
 - A disabled or deleted webhook's waiting deliveries are cancelled (`CANCELLED` in the delivery log),
   so nothing old is sent if it is enabled again. The page lists the latest deliveries.
+- **The delivery log is not kept for good** (from 0.0.3). A delivered event's body, which names the
+  user, the token serial, the ticket and the actor, is removed from the log as soon as the receiver
+  has taken it. The nightly [data retention](configuration.md#data-retention) job deletes delivered,
+  given-up and cancelled deliveries, also those of deleted webhooks,
+  `ENS_RETENTION_WEBHOOK_DELIVERIES_DAYS` (90) days after their last attempt; a delivery still
+  waiting to be sent is kept. Before 0.0.3 nothing deleted them.
 - No redirect is followed and no proxy is used.
 
 ## Where a webhook may point
@@ -100,6 +106,7 @@ each webhook's secret afterwards.
 | `ens.webhooks.first-backoff`, `.max-backoff` | `30s`, `6h` | The wait after the first failure, and the longest |
 | `ens.webhooks.connect-timeout`, `.response-timeout`, `.deadline` | `5s`, `10s`, `15s` | Per attempt; the deadline bounds the whole attempt |
 | `ens.webhooks.endpoint-budget`, `.run-budget` | `20s`, `40s` | Time one webhook, and one run of the job, may take (the job's lease is 60 s) |
+| `ENS_RETENTION_WEBHOOK_DELIVERIES_DAYS` (`ens.retention.webhook-deliveries-days`; Helm `retention.webhookDeliveriesDays`) | `90` | From 0.0.3: days the delivery log keeps delivered, given-up and cancelled deliveries after their last attempt. `0` keeps them forever |
 
 ## Audit
 

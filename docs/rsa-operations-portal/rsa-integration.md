@@ -53,7 +53,7 @@ The Connector's `springapp.xml` aliases `CommandAPIConnection` to the SDK's `Cac
 | `default_build/ssl/connector-ca.crt` | The CA certificate the Portal checks the Connector's against (`CONNECTOR_TLS_TRUSTSTORE=/ssl/connector-ca.crt` in `.env`) |
 | `portal-tls/portal-client.crt`, `.key` | The Portal's certificate (5 years) and key, for mutual TLS. Only the Portal mounts this folder (`/portal-tls`): the Connector mounts all of `default_build`, so the key is not kept there. An earlier release kept them in `default_build/ssl`; the script moves them, and the settings in `.env` that name `/ssl/portal-client.*`. The key is mode 640 with group 0, which the Portal (uid 1001, group 0) reads through: the script sets that when run as root, otherwise `util/file-owners.sh` does |
 
-To use certificates from your own PKI, set `CONNECTOR_TLS_CERTIFICATE` and `CONNECTOR_TLS_PRIVATE_KEY` in `connector.env` and `CONNECTOR_TLS_TRUSTSTORE` in `.env`; the script leaves files it did not make alone.
+To use certificates from your own PKI, set `CONNECTOR_TLS_CERTIFICATE` and `CONNECTOR_TLS_PRIVATE_KEY` in `connector.env` and `CONNECTOR_TLS_TRUSTSTORE` in `.env`; the script leaves files it did not make alone. From 0.0.3 that includes a CA file of your own at the default paths `default_build/ssl/connector-ca.crt` and `default_build/connector-tls/ca.crt` (the script prints `... was not put there by util/connector-tls.sh: left as it is`; before, every `install.sh` and `upgrade.sh` run copied the script's CA over it), and the script makes no Connector certificate and no `CONNECTOR_TLS_PRIVATE_KEY_PASSWORD` while `connector.env` names a certificate or key outside `/custom/connector-tls/`. When the script makes a new CA, it replaces those two files all the same and keeps the old one as `<file>.replaced.<time>`.
 
 ### Mutual TLS
 
@@ -166,7 +166,8 @@ Anything else is refused: the reply is not read, the command fails, and the Conn
 1. At startup the Connector connects both sessions. If AM can't be reached, it still starts, logs the error and connects on the next request.
 2. On (re)connect it runs `SearchRealmsCommand` for `rsa.authmanager.realm.name` and `SearchSecurityDomainCommand` for `rsa.authmanager.securityDomain.name`, and caches the security domain and the realm's identity sources. A missing realm or domain fails the session check (`RsaSessionCheckFailedException`).
 3. A session AM has confirmed is used for 60 seconds without asking again. If AM drops it sooner, the failing command is run once more on a new session.
-4. On shutdown the Connector logs out both sessions.
+4. From 0.0.3, after a failed attempt to open a session (AM unreachable, a wrong, locked or expired service account) the Connector tries again no sooner than 5 seconds later, doubling up to 30 seconds while it keeps failing. Until then every request and the health check get that failure at once, without another sign-in to AM, so a wrong service-account password is not tried again on every request and probe. The Connector logs `Could not open the admin session on Auth Manager; trying again in <n> s at the earliest`. A successful connect ends the wait.
+5. On shutdown the Connector logs out both sessions.
 
 ## Who runs each command
 
@@ -179,10 +180,12 @@ Anything else is refused: the reply is not read, the command fails, and the Conn
 
 Every command that changes AM, whoever runs it, is recorded as `am.change-attempt` before it is sent and `am.change-outcome` after, with `details.amAccount` saying which session made it (`operator` or `service-account`). If the attempt can't be recorded, the command is not sent. See [Security → Other controls](security.md#other-controls).
 
-The Portal passes the operator's AM session ID and principal GUID (`AppAuthenticationToken`) with each operator command. If that AM session has ended, the Connector throws `RsaUserSessionEndedException`, and the Portal signs the user out and redirects to `/login`.
+The Portal passes the operator's AM session ID and principal GUID (`AppAuthenticationToken`) with each operator command. If that AM session has ended, the Connector throws `RsaUserSessionEndedException`, and the Portal signs the user out and redirects to `/login`. From 0.0.3 that happens only when AM answers that the session does not exist. When AM cannot be reached, or the Connector's own session cannot be opened, the operator stays signed in and the command fails with an error; before, any such failure signed the operator out.
+
+From 0.0.3 the Connector also reports a check AM could not answer as a failure, not as a wrong code: enrolling a token (`verifyTokenCodeDuringRegistration`), Test My Token (`testTokenLogin`) and the tokencode checks (`validateUsersTokenCode`) used to answer "wrong code" while AM was down.
 
 !!! warning "Upgrade the Portal and the Connector together"
-    The role grant and revoke calls and `clearCachedWindowsPassword` take the operator's token since the release that moved them to the operator's session. A Portal and a Connector from different releases can't talk to each other. The release package and the Helm chart always run matching versions.
+    The role grant and revoke calls and `clearCachedWindowsPassword` take the operator's token since the release that moved them to the operator's session, and the Portal of 0.0.3 calls two methods an older Connector does not have: `getTokensOfUsers` (the registration reminders) and `countTokensInSerialRanges` (the site report). A Portal and a Connector from different releases can't talk to each other. The release package and the Helm chart always run matching versions; do not pin one of the two images to an older tag.
 
 ## Operations used by the Portal
 
@@ -205,12 +208,14 @@ The Portal passes the operator's AM session ID and principal GUID (`AppAuthentic
 | Unlock account | `setUserAccountLockoutStatus` | `UpdatePrincipalCommand` (lockout flag) |
 | Clear cached Windows password | `clearCachedWindowsPassword` | `LookupAMPrincipalCommand`, `UpdateAMPrincipalCommand` |
 | Shipments: validate serial range | `checkValidRange`, `findTokensInSerialRange` | `SearchTokensCommand` |
+| Site report: tokens at a site (from 0.0.3) | `countTokensInSerialRanges` | `SearchTokensCommand`, twice per serial range (assigned and unassigned). The Connector counts, each token once, and returns only the two numbers; before, every token of the ranges was sent to the Portal to be counted |
+| Job: registration reminders (from 0.0.3) | `getTokensOfUsers`, `retrieveUsersByRsaId` | `SearchPrincipalsCommand` for up to 100 user IDs, then `ListTokensByPrincipalCommand` for each user found. A user AM does not have is left out of the answer; any other failure fails the call |
 | Jobs: expiring tokens, inactive tokens | `findTokensExpiringWithinDays`, `findTokensThatHaveNotLoggedInWithinMinutes`, `findUsersWithTokens` | `SearchTokensCommand`, `SearchPrincipalsCommand` |
 | Health | `testConnection` | Admin session check |
 
 ## Health
 
-* **Connector:** `GET` or `HEAD /app/health` needs no credentials. It answers 200 `UP` when the Connector has an AM admin session or can open one, and 503 `DOWN` otherwise. The result is kept for 30 seconds, so probes don't reach AM on every call; the reason for `DOWN` goes to the Connector's log only. The compose files and the podman unit check `curl http://localhost:8080/app/health` inside the container; the Helm chart's readiness probe uses it too, and its liveness and startup probes check the HTTPS port.
+* **Connector:** `GET` or `HEAD /app/health` needs no credentials. It answers 200 `UP` when the Connector has an AM admin session or can open one, and 503 `DOWN` otherwise. The result is kept for 30 seconds, so probes don't reach AM on every call; the reason for `DOWN` goes to the Connector's log only. From 0.0.3, during the wait after a failed connect ([Sessions](#sessions)) it answers `DOWN` without trying AM. The compose files and the podman unit check `curl http://localhost:8080/app/health` inside the container; the Helm chart's readiness probe uses it too, and its liveness and startup probes check the HTTPS port.
 * **Portal:** the health indicator named `connector` calls the Connector's health endpoint over the Portal's TLS settings, and is part of the Portal's readiness group with the database (`/actuator/health/readiness`).
 
 ## Token serial prefix

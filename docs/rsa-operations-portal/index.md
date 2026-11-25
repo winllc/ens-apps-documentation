@@ -10,7 +10,7 @@ The **RSA Operations Portal** is a web application that simplifies the day-to-da
 | Area | What the portal does |
 |---|---|
 | **Token self-service** | Users test their token, complete token enrollment by setting a PIN, and reset a PIN themselves (with a PKI client certificate, a Windows username and password, or an emailed reset link). |
-| **Token administration** | Trusted Agents assign (distribute) tokens to users. Trusted Agents and Help Desk staff unlock accounts, and through **help-desk requests** (a ticket, a verified user, a second operator for privileged users, and a notice to the user) mark tokens lost, reset PINs, deprovision tokens, issue emergency access codes and clear cached Windows passwords. |
+| **Token administration** | Trusted Agents assign (distribute) tokens to users; from 0.0.3 a token for a privileged user or the agent's own account goes through a help-desk request. Trusted Agents and Help Desk staff unlock accounts, and through **help-desk requests** (a ticket, a verified user, a second operator for privileged users, and a notice to the user) mark tokens lost, reset PINs, deprovision tokens, issue emergency access codes and clear cached Windows passwords. |
 | **Abuse controls** | The steps anyone can reach without signing in are rate-limited per client address and per user ID, back off after repeated failures, and give one answer whatever the cause. |
 | **Trusted Agent directory and appointments** | A public directory of Trusted Agents. Users can book an appointment with a Trusted Agent to pick up, replace or return a token. |
 | **Logistics** | Trusted Agents request token shipments for their **sites**. PMO staff work the shipments and send token serial ranges, and the receiving site confirms receipt. |
@@ -18,7 +18,7 @@ The **RSA Operations Portal** is a web application that simplifies the day-to-da
 | **Single sign-on** | Operators can sign in through the organization's identity provider (OpenID Connect or SAML 2.0), followed by their SecurID passcode; the provider's groups decide the Portal roles. See [Single sign-on](single-sign-on.md). |
 | **Integration API and webhooks** | ITSM and identity-governance tools read users and tokens and open help-desk requests through a scoped, token-authenticated REST API (`/api/v1`, OpenAPI document), and receive signed webhooks for help-desk, token and account events. See [API and HTTP route reference](api-reference.md) and [Webhooks](webhooks.md). |
 | **Administration (PMO)** | Register Trusted Agents (one at a time or in bulk from a CSV file), map application roles to RSA AM administrative roles, post home-page system notifications, email groups of users, and run scheduled jobs on demand. |
-| **Automation** | Six scheduled jobs send token-expiry, appointment and PIN-set reminders, re-sync Trusted Agents from RSA AM, and flag users who lose too many tokens. |
+| **Automation** | Seven scheduled jobs send token-expiry, appointment and PIN-set reminders, re-sync Trusted Agents from RSA AM, flag users who lose too many tokens, and delete closed records past their retention. A job that could not do its work is audited as failed, and a missed night's notices are caught up. |
 | **Active Directory (optional)** | Adds or removes users in an "RSA enabled" AD group when they enroll a token, lose one, or have one deprovisioned. |
 
 ## Architecture at a glance
