@@ -8,7 +8,8 @@ a JDBC driver. Targets are LDAP directories, Active Directory, SaaS applications
 speak SCIM 2.0, and Entra ID. Since 0.6.0 a `dsml` connector carries changes across an air
 gap as DSML v2 files: a target on the connected side, a source on the far side. In
 development (not in a release yet), PostgreSQL, MySQL and SQL Server tables are targets
-too: see [SQL tables as targets](#sql-tables-as-targets).
+too: see [SQL tables as targets](#sql-tables-as-targets), and so are JSON APIs through
+request templates: see [REST services as targets](#rest-services-as-targets).
 
 This page says how each connector reads, what it needs on the source side, and which
 settings matter. Every key is listed in [Configuration](configuration.md#connectors-connectors);
@@ -1851,6 +1852,58 @@ publications:
 Tested end to end against PostgreSQL 16, MySQL 8.0 and SQL Server 2022 (`tests/e2e/sql-target.sh`);
 CI also runs it against MariaDB and SQL Server 2019.
 
+## REST services as targets
+
+*In development, not in a release yet; Cloud and SaaS pack, with the REST source.*
+
+A publication to a `rest` connector writes one resource of a JSON API per entity through
+request templates in its `rest` block. Sign-in, API keys, client certificates, the rate
+limit and retries are the connection's, as for the [REST source](#rest-and-odata-services).
+
+```yaml
+publications:
+  - name: people_to_app
+    view: people
+    target: app_api
+    external_id: e.login                # names the resource for good
+    attributes:                         # body field <- CEL over e
+      name.givenName: e.first           # a dotted name is a nested field
+      email: e.mail
+    deprovision: disable
+    rest:
+      name: users                       # entries are userName=<key>,resource=users
+      key: userName                     # the body field holding the key
+      id: $.id                          # the service's id in its answers: {id}
+      create: { path: /users, body: { active: true } }
+      update: { method: PATCH, path: "/users/{id}" }
+      delete: { path: "/users/{id}" }
+      disable: { path: "/users/{id}", body: { active: false } }
+      enable: { path: "/users/{id}", body: { active: true } }
+      find: { path: /users, query: { userName: "{key}" }, records: $.items }
+      read: { path: "/users/{id}" }
+      list: { path: /users, records: $.items, paging: { style: offset, page_size: 100 } }
+      members:
+        add: { path: "/groups/{group}/members", body: { userId: "{id}" } }
+        remove: { path: "/groups/{group}/members/{id}" }
+```
+
+- Templates take `{id}`, `{key}` and `{group}` (percent-encoded in paths). The attributes
+  are merged into a call's body; `types` makes a field a number, a boolean or a list.
+- An add finds the key first (`find`): a resource already there, or one a `409` says
+  exists, is taken over and enabled rather than duplicated. An update sends what changed
+  with `PATCH`, or everything with `PUT`; a `404` creates the resource again. The
+  service's id is recorded with the entry.
+- Only reads are retried after a lost connection or a `5xx`; `429` and `503` are waited out
+  for every method.
+- Drift checks need `find` and `read`; the governance inventory and the unmanaged pass page
+  through `list` (and `members.groups`, `members.list`) with the source's paging styles.
+- Validation refuses unknown placeholders and methods, attributes without `update`, a
+  deprovision policy without its call, and what a service cannot take (`dn`, containers,
+  `writeback`, `adopt`, `passwords`, computed groups, `references`).
+
+Tested against syncd's fake REST service only (`tests/e2e/rest-target.sh`), not against a
+real application.
+
 ## Checking a connector
 
 Before publishing, check a connector against the real system. Nothing here writes.
@@ -1952,8 +2005,8 @@ Not tested against a real server:
   needs them. HR and SaaS services are read through the REST reader since 0.5.0; Workday
   SOAP and SuccessFactors `$expand` are not built.
 - **Other targets**: Oracle and Db2 tables (PostgreSQL, MySQL and SQL Server tables are
-  targets in development), files other than DSML, REST services, and applications that
-  do not speak SCIM 2.0.
+  targets in development), files other than DSML, and APIs that take bodies other than
+  JSON (REST services with JSON bodies are targets in development).
 - **DSML over anything but a directory or SFTP**: a DSML gateway's SOAP or HTTP endpoint
   is not called; files go through a directory or an SFTP server. Not tested against a
   commercial DSML gateway or a data diode's transfer software.
