@@ -20,7 +20,7 @@ Each webhook is an HTTPS `POST` of JSON:
 | Event | When | `data` |
 |---|---|---|
 | `absence.alert` | Someone is not in by their expected time plus the grace period, and their managers were alerted | `person`, `date`, `expectedBy`, `managersNotified` |
-| `status.changed` | A check-in, lock, unlock or check-out (`kind` `presence`: `status` `IN`, `AWAY` or `OUT`, `action`, `at`, `forced`), or a status put on someone's calendar (`kind` `calendar`: `status`, `statusName`, `dates`, `source` `request`, `self` or `manager`) | As described |
+| `status.changed` | A check-in, lock, unlock or check-out (`kind` `presence`: `status` `IN`, `AWAY` or `OUT`, `action`, `at`, `forced`; `forced` is `true` for an automatic check-out, which from 0.0.11 includes the one that closes a session left open at the end of the person's day), or a status put on someone's calendar (`kind` `calendar`: `status`, `statusName`, `dates`, `source` `request`, `self` or `manager`) | As described |
 | `ping` | An administrator presses **Send test** | `message` |
 
 A webhook acts for the administrator who added it: while they are no longer one, nothing is sent to
@@ -69,18 +69,38 @@ def verify(secret: str, header: str, body: bytes) -> bool:
 - A try is cut off after `APPLICATION_WEBHOOKS_ATTEMPTTIMEOUT` (30 s) altogether, whatever the
   receiver does, the host's DNS lookup included.
 - A run starts no try after `APPLICATION_WEBHOOKS_RUNBUDGET` (40 s). Due deliveries are taken per
-  endpoint, least recently served first, at most `APPLICATION_WEBHOOKS_PERENDPOINTMAX` (20) tries and
-  `APPLICATION_WEBHOOKS_PERENDPOINTBUDGET` (20 s) each.
+  endpoint, least recently served first, for at most `APPLICATION_WEBHOOKS_PERENDPOINTBUDGET` (20 s)
+  each, in batches of `APPLICATION_WEBHOOKS_PERENDPOINTMAX` (20) tries. From 0.0.11 an endpoint
+  whose whole batch was delivered gets the next batch in the same run, within its time, so a
+  receiver that keeps up is not held to 20 deliveries a run; one that refuses a delivery or does
+  not answer gets no more than one batch.
 - An endpoint that gives no HTTP answer at all is paused with backoff (30 seconds, then 2, 10 and 30
   minutes, 1, 2, 4 and 8 hours) until any answer, so a slow or dead receiver cannot hold the others
   up.
+- **A webhook that does not answer is disabled** (from 0.0.11). After 10 tries in a row with no
+  HTTP answer, about a day with the pauses between them, ReadyRoom disables the webhook. It is
+  audited as `webhook.disabled` with the actor `system` (the reason
+  `no answer to 10 tries in a row`, the last error in `details.lastError`) and logged at `WARN`.
+  Nothing is queued for it from then on, so events raised while it is disabled are not sent
+  later. **Enable** on the Integrations page turns it back on and ends its pause, so what was
+  still queued for it is tried again. An answer of any kind, an error status included, is an
+  answer: such a webhook is retried and is not disabled.
+- **A delivery that waits too long is given up** (from 0.0.11). A delivery still waiting 3 days
+  after it was queued is marked failed, with the error
+  `expired: not delivered within 72 hours of being queued`, and then leaves the log with the rest.
+  The limit is longer when `APPLICATION_WEBHOOKS_MAXATTEMPTS` is raised so far that its retries
+  take more than two days: the retries' backoff plus a day. This is checked hourly.
 - Anything but a 2xx answer (a redirect included) is retried after 30 seconds, 2, 10 and 30 minutes,
   then 1, 2, 4 and 8 hours, up to `APPLICATION_WEBHOOKS_MAXATTEMPTS` (8) tries, then marked failed.
 - Deliveries are not held back behind a retry, so they can arrive out of order: order by
   `createdAt` (and, for a `status.changed`, by `data.at`); a retried delivery can arrive after newer
   ones.
 - The Integrations page shows each webhook's recent deliveries (state, tries, last status, error);
-  the log is kept `APPLICATION_WEBHOOKS_DELIVERYLOGDAYS` (30) days.
+  the log is kept `APPLICATION_WEBHOOKS_DELIVERYLOGDAYS` (30) days. A disabled webhook carries a
+  *disabled* badge and an **Enable** button.
+- With several replicas, a webhook deleted on one replica is still listed on the others for up to
+  30 seconds. From 0.0.11 an event raised meanwhile is still queued for every other webhook; up to
+  0.0.10 it could be queued for none.
 - Each try is counted in `ens_readyroom_webhook_deliveries_total{outcome}` (`delivered`, `retry`
   for one tried again later, `failed` for one given up). A webhook that has failed 5 tries in a row
   is logged at `WARN` (`Webhook endpoint <id> (<name>) has failed 5 tries in a row since it last
@@ -140,11 +160,12 @@ Where the only way out is an HTTP proxy, set `APPLICATION_WEBHOOKS_PROXY` to its
 | `APPLICATION_WEBHOOKS_MAXATTEMPTS` | `8` | Tries per delivery |
 | `APPLICATION_WEBHOOKS_DELIVERYLOGDAYS` | `30` | Days delivered and failed deliveries are kept |
 | `APPLICATION_WEBHOOKS_CONNECTTIMEOUT`, `_READTIMEOUT` | `5s`, `10s` | |
-| `APPLICATION_WEBHOOKS_ATTEMPTTIMEOUT`, `_RUNBUDGET`, `_PERENDPOINTMAX`, `_PERENDPOINTBUDGET` | `30s`, `40s`, `20`, `20s` | A try's overall deadline, and one run's limits |
+| `APPLICATION_WEBHOOKS_ATTEMPTTIMEOUT`, `_RUNBUDGET`, `_PERENDPOINTMAX`, `_PERENDPOINTBUDGET` | `30s`, `40s`, `20`, `20s` | A try's overall deadline, and one run's limits. `_PERENDPOINTMAX` is the size of a batch: an endpoint whose batch was all delivered gets another within `_PERENDPOINTBUDGET` |
 
 ## Audit
 
 `webhook.created`, `webhook.disabled`, `webhook.enabled`, `webhook.deleted` and
 `webhook.secret-rotated`; the secret appears only as its first characters, and a rotation names the
 previous one's too (`details.previousSecretPrefix`). A webhook disabled by an erasure carries
-`details.via` `erasure`.
+`details.via` `erasure`. One that ReadyRoom disabled because its receiver did not answer has the
+actor `system` and the reason `no answer to 10 tries in a row`.

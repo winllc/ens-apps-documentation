@@ -15,7 +15,11 @@ Without a certificate, the **Sign in** page asks for your directory credentials:
 - **Username**: your `uid`, your common name (`cn`) or your email address.
 - **Password**: your directory password.
 
-A wrong username or password shows an error on the same page. When you signed in with a password,
+A wrong username or password shows an error on the same page. After several failed attempts in a
+minute (five for one username by default, or thirty from one address), the page says *Too many
+failed sign-ins. Wait a minute, then try again.* and refuses further password sign-ins until that
+minute is over, the right password included. Signing in with a certificate or single sign-on is
+not affected. When you signed in with a password,
 **Log out** in the user menu (your avatar, top right) ends the session.
 
 Once you are signed in, the top right of every page shows your name, your role (*Administrator*,
@@ -44,7 +48,7 @@ rather than cut short. Nothing was changed: try again in a few seconds.
 |---|---|
 | **Banner** (top and bottom) | The text your organization configured, for example a classification marking. |
 | **Sidebar** | Home, Groups, Users, My Reports, Approvals, Org Chart and, for admins and managers, Metrics. Admins also see Settings, License, Delegates, Privacy and Audit Log. |
-| **Bell** (top left) | Your absence alerts that still await an answer, unread ones in bold. A red dot means at least one is unread. Click one to open it. **Mark All Read** clears the dot; the alerts stay listed until someone answers them. |
+| **Bell** (top left) | Your absence alerts that still await an answer, unread ones in bold: the newest 50 of those you may still answer (14 days old at most, by default). A red dot means at least one is unread. Click one to open it. **Mark All Read** clears the dot; the alerts stay listed until someone answers them. |
 | **System Date** (admins and managers) | Shows the site as it stood on an earlier day. See [Looking at another day](#looking-at-another-day). |
 | **?** | The "How ReadyRoom works" help dialog. |
 | **Avatar menu** | **My Profile**, **My data**, and **Log out** for password sessions. |
@@ -55,8 +59,8 @@ rather than cut short. Nothing was changed: try again in a few seconds.
 |---|---|
 | `IN` (green) | Checked in, and the latest event was a sign-in or an unlock. |
 | `AWAY` (purple) | The latest event was a screen lock. |
-| `OUT` (blue) | Checked out: you signed out, or ReadyRoom checked you out after the screen had been locked for too long (or, on a day of *Early Leave* with a time, as soon as you locked the screen at or after that time). |
-| `NONE` (grey) | Nothing recorded for the day. |
+| `OUT` (blue) | Checked out: you signed out, or ReadyRoom checked you out after the screen had been locked for too long (or, on a day of *Early Leave* with a time, as soon as you locked the screen at or after that time). A past day that ended with a locked screen reads `OUT` too. So does a day you never locked or signed out on: ReadyRoom closes such a session at the end of your day, with no check-out time, since when you left is not known. |
+| `NONE` (grey) | Nothing recorded for the day, or no check-in: a day whose only records close the day before (the automatic check-out of last evening's lock, written after midnight) is not a day you were in. |
 
 If a status is on your calendar for the day (anything other than *Standard*), it is shown
 instead, by its name: for example *Work From Home*, *Temporary Duty (TDY)*, *Training* or *Late
@@ -80,7 +84,7 @@ checked out) are in your zone. See [Your day and time zone](#your-day-and-time-z
 
 | Card | Shows |
 |---|---|
-| **My status** | Your current status and when it started, the time you checked in and out, the time you are **expected in by** with the rule it came from, and your **average arrival**. |
+| **My status** | Your current status and when it started, the time you checked in and out, the time you are **expected in by** with the rule it came from, and your **average arrival**. The check-out time is when you left, as the reports read it: when ReadyRoom checked you out after a locked screen, it is the time of the lock, not the later time the check-out was written. |
 | **Last 30 days** | Your working days you checked in, days covered only by a status (one that accounts for the day, see [Statuses](#statuses); not *Late Arrival* or *Early Leave*), and days with nothing recorded, as counts and a bar. Days on leave are left out of your working days, and the card says how many, for example *12 of 12 working days checked in, 10 on leave*. See [Working days](#working-days). |
 | **Workstation agent** | *Reporting* with the time of the last event, or *Not reporting* if nothing has arrived from your PC for 7 days or more. If you have been working but see *Not reporting*, the agent on your PC needs attention. |
 | **Coming up** | Statuses you have set for the next 14 days, with a link to **Update my calendar**. |
@@ -119,7 +123,7 @@ particular application role for this.
 |---|---|
 | **Accounted for** | The percentage of your reports who are checked in or have a status that accounts for the day (see [Statuses](#statuses)), and the mix of statuses. Only reports whose working day it is are expected. On a holiday, or a day none of your reports works, it says why nobody is expected (for example *Not a working day: Friday* for a team that works Monday to Thursday). |
 | **Not in yet** | Reports who are not accounted for on one of their working days, with their expected time: the time of a *Late Arrival* they set for the day, else their login time or average arrival. Each report's expected time is in their own time zone, shown next to the time when it is not yours (for example *expected 08:00 (Asia/Tokyo)*). A **Late** badge (**Missed** when you view a past day) appears once they are past it. |
-| **Awaiting your response** | Absence alerts nobody has answered yet, with a **New** badge on those you have not read. Marking them read in the bell does not remove them. Click one to respond. |
+| **Awaiting your response** | Absence alerts nobody has answered yet, with a **New** badge on those you have not read: the newest 50 that you may still answer. Marking them read in the bell does not remove them. Click one to respond. An older alert still opens from the link in its email. |
 | **Team agents** | How many reports' agents reported in the last 7 days, and who stopped reporting. |
 | **Team coming up** | Your reports' statuses for the next 14 days. |
 
@@ -146,7 +150,7 @@ without being able to change it.
 
 ### A group's page
 
-`/app/users/<group DN>` shows:
+A group's page (`/app/users?group=<group DN>`) shows:
 
 - **Members**: a table of each member's name, status (for their own today), last status change and
   notes. Each column can be filtered. Turn on **Advanced** to also show the DN, check-in time and
@@ -186,8 +190,12 @@ person left: their last check-out of the day, or, when that check-out came strai
 lock with no unlock between (an automatic check-out, or the logoff of a locked PC that was
 restarted, shut down or updated), the lock before it. While the day is still in progress a screen lock is taken as
 a break, and a person who has not checked out shows *No logoff recorded*. Once the day is over, a
-day that ended with a screen lock ended at that lock. The downloads and scheduled reports count
-departures the same way.
+day that ended with a screen lock ended at that lock. A day the person neither locked nor signed
+out on also shows *No logoff recorded*: ReadyRoom closes that session at the end of their day, but
+when they left is not known. For someone who works on two PCs, a logoff counts back to a lock only
+on the same PC: locking one in the morning and signing out of the other at 17:00 is leaving at
+17:00. The downloads and scheduled reports count departures the same way, and so do Home, the user
+tables and the people downloads.
 
 **Download PDF** saves the report as `group_report.pdf`. **CSV** and **Excel** download a row per
 person and day (status, first check-in, last check-out, minutes in and time zone), with each person's
@@ -216,7 +224,7 @@ narrow it or download a group.
 
 ## A person's details
 
-`/app/user/details/<DN>` shows a person's **User Information**: status, organization, employee
+A person's page (`/app/user/details?dn=<DN>`) shows their **User Information**: status, organization, employee
 type, location, branch, email, phone, manager, average login time and notes. **Member Of** lists
 their directory groups, each linking to the group page.
 
@@ -240,7 +248,9 @@ are one of their delegates.
   lock; or, once the day is over, a final lock);
   *Online since 08:02* for today while it is in progress, since a lock during the day is a break;
   and *Online from 08:02 (no logoff recorded)* for a past day that ended without a logoff, such as a
-  PC shut down after it was unlocked. Reports and attendance count only days with a departure.
+  PC shut down after it was unlocked or left unlocked overnight. Reports and attendance count only
+  days with a departure. If the calendar cannot be loaded, the page says *The calendar could not
+  be loaded* instead of showing an empty month.
 - **Working days**: the days of the week they work and their start date. See
   [Working days](#working-days).
 - **Records for a day**: pick a day with the date box, or click it on the calendar. The card shows
@@ -492,8 +502,11 @@ in your manager's place.
 **My data** (`/app/privacy`, in the avatar menu) shows what ReadyRoom keeps about you, who sees it
 and for how long, and **Download my data**: a JSON file with your profile (with your working days
 and start date), the group access granted to you in ReadyRoom, whose delegate you are, your
-check-ins (void ones too, each with its corrections), calendar statuses, status requests (with
-notes and comments), absence alerts about you, and monthly summaries. It also has two histories
+check-ins (void ones too, each with its corrections, and the name of the workstation each event
+came from), calendar statuses, status requests (with
+notes and comments), absence alerts about you, and monthly summaries. The page says that your
+check-ins, locks, unlocks and check-outs keep the workstation's name, and a check-in the network
+address it came from. It also has two histories
 from the audit trail: who set, recorded, answered, approved or cancelled a status for you, or
 changed your working days (`statusHistory`), and every correction to your records, with its reason
 (`recordCorrections`). Each download is recorded in the audit trail. The rest of the audit trail is

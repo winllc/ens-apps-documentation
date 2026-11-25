@@ -21,7 +21,7 @@ remains the source of truth; ReadyRoom copies some of them, as listed.
 |---|---|---|
 | `user_records` | Person. The hourly directory refresh creates one for every directory user, whether or not they ever sign in | DN; notes (free text, up to 255 characters, entered by the person); preferred login time (set by the person) and average login time (computed from the last 30 days); role; favourite groups; delegate DNs, and whether they await an administrator's review; working days and start date (set by their manager, a delegate or an administrator), and when the record was created; organization, employee type, location, branch, duty sub-organization, phone and mail address, copied from the directory |
 | `permission_records` | Group access granted inside ReadyRoom by an earlier release | The person and the group DN. No longer written or read: kept only so that the person's export lists them and erasure deletes them |
-| `check_in_out_records` | Workstation event (logon, lock, unlock, logoff), or a check-in or check-out an administrator added | DN, time and action, and whether it was an automatic check-out; the Windows user id; the person's organization, employee type, location, branch and duty sub-organization at the time; the logoff session id (a credential, never exported); an administrator's corrections: who voided the record, when and why; a note, who wrote it and when; who added the record, when and why |
+| `check_in_out_records` | Workstation event (logon, lock, unlock, logoff), or a check-in or check-out an administrator added | DN, time and action, and whether it was an automatic check-out; the Windows user id; from 0.0.11 the workstation's computer name, as the Windows client sends it with each event (empty for older clients and for records an administrator added; an automatic check-out carries the name of the record it follows); for a check-in, the network address it came from; the person's organization, employee type, location, branch and duty sub-organization at the time; the logoff session id (a credential, never exported); an administrator's corrections: who voided the record, when and why; a note, who wrote it and when; who added the record, when and why |
 | `user_event_records` | Day with a calendar status | DN, date, status, late-arrival time, early-leave time (when given), and the request it came from |
 | `status_requests` | Request for a status that needs approval | Requester DN, status, dates, late-arrival or early-leave time; the requester's note and the approver's comment (up to 500 characters each); state; who decided or cancelled it, and when |
 | `notification_records` | Absence alert, one per recipient | Who it is about, who it went to, date, expected arrival time, when it was read and e-mailed, and the answer with who gave it and when (and the approved request that gave it, if one did, with the answer it replaced and who gave that, and when) |
@@ -49,7 +49,7 @@ remains the source of truth; ReadyRoom copies some of them, as listed.
 | Audit outputs, when configured | Copies of the audit events on stdout, in a file, in Splunk or in syslog |
 | Email | Absence alerts carry the person's name, the date and the expected arrival time. Request emails carry the person's name, the status and the dates, never the notes. E-mails to the person about a record voided or added for them carry the record, who made the change and the reason; about a status recorded for them, the status, the days and who recorded it |
 | Webhook receivers, when configured | Each [webhook](webhooks.md) an administrator adds receives the events it subscribes to: `status.changed` carries the person's DN and name with each check-in, lock, unlock and check-out and each calendar status; `absence.alert` the person, the date and the expected time. What the receiver keeps is up to its owner |
-| Workstations | The Windows client's session file (`%ProgramData%\InOutWorker\sessions\<SID>.json`: the last logon's session id and Windows user id) and its daily logs (`%ProgramData%\InOutWorker\logs` and `%LOCALAPPDATA%\InOutWorker\logs`). The client does not delete its logs. See [Windows client](windows-client.md) |
+| Workstations | The Windows client's session file (`%ProgramData%\InOutWorker\sessions\<SID>.json`: the last logon's session id and Windows user id, readable by that user, SYSTEM and Administrators only) and its daily logs (`%ProgramData%\InOutWorker\logs` and `%LOCALAPPDATA%\InOutWorker\logs`). The client does not delete its logs. See [Windows client](windows-client.md) |
 | Database backups | `./backup.sh` or the Helm backup CronJob, kept 14 days by default, or your own backups |
 
 ## Who can see what
@@ -88,7 +88,12 @@ Delegates are set only by administrators. The full rules are in
 - **Their working days and start date**, on their profile and details page. They cannot change them;
   their manager, a delegate or an administrator can.
 - **My data** says that administrators can correct their check-ins, always with a reason, and that
-  they are e-mailed as above.
+  they are e-mailed as above. From 0.0.11 it also says that their check-ins, locks, unlocks and
+  check-outs keep the name of the workstation they came from, and a check-in the network address
+  it came from.
+- **A session closed for them.** When they neither lock nor sign out, ReadyRoom checks them out at
+  the end of their day (from 0.0.11). That record is marked as an automatic check-out
+  (`automaticCheckOut` in their export) and is not taken for the time they left.
 
 E-mail goes out only when a mail server is configured.
 
@@ -116,7 +121,9 @@ How the retention purge works, and what reports show for purged periods, is in
 - **The person:** **My data** (`/app/privacy`, in the avatar menu) shows what is kept, who sees it
   and for how long, and downloads it as a JSON file (`readyroom-personal-data/1`): profile (with
   their working days and start date), group access granted in ReadyRoom, whose delegate and which
-  groups' alternate manager they are, check-ins (without the logoff session id), calendar statuses,
+  groups' alternate manager they are, check-ins (without the logoff session id; with the
+  workstation's name, `machine`, when the client sent it, and a check-in's client address),
+  calendar statuses,
   status requests with their notes and comments, absence alerts about them, and monthly summaries
   (with each month's working days, where the purge counted them).
 - **Corrections and history in the export:**
@@ -201,7 +208,8 @@ Erasure works in every license state, including read-only.
 - Review who holds the `ADMIN` role (the **Administrators** card on **Administration → Privacy**
   lists `application.super-user-dns` and stored roles alike) and who the delegates are.
 - Review which webhooks send personal data where (**Administration → Integrations**).
-- Tell people what is recorded, who sees it, and how to use **My data**, and that they are e-mailed
+- Tell people what is recorded, the name of the workstation they work at included, who sees it,
+  and how to use **My data**, and that they are e-mailed
   about corrections to their records and statuses recorded against them.
 - Tell administrators that the person sees the reasons they give for corrections, and that the
   reasons stay in the audit log after erasure.

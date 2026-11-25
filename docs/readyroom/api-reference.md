@@ -38,6 +38,11 @@ into your API client or code generator.
 - Attendance events carry `addedByAdministrator`: `true` for a check-in or check-out an
   administrator added (see [Check-in record corrections](#check-in-record-corrections)). Records an
   administrator voided are never listed.
+- A person's `checkedOutAt` (`/api/v1/people`) is, from 0.0.11, when they left as the reports read
+  it: the screen lock that an automatic check-out, or the logoff of a locked PC, followed, not the
+  time that check-out was written. A session left open and closed at the end of the day has status
+  `OUT` and no `checkedOutAt`. Attendance events still list every record at its own time, the
+  automatic check-outs with `forced` `true`.
 - Errors are `{"error": "...", "message": "..."}`.
 - The API serves `GET`s only, and answers in the license states the features it reads are licensed
   in (attendance, calendar).
@@ -153,7 +158,8 @@ Any other `action` gets `400` (`invalid_action`).
 ```json
 {
   "sessionId": "8f6c0f3e-5d1b-4b8e-9d7a-3c1e2f4a5b6c",
-  "windowsUserId": "jdoe"
+  "windowsUserId": "jdoe",
+  "machine": "PC-0142"
 }
 ```
 
@@ -161,6 +167,7 @@ Any other `action` gets `400` (`invalid_action`).
 |---|---|
 | `sessionId` | **`out` only.** The `sessionId` from the answer to the check-in being closed: the logon's `in`, or an `unlock` recorded as the day's check-in. An `out` without a sign-in is recorded under the DN of that check-in, provided no logout has used the id yet and the check-in is younger than `application.logoff.session-max-age-hours` (168, 7 days). `in`, `lock` and `unlock` ignore it. |
 | `windowsUserId` | Stored with the record for information. With Kerberos sign-in it is replaced by the account name from the verified ticket. |
+| `machine` | Optional, from 0.0.11: the workstation's computer name. Stored with the record, trimmed and cut to 255 characters; an event is never refused for it. It keeps one workstation's locks apart from another's for someone signed in on two (see [Operations → Automatic check-out](operator-guide.md#automatic-check-out)). No response or page shows it; it is in the person's data export. Other fields in the body are ignored. |
 
 **How the DN is chosen:** `in`, `lock`, `unlock` and a signed-in `out` are recorded under the
 authenticated principal's DN (certificate subject, or the directory user matched to the Kerberos
@@ -199,6 +206,9 @@ response or page shows it.
 | `401` | `unknown_session` | An `out` without a sign-in whose `sessionId` is missing, unknown, already used or older than `session-max-age-hours`. Nothing is stored. |
 | `403` | – | A signed-in `out` whose `sessionId` is still usable and belongs to another user (access denied). |
 | `429` | `rate_limited` | More than `application.logoff.refused-per-minute` (30) logouts without a sign-in were refused from this client address within a minute. `Retry-After: 60`. A logout with a usable `sessionId` is never refused this way. |
+| `400` | `bad_request` | From 0.0.11: a body that is not readable JSON. |
+| `500` | `internal_error` | From 0.0.11: the event could not be stored (a database error, a lock timeout). Nothing was recorded. Up to 0.0.10 this answered `200` with an HTML error page, which a client took for an accepted event. |
+| `503` | `directory_unavailable` | The directory did not answer while the server checked who signed in. `Retry-After: 5`; send the event again. |
 
 === "curl with a client certificate"
 
@@ -229,7 +239,9 @@ response or page shows it.
 
 The records for the day being viewed in the session (today unless the session date was changed),
 paged. `ADMIN` only. The day is the application's (its time zone and day start), the same for
-everyone. Void records are left out. The records do not include `sessionId`.
+everyone. Void records are left out. The records do not include `sessionId`. It is a browser's
+call: the consent banner and, from 0.0.11, the session lifetimes and the account re-check apply to
+it, unlike the Windows client's four `POST`s.
 
 | Parameter | Default | |
 |---|---|---|
@@ -251,6 +263,34 @@ is off), or your ingress or route host with Helm. Timestamps in JSON records use
 
 "Signed in" means any authenticated user. `A/M` means the `ADMIN` or `MANAGER` role.
 
+**Errors.** From 0.0.11 a call that fails unexpectedly answers `500`
+(`{"error":"internal_error","message":"The request failed; the server log has the details."}`), and
+one the framework refuses keeps its own status: `400` (`bad_request`) for a missing or unreadable
+parameter or body, `404` (`not_found`) for an unknown path, `405` (`method_not_allowed`, with
+`Allow`) for a wrong method. The body is JSON under `/api`, and for a client that asks for JSON;
+pages get the error page with the same status. Up to 0.0.10 all of these answered `200` with the
+error page.
+
+**A DN as a query parameter.** From 0.0.11 the endpoints and pages that name a person or a group
+take the DN as a query parameter, URL-encoded, and the pages call them that way. A DN can hold
+characters (`\`, `/`, `#`, `?`, `%`) that a path segment does not carry past the browser and the
+request firewall: `CN=Smith\, John,...` in a path answered `404` or `400`. The path forms below
+still work, for DNs without such characters and for links made before.
+
+| Path form | Query form (from 0.0.11) |
+|---|---|
+| `GET /api/users/group/{groupDn}` | `GET /api/users/group?dn=` |
+| `GET /api/users/checkinoutrecords/{dn}` | `GET /api/users/checkinoutrecords?dn=` |
+| `GET /api/users/managers/{dn}` | `GET /api/users/managers?dn=` |
+| `POST /api/users/managers/update/{dn}` | `POST /api/users/managers/update?dn=` |
+| `GET /api/groups/managers/{groupDn}` | `GET /api/groups/managers?dn=` |
+| `POST /api/groups/managers/update/{groupDn}` | `POST /api/groups/managers/update?dn=` |
+| `GET /api/event/group/{groupDn}` | `GET /api/event/group?dn=` |
+| `/app/user/details/{dn}` | `/app/user/details?dn=` (with `&day=yyyy-MM-dd` to open a day's records) |
+| `/app/users/{groupDn}` | `/app/users?group=` |
+
+Access and license checks are the same for both forms.
+
 **When the directory does not answer.** A call that needs people from the directory (a group's
 members, a person's manager or reports, a search, a delegate or group manager being checked) and does
 not get an answer, after `application.ldap.read-retries` more tries, is answered `503` with
@@ -263,7 +303,7 @@ there: earlier releases returned an empty list, *Not in the directory* (`400`), 
 | Method and path | Access | Description |
 |---|---|---|
 | `GET /api/users/search?search=&page=1&size=10&sort=id&dir=asc` | Signed in | Directory users whose `cn` contains `search` (everyone when empty), with today's status: the first `application.ldap.search-max-results` (500) of them; when more match, the `X-Results-Limited` header is set to that number. For people whose details the caller may not see, only directory fields and what `application.privacy.coworker-visibility` allows (see [Security](security.md#authorization)). |
-| `GET /api/users/usersearch?search=` | Signed in | Directory users whose `cn` contains `search`. Used by the manager pickers. |
+| `GET /api/users/usersearch?search=` | Signed in | Directory users whose `cn` contains `search`, for the delegate and group-manager pickers. From 0.0.11: `search` needs at least 3 characters (`400` `search_too_short`), the search stays within `application.user-ldap-filter`, at most `application.ldap.search-max-results` (500) people are returned, and each is `{"dn","cn"}` only. Up to 0.0.10 it returned every match with every attribute. |
 | `GET /api/users/group/{groupDn}` | A member or manager of the group, or `ADMIN` | `{"data": [...statuses]}` for the group's members, limited by the coworker visibility setting for people whose details the caller may not see. |
 | `GET /api/users/reports` | Signed in | `{"data": [...]}`: the caller's direct reports, with status. |
 | `GET /api/users/checkinoutrecords/{dn}?page=1&size=10&sort=timestamp&dir=desc` | Whoever may see the user's details | The user's records, paged. `page` from 1, `size` 1 to 500, `sort` `timestamp` or `action`, `dir` `asc` or `desc`; anything else is `400` (`invalid_page`, `invalid_sort`). |
@@ -291,7 +331,7 @@ managers: only administrators do.
 
 | Method and path | Access | Description |
 |---|---|---|
-| `GET /api/event/all?dn=&from=&to=` | Whoever may see the user's details | A user's status entries between two ISO instants, as calendar events. |
+| `GET /api/event/all?dn=&from=&to=` | Whoever may see the user's details | A user's status entries between two ISO instants, as calendar events. For this and the other calendar reads, see [Calendar ranges](#calendar-ranges). |
 | `GET /api/event/allWithLogins?dn=&from=&to=` | Whoever may see the user's details | The same, plus "Online: ..." periods and organization calendar events. |
 | `GET /api/event/group/{groupDn}?from=&to=&type=` | Whoever may open the group | Every member's statuses, narrowed to the members whose details the caller may see. Optional `type`: a label of `application.calendar.employee-type-filters` (any case) keeps the members of those employee types; none or `All` is everyone; an unknown one is `400` `unknown_type`. |
 | `GET /api/event/reports?from=&to=&type=` | Signed in | The same over the caller's own direct reports, `type` as above. |
@@ -300,6 +340,18 @@ managers: only administrators do.
 | `GET /api/settings/calendar/all?from=&to=` | `ADMIN` | Organization calendar events. |
 | `POST /api/settings/calendar/update` | `ADMIN` | Body `{"fromDate","toDate","title","holiday"}`. Adds one event per day in the range (end exclusive). |
 | `DELETE /api/settings/calendar/delete/{id}` | `ADMIN` | Deletes one calendar event. |
+
+#### Calendar ranges
+
+From 0.0.11 every calendar read (`/api/event/all`, `/allWithLogins`, `/group`, `/reports` and
+`/api/settings/calendar/all`) checks `from` and `to` before it reads anything:
+
+- a range longer than `application.events.max-view-days` (400) days is `400` `range_too_long`;
+- a `to` before `from` is `400` `invalid_range`.
+
+`from` and `to` are ISO instants with an offset, so URL-encode them: a raw `+` in
+`2026-10-25T00:00:00+02:00` reads as a space and is refused with `400`. The pages do this from
+0.0.11; before, the profile, person and Settings calendars stayed empty in browsers east of UTC.
 
 **What `POST /api/event/update` does** depends on whose calendar and which status:
 
@@ -350,7 +402,7 @@ A request's `state` is `REQUESTED`, `APPROVED`, `REJECTED` or `CANCELLED`.
 
 | Method and path | Access | Description |
 |---|---|---|
-| `GET /api/notifications/my` | Signed in | The caller's absence alerts that await an answer, read or not (`readAt` is null while unread). |
+| `GET /api/notifications/my` | Signed in | The caller's absence alerts that await an answer, read or not (`readAt` is null while unread). From 0.0.11 the newest 50 of those raised within `application.events.alert-answer-days` (14) and a day, not every unanswered alert ever sent. |
 | `POST /api/notifications/markAllAsRead` | Signed in | Marks the caller's unread alerts read (`readAt`), audited as `absence.alerts-dismissed`. It answers nothing: they stay in `/my` until someone responds. |
 | `GET /api/orgnodes/hierarchy` | Signed in | The org chart tree for the viewed day, each person counted as the caller may see them (see [Security → Authorization](security.md#authorization)): per node, the status mix (`statusMix`, `fullTreeStatusMix`), `accountedCount` and `fullTreeAccountedCount`, and the headcounts by employee type; `fullTreePresentPercentage` is accounted over total (headcounts only with coworker visibility `none`, except for `ADMIN` and `MANAGER`). Member DNs are not included; use `/api/orgnodes/users/{orgName}`. |
 | `GET /api/orgnodes/users/{orgName}` | Signed in | Directory users whose duty sub-organization attribute equals `orgName`, with status, limited by the coworker visibility setting for people whose details the caller may not see. |
@@ -404,7 +456,7 @@ A manager, delegate or administrator can record any of them for someone else, at
 | Path | Access | Page |
 |---|---|---|
 | `/`, `/app` | – | Redirect to `/app/home` |
-| `/login` | Open | Sign-in form (`POST /login` processes it; `POST /logout` signs out) |
+| `/login` | Open | Sign-in form (`POST /login` processes it; `POST /logout` signs out). A failed sign-in goes to `/login?error`. From 0.0.11, after too many failed password sign-ins in a minute from the client's address or for the username, `POST /login` goes to `/login?throttled` without asking the directory (see [Security](security.md#ldap-username-and-password)) |
 | `/signed-out` (next release) | Open | After signing out with `ENS_SSO_OIDC_END_SESSION` or `ENS_SSO_SAML_SINGLE_LOGOUT`: continues to the identity provider (and shows a **Continue** button); also the OIDC post-logout redirect URI. See [Single sign-on → Signing out](single-sign-on.md#signing-out) |
 | `/logout/saml2/slo` (next release) | Open | SAML single logout service (HTTP-Redirect): the provider's `LogoutResponse` and `LogoutRequest` |
 | `/oauth2/authorization/oidc`, `/login/oauth2/code/oidc` | Open, with OIDC on | Start a single sign-on, and its redirect URI. See [Single sign-on](single-sign-on.md) |
@@ -412,14 +464,14 @@ A manager, delegate or administrator can record any of them for someone else, at
 | `/api/v1/openapi`, `/api/v1/openapi.yaml` | Open | The public API's OpenAPI document |
 | `/app/home` | Signed in | Home |
 | `/app/groups` | Signed in | Group trees |
-| `/app/users/{groupDn}` | A member or manager of the group, or `ADMIN` | Group members |
+| `/app/users?group=` (also `/app/users/{groupDn}`) | A member or manager of the group, or `ADMIN` | Group members |
 | `POST /app/group/report` | A/M who manages the group (`ADMIN`: any) | Group report (`groupDn`, `fromDate`, `toDate` as `yyyy-MM-dd` days in the application's zone, at most `APPLICATION_REPORTS_MAXRANGEDAYS` (366) days; `400` otherwise). The page shows the own days of the first `APPLICATION_REPORTS_HTMLMAXMEMBERS` (200) members; its day summaries, and the CSV and Excel downloads, have everyone |
 | `POST /app/export/group-report` | A/M who manages the group (`ADMIN`: any) | The group report as a file (`groupDn`, `fromDate`, `toDate`, `format` `csv` or `xlsx`, `zones` `person`, the default, or `mine` for the viewer's zone). `503` (`directory_unavailable`, `Retry-After: 5`) when the group's members, or any of them, could not be read: before anything is written, so never a file cut short. See [Reports, exports and time zones](exports.md) |
 | `POST /app/export/people` | Signed in | A people list as a file (`search` or `group`, `format`), with each person's status on the session's System Date, else today, and named after that day. `503` (`directory_unavailable`, `Retry-After: 5`) when the directory did not answer for the group, the search or one of the people, before anything is written. A `search` matching more than `application.ldap.search-max-download` (5,000) people is `400` (`too_many_matches`) |
 | `/app/reports/schedules` | A/M | Scheduled reports. `POST` creates one; `POST .../{id}/send` sends now; `POST .../{id}/enable` turns a schedule that was turned off back on; `POST .../{id}/delete` deletes |
 | `/app/admin/integrations` | ADMIN | API tokens and webhooks. `POST .../tokens`, `.../tokens/{id}/revoke`, `.../webhooks`, `.../webhooks/{id}/disable`, `/enable`, `/delete`, `/ping`, `/rotate` (a new signing secret, shown once) |
 | `/app/user/search` | Signed in | User search |
-| `/app/user/details/{dn}` | Signed in | A person's details. Times, notes, the audit log and the calendar only for the person themselves, `ADMIN` and the people responsible for them (see [Security](security.md#authorization)); anyone else sees presence and directory fields. |
+| `/app/user/details?dn=` (also `/app/user/details/{dn}`) | Signed in | A person's details. Times, notes, the audit log and the calendar only for the person themselves, `ADMIN` and the people responsible for them (see [Security](security.md#authorization)); anyone else sees presence and directory fields. |
 | `POST /app/user/details/schedule` | The person's directory manager, a delegate or `ADMIN`; never the person | Set a person's working days and start date (`dn`, `days` (one per day worked: `MONDAY` ... `SUNDAY`, at least one), `startDate` (`yyyy-MM-dd`, at most a year ahead, or empty)). Audited as `person.schedule-changed`. Bad input redirects back to the details page with the reason; anyone else gets `403` |
 | `POST /app/user/details` | ADMIN | Change a role (`dn`, `role`). `ADMIN` only to keep it for someone whose stored role it is (`400` `admin_not_grantable` otherwise); taking it from the last administrator is refused with a message on the page |
 | `/app/user/reports` | Signed in | My Reports |

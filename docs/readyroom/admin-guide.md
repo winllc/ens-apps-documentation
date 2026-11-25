@@ -13,7 +13,7 @@ ReadyRoom has three roles (`UserRoleEnum`):
 |---|---|
 | `USER` | Automatically, for anyone whose sign-in resolves to a directory entry. Every signed-in person has it, including managers and admins. |
 | `MANAGER` | An admin sets it on the person's details page. It is stored in `user_records.user_role`. |
-| `ADMIN` | The person's DN is listed in `application.super-user-dns` (matched without regard to case). The application also honors `ADMIN` if it is stored in `user_records.user_role`, which can only be set directly in the database. It is never given from the UI. **Administration → Privacy** lists every administrator and where the role comes from. |
+| `ADMIN` | The person's DN is listed in `application.super-user-dns` (matched as a DN, without regard to case or, from 0.0.11, to spaces after the commas). The application also honors `ADMIN` if it is stored in `user_records.user_role`, which can only be set directly in the database. It is never given from the UI. **Administration → Privacy** lists every administrator and where the role comes from. |
 
 With [single sign-on](single-sign-on.md), the identity provider's groups can add `MANAGER` or
 `ADMIN` for that session through `ENS_SSO_ROLE_MAPPING` (for example
@@ -99,9 +99,13 @@ open, and a page opened directly without the required role shows *Unauthorized*.
 
 Group trees come from the directory: each entry under every `application.groups[].groups-base-dn`
 whose object class is `groupOfUniqueNames`. Members are its `uniqueMember` values, and its
-directory manager is its `owner` attribute. ReadyRoom never writes to the directory.
+directory manager is its `owner` attribute. Those two are the defaults: from 0.0.11 the object
+class and the member attribute are server settings (`application.ldap.group-object-class`, `application.ldap.group-member-attribute`):
+`group` and `member` for Active Directory. See
+[Configuration → Directory mapping](configuration.md#directory-mapping). ReadyRoom never writes to
+the directory.
 
-**Who can open a group** (`/app/users/<group DN>`) is decided by `AccessPolicy.canViewGroup()`:
+**Who can open a group** (`/app/users?group=<group DN>`) is decided by `AccessPolicy.canViewGroup()`:
 `ADMIN` can open any group, and anyone else can open a group they are a member of in the directory
 or manage. Group memberships are cached per user for
 `application.ldap.group-membership-cache-seconds` (300 s by default), so a directory change can take
@@ -120,7 +124,10 @@ directory fields and whether they are in.
 On a group's page, admins see a **Group Managers** card. **Only administrators set a group's
 alternate managers**, as for delegates: a group's own managers no longer appoint them.
 
-1. Type at least part of a name in **Add a manager** and pick people from the results.
+1. Type at least three characters of a name in **Add a manager** and pick people from the results.
+   The list offers people within the user filter (`application.user-ldap-filter`), at most
+   `application.ldap.search-max-results` (500) of them: type more of the name if the person is
+   not listed.
 2. Remove anyone with the remove control next to their name.
 3. Choose **Update**. The list is saved in `group_records.alternate_managers`.
 
@@ -132,7 +139,10 @@ does not answer while it checks them, nothing is saved either, and the answer sa
 
 A person counts as a **manager of a group** if they are its directory `owner` or are on this list.
 A group manager can open the group and sees the details of every member of every group they manage
-(times, notes, **Audit Log** and **Event Calendar**), even with only the `USER` role. Running the
+(times, notes, **Audit Log** and **Event Calendar**), even with only the `USER` role. A change to
+this list applies at once. A change in the directory (a new owner, a new member, a new reporting
+line) applies within a minute for who sees whose details (from 0.0.11; ReadyRoom keeps what the
+directory says about that for a minute). Running the
 group's report also needs the `MANAGER` role. A sub-group is a separate group with its own
 managers.
 
@@ -183,20 +193,31 @@ raised when **all** of these are true:
   locked-out account is still alerted about.
 
 **Recipients** are the person's directory manager (found through the reporting-line attributes, read
-live from the directory for each alert) and their delegates, each once, and never the person
-themselves. If the directory cannot be read, no alert is saved and the next run tries the person
+live from the directory for each alert), their delegates and the managers of their groups (see
+[Group managers](#group-managers)), each once, and never the person themselves. If the directory cannot be read, no alert is saved and the next run tries the person
 again (`No absence alert about <dn> this run, tried again next run` at `WARN`), so the manager is
 not left out of an alert sent to the delegates alone. Each recipient gets a notification record and,
 if their directory entry has a valid email address, an email from
 `application.notification-sender-email` linking to `application.application-base-url` +
 `/app/notifications/id/<id>`. When the person's zone is not the application's, the email names it
 next to the expected time, for example *08:00 (Asia/Tokyo)*. A recipient who is not found in the
-directory, or has no email address, is logged as an error. Someone with no directory manager and no
-delegate (or none found in the directory) cannot be alerted about: the log says `no directory
-manager or delegate for <dn>; no absence alert sent` at `WARN`, once a person a day, and each run
-tries again. An alert whose email the mail server did not take is emailed again by the next run, the
-same day, while nobody has answered it. The job's count of alerts sent (in its log line and its
+directory, or has no email address, is logged as an error. Someone with no directory manager, no
+delegate and no group manager (or none found in the directory) cannot be alerted about: the log says
+`no directory manager, delegate or group manager for <dn>; no absence alert sent` at `WARN`, once a
+person a day, and each run tries again. The job's count of alerts sent (in its log line and its
 `job.completed` audit event) is the number of people alerted about.
+
+**Emails are sent apart from the check** (from 0.0.11). The absence job only records the alerts,
+which show in the bell as soon as they are recorded. A job of its own sends their emails every 30 seconds, so an email
+follows its alert within about half a minute. An alert whose email the mail server did not take is
+emailed again by that job, for up to a day, while nobody has answered it. A mail server that does
+not answer delays the emails, never the alerts.
+
+**One person's problem does not stop the others** (from 0.0.11). A delegate or a group's alternate
+manager stored as something that is not a DN is left out of the alert (`Not alerting <dn> about
+<dn>: not a distinguished name ReadyRoom can use` in the log) and the other recipients are alerted.
+A person whose check fails unexpectedly is logged and counted (`failed` in the job's
+`job.completed` audit event), and the run goes on with the next person.
 
 **Responses.** A recipient opens the alert and picks any status that accounts for the day, by name:
 under **Recorded by a manager**, *Unscheduled Leave*, *Absent Excused*, *Absent Unexcused* or
@@ -211,7 +232,10 @@ stored as the person's status for the day the alert was about: their own date wh
 does not excuse the day (`UNSCHEDULED_LEAVE`, `ABSENT_UNEXCUSED` or `ABSENT`) is e-mailed to the
 person, as is such a status recorded on their calendar (see [User guide → E-mails about
 you](user-guide.md#e-mails-about-you)). **Mark All Read** in the bell only marks alerts read: they
-stay awaiting an answer, in the bell and on Home, until someone responds. Administrators may answer
+stay awaiting an answer, in the bell and on Home, until someone responds. From 0.0.11 the bell and
+Home list the newest 50 alerts that the recipient may still answer, those at most
+`application.events.alert-answer-days` (14) days old; an older alert still opens from its email
+link. Administrators may answer
 any alert too. Two cases are refused, and the alert page says why:
 
 - **Answered by a request.** Approving a status request answers the alerts about the person on its
@@ -247,8 +271,8 @@ details. **Only administrators set them.** People cannot choose their own: their
 lists them.
 
 To set someone's delegates, open their details page (**Users** → the person). On the
-**Delegates** card, search under **Add a delegate**, remove anyone with the remove control, and
-choose **Save delegates**. Each delegate must be someone else in the directory. The change is
+**Delegates** card, search under **Add a delegate** (at least three characters of the name), remove
+anyone with the remove control, and choose **Save delegates**. Each delegate must be someone else in the directory. The change is
 audited as `person.updated` with `details.via` `alternate-managers` and the old and new lists. If
 the directory does not answer while it checks them, nothing is saved and the answer is *The directory
 did not answer* (`503`), not *Not in the directory*: save again in a few seconds.
@@ -346,6 +370,16 @@ From there you can:
     administrator voided: it does not write it again, early leave or not. The person's day stays open until a later
     record of theirs ends it, or you add the check-out they missed.
 
+!!! note "A session left open at the end of the day"
+    From 0.0.11, when someone's last record of the day is a check-in or an unlock (a PC left
+    unlocked, or a lock that never reached ReadyRoom), the automatic check-out job closes the
+    session at the end of their day, or at the time your operators set
+    (`APPLICATION_ENDOFDAY_AT`). **Records for a day** then lists a check-out record at that
+    time, and the audit log has `record.auto-checked-out` with the reason *end of day*. When the
+    person left is not known: their status reads `OUT`, and the day shows no check-out time and,
+    in reports, *No logoff recorded*. If you know when they left, add the check-out they missed
+    with the real time and void the automatic one; a voided one is not written again.
+
 **Rules.**
 
 - Only administrators (the `ADMIN` role) can correct records. Managers, delegates and the person see
@@ -432,8 +466,10 @@ What erasure does not remove is listed in
   tokens nobody uses.
 - **Webhooks** for absence alerts and status changes: an `https://` URL and the events. The signing
   secret is shown once; **Send test** posts a `ping`, and the page lists recent deliveries. Webhooks
-  stay unavailable until your operators set `APPLICATION_WEBHOOKS_SECRETKEY`. See
-  [Webhooks](webhooks.md).
+  stay unavailable until your operators set `APPLICATION_WEBHOOKS_SECRETKEY`. From 0.0.11 ReadyRoom
+  disables a webhook whose receiver has given no answer for about a day (10 tries in a row): it
+  shows *disabled*, and nothing is queued for it. Once the receiver is back, choose **Enable**.
+  Events raised while it was disabled are not sent. See [Webhooks](webhooks.md#delivery).
 
 ## Settings page
 
@@ -445,6 +481,10 @@ organization. The `MANAGER` role no longer opens it.
 - **Add an event:** drag across one or more days. In the dialog, enter a **Title**, tick
   **Holiday** if nobody is expected that day, and choose **Submit**. One event is stored per day.
 - **Delete an event:** click it and confirm.
+
+From 0.0.11 the event is saved on the days you selected in every time zone (in browsers east of
+UTC it used to land a day early), and a save or a delete the server refuses is shown with its
+reason instead of closing as if it had worked.
 
 Calendar events appear in orange on everyone's calendars. Events marked **Holiday** also stop
 absence alerts and make metrics report the day as *Not a working day* with the event's title.

@@ -52,6 +52,11 @@ flowchart TD
   `ocsp-then-crl`, soft-fail (a revoked certificate is refused; one no responder answers for signs
   in with a WARN). A mode set explicitly fails closed unless `ENS_X509_REVOCATION_FAIL=open`. See
   [Install → Revocation from the next release](install.md#revocation-from-the-next-release).
+  From 0.0.11 an OCSP responder or CRL distribution point that could not be reached is not asked
+  again for 60 seconds; meanwhile its answer is unknown at once, and `ENS_X509_REVOCATION_FAIL`
+  decides as before. Revocation is checked on every certificate sign-in, each check-in, lock and
+  unlock included, so sign-ins no longer each wait out the connect timeout where the PKI cannot be
+  reached. A CRL that cannot be fetched again is still used until its own next update.
 - **Header mode** (`ENS_X509_SOURCE=header`): a TLS-terminating proxy forwards the certificate. It
   is accepted only from an address in `ENS_X509_TRUSTED_PROXIES` that sends the proxy secret in
   `X-ENS-Proxy-Secret` (compared in constant time), and only if it chains to
@@ -85,6 +90,32 @@ LDAP authentication provider searches `user-base-dn` (subtree) with
 typed. Password binds never use the LDAP connection pool, so a changed password takes effect at
 once. Failed sign-ins go back to `/login?error`. Logging out goes to `/login?logout`.
 
+**Throttling (from 0.0.11).** Each password sign-in is a directory search and a bind, and the form
+is there in every deployment, those that use certificates or single sign-on too. Failed password
+sign-ins are therefore counted:
+
+| Counted per | Limit a minute | Setting |
+|---|---|---|
+| Client address | 30 | `application.login.address-failures-per-minute` (`APPLICATION_LOGIN_ADDRESSFAILURESPERMINUTE`; Helm `login.addressFailuresPerMinute`) |
+| Username as entered (trimmed, any case), from anywhere | 5 | `application.login.username-failures-per-minute` (`APPLICATION_LOGIN_USERNAMEFAILURESPERMINUTE`; Helm `login.usernameFailuresPerMinute`) |
+
+- Past either limit, further password sign-ins from that address, or for that username, are sent
+  to `/login?throttled` (*Too many failed sign-ins. Wait a minute, then try again.*) before the
+  directory is asked, so they do not count towards the directory's own lockout either.
+- The refusal lasts until the minute that the first failure started is over. Someone guessing can
+  hold a person's password sign-in off for a minute at a time, never longer. Certificate, single
+  sign-on and Windows sign-in are not affected.
+- A sign-in that failed because the directory did not answer is not counted.
+- The counts are kept in the database with the other rate limits, once for all replicas. If the
+  database cannot count for a moment, each replica counts in its own memory meanwhile.
+- The first refusal over a limit is logged at `WARN` and audited as a failed `auth.login` with the
+  reason `too many failed sign-ins` (`details.method` `ldap`, `details.limitedBy` `address` or
+  `username`, `details.perMinute`).
+- The client address is the one ReadyRoom sees. Behind a reverse proxy, set
+  `SERVER_FORWARD_HEADERS_STRATEGY=framework`, or every browser shares the proxy's address and one
+  person's mistakes lock everyone's password sign-in for the minute.
+- `0` turns a limit off.
+
 Both methods load roles through the same `AppUserDetailsService`, so a person gets identical access
 whichever way they sign in.
 
@@ -108,7 +139,10 @@ whichever way they sign in.
   grants do not count. An account that is disabled, locked out, expired or gone, or a changed role,
   ends the session, audited as `auth.session-expired` with reason `account` (`details.account` says
   why); the new role applies from the next sign-in. A directory that cannot be read leaves the
-  session as it is, as at sign-in. The Windows client's API is exempt.
+  session as it is, as at sign-in. The Windows client's calls (`POST` to `/api/check/in`, `/lock`,
+  `/unlock` and `/out`) are exempt from the session lifetimes and this check. From 0.0.11 the rest
+  of `/api/check/`, such as the administrators' day records (`GET /api/check/records`), is a
+  browser's call and is not: up to 0.0.10 polling it kept a session alive past its limits.
 
 ### Windows (Kerberos) sign-in
 
@@ -119,6 +153,8 @@ Windows sign-in is optional and **off by default**. It applies only to `POST /ap
   certificate never reaches the Kerberos code.
 - A request with neither a certificate nor a ticket gets `401` with `WWW-Authenticate: Negotiate`
   (which prompts Windows to send a ticket) instead of a redirect to the login page.
+- These calls make no session (from 0.0.11): the client keeps no cookies and signs in on every
+  call. Up to 0.0.10 each logon, lock and unlock left a stored session behind for 30 minutes.
 - The ticket is validated with the service principal's key from the keytab. No domain controller is
   contacted, so `krb5.conf` is optional.
 - The account name from the ticket (for example `jdoe@EXAMPLE.COM`) must come from an **allowed
@@ -202,7 +238,10 @@ All settings are listed in [Configuration](configuration.md#windows-kerberos-sig
   parse rules, the group cache), which applies to the whole organization, needs `ADMIN`. Whose
   data a page shows is decided by `AccessPolicy`.
 - **Administrators:** `ADMIN` comes from `application.super-user-dns`, or from a stored role
-  (`user_records.user_role`) set in the database. It is never given from the UI: a person's page
+  (`user_records.user_role`) set in the database. An entry of `super-user-dns` is compared with the
+  person's DN as a DN, whatever its case or the spaces after its commas (from 0.0.11; before, an
+  entry written `CN=Jane Doe, OU=Users, ...` signed in as `USER` while the **Administrators** card
+  listed her). It is never given from the UI: a person's page
   offers `ADMIN` only to keep it for someone who holds it, and refuses it otherwise (`400`). The
   last administrator cannot be demoted there: the page says why.
   **Administration → Privacy** lists every administrator and where the role comes from.
@@ -217,6 +256,11 @@ All settings are listed in [Configuration](configuration.md#windows-kerberos-sig
 
     These relationships apply whatever the viewer's role. The `MANAGER` role on its own does not
     show anyone's details.
+
+    From 0.0.11, what the directory says about them (the groups a viewer owns, a group's members,
+    a viewer's direct reports) is kept for a minute per viewer and per group, on each replica, so
+    a change there applies within a minute. Delegates and a group's additional managers, which
+    ReadyRoom stores, apply at once.
 
 - **Everyone else** sees a coworker, found by search, on a group page, an organization's members
   or in the org chart, with their directory details (organization, employee type, location,
@@ -282,7 +326,7 @@ A refused page is logged at `info` as `Access denied for <METHOD> <URI>`, and th
 | `POST /api/check/out` | Runs at logoff, after the user's profile and certificate store are gone. It accepts only the `sessionId` of a check-in that no logout has used yet and that is younger than 7 days (`application.logoff.session-max-age-hours`), and records the check-out under that check-in's DN. |
 | `/actuator/health` (and its groups, such as `/actuator/health/liveness`) | Health checks and probes. Status only; details for `ADMIN`. It is the only Actuator endpoint exposed on the application's port, and any other endpoint you expose there needs an `ADMIN` sign-in. |
 | `/actuator/prometheus` | Only on the management port (`MANAGEMENT_SERVER_PORT`), plain HTTP. Never publish that port |
-| `/login`, `/consent`, `/error` | The sign-in, consent banner and error pages. |
+| `/login`, `/consent`, `/error` | The sign-in, consent banner and error pages. Failed password sign-ins are [throttled](#ldap-username-and-password). |
 | `GET /api/audit/events` | The audit pull API, with a bearer token instead of a session. See [Audit logging](../audit-logging.md#the-pull-api) |
 | `/api/v1/**` | The [public API](api-reference.md#public-api-apiv1): a bearer API token instead of a session, read-only. Its OpenAPI document (`/api/v1/openapi`, `/api/v1/openapi.yaml`) needs no token |
 | `/oauth2/authorization/oidc`, `/login/oauth2/code/oidc`, `/saml2/authenticate/saml`, `/login/saml2/sso/saml`, `/saml2/service-provider-metadata/saml` | [Single sign-on](single-sign-on.md), when enabled: starting a sign-in, the provider's answer, and this service provider's metadata |
@@ -315,15 +359,16 @@ never limited.
   From the next release the OIDC issuer (with the endpoints and keys it names) and the SAML metadata
   are read over `https://` only (or, for SAML, from a file), and SAML refuses to start without an
   `https://` `APPLICATION_BASE_URL`. See [Single sign-on](single-sign-on.md).
-- **API tokens** are SHA-256 hashed, shown once, scoped per endpoint, expiring, rate-limited (per
-  replica), and act for their creating administrator with that person's roles and account status
+- **API tokens** are SHA-256 hashed, shown once, scoped per endpoint, expiring, rate-limited (for
+  all replicas together), and act for their creating administrator with that person's roles and account status
   re-checked live in the directory on every call, failing closed. The `/api/v1` chain accepts nothing
   but a bearer token and serves `GET`s only. See [API reference → Tokens](api-reference.md#tokens).
 - **Webhooks** go to `https://` receivers on public addresses only (internal ranges only through
   `APPLICATION_WEBHOOKS_ALLOWEDCIDRS`, cloud metadata never), connect to the address just checked,
   follow no redirects, and are HMAC-SHA256 signed. Signing secrets are encrypted in the database with
   `APPLICATION_WEBHOOKS_SECRETKEY` (AES-256-GCM); a leaked one is replaced with **Rotate secret**,
-  audited as `webhook.secret-rotated`. See [Webhooks](webhooks.md).
+  audited as `webhook.secret-rotated`. From 0.0.11 a webhook whose receiver gives no answer for
+  about a day is disabled, audited as `webhook.disabled` by `system`. See [Webhooks](webhooks.md).
 - **Exports** are form posts with the CSRF token, audited before they start, and hold only what the
   viewer may see; CSV cells that could run as formulas are neutralised. See
   [Reports, exports and time zones](exports.md).
@@ -346,8 +391,20 @@ never limited.
   older browsers.
 - **Windows client files:** the installer makes the install folder and
   `%ProgramData%\InOutWorker` writable by SYSTEM and Administrators only, and the SYSTEM logout task
-  reads a user's session file only after checking for links and for its owner. See
+  reads a user's session file only after checking for links and for its owner. From 0.0.11 a
+  check-in restricts the session file to its user before the `sessionId` goes in, and writes
+  nothing into a file another account created first. See
   [Windows client](windows-client.md#installation).
+- **Errors are never a success** (from 0.0.11): a request that fails unexpectedly answers `500`,
+  and one the framework refuses keeps its own status (`400`, `404`, `405`). Under `/api`, or for a
+  client that asks for JSON, the body is `{"error": "...", "message": "..."}`, without the cause; the
+  server log has it. Up to 0.0.10 these answered `200` with the error page.
+- **Bounded reads** (from 0.0.11): a calendar read covers at most
+  `application.events.max-view-days` (400) days, and the name search behind the delegate and
+  group-manager pickers needs three characters, stays within `application.user-ldap-filter`,
+  returns at most `application.ldap.search-max-results` people and only their DN and name.
+- **A person's DN in a link** is a query parameter (`/app/user/details?dn=...`), encoded, from
+  0.0.11, so a DN holding `\`, `/`, `#` or `?` reaches the page it names.
 - **LDAP injection:** user-supplied search terms are escaped before they are put into LDAP filters.
 - **LDAP timeouts:** connect (5 s) and read (30 s) timeouts and a paged-search page limit stop a
   slow or misbehaving directory from holding requests open indefinitely.
@@ -383,7 +440,10 @@ See [FIPS 140-3 and DISA STIG](fips-and-stig.md).
       only read.
 - [ ] Keep Actuator exposure at `health` (the packaged setting).
 - [ ] Behind a proxy that terminates TLS for browsers, set `ENS_COOKIE_SECURE=true` and
-      `SERVER_FORWARD_HEADERS_STRATEGY=framework`.
+      `SERVER_FORWARD_HEADERS_STRATEGY=framework`. Without the second, ReadyRoom sees every browser
+      at the proxy's address, and the password sign-in limit per address is shared by everyone.
+- [ ] Decide the password sign-in limits (`APPLICATION_LOGIN_*`), and keep the directory's own
+      lockout policy: ReadyRoom's throttle slows guessing, it locks no account.
 - [ ] Set `super-user-dns` to the real administrators only, and review the **Administrators** card
       on **Administration → Privacy**, which also lists roles stored in the database.
 - [ ] Keep the Kerberos keytab in `kerberos/` (mounted read-only) or a Secret, and out of images
