@@ -162,6 +162,7 @@ nav:
           - Air-gapped synchronisation: syncd/air-gap.md
           - Computed attributes and rules: syncd/rules.md
           - Password synchronisation: syncd/password-sync.md
+          - Governance: syncd/governance.md
           - Licensing: syncd/licensing.md
           - Change safety and lifecycle: syncd/change-safety.md
           - Configuration as code: syncd/config-as-code.md

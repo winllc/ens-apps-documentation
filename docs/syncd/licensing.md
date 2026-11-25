@@ -167,6 +167,7 @@ each connector's pack.
 | Password Sync | | Capture agents, self-service, password delivery, initial passwords, password key and agent CA rotation |
 | High Availability | | Active/passive pairs, with the PostgreSQL, file and Kubernetes Lease backends |
 | Extensibility | | [Custom functions in WebAssembly](rules.md#custom-functions-in-webassembly) |
+| Governance (in development, not issued yet) | | [Grants from the governance layer](governance.md) (`grants` on a publication); the console's governance pages |
 
 What the license does not include is **locked**: the console's editor marks the connector type
 and won't add one, the Studio marks WebAssembly functions, validation names the setting and its
