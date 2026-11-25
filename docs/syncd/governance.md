@@ -4,7 +4,7 @@
     This page describes the governance layer as it is being built on the
     `ldap-sync-merge-view` branch `claude/modest-mayer-onyb29`, after release 0.6.1. It is
     not in a release, and the Governance pack is not issued in licenses yet. What is built
-    is listed below; policies and roles follow.
+    is listed below; roles follow.
 
 Governance answers who should have what, and why. The console decides; the engine
 carries the decision out and keeps it, so access is enforced, and ends on time, while
@@ -31,6 +31,7 @@ the console is down.
 | Access certifications: campaigns, reviewer queues, revocations the engine carries out, sign-off and the evidence report | Console: Access reviews (`/governance/campaigns`) and My reviews (`/my/reviews`) |
 | Access requests: approval workflows, requests for oneself or a direct report, approvals, end dates, overrides | Console: Request access, My requests, My approvals, My team; Workflows and Requests for administrators |
 | The Directory Services Portal: its group requests decided here (governed mode), and its owners' changes reported here | `governance:delegate` tokens; `POST /api/v1/governance/ingest/dsp` |
+| Policies: separation of duties and rules over the person, a scan, violations, remediation and exceptions, and the check when access is asked for | Console: Policies, Violations, My policy violations |
 | The Governance pack | Licensing |
 
 ## Setting a publication up for grants
@@ -228,6 +229,51 @@ from.
   engine will take the member out again); a member removed there ends it. Repeated deliveries
   are ignored.
 
+## Policies
+
+A **policy** says what nobody should hold (Governance → Policies):
+
+- **Separation of duties** (`sod`): one entitlement of the first set *with* one of the
+  second, e.g. creating payments with approving them.
+- **Rule** (`rule`): a CEL condition over the person. It reads `e` with these attributes:
+
+| Attribute | What |
+|---|---|
+| `e.login`, `e.display_name`, `e.mail`, `e.status` | From the identity source |
+| `e.<attribute>` | Every attribute the settings keep (`extra_attributes`), e.g. `e.employeeType` |
+| `e.entitlements` | A list: what the person holds, as `<system>:<native id>` (`=<value>` for an attribute value), e.g. `"Directory:cn=vpn,ou=Groups,dc=x"` |
+| `e.privileged` | The same, only privileged entitlements |
+| `e.roles` | Roles (empty until roles are built) |
+
+  For example `e.employeeType == "contractor" && size(e.privileged) > 0`. A condition that
+  does not compile is refused when the policy is saved, with where. **Try it** shows how many
+  people a policy would find, and up to 50 of them, without saving anything.
+
+What a person holds is **effective access**: what the inventory found on their accounts, and
+open assignments the engine may not have carried out yet.
+
+The **scan** runs after each complete inventory, every night, and on **Scan now**. A new
+violation is **open**: its owner gets a task and mail (`governance.violation-opened` webhook
+for high and critical policies). One an unexpired exception covers is **excepted**; when the
+exception runs out it is open again. One no longer found is **remediated**.
+
+The owner (on **My policy violations**) or a governance administrator either **removes
+access** (each entitlement chosen is removed as a certification revocation removes it) or
+**grants an exception** until a date, at most the policy's longest exception. Nobody excepts
+their own violation.
+
+When access is **asked for**, the request is checked against every enabled policy the
+person would newly violate:
+
+| The policy's setting | The request |
+|---|---|
+| Block | Refused, naming the policy |
+| Warn | Goes ahead; every approver sees the warning |
+| Require an exception | Gains an approval step for the policy's owner; their approval grants the exception |
+
+Giving an assignment directly that would violate a policy is refused unless the call says
+`override_policy` with a reason, recorded as `governance.policy.overridden`.
+
 ## API
 
 | Method and path | Who | What |
@@ -261,6 +307,11 @@ from.
 | `GET`, `POST /api/v1/governance/ingest-sources`; `POST /api/v1/governance/ingest/dsp` | readers, writers; the portal's signature | Portals reporting group changes |
 | `GET /api/v1/my/catalog`, `GET`, `POST /api/v1/my/requests`, `GET .../{rid}`, `POST .../{rid}/cancel` | every signed-in role | Asking, and one's requests |
 | `GET /api/v1/my/approvals`, `POST .../{tid}/approve`, `/reject`, `/delegate`; `GET /api/v1/my/team` | every signed-in role | Approving, and a manager's team |
+| `GET`, `POST /api/v1/governance/policies`; `PUT`, `DELETE .../{pid}` | readers; writers | Policies |
+| `POST /api/v1/governance/policies/simulate`, `.../{pid}/simulate` | readers | Whom a policy would find, writing nothing |
+| `POST /api/v1/governance/policies/scan` | writers | Scan now |
+| `GET /api/v1/governance/violations`; `POST .../{vid}/remediate`, `/exception` | readers; writers | Violations (`policy`, `state`, `severity`, `identity`) |
+| `GET /api/v1/my/violations`; `POST .../{vid}/remediate`, `/exception` | the policy's owner | Their policies' violations |
 | `GET /api/v1/my/identity`, `/my/access` | every signed-in role | The signed-in person, and what they hold |
 
 Writes need the Governance pack. Reads never do: what was recorded stays visible after
@@ -281,6 +332,8 @@ a license lapses.
 | `governance.workflow.updated`, `governance.ingest_source.saved` | configuration |
 | `governance.request.created`, `.approved`, `.rejected`, `.cancelled`, `.completed`, `.overridden` | authorization |
 | `governance.assignment.conflict` | authorization |
+| `governance.policy.created`, `.updated`, `.deleted` | configuration |
+| `governance.violation.detected`, `.remediated`, `.excepted`; `governance.policy.overridden` | authorization |
 | `governance.projection.halted`, `governance.inventory.completed`, `governance.inventory.suspect` | system |
 
 ## What the console stores about people
@@ -310,5 +363,9 @@ each change the projection saw, the attributes' old and new values.
   rejection, a manager for a report, end dates and limits, timeouts, overrides, the portal's
   signed webhook and delegated requests), and the portal's own test of governed mode against a
   stand-in console. Not yet an end-to-end script.
+- Policies: integration tests (a person with one entitlement of each set is found and one
+  with one set only is not; an exception hides a violation until it runs out; remediation
+  resolves it; simulation writes nothing; a broken condition is refused; a request is
+  blocked, warned or gains the owner's step; a direct assignment needs an override).
 - Not built yet: holding grants in change windows and thresholds, correlation rules in
-  the API, policies and roles.
+  the API, and roles.

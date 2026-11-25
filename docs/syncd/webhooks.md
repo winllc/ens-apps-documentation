@@ -52,6 +52,7 @@ delivery log.
 | `config.unpublished-running` | From 0.5.0: an engine runs a configuration the console did not publish, applied by another client of its control API or edited on its host. Told once per configuration (see [Security](security.md#what-the-console-reports)) |
 | `license.state-changed` | From 0.5.0: the [license](licensing.md)'s state changed: a warning, the grace period, publishing blocked, or licensed again. Not tied to an engine. Told once per change |
 | `governance.campaign-started` | An [access review](governance.md#access-certifications) campaign started, by hand or on its schedule. Not tied to an engine (in development, not in a release yet) |
+| `governance.violation-opened` | A high or critical [policy](governance.md#policies) found a person in violation (new, or again after an exception ran out). Not tied to an engine (in development) |
 | `governance.review-overdue` | A reviewer's access-review task passed its due date with items undecided. Told once per task; their manager is mailed too. Not tied to an engine (in development) |
 | `webhook.test` | **Send a test** on the Integrations page |
 
@@ -140,6 +141,7 @@ sentence. `data` depends on the event:
 | `license.state-changed` | `state`, `previous`, `licenseId`, `managedIdentities`, `limit`, `graceEnds`, `publishingBlocked`, `messages`; `engine` is `null` |
 | `governance.campaign-started` | `campaign` (its id), `name`, `items`, `reviewers`; `engine` is `null` |
 | `governance.review-overdue` | `campaign`, `name`, `task`, `reviewer`, `undecided`; `engine` is `null` |
+| `governance.violation-opened` | `violation`, `policy`, `name`, `severity`, `identity`, `login`; `engine` is `null` |
 | `webhook.test` | `webhook`, `sentBy` |
 
 A `hold.created` example:
