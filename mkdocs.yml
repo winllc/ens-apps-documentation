@@ -160,6 +160,7 @@ nav:
       - Additional guidance:
           - Connectors: syncd/connectors.md
           - Air-gapped synchronisation: syncd/air-gap.md
+          - Connector SDK: syncd/connector-sdk.md
           - Computed attributes and rules: syncd/rules.md
           - Password synchronisation: syncd/password-sync.md
           - Governance: syncd/governance.md

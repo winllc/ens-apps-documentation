@@ -10,6 +10,8 @@ gap as DSML v2 files: a target on the connected side, a source on the far side. 
 development (not in a release yet), PostgreSQL, MySQL and SQL Server tables are targets
 too: see [SQL tables as targets](#sql-tables-as-targets), and so are JSON APIs through
 request templates: see [REST services as targets](#rest-services-as-targets).
+For anything else, a connector can be written with the [connector SDK](connector-sdk.md)
+(in development).
 
 This page says how each connector reads, what it needs on the source side, and which
 settings matter. Every key is listed in [Configuration](configuration.md#connectors-connectors);
