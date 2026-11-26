@@ -7,8 +7,8 @@ SuccessFactors and UKG Pro, plus any database that Debezium Server can capture o
 a JDBC driver. Targets are LDAP directories, Active Directory, SaaS applications that
 speak SCIM 2.0, and Entra ID. Since 0.6.0 a `dsml` connector carries changes across an air
 gap as DSML v2 files: a target on the connected side, a source on the far side. In
-development (not in a release yet), PostgreSQL, MySQL and SQL Server tables are targets
-too: see [SQL tables as targets](#sql-tables-as-targets), and so are JSON APIs through
+development (not in a release yet), PostgreSQL, MySQL, SQL Server, Oracle and Db2 tables
+are targets too: see [SQL tables as targets](#sql-tables-as-targets), and so are JSON APIs through
 request templates: see [REST services as targets](#rest-services-as-targets).
 For anything else, a connector can be written with the [connector SDK](connector-sdk.md)
 (in development).
@@ -655,7 +655,9 @@ snapshot (its signal table, `execute-snapshot`); see
 
 For any other database with a JDBC driver (Db2, Informix, Oracle, ...), a `jdbc` connector
 reads through the JDBC bridge, a small Java service (Java 17 or newer) that runs the SQL
-syncd builds with the database's own driver and streams the rows back over gRPC.
+syncd builds with the database's own driver and streams the rows back over gRPC. A
+publication can also write such a database's tables through it: see
+[Through the JDBC bridge](#through-the-jdbc-bridge-oracle-db2).
 
 ```yaml
 - name: hr
@@ -1803,9 +1805,10 @@ entries one carries; an object's sample shows its entries as the newest files ca
 *In development, not in a release yet; Enterprise Database pack (the feature
 `sql-targets`), whichever database.*
 
-A publication to a `postgres`, `mysql` or `sql_server` connector writes each entity as one
-row of a table, found by its key column: for applications that keep their users in their
-own tables and have no LDAP, SCIM or API to provision through.
+A publication to a `postgres`, `mysql` or `sql_server` connector, or to a `jdbc` connector
+(Oracle, Db2 and other databases, through the [JDBC bridge](#jdbc-bridge)), writes each
+entity as one row of a table, found by its key column: for applications that keep their
+users in their own tables and have no LDAP, SCIM or API to provision through.
 
 ```yaml
 publications:
@@ -1849,10 +1852,41 @@ publications:
   the table by key, and the groups as the membership table's distinct group names.
 - Refused on such a publication: `dn`, `object_classes`, containers, moves, `writeback`,
   `adopt`, `passwords`, computed `groups`, `references`, `strip_unmanaged_groups`.
-- Oracle and Db2 are not targets yet: the JDBC bridge only reads.
 
-Tested end to end against PostgreSQL 16, MySQL 8.0 and SQL Server 2022 (`tests/e2e/sql-target.sh`);
-CI also runs it against MariaDB and SQL Server 2019.
+### Through the JDBC bridge (Oracle, Db2)
+
+A `jdbc` connector as the target writes through the JDBC bridge, version 0.2.0 or later,
+with the database's driver in its `drivers/` directory. The connection is the one a `jdbc`
+source takes:
+
+```yaml
+connectors:
+  - name: app_db
+    type: jdbc
+    connection:
+      bridge: http://127.0.0.1:50071
+      token: { file: /etc/syncd/bridge-token }
+      url: "jdbc:oracle:thin:@//app-db.example.com:1521/APPPDB"   # or jdbc:db2://...
+      user: syncd_writer
+      password: { env: APP_DB_PASSWORD }
+```
+
+- Each entity's statements are one transaction over one connection of the bridge: committed
+  when the last succeeds, rolled back when one fails or when syncd or the bridge stops
+  first.
+- For `jdbc:oracle:` and `jdbc:db2:` URLs, table and column names are quoted in **upper
+  case**, as those databases store unquoted names: `app.app_users` is `"APP"."APP_USERS"`,
+  and a column named `group` works. A table created with a quoted lower-case name is not
+  found. Other databases' names are written unquoted and fold as the database folds them.
+- Each value is bound by its column's type: numbers, timestamps (Oracle's `DATE` holds a
+  time, so it is one; `2026-10-25T10:13:51Z` and a date alone are taken), dates, booleans
+  (`true`, `1`, `yes`). A value the column cannot take fails that entity's export.
+- The account needs `SELECT`, `INSERT`, `UPDATE` and `DELETE` on the tables and to read
+  their columns' descriptions.
+
+Tested end to end against PostgreSQL 16, MySQL 8.0 and SQL Server 2022, and through the
+bridge against Oracle Database 23ai Free, Db2 12.1 Community Edition and Apache Derby
+(`tests/e2e/sql-target.sh`); CI also runs it against MariaDB and SQL Server 2019.
 
 ## REST services as targets
 
@@ -1993,9 +2027,9 @@ Not tested against a real server:
   only.
 - **REST services, Workday, SAP SuccessFactors and UKG Pro**: fakes only.
 - **Vault, AWS Secrets Manager and Azure Key Vault**: doubles only.
-- **Oracle and Db2**: their container images do not fit the CI runners, so PostgreSQL
-  (Debezium) and Apache Derby (JDBC) stand in. Debezium's change events have the same
-  shape for every database it captures.
+- **Oracle and Db2 as sources**: PostgreSQL (Debezium) and Apache Derby (JDBC) stand in.
+  Debezium's change events have the same shape for every database it captures. (As
+  targets, Oracle Database 23ai Free and Db2 12.1 are tested in Docker.)
 - **Red Hat Directory Server, ForgeRock / OpenDJ, Oracle DSEE and Oracle Unified
   Directory**: supported through the same standards (`389ds` profile, `cn=changelog`) but
   not in the suite.
@@ -2006,8 +2040,7 @@ Not tested against a real server:
 - **Other source families**: Kafka and inbound SCIM are not planned until a customer
   needs them. HR and SaaS services are read through the REST reader since 0.5.0; Workday
   SOAP and SuccessFactors `$expand` are not built.
-- **Other targets**: Oracle and Db2 tables (PostgreSQL, MySQL and SQL Server tables are
-  targets in development), files other than DSML, and APIs that take bodies other than
+- **Other targets**: files other than DSML, and APIs that take bodies other than
   JSON (REST services with JSON bodies are targets in development).
 - **DSML over anything but a directory or SFTP**: a DSML gateway's SOAP or HTTP endpoint
   is not called; files go through a directory or an SFTP server. Not tested against a
