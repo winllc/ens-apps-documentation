@@ -261,6 +261,13 @@ approvals never let a member decide a request they made or that is for them, and
 never gives a delegate a task about their own access. See
 [Governance](governance.md#delegated-administration).
 
+The governance layer has its own threat model (`docs/security/governance-threat-model.md`
+in the source repository; a draft for the owner's sign-off): the trust boundaries
+(the console to the engines' `ApplyGrants`, the ingest endpoints, the participant role,
+delegated tokens, outbound products) and the abuse cases with the code that controls
+each: self-approval, a hostile inventory causing mass revocation, replayed webhooks and a
+compromised service-desk token. No penetration test of governance has been done.
+
 | Role | Can |
 |---|---|
 | `viewer` | Read engines, status, held changes, dead letters, data quality, configuration versions, diffs and the environments' names, the object explorer and lineage exports, the reconciliation report export, rule previews and the function catalogue |
@@ -1008,6 +1015,14 @@ reveals, backups and password deliveries go to its journal with their caller (a 
 submitted the change). From 0.5.0 its status also says who applied the configuration it runs.
 
 ## Backups
+
+- **Governance: restore the console and the engines to the same point.** The console's
+  database holds what governance decided and how far each engine has been sent; each
+  engine's store holds the grants it applies. A host-local backup and an upgrade's rollback
+  keep the two together. After restoring only one of them, run
+  `syncd-console governance redeliver --engine <name>` so the engine holds exactly what
+  the console says (audited as `governance.delivery.redelivered`); the same after an HA
+  failover, for grants taken in the last snapshot interval.
 
 - **What a backup holds.** An engine backup (`syncd backup`, `engine.backup`) holds the store,
   which carries entity data, the configuration file, and every live password key and agent CA
