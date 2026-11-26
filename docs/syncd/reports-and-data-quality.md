@@ -20,6 +20,8 @@ changes nothing here.
 - **History retention**: how much entity history the engine keeps, and what it never prunes.
 - **Data-quality checks**: what good source data is, checked on every entity.
 - **Correlation assistance**: scored suggestions for source records that joined no entity.
+- **Governance reports** (in development, not in a release yet): ten reports of the
+  console's governance catalog, for auditors.
 
 The audit trail itself is in the [Admin guide](admin-guide.md). From 0.5.0 its **Audit log** page
 filters by time, category, action, actor and outcome (server-side), and exports what it lists as
@@ -218,6 +220,49 @@ The outbox's timings (`CONSOLE_MAIL_POLL_SECONDS` 30, `CONSOLE_MAIL_RETRY_INITIA
 `CONSOLE_MAIL_KEEP_DAYS` 14) can be changed but rarely need to be. With the Helm chart's
 `networkPolicy.egress.enabled` on, add a rule to `networkPolicy.egress.extra` so the console can
 reach the mail server.
+
+## Governance reports
+
+!!! warning "In development, not in a release yet"
+    Governance reports are built on the `ldap-sync-merge-view` branch
+    `claude/modest-mayer-onyb29`, after release 0.6.1, with the rest of
+    [Governance](governance.md).
+
+The governance reports read the console's catalog (what the last inventory of each system
+found, the assignments, campaigns, policies, requests and grants), not the engine. Each is
+a CSV, Excel or PDF file, from the **Governance reports** page (`/governance/reports`,
+`GET /api/v1/governance/reports/{report}?format=csv|xlsx|pdf`), for administrators,
+governance administrators and auditors (and `governance:read` tokens). Each download is
+recorded as `governance.report.exported`, before the file leaves; one that cannot be
+recorded is refused. A file holds at most `CONSOLE_REPORTS_MAX_ROWS` rows and says so when
+cut (`X-Syncd-Truncated: true` on a download).
+
+| Report (`report`) | One row per | Columns |
+|---|---|---|
+| User access (`user_access`) | person, account and entitlement held | Login, Name, Status, System, Account, Entitlement, Privileged, Risk, Origin, Explained, Held since |
+| Unlinked accounts (`unlinked_accounts`) | account linked to no person | System, Account, Kind, State, Entitlements, First seen, Last seen |
+| Unexplained access (`unexplained_access`) | membership no open assignment and no rule explains | System, Account, Login, Name, Entitlement, Privileged, Risk, Held since |
+| Privileged access (`privileged_access`) | holder of a privileged entitlement | Login, Name, Status, System, Account, Entitlement, Risk, Origin, Explained, Held since |
+| Leavers with access (`leavers_with_access`) | account not disabled whose person is inactive or gone | Login, Name, Status, Left, System, Account, Account state, Entitlements |
+| Service accounts (`service_accounts`) | service account, with its owner | System, Account, State, Owner, Owner name, Owner status, Entitlements, Last seen |
+| Certification status (`certification_status`) | campaign (reviewer `(all)`), and campaign and reviewer | Campaign, State, Started, Due, Reviewer, Items, Kept, Revoked, Flagged, Undecided, Decided % |
+| Violations and exceptions (`violations_and_exceptions`) | policy violation, with its latest exception | Policy, Severity, Login, Name, State, First detected, Last detected, Resolved, Exception by, Exception reason, Exception expires |
+| Request history (`request_history`) | approval of a request item (or the item, before any approval) | Request, Created, Requester, Beneficiary, Action, Entitlement, Item state, Step, Approver, Approval, Decided by, Decided at, Comment |
+| Provisioning history (`provisioning_history`) | grant sent to an engine | Instructed, Login, Engine, Publication, Kind, Target, Value, Effect, Origin, State, Applied, Failed, Detail |
+
+- **Origin** is what explains a holding: the assignment's origin (`manual`, `request`,
+  `role`, `certification`, `import`, ...) or `rule` (a computed group); empty when nothing
+  does. **Held since** is when the inventory first saw it.
+- **Risk** is the entitlement's: its own, else 80 when privileged and 10 when not. See
+  [Risk, access search and reports](governance.md#risk-access-search-and-reports).
+- **Provisioning history** has its times for grants made from this version on; earlier
+  grants show their last change as both instructed and applied (or failed).
+- **Scheduled**: on the **Reports** page, a scheduled report is an engine's
+  reconciliation report or one of these (`governance_report` in `/api/v1/reports`, with no
+  engine). Governance reports are scheduled by those who read governance across the
+  console, checked again at each run; they go by e-mail through the outbox or to the share
+  as `governance-<report>-<date>.<csv|xlsx|pdf>`, recorded as `report.sent` like the
+  others. The same recipient domains apply.
 
 ## Lineage export
 
@@ -532,6 +577,9 @@ contractor, say), not something to accept.
 - `other_views` has no console form field: write it in the configuration.
 
 ## Known limitations
+
+- **Governance reports** read the catalog as the last inventory found it; access that came
+  and went between two runs is in no report.
 
 - **Reports:** the Excel files were read back with a zip reader in testing, not opened in Excel or
   LibreOffice. The PDFs were checked with qpdf and poppler, not with veraPDF, PAC, Acrobat or a

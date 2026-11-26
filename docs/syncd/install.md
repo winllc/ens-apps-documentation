@@ -2545,6 +2545,19 @@ is refused: install the older package, then `syncdctl restore` the backup named
 `<time>-upgrade-<old>-to-<new>`. More on recovery is in
 [Sizing, availability and recovery](availability-and-sizing.md#rolling-back-an-upgrade).
 
+### Rolling back once governance is in use
+
+In development (governance, not in a release yet). Governance keeps its records in the
+console's database, and each release that adds governance tables changes the schema, so
+a rollback restores the database dumped before the upgrade, and with it the governance
+records as they were then: requests, approvals, review decisions and assignments made
+since the upgrade are gone, as are the grants the console sent since. An older console
+refuses a database a newer one migrated and changes nothing in it (it stops at start with
+`migration <n> was previously applied but is missing`): there is no partial rollback.
+The engine store comes back from the same backup, so the two agree; after restoring only
+one of them, run `syncd-console governance redeliver --engine <name>` (see
+[Security, backups](security.md#backups)).
+
 ### Rolling back 0.6.1, 0.6.0 or 0.5.5
 
 - **0.6.1 to 0.6.0**: nothing to restore. The schema (33), the store's format (2) and the

@@ -40,7 +40,7 @@ The read paths an integration usually wants:
 | `GET` | `/api/v1/certificates/{id}` | `certificates:read` | One certificate |
 | `POST` | `/api/v1/certificates/export?format=csv\|xlsx` | `certificates:read` | The same, as a file; see [Exports](exports-and-reports.md) |
 | `GET` | `/api/v1/summary/expiry` | `certificates:read` | Counts by state, expiring within 7/30/60/90 days, revoked, by owner type; takes the same filters |
-| `GET` | `/api/v1/servers`, `/api/v1/servers/{id}` | `certificates:read` | Servers, `?q=&certificateStatus=` |
+| `GET` | `/api/v1/servers`, `/api/v1/servers/{id}` | `certificates:read` | Servers, `?q=&certificateStatus=`; `?pocUserId=` (a person's id: the servers they are point of contact for) or `?pocEmail=` (an address, case aside) |
 | `GET` | `/api/v1/people`, `/api/v1/people/{id}` | `people:read` | People, `?q=&certificateStatus=` |
 | `GET` | `/api/v1/jobs`, `/api/v1/jobs/{id}` | `jobs:read` | Job runs |
 | `POST` | `/api/v1/sync`, `/api/v1/revocation/check`, `/api/v1/notifications/digest`, ... | `jobs:run` | Start a job: `202` and a run to poll (see [Sync and jobs](#sync-and-jobs)) |
@@ -163,7 +163,7 @@ The full list of which method and path needs which scope is in the OpenAPI docum
 | `GET` | `/api/v1/certificates`, `/api/v1/certificates/{id}` | user | The inventory, filtered and paged, or one certificate |
 | `POST` | `/api/v1/certificates/export?format=csv\|xlsx` | user (auditors from 0.0.3) | Download the filtered inventory; audited as `inventory.exported` |
 | `GET` | `/api/v1/summary/expiry` | user | Counts over the same filters |
-| `GET` | `/api/v1/servers`, `/api/v1/servers/{id}` | user | Servers with their certificate state |
+| `GET` | `/api/v1/servers`, `/api/v1/servers/{id}` | user | Servers with their certificate state; `?pocUserId=` or `?pocEmail=` for one person's servers |
 | `GET` | `/api/v1/people`, `/api/v1/people/{id}` | user | People with their certificate state |
 | `GET`, `POST` | `/api/v1/saved-views` | user (auditors too) | Your saved views; save one (`{"page", "name", "query"}`, the query string of the filters; the same name replaces it) |
 | `DELETE` | `/api/v1/saved-views/{id}` | user (auditors too) | Delete one of yours |

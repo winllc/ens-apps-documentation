@@ -14,6 +14,7 @@ until one exists.
 | `entry.changed` | An entry was created, updated (or renamed) or deleted (`data.operation`, the changed attribute names) |
 | `group.membership_changed` | `member`, `uniqueMember` or `memberUid` values were added or removed (`data.added`, `data.removed`) |
 | `form.submitted` | An entry form was saved: create, update, or a user's own profile (`self_update`) |
+| `entry.expiring` | (next release) An entry of a definition with [entry expiry](configuration.md#entry-expiry) ends within its days of warning: sent daily until it is extended or ends (`data.dn`, `name`, `endDate`, `daysLeft`, `sponsors`) |
 
 A webhook can be limited to some directories. **Send test event** queues a `ping`.
 

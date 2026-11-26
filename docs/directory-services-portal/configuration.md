@@ -428,6 +428,75 @@ Helm: `integrations.api.*`, `integrations.webhooks.*` and `integrations.transfer
 [API reference](api-reference.md#integration-api-apiv1), [Webhooks](webhooks.md) and
 [Import and export](import-export.md).
 
+## Entry expiry (next release) { #entry-expiry }
+
+For entries that end on a date, such as contractors and guests. In the form, give the end
+date field the format **Date** (`yyyy-mm-dd`; a generalized time such as `20261231000000Z` is
+read too), and have a field holding the sponsor's DN (the format **Distinguished name**, or a
+directory drop down of DNs). On the directory definition, under **Entry expiry**, choose:
+
+| Setting | Default | What |
+|---|---|---|
+| End date field | *(off)* | The form's date field |
+| Sponsor field | | The form's DN field naming the sponsor |
+| Days of warning | `14` | From this many days before the end, the sponsor is told daily |
+| Longest extension | `180` | A sponsor may set the end date at most this many days from today |
+
+Each day at 06:07 UTC, on one replica, the sponsor of every entry ending within the days of
+warning is mailed, the [`entry.expiring`](webhooks.md) webhook event is sent, and the notice is
+audited as `entry.expiring`. Sponsors find their entries under **Sponsored entries** and move
+the end date out, never in and no further than the longest extension, without write access to
+the definition; the change is audited as `entry.update` with `details.via =
+"sponsor-renewal"`.
+
+Mail needs an SMTP server:
+
+| Variable | Default | Description |
+|---|---|---|
+| `SMTP_HOST` | *(empty: no mail)* | The mail server; without it, notices are only audited and sent as webhook events |
+| `SMTP_PORT` | `587` | |
+| `SMTP_USERNAME`, `SMTP_PASSWORD` | *(empty)* | When the server needs a sign-in |
+| `SMTP_STARTTLS` | `true` | |
+| `MAIL_FROM` | `directory-portal@localhost` | The sender |
+
+With the Helm chart, set them in `api.extraEnv`. The mail server is not part of the portal's
+health checks.
+
+## Governed mode (next release) { #governed-mode }
+
+With the ENS identity governance console (syncd's console, see
+[syncd Governance](../syncd/governance.md#access-requests)) deciding who holds which group,
+the portal hands its group requests to the console's approval workflows instead of the
+groups' owners.
+
+| Variable | Property | Default | Description |
+|---|---|---|---|
+| `GOVERNANCE_URL` | `portal.governance.url` | *(empty: off)* | The console's address, e.g. `https://syncd.example.com` |
+| `GOVERNANCE_TOKEN`, `GOVERNANCE_TOKEN_FILE` | `portal.governance.token`, `.token-file` | *(empty)* | A console API token with the scope `governance:delegate` |
+| `GOVERNANCE_SYSTEMS` | `portal.governance.systems` | *(empty)* | `dir-a=<system id>;dir-b=<system id>`, or `*=<system id>`: the governance system each directory's groups belong to. A directory not listed stays ungoverned |
+| `GOVERNANCE_PORTAL_URL` | `portal.governance.portal-url` | `GOVERNANCE_URL` | Where people follow their requests in the console |
+
+Helm: `integrations.governance.url`, `.portalUrl`, `.systems` (a map) and `.token`
+(`value`, or `existingSecret` and `existingSecretKey`).
+
+In a governed directory:
+
+- A request is made in the console on the user's behalf (their login name must be their
+  login in the console's identity source), and the portal keeps its record with the
+  console's request id. The `group.access-requested` audit event says `governed` and
+  `governanceRequest`.
+- Owners' approve and reject answer 409 with a link to the governance portal; governed
+  requests are not listed under *To review*.
+- Groups the console does not let people ask for (not requestable, or computed by a syncd
+  rule) are closed to requests. Lookups are cached for five minutes; when the console cannot
+  be reached, groups show as closed.
+- *My requests* mirrors each open governed request's state from the console and links to it.
+  A governed request is withdrawn in the governance portal.
+- Owners still manage members directly. To report those changes to the console, add a
+  [webhook](webhooks.md) for `group.membership_changed` to the console's
+  `/api/v1/governance/ingest/dsp`, with the secret the console gives when the portal is added
+  under *Governance → Workflows*.
+
 ## X.509 client-certificate sign-in
 
 | Variable | Property | Default | Description |

@@ -51,7 +51,24 @@ delivery log.
 | `config.promoted` | A version was promoted to another environment's engines |
 | `config.unpublished-running` | From 0.5.0: an engine runs a configuration the console did not publish, applied by another client of its control API or edited on its host. Told once per configuration (see [Security](security.md#what-the-console-reports)) |
 | `license.state-changed` | From 0.5.0: the [license](licensing.md)'s state changed: a warning, the grace period, publishing blocked, or licensed again. Not tied to an engine. Told once per change |
+| `governance.campaign-started` | An [access review](governance.md#access-certifications) campaign started, by hand or on its schedule. Not tied to an engine (in development, not in a release yet) |
+| `governance.identity-terminated` | A governance administrator [terminated](governance.md#emergency-termination) a person everywhere at once. Not tied to an engine (in development) |
+| `governance.violation-opened` | A high or critical [policy](governance.md#policies) found a person in violation (new, or again after an exception ran out). Not tied to an engine (in development) |
+| `governance.review-overdue` | A reviewer's access-review task passed its due date with items undecided. Told once per task; their manager is mailed too. Not tied to an engine (in development) |
+| `governance.request-created` | An [access request](governance.md#access-requests) was submitted, by a person, a manager or a tool on someone's behalf (in development) |
+| `governance.request-approved` | Every approval step of a request was decided yes: it is being fulfilled (in development) |
+| `governance.request-rejected` | An approver rejected a request, or its approval timed out and was rejected (in development) |
+| `governance.request-completed` | A request is closed: fulfilled, failed or cancelled (`data.state`). A service desk closes its ticket on this one (see [Service-desk integration](service-desk.md)) (in development) |
+| `governance.task-created` | A task was given to someone: an approval, a review, a fulfilment or a violation to handle; no assignee means the governance administrators (in development) |
+| `governance.assignment-granted` | An assignment gave a person an entitlement (in development) |
+| `governance.assignment-revoked` | An assignment ended, or a revoke assignment was made: the person loses the entitlement (in development) |
+| `governance.grant-failed` | An engine refused or failed a grant it was sent (in development) |
 | `webhook.test` | **Send a test** on the Integrations page |
+
+The governance events are written in the same database transaction as the change they
+report, so a receiver hears of a change exactly when it is committed, and never of one that
+was rolled back. Their `data` carries ids, logins, entitlement and system names, the
+request's ticket reference, and never a person's projected attributes or mail address.
 
 Event ids are stable: an event is never renamed, only added.
 
@@ -136,6 +153,10 @@ sentence. `data` depends on the event:
 | `config.promoted` | `from`, `to`, `promotedBy`, `ticket`, and `results`: each target engine's outcome |
 | `config.unpublished-running` | `runningSha256`, `runningVersion`, `appliedBy`, `appliedAtMicros`, `throughApi` (applied through the control API, or the file on the host), `publishedVersion` (what the console last published) |
 | `license.state-changed` | `state`, `previous`, `licenseId`, `managedIdentities`, `limit`, `graceEnds`, `publishingBlocked`, `messages`; `engine` is `null` |
+| `governance.campaign-started` | `campaign` (its id), `name`, `items`, `reviewers`; `engine` is `null` |
+| `governance.review-overdue` | `campaign`, `name`, `task`, `reviewer`, `undecided`; `engine` is `null` |
+| `governance.identity-terminated` | `identity`, `login`, `reason`, `by`; `engine` is `null` |
+| `governance.violation-opened` | `violation`, `policy`, `name`, `severity`, `identity`, `login`; `engine` is `null` |
 | `webhook.test` | `webhook`, `sentBy` |
 
 A `hold.created` example:

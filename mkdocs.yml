@@ -160,8 +160,12 @@ nav:
       - Additional guidance:
           - Connectors: syncd/connectors.md
           - Air-gapped synchronisation: syncd/air-gap.md
+          - Connector SDK: syncd/connector-sdk.md
           - Computed attributes and rules: syncd/rules.md
           - Password synchronisation: syncd/password-sync.md
+          - Governance: syncd/governance.md
+          - Service-desk integration: syncd/service-desk.md
+          - Migrating from IdentityIQ: syncd/migrating-from-iiq.md
           - Licensing: syncd/licensing.md
           - Change safety and lifecycle: syncd/change-safety.md
           - Configuration as code: syncd/config-as-code.md

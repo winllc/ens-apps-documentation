@@ -965,6 +965,41 @@ character replaced, dropped or added, or two neighbours swapped) from five chara
 suggestions shown, before you accept. How scoring and hints work is in
 [Reports, lineage and data quality](reports-and-data-quality.md#correlation-assistance).
 
+## Requesting access (`/my/request`)
+
+1. **Request access**, from My access. A manager chooses whom it is for: themselves or a
+   direct report.
+2. Search for what you need; **Add** each item. Items you hold, or asked for already, say so.
+3. Give an end date where the item needs one (some access is given for a limited time), a
+   reason, and a ticket if you have one. **Submit.**
+4. **My requests** shows each request, each item's state and its approvers' decisions.
+   **Cancel what waits** withdraws items not decided yet.
+
+Approvers find their work on **My approvals**: **Approve**, **Reject** (a comment is
+required), or **Hand to someone else**. Nobody is asked to approve a request they made or
+benefit from. Managers see their reports' access on **My team**.
+
+## Access reviews (`/my/reviews`)
+
+When an [access certification](governance.md#access-certifications) names you as a
+reviewer, you are mailed, and **My access** says reviews are waiting. **My reviews** lists
+your tasks, one per campaign, with how many items you have decided and when they are due.
+
+1. Open a task. Each item is one person holding one entitlement in one system, with why
+   they hold it: assigned, a rule (a computed group), or *nothing explains it* (found in
+   place).
+2. Group the items by person or by entitlement, and tick **Undecided only** to see what is
+   left.
+3. Select items (the box in the header selects every item shown) and choose **Keep**,
+   **Revoke** or **Flag**. A revocation needs a reason, and so does keeping a privileged
+   entitlement. Computed groups can be kept or flagged, not revoked.
+4. To let someone else decide, select items and choose **Hand to someone else**. Nobody can
+   be handed their own access.
+5. When every item is decided, choose **Done**.
+
+Until the campaign closes you can change a decision, unless the revocation was already
+carried out. Everything works from the keyboard: Tab to the boxes, Space to tick them.
+
 ## Reports
 
 ### Downloading the reconciliation report

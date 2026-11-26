@@ -6,7 +6,12 @@ Entra ID, and since 0.5.0 REST and OData services and the HR services Workday, S
 SuccessFactors and UKG Pro, plus any database that Debezium Server can capture or that has
 a JDBC driver. Targets are LDAP directories, Active Directory, SaaS applications that
 speak SCIM 2.0, and Entra ID. Since 0.6.0 a `dsml` connector carries changes across an air
-gap as DSML v2 files: a target on the connected side, a source on the far side.
+gap as DSML v2 files: a target on the connected side, a source on the far side. In
+development (not in a release yet), PostgreSQL, MySQL, SQL Server, Oracle and Db2 tables
+are targets too: see [SQL tables as targets](#sql-tables-as-targets), and so are JSON APIs through
+request templates: see [REST services as targets](#rest-services-as-targets).
+For anything else, a connector can be written with the [connector SDK](connector-sdk.md)
+(in development).
 
 This page says how each connector reads, what it needs on the source side, and which
 settings matter. Every key is listed in [Configuration](configuration.md#connectors-connectors);
@@ -650,7 +655,9 @@ snapshot (its signal table, `execute-snapshot`); see
 
 For any other database with a JDBC driver (Db2, Informix, Oracle, ...), a `jdbc` connector
 reads through the JDBC bridge, a small Java service (Java 17 or newer) that runs the SQL
-syncd builds with the database's own driver and streams the rows back over gRPC.
+syncd builds with the database's own driver and streams the rows back over gRPC. A
+publication can also write such a database's tables through it: see
+[Through the JDBC bridge](#through-the-jdbc-bridge-oracle-db2).
 
 ```yaml
 - name: hr
@@ -1793,6 +1800,146 @@ prints `signed in to <host>:<port> as <user>, host key <key>` and how many files
 there. In the console, **Browse the files** lists the files, newest first, and shows the
 entries one carries; an object's sample shows its entries as the newest files carry them.
 
+## SQL tables as targets
+
+*In development, not in a release yet; Enterprise Database pack (the feature
+`sql-targets`), whichever database.*
+
+A publication to a `postgres`, `mysql` or `sql_server` connector, or to a `jdbc` connector
+(Oracle, Db2 and other databases, through the [JDBC bridge](#jdbc-bridge)), writes each
+entity as one row of a table, found by its key column: for applications that keep their
+users in their own tables and have no LDAP, SCIM or API to provision through.
+
+```yaml
+publications:
+  - name: people_to_app
+    view: people
+    target: app_db
+    table: app.app_users          # table, or schema.table
+    key: login                    # the column naming the row
+    external_id: e.login          # its value
+    attributes:                   # column <- CEL over e, one value each
+      employee_no: e.employee_id
+      email: e.mail
+      full_name: e.display_name
+    account_state: { column: active, enabled: "true", disabled: "false" }
+    deprovision: disable
+    drift: { default: revert }
+    grants:
+      memberships: { table: app.user_roles, entity_column: login, group_column: role_name }
+```
+
+| The engine | The statement |
+|---|---|
+| adds an entity | `SELECT` by key; a row already there is updated and counted as adopted, else `INSERT` with the enabled value |
+| changes attributes | `UPDATE` of the changed columns; a row deleted by hand is inserted again |
+| a new key value | `UPDATE` of the key, and of the membership rows |
+| disables or enables | `UPDATE` of the `account_state` column |
+| deletes | `DELETE` of the membership rows, then of the row |
+| grants a membership (governance) | `INSERT` of (key, group) unless it is there; ending the grant deletes that row only |
+
+- Table and column names are identifiers (letters, digits and `_`), quoted as written in
+  every statement. PostgreSQL folds unquoted names to lower case: write them as the
+  database stores them. No SQL text from the configuration or the data is executed; every
+  value is a parameter.
+- Values travel as text and the database converts them to the column's type (`true` or
+  `1` for a boolean or bit, digits for an integer); for PostgreSQL syncd reads each
+  column's type from the catalog and casts.
+- Each entity's changes are one transaction. The account needs `SELECT`, `INSERT`,
+  `UPDATE` and `DELETE` on the tables and read access to the catalog.
+  `syncd test-connection` and the engine's start check that the tables and columns exist.
+- Drift checks read rows back by key; the unmanaged pass and the governance inventory list
+  the table by key, and the groups as the membership table's distinct group names.
+- Refused on such a publication: `dn`, `object_classes`, containers, moves, `writeback`,
+  `adopt`, `passwords`, computed `groups`, `references`, `strip_unmanaged_groups`.
+
+### Through the JDBC bridge (Oracle, Db2)
+
+A `jdbc` connector as the target writes through the JDBC bridge, version 0.2.0 or later,
+with the database's driver in its `drivers/` directory. The connection is the one a `jdbc`
+source takes:
+
+```yaml
+connectors:
+  - name: app_db
+    type: jdbc
+    connection:
+      bridge: http://127.0.0.1:50071
+      token: { file: /etc/syncd/bridge-token }
+      url: "jdbc:oracle:thin:@//app-db.example.com:1521/APPPDB"   # or jdbc:db2://...
+      user: syncd_writer
+      password: { env: APP_DB_PASSWORD }
+```
+
+- Each entity's statements are one transaction over one connection of the bridge: committed
+  when the last succeeds, rolled back when one fails or when syncd or the bridge stops
+  first.
+- For `jdbc:oracle:` and `jdbc:db2:` URLs, table and column names are quoted in **upper
+  case**, as those databases store unquoted names: `app.app_users` is `"APP"."APP_USERS"`,
+  and a column named `group` works. A table created with a quoted lower-case name is not
+  found. Other databases' names are written unquoted and fold as the database folds them.
+- Each value is bound by its column's type: numbers, timestamps (Oracle's `DATE` holds a
+  time, so it is one; `2026-10-25T10:13:51Z` and a date alone are taken), dates, booleans
+  (`true`, `1`, `yes`). A value the column cannot take fails that entity's export.
+- The account needs `SELECT`, `INSERT`, `UPDATE` and `DELETE` on the tables and to read
+  their columns' descriptions.
+
+Tested end to end against PostgreSQL 16, MySQL 8.0 and SQL Server 2022, and through the
+bridge against Oracle Database 23ai Free, Db2 12.1 Community Edition and Apache Derby
+(`tests/e2e/sql-target.sh`); CI also runs it against MariaDB and SQL Server 2019.
+
+## REST services as targets
+
+*In development, not in a release yet; Cloud and SaaS pack, with the REST source.*
+
+A publication to a `rest` connector writes one resource of a JSON API per entity through
+request templates in its `rest` block. Sign-in, API keys, client certificates, the rate
+limit and retries are the connection's, as for the [REST source](#rest-and-odata-services).
+
+```yaml
+publications:
+  - name: people_to_app
+    view: people
+    target: app_api
+    external_id: e.login                # names the resource for good
+    attributes:                         # body field <- CEL over e
+      name.givenName: e.first           # a dotted name is a nested field
+      email: e.mail
+    deprovision: disable
+    rest:
+      name: users                       # entries are userName=<key>,resource=users
+      key: userName                     # the body field holding the key
+      id: $.id                          # the service's id in its answers: {id}
+      create: { path: /users, body: { active: true } }
+      update: { method: PATCH, path: "/users/{id}" }
+      delete: { path: "/users/{id}" }
+      disable: { path: "/users/{id}", body: { active: false } }
+      enable: { path: "/users/{id}", body: { active: true } }
+      find: { path: /users, query: { userName: "{key}" }, records: $.items }
+      read: { path: "/users/{id}" }
+      list: { path: /users, records: $.items, paging: { style: offset, page_size: 100 } }
+      members:
+        add: { path: "/groups/{group}/members", body: { userId: "{id}" } }
+        remove: { path: "/groups/{group}/members/{id}" }
+```
+
+- Templates take `{id}`, `{key}` and `{group}` (percent-encoded in paths). The attributes
+  are merged into a call's body; `types` makes a field a number, a boolean or a list.
+- An add finds the key first (`find`): a resource already there, or one a `409` says
+  exists, is taken over and enabled rather than duplicated. An update sends what changed
+  with `PATCH`, or everything with `PUT`; a `404` creates the resource again. The
+  service's id is recorded with the entry.
+- Only reads are retried after a lost connection or a `5xx`; `429` and `503` are waited out
+  for every method.
+- Drift checks need `find` and `read`; the governance inventory and the unmanaged pass page
+  through `list` (and `members.groups`, `members.list`) with the source's paging styles.
+- Validation refuses unknown placeholders and methods, attributes without `update`, a
+  deprovision policy without its call, and what a service cannot take (`dn`, containers,
+  `writeback`, `adopt`, `passwords`, computed groups, `references`).
+
+Tested against syncd's fake REST service only (`tests/e2e/rest-target.sh`), not against a
+real application.
+
 ## Checking a connector
 
 Before publishing, check a connector against the real system. Nothing here writes.
@@ -1880,9 +2027,9 @@ Not tested against a real server:
   only.
 - **REST services, Workday, SAP SuccessFactors and UKG Pro**: fakes only.
 - **Vault, AWS Secrets Manager and Azure Key Vault**: doubles only.
-- **Oracle and Db2**: their container images do not fit the CI runners, so PostgreSQL
-  (Debezium) and Apache Derby (JDBC) stand in. Debezium's change events have the same
-  shape for every database it captures.
+- **Oracle and Db2 as sources**: PostgreSQL (Debezium) and Apache Derby (JDBC) stand in.
+  Debezium's change events have the same shape for every database it captures. (As
+  targets, Oracle Database 23ai Free and Db2 12.1 are tested in Docker.)
 - **Red Hat Directory Server, ForgeRock / OpenDJ, Oracle DSEE and Oracle Unified
   Directory**: supported through the same standards (`389ds` profile, `cn=changelog`) but
   not in the suite.
@@ -1893,8 +2040,8 @@ Not tested against a real server:
 - **Other source families**: Kafka and inbound SCIM are not planned until a customer
   needs them. HR and SaaS services are read through the REST reader since 0.5.0; Workday
   SOAP and SuccessFactors `$expand` are not built.
-- **Other targets**: databases, files other than DSML, REST services, and applications
-  that do not speak SCIM 2.0.
+- **Other targets**: files other than DSML, and APIs that take bodies other than
+  JSON (REST services with JSON bodies are targets in development).
 - **DSML over anything but a directory or SFTP**: a DSML gateway's SOAP or HTTP endpoint
   is not called; files go through a directory or an SFTP server. Not tested against a
   commercial DSML gateway or a data diode's transfer software.
