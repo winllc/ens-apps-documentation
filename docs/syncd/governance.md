@@ -777,5 +777,28 @@ account held (from when to when, as the inventory saw it).
   unassignment per token, the run completed by signed webhooks, a repeated event ignored, a
   bad signature refused; a task listing the unexpired certificate and both servers). Not yet
   against a running portal or CertAlert.
+- Scale: a benchmark with a stand-in engine at 10,000, 100,000 and 1,000,000 people
+  (ten memberships each), release build, on a shared 4 vCPU VM with PostgreSQL on its
+  default settings. At 1,000,000 people: the projection takes 5.3 minutes, a full
+  inventory 33 minutes, a manager campaign over 10,000,000 items 15 minutes, a scan of
+  50 policies 68 seconds; grants are applied at about 4,000 a second, and a page of a
+  reviewer's queue answers in 4.3 ms at the 95th percentile. Up to 100,000 people each
+  measure grows no faster than the people; from 100,000 to 1,000,000 the inventory and the
+  campaign grow about 18 times. Not yet run on the reference hardware, with PostgreSQL
+  tuned for that size, or with a real engine reading a real directory.
+- Resilience: integration tests of two console replicas on one database with the one
+  delivering killed in the middle of a batch (1,500 grants, none lost or applied twice),
+  of the console and the engine restored to different points, and of an older console
+  refusing a database a newer one migrated; an end-to-end script of engine failover after a
+  grant and of backup and restore against OpenLDAP. The failover found that a grant the
+  active engine takes in its last snapshot interval before it dies is not on the standby:
+  run `syncd-console governance redeliver --engine <name>` after a failover.
+- Real systems: scripts for Active Directory (grants to a nested group, inventory, reset
+  and unlock), an Entra tenant, a SCIM application and ServiceNow and Jira, run nightly
+  where their credentials are set. The Entra and SCIM scripts pass against stand-ins; none
+  has run against its real system yet.
+- Security and accessibility: a threat model of the governance layer, not yet signed off,
+  and no penetration test. Every governance page is checked by axe in both themes; the
+  screen-reader pass of the reviewer's and the requester's pages has not been done.
 - Not built yet: holding grants in change windows and thresholds, correlation rules in
   the API, and roles as policy sets (a role is checked by what it expands to).
