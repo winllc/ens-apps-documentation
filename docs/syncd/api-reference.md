@@ -153,6 +153,10 @@ makes the last call from the command line (see [Configuration as code](config-as
 | `runs:run` | operator or admin | Start runs and drift checks, approve held deletions and changes, review groups, accept correlation suggestions, retry and discard dead letters, and from 0.5.0 check for unmanaged entries and adopt one |
 | `audit:read` | auditor or admin | The audit log, its verification, the pull API, the export and the outputs' status |
 | `environments:read` | auditor or admin | From 0.4.1: the environments with their plain values, the names of their secret ones, and their engines. Before 0.4.1 `configs:read` read them; a script that reads values with a `configs:read` token needs this scope now |
+| `governance:read` | governance administrator, auditor or admin | Governance: identities, systems, entitlements, assignments and their states, reports, the access search, and the [SCIM server](#scim-20-read-only) (in development) |
+| `governance:write` | governance administrator or admin | Change governance: systems, entitlements, assignments (in development) |
+| `governance:delegate` | governance administrator or admin | The Directory Services Portal: ask on a person's behalf, look entitlements up; everything `governance:request` allows (in development) |
+| `governance:request` | governance administrator or admin | A service-desk tool: `GET /api/v1/governance/catalog`, `POST /api/v1/governance/requests` with `on_behalf_of` and a ticket, and `GET /api/v1/governance/requests/{id}` for the requests it made (see [Service-desk integration](service-desk.md)) (in development) |
 | `admin` | admin | Everything above |
 
 The tables below give each endpoint's scope in the **Token** column; `—` means session only.
@@ -481,6 +485,28 @@ From 0.5.0 (see [Licensing](licensing.md)). Session only.
 Here "admin" is `admin` on everything. Installing, replacing and removing are audited
 (`license.upload`, `license.replace`, `license.remove`), and each change of state as
 `license.state` and the webhook event `license.state-changed`.
+
+### SCIM 2.0, read-only
+
+In development, not in a release yet. Governance's people and roles, for systems that read
+identities over SCIM 2.0 (RFC 7643 and 7644), under `/api/v1/scim/v2`, with a `governance:read`
+token as a bearer token (or a governance reader's session). Answers are
+`application/scim+json`.
+
+| Method | Path | Answers |
+|---|---|---|
+| GET | `/Users` | People not gone: `userName` (the login), `externalId` (the engine's entity id), `displayName`, `emails`, `active`, and the enterprise extension's `manager` |
+| GET | `/Users/{id}` | One person (404 when gone or unknown) |
+| GET | `/Groups` | Active roles (`displayName`, the role's name), with `members`: who holds each now |
+| GET | `/Groups/{id}` | One role |
+| GET | `/ServiceProviderConfig`, `/ResourceTypes`, `/Schemas` | Discovery |
+| POST, PUT, PATCH, DELETE | `/Users...`, `/Groups...` | 501: the server is read-only; people come from the identity source |
+
+- **Filters:** `userName eq "…"`, `externalId eq "…"`, `displayName co "…"`; on groups,
+  `displayName eq` and `co`. Anything else is refused with 400 and `scimType: invalidFilter`.
+- **Paging:** `startIndex` (from 1) and `count` (100 by default, at most 1,000); the answer
+  has `totalResults`, `startIndex` and `itemsPerPage`. Sorting, `attributes` and ETags are
+  not supported.
 
 ### Webhooks
 

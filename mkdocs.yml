@@ -164,6 +164,7 @@ nav:
           - Computed attributes and rules: syncd/rules.md
           - Password synchronisation: syncd/password-sync.md
           - Governance: syncd/governance.md
+          - Service-desk integration: syncd/service-desk.md
           - Licensing: syncd/licensing.md
           - Change safety and lifecycle: syncd/change-safety.md
           - Configuration as code: syncd/config-as-code.md

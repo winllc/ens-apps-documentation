@@ -567,6 +567,8 @@ ten riskiest people. The identity source and systems are on **Governance setting
 | `GET`, `POST /api/v1/governance/workflows`; `PUT`, `DELETE .../{wid}`; `PATCH /api/v1/governance/systems/{sid}` | readers; writers | Workflows, and a system's workflow and owner |
 | `GET /api/v1/governance/requests`, `.../{rid}`; `POST .../{rid}/override` | readers; writers | Requests, and overriding their approvers |
 | `POST /api/v1/governance/requests`; `GET .../{rid}/state`; `GET /api/v1/governance/entitlements/lookup` | administrators, or `governance:delegate` | Asking on a person's behalf (`on_behalf_of`) |
+| `GET /api/v1/governance/catalog`; `POST /api/v1/governance/requests`; `GET /api/v1/governance/requests/{rid}` | `governance:request` (a service-desk tool), or `governance:delegate` | What can be requested; asking on a person's behalf with a ticket; reading back its own requests ([Service-desk integration](service-desk.md)) |
+| `GET /api/v1/scim/v2/Users`, `/Groups`, ... | `governance:read` | People and roles over SCIM 2.0, read-only ([API reference](api-reference.md#scim-20-read-only)) |
 | `GET`, `POST /api/v1/governance/ingest-sources`; `POST /api/v1/governance/ingest/dsp` | readers, writers; the portal's signature | Portals reporting group changes |
 | `GET /api/v1/my/catalog`, `GET`, `POST /api/v1/my/requests`, `GET .../{rid}`, `POST .../{rid}/cancel` | every signed-in role | Asking, and one's requests |
 | `GET /api/v1/my/approvals`, `POST .../{tid}/approve`, `/reject`, `/delegate`; `GET /api/v1/my/team` | every signed-in role | Approving, and a manager's team |

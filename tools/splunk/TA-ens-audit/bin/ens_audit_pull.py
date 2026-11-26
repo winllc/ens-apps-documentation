@@ -3,6 +3,10 @@
 
     ens_audit_pull.py <application base URL> <token file> [checkpoint dir]
 
+The base URL is the application's (https://certalert.example.com); for the
+syncd console, whose API is versioned, give it with /api/v1
+(https://syncd.example.com/api/v1).
+
 Prints every event recorded since the last run, one JSON line each, oldest
 first, and remembers the last sequence number so nothing is read twice and
 nothing is missed across restarts. Also works outside Splunk, to feed any
@@ -27,6 +31,14 @@ def checkpoint_dir(argv):
     return os.path.join(os.path.expanduser("~"), ".ens_audit_pull")
 
 
+def events_url(base):
+    """The pull API under `base`: /api/audit/events, or audit/events under a
+    versioned API base such as syncd's /api/v1."""
+    if re.search(r"/api/v\d+$", base):
+        return f"{base}/audit/events"
+    return f"{base}/api/audit/events"
+
+
 def main(argv):
     if len(argv) < 3:
         print(__doc__.strip(), file=sys.stderr)
@@ -44,7 +56,7 @@ def main(argv):
 
     while True:
         request = urllib.request.Request(
-            f"{base}/api/audit/events?after={after}&limit={PAGE}",
+            f"{events_url(base)}?after={after}&limit={PAGE}",
             headers={"Authorization": f"Bearer {token}", "Accept": "application/x-ndjson"},
         )
         with urllib.request.urlopen(request, timeout=60) as response:
