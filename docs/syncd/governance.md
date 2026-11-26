@@ -525,6 +525,9 @@ mapping.
 | `GET`, `POST /api/v1/governance/roles/{rid}/members`; `POST .../members/{maid}/end` | readers; writers | Who holds a role (`all` for ended ones too); give it (`override_policy`), take it |
 | `POST /api/v1/governance/role-mining`; `GET /api/v1/governance/role-candidates`; `POST .../{cid}/accept`, `/dismiss` | writers; readers | Role mining |
 | `GET /api/v1/my/identity`, `/my/access` | every signed-in role | The signed-in person, and what they hold |
+| `GET /api/v1/my/password`; `POST /api/v1/my/password/reset`, `/my/account/unlock` | every signed-in role, after a fresh single sign-on | Reset one's password, unlock one's account ([Password synchronisation](password-sync.md#forgotten-passwords-and-locked-accounts)) |
+| `POST /api/v1/governance/identities/{gid}/password-reset-link` | the person's manager, or `reset_passwords` | Mail the person a single-use reset link |
+| `POST /api/v1/password-reset/check`, `/password-reset` | anyone with the link | The public reset page |
 
 Writes need the Governance pack. Reads never do: what was recorded stays visible after
 a license lapses.
@@ -556,6 +559,14 @@ a license lapses.
 | `governance.fulfilment.completed` | authorization |
 | `governance.fulfilment.ticket_opened` | system |
 | `governance.projection.halted`, `governance.inventory.completed`, `governance.inventory.suspect` | system |
+
+## Password reset links
+
+A manager can send each direct report a link to set a new password (**My team**), and so can
+a holder of the console permission `reset_passwords` (admins and governance
+administrators), once the governance setting `reset_mail_attribute` names a projected
+attribute (one of `extra_attributes`) holding an address that does not depend on the
+forgotten password. See [Password synchronisation](password-sync.md#forgotten-passwords-and-locked-accounts).
 
 ## What the console stores about people
 
