@@ -29,7 +29,7 @@ the console is down.
 | Grants the engine enforces: `grants` on a publication, `granted()` and `grants()` in its filter and attributes, `ApplyGrants` and `ListGrantStates`, `syncd grants` | The engine |
 | Roles `governance_admin` and `participant`; permissions `govern`, `view_governance`, `participate` | The console |
 | The identity source and its projection | Console: Governance page |
-| Systems, entitlements, assignments | Console: Governance and Assignments pages; API under `/api/v1/governance` |
+| Systems, entitlements, assignments | Console: Governance settings (`/governance/settings`) and Assignments pages; API under `/api/v1/governance` |
 | A person's own page | Console: My access (`/my`); API under `/api/v1/my` |
 | The entitlement catalog: each system's accounts, groups and holdings, read daily from its target (`ListInventory`, `syncd inventory`) | Console: Catalog page, and "What they hold" on Assignments |
 | Access certifications: campaigns, reviewer queues, revocations the engine carries out, sign-off and the evidence report | Console: Access reviews (`/governance/campaigns`) and My reviews (`/my/reviews`) |
@@ -39,6 +39,7 @@ the console is down.
 | Lifecycle: rules for joiners, movers and leavers; emergency termination and reinstatement | Console: Lifecycle; Terminate on a person's card; the engine's reserved `terminated` scope |
 | Manual systems: CSV imports, fulfilment tasks for the system's owner, tickets in ServiceNow, Jira or a webhook receiver | Console: Governance (Import CSV), Fulfilment, My tasks |
 | Roles: versions a second person approves, membership rules, requests for roles, certifications of roles, role mining | Console: Roles (`/governance/roles`), Role mining |
+| Access history and search, risk scores, the governance report set, the summary dashboard | Console: Governance (`/governance`), Access search, Reports, Risk; see [Risk, access search and reports](#risk-access-search-and-reports) |
 | The Governance pack | Licensing |
 
 ## Setting a publication up for grants
@@ -475,20 +476,81 @@ against stand-ins; try them against your instance before relying on them, and ad
 your instance requires (an assignment group, a component) under the adapter's `fields`
 mapping.
 
+## Risk, access search and reports
+
+**Who held what, when.** Each inventory run records when it first sees a membership and
+when a complete run no longer does, so a membership has one spell per time it was held.
+The **Access search** page (`/governance/search`, `GET /api/v1/governance/search/access`)
+answers "who holds this entitlement" and "what did this person hold on that date" from
+the same filters: person (login or id), entitlement, system, explained or not, and a
+time (now when empty).
+
+!!! note "A past answer is as precise as the inventory's schedule"
+    With the default daily inventory, a membership held for two hours between two runs
+    is not recorded, and one removed in the morning reads as held until the next run.
+    Run a system's inventory more often (its interval, from 5 minutes) where that
+    matters. The person shown for a past holding is the account's link now.
+
+**Risk.** Each entitlement has a risk from 0 to 100: 80 when privileged and 10 when not,
+unless set on the entitlement (Catalog) or by the entitlement import. Each person has a
+score, the sum of four parts up to a cap, recomputed nightly and whenever the weights
+change (**Risk** page, `/governance/risk`):
+
+| Part | Default weight |
+|---|---|
+| What the person holds | 25 % of the sum of the risks of the entitlements held |
+| Open policy violations | 5, 10, 20 or 40 points each, for a low, medium, high or critical policy |
+| Access nothing explains | 5 points per holding |
+| Access no review kept within 365 days | 2 points per holding |
+| Cap | 100 |
+
+Access a rule decides counts in neither of the last two. A person's card on
+**Assignments** shows the four parts. The score puts the riskiest people first in a
+reviewer's queue, is shown to approvers with its parts, and can scope a campaign
+("Risk score above").
+
+**The entitlement import** (`POST /api/v1/governance/entitlements/import`, CSV) describes
+entitlements the catalog already holds, in bulk: columns `system` and `entitlement` (its
+native id) and `value` find it; `display_name`, `description`, `owner` (a login),
+`privileged`, `requestable` (yes or no) and `risk` (0 to 100, or `default`) change it; an
+empty cell changes nothing. A file with an error changes nothing; rows naming an
+entitlement the catalog does not hold are listed.
+
+**Service accounts.** On the Catalog page, an account nobody owns can be marked a service
+account and given an owner (`PATCH /api/v1/governance/accounts/{acid}`), which the Service
+accounts report lists.
+
+**Reports.** Ten reports of the catalog, as CSV, Excel or PDF, from the **Governance
+reports** page (`/governance/reports`) or on a schedule from the **Reports** page. Each
+download is recorded as `governance.report.exported`. Their columns are listed under
+[Governance reports](reports-and-data-quality.md#governance-reports).
+
+**The summary.** `/governance` now shows people, unlinked accounts, unexplained access,
+open violations by severity, campaigns in progress and how much is decided, approvals
+past their timeout, failed grants and high-risk people, with their daily trend and the
+ten riskiest people. The identity source and systems are on **Governance settings**
+(`/governance/settings`).
+
 ## API
 
 | Method and path | Who | What |
 |---|---|---|
 | `GET /api/v1/governance/settings` | governance readers, `governance:read` | The identity source |
 | `PUT /api/v1/governance/settings` | admins | Change it |
-| `GET /api/v1/governance/identities`, `/identities/{gid}` | governance readers | People, by login (`q`, `status`, `after`, `limit`) |
+| `GET /api/v1/governance/identities`, `/identities/{gid}` | governance readers | People, by login (`q`, `status`, `min_risk`, `after`, `limit`), with their risk score and its parts |
 | `GET`, `POST /api/v1/governance/systems` | readers; writers, `governance:write` | Systems |
 | `GET`, `POST /api/v1/governance/entitlements` | readers; writers | Entitlements |
 | `GET`, `POST /api/v1/governance/assignments` | readers; writers | Assignments (`identity`, `open`) |
 | `POST /api/v1/governance/assignments/{aid}/end` | writers | End one, with a reason |
-| `GET /api/v1/governance/accounts` | readers | Accounts found (`system`, `identity`, `link`, `q`, `gone`) |
+| `GET /api/v1/governance/accounts` | readers | Accounts found (`system`, `identity`, `link`, `kind`, `q`, `gone`) |
+| `PATCH /api/v1/governance/accounts/{acid}` | writers | An account's kind (`person`, `service`, `unknown`) and a service account's owner |
 | `POST /api/v1/governance/accounts/{acid}/link`, `/unlink` | writers | Link an account to a person by hand, or unlink it |
-| `PATCH /api/v1/governance/entitlements/{eid}` | writers | Describe an entitlement: name, description, owner, privileged, requestable |
+| `PATCH /api/v1/governance/entitlements/{eid}` | writers | Describe an entitlement: name, description, owner, privileged, requestable, risk (`risk_default` to go back) |
+| `POST /api/v1/governance/entitlements/import` | writers | Describe entitlements in bulk, from CSV |
+| `GET /api/v1/governance/search/access` | readers | Who holds what, now or `at` a past time (`entitlement`, `identity`, `system`, `explained`, `cursor`, `limit`) |
+| `GET`, `PUT /api/v1/governance/risk/settings`; `POST /api/v1/governance/risk/score` | readers; writers | How the risk score is made; score everyone now |
+| `GET /api/v1/governance/dashboard` | readers | The summary: counts now, daily trend (`days`), the riskiest people |
+| `GET /api/v1/governance/reports`; `GET .../reports/{report}?format=csv\|xlsx\|pdf` | readers | The governance report set, and one report as a file |
 | `GET /api/v1/governance/entitlements/{eid}/members` | readers | Who holds it, explained or not |
 | `GET /api/v1/governance/identities/{gid}/access` | readers | What a person holds everywhere |
 | `POST /api/v1/governance/systems/{sid}/inventory` | writers | Run a system's inventory now |
@@ -559,6 +621,9 @@ a license lapses.
 | `governance.fulfilment.completed` | authorization |
 | `governance.fulfilment.ticket_opened` | system |
 | `governance.projection.halted`, `governance.inventory.completed`, `governance.inventory.suspect` | system |
+| `governance.risk.scored` | system |
+| `governance.risk.settings_changed`, `governance.entitlements.imported`, `governance.account.updated` | configuration |
+| `governance.report.exported` (each download of a governance report, the campaign report too) | data |
 
 ## Password reset links
 
@@ -574,7 +639,9 @@ Until governance is set up, the console's database holds no identity data. Once 
 it holds, for each person of the identity view: the engine's entity id, login, display
 name, mail, the manager reference, a status (active, inactive, gone), the further
 attributes named in the settings, and when the person was first and last seen; and for
-each change the projection saw, the attributes' old and new values.
+each change the projection saw, the attributes' old and new values. From the risk work,
+it also holds each person's risk score and its four parts, and the history of what each
+account held (from when to when, as the inventory saw it).
 
 ## Tested, and not yet
 
@@ -612,5 +679,12 @@ each change the projection saw, the attributes' old and new values.
   joiner; a request for a role; both role certifications; mining nine of ten people holding
   the same three entitlements), and two grants of one group in the engine's end-to-end
   script against OpenLDAP.
+- Risk, search and reports: integration tests (a membership in the second of three
+  inventories is found for a time between the second and the third and not after the
+  third, and a membership lost and regained has two spells; a person's four parts add up
+  to the score, which a lower cap caps; each of the ten reports runs with its documented
+  columns as CSV, Excel and PDF and each download is recorded; a scheduled governance
+  report arrives through the mail outbox). Not yet with a real inventory schedule over
+  days.
 - Not built yet: holding grants in change windows and thresholds, correlation rules in
   the API, and roles as policy sets (a role is checked by what it expands to).
