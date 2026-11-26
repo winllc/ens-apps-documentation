@@ -96,6 +96,7 @@ Each assignment has a scope, written after the role in role maps and settings:
 | Everything | `operator` or `operator@*` | Every engine and environment, and the console itself |
 | An environment | `operator@prod` | The engines running in that environment, and its values |
 | An engine | `designer@engine:hr-1` | That engine, wherever it runs; not its environment's values. `designer@engine:hr-1,hr-2` in a role map names several |
+| A governance scope | `governance_admin@governance:finance` | In development: the people and systems of one [governance scope](governance.md#delegated-administration), for `governance_admin` only. Records outside it answer `404` |
 
 - **An engine outside every assignment does not exist** for the account: it is in no list, and its
   pages and API answer `404`, as for an id never used. An action none of the account's roles allows

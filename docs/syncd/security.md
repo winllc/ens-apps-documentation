@@ -251,6 +251,16 @@ the body is read; every operation of the API is declared once with its rule, so 
 without one. An API token is checked against its scopes, its limit and its creator's
 assignments.
 
+In development (governance, not in a release yet): a `governance_admin` may be held on a
+**governance scope** (`governance_admin@governance:<scope>`), a population chosen by a CEL
+filter over people and a list of systems. Every governance administration route then
+filters by the caller's scopes in the database, and answers `404` for a person, an
+assignment, an account, a request or a violation outside them, as for one that does not
+exist; workgroups, scopes and the identity sources are changed only at scope `all`. Team
+approvals never let a member decide a request they made or that is for them, and forwarding
+never gives a delegate a task about their own access. See
+[Governance](governance.md#delegated-administration).
+
 | Role | Can |
 |---|---|
 | `viewer` | Read engines, status, held changes, dead letters, data quality, configuration versions, diffs and the environments' names, the object explorer and lineage exports, the reconciliation report export, rule previews and the function catalogue |

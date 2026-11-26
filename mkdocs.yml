@@ -165,6 +165,7 @@ nav:
           - Password synchronisation: syncd/password-sync.md
           - Governance: syncd/governance.md
           - Service-desk integration: syncd/service-desk.md
+          - Migrating from IdentityIQ: syncd/migrating-from-iiq.md
           - Licensing: syncd/licensing.md
           - Change safety and lifecycle: syncd/change-safety.md
           - Configuration as code: syncd/config-as-code.md

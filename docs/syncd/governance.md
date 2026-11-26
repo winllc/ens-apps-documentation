@@ -378,6 +378,8 @@ Lifecycle) act on these, each once per event:
 | Review (for movers) | The person's (new) manager reviews the access they keep, in a one-person campaign of everything no rule gives; what is undecided after the grace period (14 days) is revoked |
 | Tell the manager (for joiners) | Once the person has an account and nothing of theirs is pending, or after a day, their manager is mailed the accounts by system and what is still being set up. Never a password |
 | End assignments (for leavers) | Every assignment ends; the person's open tasks go to their manager (or to the governance administrators); whatever they owned (entitlements, systems, policies, a workflow's fallback) gets a task for a new owner |
+| Offboard in the RSA portal (for leavers) | The person's SecurID account is disabled and each token asked back; the run finishes when the portal's webhooks say every request is done. See [SecurID tokens and certificates](#securid-tokens-and-certificates) |
+| Offboard in CertAlert (for leavers) | A task for the governance administrators lists the person's unexpired certificates to have revoked by the CA and the servers that need a new point of contact |
 
 A rule may have a condition: CEL over the person as `e`, and for a change
 `e.previous_<attribute>` too. For example a mover rule on **changed** with
@@ -531,6 +533,71 @@ past their timeout, failed grants and high-risk people, with their daily trend a
 ten riskiest people. The identity source and systems are on **Governance settings**
 (`/governance/settings`).
 
+## SecurID tokens and certificates
+
+Governance connects to the [RSA Operations Portal](../rsa-operations-portal/index.md) and
+[CertAlert](../cert-alert/index.md) (Governance → **Connected products**,
+`/governance/products`). Each needs its https address and an API token; the portal also
+the secret of its webhook. Both are encrypted with the console's master key and never shown
+again. **Test** checks that the product answers and takes the token. *A person's key in the
+product* says what to look them up by: `login` (the default), `mail` or a projected
+attribute.
+
+| Product | Token | What governance asks |
+|---|---|---|
+| RSA Operations Portal | an API token with `users:read`, `users:status`, `tokens:unassign` | a person's tokens; disable their account; take each token back |
+| CertAlert | an API token with `people:read`, `certificates:read` | the person, their certificates, the servers they are point of contact for (`GET /api/v1/servers?pocUserId=`) |
+
+A person's tokens (serial, enabled, disabled or lost, expiry) and certificates (subject,
+revocation status, expiry) show on their card on **Assignments** and on their own **My
+access** page. They are read from the products again after five minutes.
+
+For leavers, add a lifecycle rule on **left** with the action `rsa_offboard`,
+`certalert_offboard`, or one rule of each:
+
+- **RSA portal**: governance disables the account and asks for each token back, citing the
+  lifecycle run as the ticket. The portal turns these into help-desk requests; the tokens
+  show *unassignment requested*. Point the portal's webhook at
+  `https://<console>/api/v1/governance/ingest/rsa` with the same secret as the product (see
+  [the portal's webhooks](../rsa-operations-portal/webhooks.md)): its `user.disabled`,
+  `token.unassigned` and `token.deprovisioned` events complete the requests, and a rejected
+  or failed request fails the offboarding. An event signed with any other secret, or more
+  than five minutes old, is refused (401); each event is taken once.
+- **CertAlert**: CertAlert neither revokes certificates nor changes servers' points of
+  contact, so governance opens one fulfilment task listing the unexpired certificates and
+  the servers, for an administrator to act on.
+
+The run shows *waiting* until every offboarding is complete. The offboardings are listed on
+the Connected products page.
+
+## Delegated administration
+
+**Workgroups** (`/governance/workgroups`) are teams. A workgroup can own a system, an
+entitlement, a role or a policy in place of a person (**Change the owner**, or
+`POST /api/v1/governance/owner`). A step that asks the owner then asks the team, as does a
+step whose approver is `workgroup:<id>`: every member sees the approval, the first to decide
+settles it and is recorded as the approver, and a member who asked for the access, or whom
+it is for, is refused. Fulfilment tasks of a system a team owns, and violation tasks of a
+policy it owns, are the team's: a member **claims** one, which takes it off the others'
+lists, and can **release** it. Reviews go to one person: the workgroup's owner reviews what
+the team owns.
+
+**While I am away** (`/my/delegation`): a person forwards their new tasks to someone until
+a date (at most a year). Approvals, fulfilment and violation tasks made meanwhile go to the
+delegate and show whose they were; one about the delegate's own access stays with the
+person. Review tasks are not forwarded.
+
+**Governance scopes** (`/governance/scopes`) limit a governance administrator to some
+people (a CEL filter, such as `e.department == "Finance"`, refreshed after each projection)
+and some systems. Give the role on the **Users** page as `governance_admin` on a governance
+scope (in role maps, `governance_admin@governance:finance`). Such an administrator sees and
+changes only people and systems inside it; anything else answers 404. Lists of campaigns,
+roles, policies, workflows, reports and the dashboard are not filtered by scope yet.
+
+**Identity sources**: besides the settings' own (named `primary`), an admin can add other
+engines' or views' people (`/api/v1/governance/identity-sources`). Each is projected on its
+own; one person in two sources is two people.
+
 ## API
 
 | Method and path | Who | What |
@@ -592,6 +659,14 @@ ten riskiest people. The identity source and systems are on **Governance setting
 | `GET /api/v1/my/password`; `POST /api/v1/my/password/reset`, `/my/account/unlock` | every signed-in role, after a fresh single sign-on | Reset one's password, unlock one's account ([Password synchronisation](password-sync.md#forgotten-passwords-and-locked-accounts)) |
 | `POST /api/v1/governance/identities/{gid}/password-reset-link` | the person's manager, or `reset_passwords` | Mail the person a single-use reset link |
 | `POST /api/v1/password-reset/check`, `/password-reset` | anyone with the link | The public reset page |
+| `GET`, `POST /api/v1/governance/workgroups`; `PUT`, `DELETE .../{wid}`; `POST /api/v1/governance/owner` | readers; writers on everything | Workgroups, and who owns a system, an entitlement, a role or a policy |
+| `GET`, `POST /api/v1/governance/scopes`; `POST .../preview`; `PUT`, `DELETE .../{sid}` | readers; writers on everything | Governance scopes, and how many people a filter selects |
+| `GET`, `POST /api/v1/governance/identity-sources`; `PUT`, `DELETE .../{isid}` | readers; admins | Identity sources other than the settings' own |
+| `GET`, `POST /api/v1/governance/products`; `PUT`, `DELETE .../{pid}`; `POST .../{pid}/test` | readers; writers | Connected products (the RSA portal, CertAlert) |
+| `GET /api/v1/governance/identities/{gid}/credentials` (`fresh`); `GET /api/v1/my/credentials` | readers; every signed-in role | A person's SecurID tokens and certificates |
+| `GET /api/v1/governance/offboards` (`identity`) | readers | Leavers' offboardings in the products |
+| `POST /api/v1/governance/ingest/rsa` | the portal's signature | The RSA portal's webhook |
+| `GET`, `PUT /api/v1/my/delegation`; `GET /api/v1/my/team-tasks`; `POST /api/v1/my/tasks/{tid}/claim`, `/release` | every signed-in role | Forwarding while away; one's teams' tasks |
 
 Writes need the Governance pack. Reads never do: what was recorded stays visible after
 a license lapses.
@@ -626,6 +701,10 @@ a license lapses.
 | `governance.risk.scored` | system |
 | `governance.risk.settings_changed`, `governance.entitlements.imported`, `governance.account.updated` | configuration |
 | `governance.report.exported` (each download of a governance report, the campaign report too) | data |
+| `governance.workgroup.created`, `.updated`; `governance.scope.created`, `.updated`; `governance.system.updated` | configuration |
+| `governance.task.claimed`, `governance.delegation.updated` | authorization |
+| `governance.product.connected`, `governance.product.removed` | configuration |
+| `governance.offboard.requested`, `.completed`, `.failed` | authorization |
 
 ## Password reset links
 
@@ -688,5 +767,15 @@ account held (from when to when, as the inventory saw it).
   columns as CSV, Excel and PDF and each download is recorded; a scheduled governance
   report arrives through the mail outbox). Not yet with a real inventory schedule over
   days.
+- Delegated administration: integration tests (an administrator scoped to one department
+  lists only its people, gets 404 outside it and cannot assign there; a team approves, a
+  member who asked is refused, a claimed task leaves the others' lists and returns on
+  release; an approval goes to the delegate while the approver is away; a person moves
+  between scopes after the projection).
+- SecurID tokens and certificates: integration tests against stand-ins that answer as the
+  RSA portal's and CertAlert's APIs are documented (a leaver's account disabled, one
+  unassignment per token, the run completed by signed webhooks, a repeated event ignored, a
+  bad signature refused; a task listing the unexpired certificate and both servers). Not yet
+  against a running portal or CertAlert.
 - Not built yet: holding grants in change windows and thresholds, correlation rules in
   the API, and roles as policy sets (a role is checked by what it expands to).
