@@ -11,8 +11,8 @@ console, and enrolment for capture agents. 0.4.1 added sealing of the engine's k
 metrics and alerts. **syncd 0.5.0** added the **capture points** inside the directories, with a
 packaged capture agent (`syncd-capture`); agents bound to the sources they speak for; rotation of
 the keys and a change of passphrase; queued changes that survive an HA failover; and a refusal to
-send passwords to a directory in clear text. This page describes **syncd 0.6.1** (tag `v0.6.1`,
-commit `59cbf19`). 0.5.1 fixed delivery and access: delivery looks past
+send passwords to a directory in clear text. This page describes **syncd 0.7.0** (tag `v0.7.0`,
+commit `6de2fa1`). 0.5.1 fixed delivery and access: delivery looks past
 changes it cannot deliver yet, a refusal is shown by its result code only, the HA fence is checked
 before every password written, `passwords.key_file` is a host setting, backups and snapshots of an
 engine with password keys need the passwords permission in strict mode, and the Windows filter
@@ -21,14 +21,21 @@ fixes what a review found: an agent's revocation is never undone by a submission
 critical finding), a change throttled or failed by the service is kept and tried again, echo
 suppression remembers several passwords per account, self-service attempts count before the bind,
 and a capture agent backs off when its spool cannot be cleared. 0.6.0 adds DSML files for air
-gaps, which carry no passwords, and 0.6.1 changes nothing here. Each is marked where it is
-described.
+gaps, which carry no passwords, and 0.6.1 changes nothing here. **0.7.0** adds
+[resetting a forgotten password and unlocking an account](#forgotten-passwords-and-locked-accounts),
+after a fresh sign-in that the identity provider must prove (the ID token's `auth_time`, the
+SAML assertion's `AuthnInstant`) or with a link a manager sends; the console's **Password
+agents** page and a permission of its own, `manage_passwords`, which publishing a change to a
+`passwords` block now needs too; the engine calls `ResetPassword`, `UnlockAccount` and
+`GetPasswordPolicy`; pages that show the strictest of the engine's and the directories'
+policies; and a build of the Windows filter with MSVC and WiX in CI, an unsigned preview that
+is not in the release. Each is marked where it is described.
 
 !!! warning "Not yet for production capture from Active Directory"
     The OpenLDAP overlay and the 389 Directory Server plugin were built and run end to end. The
-    **Windows password filter has never been loaded by LSASS or run on a domain controller**; in
-    development it is built with MSVC and WiX, as an unsigned preview, and it needs Microsoft's
-    signature to load where LSA protection is on. The threat model is a **draft, not signed off**, and **no
+    **Windows password filter has never been loaded by LSASS or run on a domain controller**; from
+    0.7.0 CI builds it with MSVC and WiX, as an unsigned preview that is not in the release, and
+    it needs Microsoft's signature to load where LSA protection is on. The threat model is a **draft, not signed off**, and **no
     penetration test** has been done; the plan makes both release gates for password
     synchronisation. See [Known limitations](#known-limitations).
 
@@ -39,7 +46,7 @@ running.
 
 ## What is built
 
-| Piece | In 0.6.1 |
+| Piece | In 0.7.0 |
 |---|---|
 | Delivery of captured changes to targets (the sealed queue, routing, retries, ordering, echo suppression) | Built |
 | Initial passwords: a password set as the account is created, read from the entity or generated | Built; from 0.5.0 a refused one is tried again, then held as a dead letter |
@@ -49,20 +56,21 @@ running.
 | The `syncd-capture` agent and its package (`.deb`, `.rpm`), for the directory servers' hosts | Built in 0.5.0; never started under systemd in tests |
 | The OpenLDAP overlay (`syncd_capture`) | Built in 0.5.0, shipped as source; tested end to end with slapd 2.6.10 on Ubuntu 24.04 |
 | The 389 Directory Server plugin (`syncd-capture`) | Built in 0.5.0, shipped as source; tested end to end with 389-ds-base 2.4.5 on Ubuntu 24.04 |
-| The Windows password filter (an LSA filter DLL), the agent as a service, and its installer | **Never run on a domain controller, not signed, not in the release.** In development: built with MSVC and WiX in CI (an unsigned preview), and a test for a domain controller written, not run |
+| The Windows password filter (an LSA filter DLL), the agent as a service, and its installer | **Never run on a domain controller, not signed, not in the release.** From 0.7.0 built with MSVC and WiX in CI (an unsigned preview, `syncd-capture-windows-preview`), and a test for a domain controller written, not run |
 | The keys sealed at rest with a passphrase | Built in 0.4.1; from 0.5.0 the passphrase can be changed (`rekey`) and wrapped by a KMS key |
 | Rotation of the password key and of the agent CA | Built in 0.5.0, by command; nothing rotates on a schedule |
 | Queued changes followed by the passive engine of an HA pair, and the ingest listener on both engines | Built in 0.5.0 |
 | Password metrics and alert rules; per-publication counts on the console's engine page | Built in 0.4.1; key and certificate metrics and alerts added in 0.5.0 |
-| A permission of its own for setting passwords through the control API | Built in 0.5.0 in the engine (`api.access.passwords`, strict mode only); in development the console's `manage_passwords` (admins) for agents and for publishing a `passwords` change |
-| A console page for agents | In development: an engine's **Password agents** page |
-| Resetting a forgotten password, unlocking an account | In development: after a fresh single sign-on, or with a link a manager sends (see [Forgotten passwords and locked accounts](#forgotten-passwords-and-locked-accounts)) |
+| A permission of its own for setting passwords through the control API | Built in 0.5.0 in the engine (`api.access.passwords`, strict mode only); from 0.7.0 the console's `manage_passwords` (admins) for agents and for publishing a `passwords` change |
+| A console page for agents | Built in 0.7.0: an engine's **Password agents** page (see [Agents in the console](#agents-in-the-console)) |
+| Resetting a forgotten password, unlocking an account | Built in 0.7.0: after a fresh sign-in the identity provider proves, or with a link a manager sends (see [Forgotten passwords and locked accounts](#forgotten-passwords-and-locked-accounts)) |
 | The threat model sign-off and the third-party penetration test that the plan sets as release gates | **Not done**: the threat model is a draft |
 
-So in 0.6.1 a password reaches syncd in one of four ways: a person changes it in OpenLDAP or 389
+So in 0.7.0 a password reaches syncd in one of five ways: a person changes it in OpenLDAP or 389
 DS where a capture point is installed, a person changes it on the console's self-service page, a
-publication creates an account with an initial password, or a script submits it with `syncd
-password set`. A password changed directly in Active Directory is not captured in production
+person who forgot it sets a new one after proving who they are (from 0.7.0), a publication
+creates an account with an initial password, or a script submits it with `syncd password
+set`. A password changed directly in Active Directory is not captured in production
 yet.
 
 Cloud identity providers (Entra ID, Okta, SaaS applications) never reveal a plaintext password, so
@@ -389,29 +397,41 @@ limited). No password is ever in it.
 From the command line, `syncd password change --login <name>` does the same through the control
 API. It reads the current password and then the new one, one line each, from standard input.
 
-The page's hint under **New password** gives the engine's policy, read from the engine's status
-(`min_length` and `min_classes`, for example "At least 14 characters, mixing three of lower case,
-upper case, digits and symbols; not your user name."). The console asks the engine at most once a
-minute, and shows the defaults (12 characters, 3 classes) when it can't reach it. Before 0.4.1 the
-hint always gave the defaults.
+The page's hint under **New password** gives the policy (`min_length` and `min_classes`, for
+example "At least 14 characters, mixing three of lower case, upper case, digits and symbols; not
+your user name."). From 0.7.0 it is the strictest of the engine's policy and the directories' own
+(see [Forgotten passwords and locked accounts](#forgotten-passwords-and-locked-accounts)), read
+with `GetPasswordPolicy`; an engine older than 0.7.0 gives its own, from its status. The console
+asks the engine at most once a minute, and shows the defaults (12 characters, 3 classes) when it
+can't reach it. Before 0.4.1 the hint always gave the defaults. From 0.7.0 the page also points a
+person who forgot their password to **My password** or to their manager.
 
 ## Forgotten passwords and locked accounts
 
-*In development, not in a release yet.*
-
-A person who forgot their password, or locked their account with failed sign-ins, proves who
-they are another way, and syncd sets the new password in the directory they sign in to (as
-the engine's service account) and delivers it from there like any change. It uses the
-self-service settings above (`passwords.self_service`, `CONSOLE_SELF_SERVICE_ENGINE`). There
-are no security questions.
+New in 0.7.0. A person who forgot their password, or locked their account with failed
+sign-ins, proves who they are another way, and syncd sets the new password in the directory
+they sign in to (as the engine's service account) and delivers it from there like any change
+(its submitter, in `syncd password queue` and the log, reads `password reset of <login>
+(<proof>, through <caller>)`). It uses the self-service settings above
+(`passwords.self_service`, `CONSOLE_SELF_SERVICE_ENGINE`). There are no security questions.
 
 **Two proofs:**
 
-- **A fresh sign-in.** On **My password** (`/my/password`) a person signed in to the console
-  with single sign-on, SAML or a client certificate **less than five minutes ago** sets a new
-  password or unlocks their account. The page's **Sign in again** asks the identity provider
-  to authenticate them again (OpenID Connect `max_age=0` and `prompt=login`; SAML
-  `ForceAuthn`). A session started with a password proves nothing here and is refused.
+- **A fresh sign-in.** On **My password** (`/my/password`) a person whose identity was proved
+  **less than five minutes ago** sets a new password or unlocks their account. The page's
+  **Sign in again** starts a sign-in that asks the identity provider to authenticate them
+  again (OpenID Connect `max_age=0` and `prompt=login`; SAML `ForceAuthn`), and **the console
+  requires the provider's proof that it did**: the ID token's `auth_time`, or the SAML
+  assertion's `AuthnInstant`, no older than the console's request (with a minute's leeway
+  for the clocks) and within the five minutes. A provider that sends neither on such a
+  sign-in, or an older time (it showed the person their existing session), has the sign-in
+  refused, with the reason ("the identity provider did not say when it authenticated you
+  ..."). The time is kept with the session. A client certificate counts from the session's
+  start. A session started with a password proves nothing here and is refused (403, and
+  audited); so is a single sign-on that was not started fresh, and a session from before the
+  upgrade to 0.7.0: sign in again from the page. Check that your identity provider sends
+  `auth_time` when asked for `max_age=0` (OpenID Connect requires it then) or `AuthnInstant`
+  on a `ForceAuthn` sign-in before relying on this.
 - **A link from a manager.** For sites without such a sign-in: the person's manager (on
   **My team**) or a holder of the console permission `reset_passwords` (admins and
   governance administrators) sends a link. It is mailed to the address in a projected
@@ -420,10 +440,14 @@ are no security questions.
   personal one), within the allowed recipient domains, and needs `CONSOLE_PUBLIC_URL`. It
   works **once, for 15 minutes**, and a person gets **at most three a day**. The token is
   in the link's fragment, so no server or proxy logs it, and the console keeps only its
-  hash. Nobody sends one to themselves.
+  hash. Nobody sends one to themselves. A link is spent before the engine is asked, and given
+  back only when the password was certainly not set (the policy refused it, or the engine was
+  never reached). A used or expired link answers 410, an unknown one 404, a fourth in a day
+  429.
 
-**What the engine does** (calls new in development: `ResetPassword`, `UnlockAccount`,
-`GetPasswordPolicy`; in strict mode the first two need `api.access.passwords`):
+**What the engine does** (control API calls new in 0.7.0: `ResetPassword` and `UnlockAccount`
+at the `operate` tier, and in strict mode only for a certificate listed under
+`api.access.passwords`; `GetPasswordPolicy` at the `read` tier):
 
 | | Active Directory | OpenLDAP with ppolicy (`profile: openldap`) | 389 DS (`profile: 389ds`) |
 |---|---|---|---|
@@ -437,8 +461,8 @@ other targets answer "not supported". The pages (self-service, My password, the 
 show the strictest of the engine's policy and the directories', with each directory's
 history and lockout.
 
-From the command line: `syncd password reset --login NAME` (the new password from standard
-input), `syncd password unlock --login NAME`, `syncd password policy`.
+From the command line, on the engine's host: `syncd password reset --login NAME` (the new
+password from standard input), `syncd password unlock --login NAME`, `syncd password policy`.
 
 The console's audit trail records `password.reset` (with the proof and, for a link, who sent
 it), `password.reset_link.created` and `account.unlocked`; never a password or a token.
@@ -452,7 +476,7 @@ inside the directory server, and the `syncd-capture` agent beside it on the same
 |---|---|---|
 | OpenLDAP | The `syncd_capture` overlay | Tested end to end with slapd 2.6.10 on Ubuntu 24.04 (Add, Modify and Password Modify, echo suppression both ways, refusals not captured, the agent away or required, the engine away, a revoked agent, another user refused on the socket, no password in any log or file) |
 | 389 Directory Server | The `syncd-capture` plugin | The same, with 389-ds-base 2.4.5 on Ubuntu 24.04 |
-| Active Directory | An LSA password filter (`syncd-pwfilter.dll`), the agent as a Windows service, and an MSI | **Compile-checked only. Do not install it in production**: never loaded by LSASS, never run on a domain controller (with or without LSA protection), never built with MSVC or WiX, no Authenticode signature. A fault in a password filter is a domain controller outage. Nothing for Windows is in the packages or the release: it is source only |
+| Active Directory | An LSA password filter (`syncd-pwfilter.dll`), the agent as a Windows service, and an MSI | **Built, never run. Do not install it in production**: never loaded by LSASS, never run on a domain controller (with or without LSA protection), no Authenticode signature, and no Microsoft LSA signature. From 0.7.0 CI builds the agent and the filter with MSVC (the filter's exports, imports and hardening flags checked) and the MSI with WiX 3, as an unsigned preview; a test for a domain controller is written and has not run. A fault in a password filter is a domain controller outage. Nothing for Windows is in the packages or the release |
 
 - **The hook** does nothing but hand the change over: no network, no cryptography, no files, and
   no password in any log. It waits for the agent at most its timeout (one second by default); an
@@ -608,11 +632,19 @@ out of publications that take passwords from a less protected directory.
 
 ### Agents in the console
 
-*In development.* An engine's **Password agents** page lists its agents and adds one (its
-enrolment token is shown once, with the agent CA's certificate), changes the sources it
-may submit for, and revokes it. It needs the console permission `manage_passwords`
-(admins), with a session; so does publishing a configuration version that changes a
-`passwords` block, which before could be done by anyone who may publish.
+From 0.7.0. An engine's **Password agents** page (`/engines/<id>/password-agents`) lists its
+agents (their sources, enrolment, certificate expiry, when last seen and their counts) and
+adds one (its enrolment token is shown once, with the agent CA's certificate), changes the
+sources it may submit for, and revokes it (`GET`, `POST /api/v1/engines/{id}/password-agents`,
+`POST .../{name}/bind`, `.../{name}/revoke`; audited as `password.agent.added`, `.bound`,
+`.revoked`). It needs the console permission `manage_passwords` (admins), with a session,
+not an API token.
+
+**Behaviour change in 0.7.0:** publishing a configuration version that changes a
+`passwords` block (the engine's or a publication's, compared with the version published
+before; a version that cannot be read counts as a change) needs `manage_passwords` on the
+engine too, with a session. In 0.6.1 anyone who may publish could. A designer or operator who
+publishes such a change is refused (403): an admin publishes it.
 
 ### Revoking and listing agents
 
@@ -661,7 +693,7 @@ expire. The operator's procedure is in the [Operator guide](operator-guide.md#ch
 | `syncd password set --source S --object O --anchor A [--sequence N]` | The engine's host (control access; in strict mode `api.access.passwords` or the control socket) | Reads one password from standard input, seals it here and submits it through the control API. `--sequence` defaults to the current time in microseconds; a later change for the same account needs a larger one |
 | `syncd password set --agent-dir DIR --source S --object O --anchor A` | An enrolled agent's host | The same, as that agent, to its ingest listener |
 | `syncd password change --login NAME` | The engine's host (control access) | A self-service change: the current and the new password from standard input |
-| `syncd password reset --login NAME`, `unlock --login NAME`, `policy` | The engine's host (control access; in strict mode `api.access.passwords` for the first two) | In development: a reset without the current password, an unlock, and the policy (see [Forgotten passwords and locked accounts](#forgotten-passwords-and-locked-accounts)) |
+| `syncd password reset --login NAME`, `unlock --login NAME`, `policy` | The engine's host (control access; in strict mode `api.access.passwords` for the first two) | From 0.7.0: a reset without the current password, an unlock, and the policy (see [Forgotten passwords and locked accounts](#forgotten-passwords-and-locked-accounts)) |
 | `syncd password queue [--limit N]` | The engine's host (control access) | From 0.5.0: the changes waiting for delivery, oldest first: when each arrived, who submitted it, the publications it reached already. Never a password |
 | `syncd password agent add NAME --source CONNECTOR [--ca-out FILE]` | The engine's host (as `set`) | A one-time enrolment token for a new agent, or a new one for an agent to enrol again |
 | `syncd password agent bind NAME --source CONNECTOR` | The engine's host (as `set`) | From 0.5.0: set the sources an agent may submit for, without enrolling it again |
@@ -856,6 +888,11 @@ API.
 - **Self-service** proves the current password against the directory, changes it as the person,
   holds a user name off after repeated failures, and gives the same answer for an unknown user and
   a wrong password.
+- **Reset and unlock** (from 0.7.0) need a sign-in the identity provider proves fresh
+  (`auth_time`, `AuthnInstant`) or a client certificate, less than five minutes old, for the
+  session's own login; or a single-use link valid 15 minutes, of which only its hash is kept.
+  The request is sealed to the engine's key with an HPKE context of its own. An unlock clears
+  only the lockout: an account disabled on purpose stays disabled.
 
 Protect these files like the master key:
 
@@ -933,12 +970,13 @@ What to know:
 
 - **Release gates not met:** the threat model (`docs/security/password-sync-threat-model.md` in the
   source repository) is a **draft, not signed off**, and **no penetration test** of the capture
-  path, the ingest listener, enrolment, the self-service page or the key handling has been
-  commissioned. The plan requires both before password synchronisation is offered as finished.
+  path, the ingest listener, enrolment, the self-service page, password reset and unlock, or the
+  key handling has been commissioned. The plan requires both before password synchronisation is offered as finished.
 - **Windows:** the password filter, the service and the installer have **never been loaded by
-  LSASS or run on a domain controller**, and nothing is in the release. In development they
-  are built with MSVC and WiX (an unsigned preview until the code-signing certificate
-  arrives), and a nightly test for a test domain controller is written but has not run.
+  LSASS or run on a domain controller**, and nothing is in the release. From 0.7.0 CI builds
+  them with MSVC and WiX (an unsigned preview until the code-signing certificate arrives),
+  and a nightly test for a test domain controller is written but has not run (no domain
+  controller has been provided).
   Where LSA protection is on, Windows loads a password filter only with **Microsoft's
   signature** (its file signing service for LSA plug-ins), which the filter does not have;
   until it does, it loads only where LSA protection is off. Passwords changed directly in
@@ -960,19 +998,19 @@ What to know:
 - **Memory hygiene** stops at zeroising: the engine has no locked memory pages and does not turn
   core dumps off (the agent's sample unit sets `LimitCORE=0`). The LDAP library's encoding buffers,
   the directory server's own buffers and the kernel's socket buffers are not wiped.
-- **Agents in the console** are in development (`manage_passwords`); in 0.6.1 they are managed
-  with the command line only, and anyone who may publish a configuration may configure
-  password delivery.
 - **Missed captures** (a hook that could not reach its agent) show only in the directory server's
   log; the engine has no metric for them.
 - **Initial passwords:** the number of attempts (3) and the delay are fixed; a `from` value the
   policy refuses is refused three times, and a corrected value waits for `syncd retry` once the
   entry is held; telling the person their password is out of scope.
-- **Self-service:** in 0.6.1 there is no reset of a forgotten password and the page shows only
-  the engine's policy; both are in development. The policy is the engine's, not per site. The
-  fresh sign-in trusts the identity provider to honour `max_age` and `ForceAuthn` (the console
-  does not check `auth_time`); Ping Directory and generic directories cannot be unlocked; the
-  governance settings page has no field for `reset_mail_attribute` yet (the API has).
+- **Self-service, reset and unlock:** the engine's policy is one for the engine, not per
+  site. A reset after single sign-on needs an identity provider that sends `auth_time`
+  (OpenID Connect) or `AuthnInstant` (SAML) on a fresh sign-in; one that does not cannot be
+  used for resets (use the manager's link instead). A stolen fresh sign-in is good for its
+  five minutes. Ping Directory and generic directories cannot be unlocked ("not
+  supported"); the governance settings page has no field for `reset_mail_attribute` yet (the
+  API has). Reset and unlock were run against OpenLDAP with the password policy overlay and
+  Samba Active Directory, not a Windows domain controller.
 - **High availability:** an agent enrolled or a key rotated after the last snapshot is lost with the
   active engine; self-service through the followed queue and a passphrase change on a pair were
   not run end to end; a mixed-version pair does not follow the queue.
