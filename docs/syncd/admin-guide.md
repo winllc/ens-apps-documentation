@@ -2,7 +2,7 @@
 
 This guide is for **console administrators**: people holding the `admin` role on everything in the
 syncd web console (`syncd-console`). It covers what an administrator does in the console and with the
-`syncd-console admin` commands: accounts, roles and their scopes, sign-in policy, configuration
+`syncd-console admin` commands: accounts, roles and their scopes (the governance roles too), sign-in policy, configuration
 approval and the pre-publish hook, banners, engines and HA pairs, the **Integrations** page (API
 tokens, environments, webhooks), Git sync, scheduled reports and mail, the self-service password
 page, and the audit trail. The license and the **License** page are in [Licensing](licensing.md).
@@ -10,7 +10,7 @@ Installing, upgrading and backing up are in the [Install guide](install.md) and 
 [Operator guide](operator-guide.md); the screens designers and operators use every day are in the
 [User guide](user-guide.md).
 
-This page describes syncd 0.6.1 (tag `v0.6.1`, commit `59cbf19`). The biggest change for
+This page describes syncd 0.7.0 (tag `v0.7.0`, commit `6de2fa1`). The biggest change for
 administrators since 0.4.1: roles are held as **assignments** that can be limited to an environment or an engine,
 and role maps add up (see [Roles](#roles)); sign-in gains a policy of its own
 ([Sign-in policy](#sign-in-policy)) and the product a [license](#the-license). 0.5.0 also brought a
@@ -24,6 +24,18 @@ the API tokens the account created, and a one-time password an administrator iss
 after 7 days ([Password resets and lockouts](#password-resets-and-lockouts)). 0.6.0 and 0.6.1
 change nothing for administrators (0.6.0's `dsml` connector is configured like any other; see
 [Connectors](connectors.md#dsml-files-air-gap)).
+
+0.7.0 adds [governance](governance.md), and with it two roles, `governance_admin` and
+`participant`, and a scope for the first, a governance scope ([Roles](#roles), [Scopes](#scopes));
+the **Governance** and **My access** pages in the navigation; a [governance permissions
+table](#governance-permissions); **My password**, where people reset their directory password
+or unlock their account after a fresh single sign-on, and reset links that managers send
+([The self-service password page](#the-self-service-password-page)); the engine's **Password
+agents** page; and `syncd-console governance` commands
+([Command-line administration](#command-line-administration-syncd-console-admin)). It also
+refuses one thing 0.6.1 allowed: a configuration version that changes the `passwords` settings
+is published by an admin only ([Permissions matrix](#permissions-matrix)). Governance records go
+in the audit trail under `governance.*` ([What is recorded](#what-is-recorded)).
 
 ## Becoming an administrator
 
@@ -60,18 +72,27 @@ roles you hold (`2 roles`, with the list on hover). The navigation depends on th
 
 | Role | Navigation |
 |---|---|
-| admin on everything | **Engines**, **Users**, **Audit log**, **Reports**, **Integrations**, **License** |
+| admin on everything | **Engines**, **Governance**, **My access**, **Users**, **Audit log**, **Reports**, **Integrations**, **License** |
 | admin of an environment or an engine | **Engines**, **Audit log**, **Reports**, **Integrations** |
-| auditor (in any scope) | **Engines**, **Audit log**, **Reports**, **Integrations** (read-only) |
-| operator (in any scope) | **Engines**, **Reports** |
-| designer, viewer | **Engines** |
+| auditor on everything | **Engines**, **Governance** (read-only), **My access**, **Audit log**, **Reports**, **Integrations** (read-only) |
+| auditor of an environment or an engine | **Engines**, **Audit log**, **Reports**, **Integrations** (read-only) |
+| operator | **Engines**, **Reports**; **My access** on everything |
+| designer, viewer | **Engines**; **My access** on everything |
+| governance_admin on everything (new in 0.7.0) | **Governance**, **My access**, **Reports** |
+| participant (new in 0.7.0) | **My access** |
 
-An account holding several roles gets every entry any of them gives.
+An account holding several roles gets every entry any of them gives. From 0.7.0 **Engines** is
+shown only to roles that see engines; an account that sees none starts on **Governance** (with a
+governance role on everything) or **My access**. **My access** and **Governance** come with
+roles on everything: an account whose roles are all limited to an environment, an engine or a
+governance scope does not have them in its navigation. A `governance_admin` limited to a
+governance scope opens `/governance` directly; give it `participant` too for **My access**.
 
 ## Roles
 
-The console has five roles. An account holds one or more **role assignments**: each a role, and
-what it applies to (everything, one environment, or one engine). The assignments add up.
+The console has seven roles (five before 0.7.0). An account holds one or more **role
+assignments**: each a role, and what it applies to (everything, one environment, one engine, or
+for `governance_admin` a governance scope). The assignments add up.
 
 | Role | In short |
 |---|---|
@@ -79,10 +100,13 @@ what it applies to (everything, one environment, or one engine). The assignments
 | **designer** | Reads everything a viewer reads; edits, checks, previews, simulates, approves, publishes and promotes configuration; runs connector checks; uploads and approves modules of custom functions; syncs from Git |
 | **operator** | Reads everything a viewer reads; runs and controls engines: reconciliations, full syncs, drift checks, unmanaged-entry checks and adoptions, threshold approvals, held changes, group reviews, dead letters, manual joins, unjoins and accepted correlation suggestions; schedules reports |
 | **viewer** | Reads engines, their status, configuration versions, the object explorer and data quality, and exports reports and lineage |
-| **auditor** | Reads everything a viewer reads, plus the audit trail, the API token and webhook lists, the environments' values and the scheduled reports |
+| **auditor** | Reads everything a viewer reads, plus the audit trail, the API token and webhook lists, the environments' values and the scheduled reports; from 0.7.0, on everything, governance too, read-only |
+| **governance_admin** | New in 0.7.0. Runs [governance](governance.md): systems, the entitlement catalog, assignments, campaigns, requests and workflows, policies, roles, lifecycle rules, reports; sends people [reset links](#the-self-service-password-page). Sees no engine and no configuration. On everything, or on a governance scope |
+| **participant** | New in 0.7.0. An employee: their own access, requests, approvals, reviews and tasks under **My access** (`/my`), and nothing else. On everything only; the usual default role for single sign-on (`*_DEFAULT_ROLE`) |
 
-One role does not include another: a designer cannot run a full sync and an operator cannot publish
-a configuration. Give someone who needs both the two roles (`designer` and `operator`), or `admin`.
+Every role, on everything, also takes part in governance as a person: their own access,
+requests, approvals and reviews (the `participate` permission). One role does not include
+another: a designer cannot run a full sync and an operator cannot publish a configuration. Give someone who needs both the two roles (`designer` and `operator`), or `admin`.
 The console checks every request on the server; the UI only hides what would be refused. Until
 0.5.0 an account held exactly one role, on everything; at the upgrade every account kept its role,
 on everything.
@@ -96,7 +120,7 @@ Each assignment has a scope, written after the role in role maps and settings:
 | Everything | `operator` or `operator@*` | Every engine and environment, and the console itself |
 | An environment | `operator@prod` | The engines running in that environment, and its values |
 | An engine | `designer@engine:hr-1` | That engine, wherever it runs; not its environment's values. `designer@engine:hr-1,hr-2` in a role map names several |
-| A governance scope | `governance_admin@governance:finance` | In development: the people and systems of one [governance scope](governance.md#delegated-administration), for `governance_admin` only. Records outside it answer `404` |
+| A governance scope | `governance_admin@governance:finance` | New in 0.7.0: the people and systems of one [governance scope](governance.md#delegated-administration), for `governance_admin` only. `governance_admin` is held on everything or on a governance scope, never on an environment or an engine, and `participant` on everything only. See below |
 
 - **An engine outside every assignment does not exist** for the account: it is in no list, and its
   pages and API answer `404`, as for an id never used. An action none of the account's roles allows
@@ -113,6 +137,14 @@ Each assignment has a scope, written after the role in role maps and settings:
 - **Moving an engine** to another environment takes it out of reach of the roles on its old
   environment and into reach of those on the new one. Roles on the engine by name stay with it,
   and follow [`rename-engine`](#syncd-console-admin-rename-engine).
+- **A governance scope** (new in 0.7.0) limits a `governance_admin` to the people its filter
+  selects and the systems it names. On every route, a person, account, entitlement, system or
+  request outside it answers `404`, as one that does not exist. What has no scope of its own
+  answers `403` (`<what> needs a governance role on everything, not on a scope`): campaigns and
+  their definitions, reads included; changes to roles, policies, workflows and lifecycle rules;
+  the governance reports; the risk score's settings; workgroups and scopes; registering systems,
+  imports and connected products. The governance dashboard's counts are across every scope. Such
+  an assignment reaches no engine.
 - **Who counts as an administrator.** Only accounts with `admin` on everything manage accounts and
   settings, count for "the last admin cannot be demoted, limited to a scope or disabled" and for
   break-glass sign-in, and get the administrators' idle limit. An admin of an environment or an
@@ -152,6 +184,7 @@ environment) the role's assignment reaches; rows marked *everything* need the ro
 | Upload a module of custom functions; approve one (not one you uploaded) | ✓ | ✓ | | | |
 | Approve a version (not your own) | ✓ | ✓ | | | |
 | Publish a version; promote one to another environment (**Promote**, the API, `syncd config promote`; the role must reach every engine of the target environment) | ✓ | ✓ | | | |
+| Publish a version that changes the `passwords` settings (new in 0.7.0; with a session) | ✓ | | | | |
 | Reconcile, full sync, drift check; **Check now** for unmanaged entries; **Adopt** an entry | ✓ | | ✓ | | |
 | Let deletes held by a deletion threshold through; **Approve and apply** held changes (windows, thresholds, canaries; see [Change safety](change-safety.md#approving)) | ✓ | | ✓ | | |
 | **Review** a group ([group lifecycle](change-safety.md#review)) | ✓ | | ✓ | | |
@@ -173,7 +206,18 @@ environment) the role's assignment reaches; rows marked *everything* need the ro
 | The **License** page: install, replace, remove the license, export usage (*everything*) | ✓ | | | | |
 | Register and remove engines; move an engine to another environment (API) (*everything*) | ✓ | | | | |
 | Download the console's support bundle (**Users** page, API) (*everything*) | ✓ | | | | |
+| The engine's **Password agents** page: add, bind and revoke capture agents (new in 0.7.0; with a session) | ✓ | | | | |
 | Reveal sensitive attributes | Roles listed in `CONSOLE_REVEAL_ROLES` (default: `admin` only), on the engines their assignment reaches; see below | | | | |
+
+`governance_admin` and `participant` have none of the rows above: they see no engine. What the
+governance roles may do is in [Governance permissions](#governance-permissions).
+
+From 0.7.0 publishing a version whose `passwords` settings differ from those published before (or
+that cannot be read) needs `manage_passwords` on the engine, which only `admin` holds, signed in
+with a session: password synchronisation's settings decide what may set people's passwords. A
+designer's publish of such a version is refused with `this version changes password
+synchronization's settings (a passwords block): publishing it needs manage_passwords on the
+engine (an admin), with a session`; versions that leave `passwords` alone publish as before.
 
 Anyone signed in may read their own account, sign out and change their own password, read the
 [message of the day](#message-of-the-day) and their previous sign-in (`GET /api/v1/auth/session`),
@@ -197,6 +241,25 @@ reason), at most once a minute per session, so a page that keeps asking does not
 0.5.0 recorded none. Refused sign-ins, refused reveals and refused API tokens (`api.token-refused`)
 are recorded too. Every action that is recorded carries the assignment that allowed it
 (`details.assignment`, such as `operator@prod`).
+
+### Governance permissions
+
+New in 0.7.0. Governance has permissions of its own; an admin on everything has all of them.
+
+| Action | admin | governance_admin | auditor | participant | designer, operator, viewer |
+|---|:-:|:-:|:-:|:-:|:-:|
+| **My access** (`/my`): one's own access, requests, approvals, reviews, tasks, delegation while away, **My password** (`participate`) | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Read governance: the **Governance** pages, the catalog, assignments, campaigns, violations, access search, the governance reports (`view_governance`; API token scope `governance:read`) | ✓ | ✓ | ✓ | | |
+| Change governance: systems, entitlements, assignments, campaigns, workflows, policies and exceptions, roles, lifecycle rules, workgroups and scopes, imports (`govern`; scopes `governance:write`, `governance:request`, `governance:delegate`) | ✓ | ✓ | | | |
+| Send a person a password reset link (`reset_passwords`; a manager may for a direct report without it) | ✓ | ✓ | | | |
+| Schedule governance reports on **Reports** (their own; an admin anyone's) | ✓ | ✓ | ✓ | | |
+
+The table holds for roles on everything. `participate` and `view_governance` come with roles on
+everything only; `govern` and `reset_passwords` also with `governance_admin` on a governance
+scope, within it (see [Scopes](#scopes)). A role version is approved by someone other than the
+person who proposed it, or who created the token that did (`a version is approved by someone
+other than its proposer`), and nobody approves or claims a request they made or that is for
+them. How governance works is in [Governance](governance.md).
 
 ### Revealing sensitive attributes
 
@@ -256,7 +319,7 @@ Choose **New user** and fill in:
 |---|---|
 | **Username** | 1–64 characters: letters, digits, `.`, `_`, `@`, `-`. Must be unused |
 | **Display name** | Optional |
-| **Roles** | One row per assignment: a role, and **on everything**, **on an environment** or **on an engine** with its name (the field suggests the names). **Add a role** adds a row; an account needs at least one, and holds at most 100. One row, **viewer** on everything, is preselected |
+| **Roles** | One row per assignment: a role, and **on everything**, **on an environment** or **on an engine** with its name (the field suggests the names); from 0.7.0, for **governance_admin**, also **on a governance scope**, with the scope's name. **governance_admin** and **participant** are refused on an environment or an engine (`... is held on everything only (scope all)`). **Add a role** adds a row; an account needs at least one, and holds at most 100. One row, **viewer** on everything, is preselected |
 
 **Create** shows a 20-character **one-time password** once. Give it to the user over a trusted
 channel; they must choose their own at the first sign-in. From 0.5.5 it is good for 7 days: past
@@ -731,6 +794,10 @@ stops the token at once. From 0.5.5 a reset of its creator's password revokes it
 | `runs:run` | operator or admin | Start runs and drift checks; approve held deletions and changes; review groups; accept correlation suggestions; retry and discard dead letters |
 | `audit:read` | auditor or admin | The audit trail, its verification, the pull API, the export and the outputs' status |
 | `environments:read` | auditor or admin | The environments: their plain values, the names of their secret ones, and their engines (new in 0.4.1) |
+| `governance:read` | governance administrator, auditor or admin | New in 0.7.0: governance's identities, systems, entitlements, assignments and their states |
+| `governance:write` | governance administrator or admin | New in 0.7.0: register systems and entitlements, grant and end assignments |
+| `governance:delegate` | governance administrator or admin | New in 0.7.0: ask for access on a person's behalf (`on_behalf_of`) and look entitlements up, for the Directory Services Portal |
+| `governance:request` | governance administrator or admin | New in 0.7.0: a service-desk tool lists what can be requested, asks for access on a person's behalf with a ticket reference, and reads back its own requests |
 | `admin` | admin | Everything above |
 
 A token never does more than its creator **now**, within its limit:
@@ -740,7 +807,8 @@ A token never does more than its creator **now**, within its limit:
   so a demoted creator's token keeps its reads and loses its writes (`403`), and one whose creator
   was moved to another environment reaches nothing. A good answer is reused for up to a minute,
   and dropped when the account changes;
-- a limited token does nothing on the console as a whole (no audit pull or export, no Git sync),
+- a limited token does nothing on the console as a whole (no audit pull or export, no Git sync,
+  and from 0.7.0 no governance),
   and an engine outside its limit does not exist for it (`404`). The limit follows an engine's
   rename;
 - no token, whatever its scopes, can manage tokens, webhooks, accounts, settings or scheduled
@@ -964,6 +1032,53 @@ it.
   and the outcome (changed, wrong credentials, refused by the policy, rate limited), never a
   password.
 
+From 0.7.0 the page also says, under the form, that a forgotten password is set on **My
+password** after a single sign-on, or with a manager's reset link.
+
+### My password and reset links
+
+New in 0.7.0, for people who **forgot** their directory password or locked their account, and so
+cannot use `/password`. Both go to the engine `CONSOLE_SELF_SERVICE_ENGINE` names, which sets the
+password as its service account in the self-service source and delivers it to the other
+directories (`ResetPassword`), or clears the lockout there and in those directories
+(`UnlockAccount`). That engine must run 0.7.0 or later (`the engine is older than password reset
+(0.7): upgrade it`), and in strict control API access list the console's certificate under
+`api.access.passwords` (see [Control API access](operator-guide.md#control-api-access)).
+
+- **My password** (`/my/password`, from **My access**): a person proves who they are by a
+  **fresh** sign-in through single sign-on or with a certificate, less than five minutes old,
+  then sets a new password or unlocks their account. A session started with a password proves
+  nothing here. The page's **Sign in again with single sign-on** asks the identity provider to
+  authenticate the person again (OpenID Connect `prompt=login` and `max_age=0`, SAML
+  `ForceAuthn`), and the console requires the provider's proof that it did, after the console
+  asked: the ID token's `auth_time` or the assertion's `AuthnInstant`. A provider that sends
+  neither is refused (`the sign-in is not fresh: the identity provider did not say when it
+  authenticated you ...`), and so is one that reuses its session without asking again. Check
+  your providers send it before people rely on the page. A certificate sign-in counts from its
+  own start. Sessions from before the upgrade to 0.7.0 do not count: people sign in again. The
+  account's user name is the login reset.
+- **A reset link**: a manager sends one to a direct report on **My team**, and a holder of
+  `reset_passwords` (admins and governance administrators) to anyone, through the API
+  (`POST /api/v1/governance/identities/{gid}/password-reset-link`), once the
+  governance setting `reset_mail_attribute` names a projected attribute holding an address that
+  does not depend on the forgotten password. The link is mailed, works once, for 15 minutes,
+  and at most three are sent to a person a day; it opens a public page that needs no account.
+  It needs mail set up for the address's domain and `CONSOLE_PUBLIC_URL`. Nobody sends
+  themselves one.
+
+Every reset, unlock and link is audited (`password.reset`, `account.unlocked`,
+`password.reset_link.created`), with how the person proved who they are, never the password.
+What the engine does is in [Password synchronisation](password-sync.md).
+
+### Password agents
+
+New in 0.7.0: the engine's page has **Password agents** for an admin (with a session) whose
+role reaches the engine. It lists the [capture agents](password-sync.md) that may submit password
+changes from other hosts, adds one (its one-time enrolment token is shown once), sets the
+sources each may submit for, and revokes one: what `syncd password agent add`, `bind`, `list`
+and `revoke` do on the host. In strict control API access the console's certificate must be
+listed under `api.access.passwords` for adding and binding.
+
 ## The audit trail (`/audit`)
 
 Administrators and auditors. The console records every sign-in, account change, setting change,
@@ -1070,6 +1185,8 @@ The Splunk and syslog TLS connections trust the public roots. A SIEM can also pu
 | `password.self_service` | Self-service password changes and their refusals (from 0.5.1 a user name holding control characters is refused and recorded escaped) |
 | `support.bundle-exported` | The console's support bundle downloaded |
 | `audit.format-upgraded`, `audit.verified`, `audit.pruned`, `audit.delivery-failed`, `audit.delivery-recovered` | The trail itself: the switch to `ens-audit/1`, a broken chain found by **Verify chain**, retention, outputs failing and recovering |
+| `password.reset`, `account.unlocked`, `password.reset_link.created` | New in 0.7.0: resets and unlocks from **My password** and reset links, and the links sent, with how the person proved who they are |
+| `governance.*` | New in 0.7.0: everything governance decides and does (assignments, requests and approvals, reviews, policies, roles, lifecycle, deliveries to the engines such as `governance.delivery.redelivered`, reports exported); the full list is in [Governance](governance.md#audit) |
 
 Some changes and their records are written in one transaction, so if the audit trail cannot be
 written the change is refused ("the audit log cannot be written, so this was not done"): account
@@ -1124,7 +1241,7 @@ neither). The result is one of:
 
 `syncd-console` has six administration commands besides `serve` (the default): `reset-password`,
 `register-engine`, `rename-engine`, and, new in 0.5.0, `license`, `config-signing-key` and
-`wrap-master-key`. They connect to the console database (or, for `wrap-master-key`, its key file)
+`wrap-master-key`; from 0.7.0 also two [governance commands](#syncd-console-governance). They connect to the console database (or, for `wrap-master-key`, its key file)
 directly, so they need the console's settings: run them on the console host as the `syncd-console`
 user, with the console's environment file.
 
@@ -1238,6 +1355,30 @@ Wraps the master key file in place with a KMS key (`awskms:<key>[?region=...]`,
 `azurekv:https://<vault>.vault.azure.net/keys/<name>` or `vaulttransit:<mount>/<key>`). Stop the
 console first; afterwards it must start with `CONSOLE_MASTER_KEY_KMS` set to the same key. See
 [The master key](#the-master-key).
+
+### `syncd-console governance`
+
+New in 0.7.0. Two commands for [governance](governance.md), run the same way as the `admin` ones:
+
+```sh
+syncd-console governance import-iiq --file EXPORT --map MAPPING.yaml [--dry-run] [--strict] \
+  [--archive-dir DIR] [--apply-links] [--report-dir DIR]
+syncd-console governance redeliver --engine NAME
+```
+
+- `import-iiq` imports an IdentityIQ export (its applications mapped to systems by the mapping
+  file), writes `import-report.md` and `import-report.json` to `--report-dir` (the current
+  directory by default) and, with `--archive-dir`, the past certifications, access requests and
+  audit events as CSV and NDJSON files kept for retention, not loaded. `--dry-run` runs it all in
+  a transaction it rolls back; `--strict` exits non-zero when anything needs a person's work. See
+  [Migrating from IdentityIQ](migrating-from-iiq.md).
+- `redeliver` queues every grant the console holds for an engine again, each standing one as an
+  upsert and each ended one as a remove, for a running console to deliver (`queued for <name>: N
+  grants standing, N ended; a running console delivers them`; audited as
+  `governance.delivery.redelivered`). From 0.7.0 the console does this by itself when an engine
+  reports a new store generation (a restore with `syncd restore`, an HA takeover), so the command
+  is for restores it cannot see: see
+  [The console and the engine at different points](operator-guide.md#the-console-and-the-engine-at-different-points).
 
 There is no command to create accounts, change roles or change the console settings; those are done
 in the console or through the [API](api-reference.md).

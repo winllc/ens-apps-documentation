@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Symptoms, likely causes and fixes, for syncd 0.6.1 (tag `v0.6.1`, commit `59cbf19`). Start with
+Symptoms, likely causes and fixes, for syncd 0.7.0 (tag `v0.7.0`, commit `6de2fa1`). Start with
 `sudo syncd status`, `sudo syncdctl status` and the journal (`journalctl -u syncd -u syncd-console
 -e`). Commands, metrics and alert rules are in the [Operator guide](operator-guide.md); settings
 are in [Configuration](configuration.md); the license is in [Licensing](licensing.md). The source
@@ -54,6 +54,23 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
     0.6.1 fixes an install that stopped after `==> installing syncd`. The full list is in
     [Upgrading from 0.5.4 to 0.6.1](install.md#upgrading-from-054-to-061).
 
+!!! tip "Just upgraded from 0.6.1?"
+    0.7.0 adds governance, and changes a few things on purpose: the console's database is at
+    schema 52, which 0.6.1's console refuses after a rollback without the database restored
+    ([Installation and upgrade](#installation-and-upgrade)); the evaluation's `license:` line
+    ends with `governance` ([The license](#the-license)); a password reset after single sign-on
+    needs the provider's proof of a fresh sign-in, sessions from before the upgrade included, and
+    the console's certificate needs `api.access.passwords` for it
+    ([Passwords](#passwords)); a version that changes `passwords` is published by an admin only,
+    scoped governance administrators get 404 and 403 outside their scope, list searches match
+    from the start of a name, and campaigns start as **preparing**
+    ([The console and its engines](#the-console-and-its-engines)); grants are sent again by
+    themselves after a restore or a failover ([Backups and restore](#backups-and-restore),
+    [High availability](#high-availability)). On Kubernetes, chart 0.7.0 is not published
+    ([Kubernetes](#kubernetes)). The full list is in
+    [Upgrading from 0.6.1 to 0.7.0](install.md#upgrading-from-061-to-070), and going back in
+    [Rolling back once governance is in use](install.md#rolling-back-once-governance-is-in-use).
+
 ## Installation and upgrade
 
 ??? failure "`gpg: BAD signature`, `gpg: Can't check signature: No public key`, or `sha256sum: WARNING: ... computed checksum did NOT match`"
@@ -63,15 +80,17 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
     the one that was signed; download both files again. A file whose checksum does not match is
     damaged or not the published one: download it again from the portal's **Downloads** page,
     and do not install it. A release without `SHA256SUMS.asc` was published without the signing
-    key, as 0.5.0, 0.5.1, 0.5.4, 0.5.5, 0.6.0 and 0.6.1 were: there is nothing to `gpg --verify`,
+    key, as 0.5.0, 0.5.1, 0.5.4, 0.5.5, 0.6.0, 0.6.1 and 0.7.0 were: there is nothing to `gpg --verify`,
     and `sha256sum -c SHA256SUMS --ignore-missing` is the check. From 0.5.5 the release job
     refuses to publish an unsigned release unless the maintainers allow it
-    (`ALLOW_UNSIGNED_RELEASE`), which they did for 0.5.5, 0.6.0 and 0.6.1. See
+    (`ALLOW_UNSIGNED_RELEASE`), which they did for 0.5.5, 0.6.0, 0.6.1 and 0.7.0. The `.rpm`
+    files are not signed either. The container images are verified another way: the 0.7.0 images,
+    like 0.6.0's, are signed with cosign (see [Kubernetes](#kubernetes)). See
     [Verifying a release](install.md#verifying-a-release).
 
 ??? failure "`apt update` or `dnf` cannot reach `https://winllc.github.io/ldap-sync-merge-view` (404)"
-    The signed apt and dnf repositories are not published yet: 0.5.0, 0.5.1, 0.5.4, 0.5.5, 0.6.0
-    and 0.6.1 were released without the signing key. Remove `/etc/apt/sources.list.d/syncd.sources` or
+    The signed apt and dnf repositories are not published yet: 0.5.0, 0.5.1, 0.5.4, 0.5.5, 0.6.0,
+    0.6.1 and 0.7.0 were released without the signing key. Remove `/etc/apt/sources.list.d/syncd.sources` or
     `/etc/yum.repos.d/syncd.repo`, and install or upgrade from the `.deb` or `.rpm` downloaded
     from the portal's **Downloads** page. See
     [From the package repositories](install.md#from-the-package-repositories).
@@ -245,8 +264,8 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
 
 ??? failure "`syncdctl rollback --keep-data`: `the console database is at schema N, and syncd <old>'s console knows schema M: it would not start on it`"
     New in 0.5.1. The newer release migrated the console's database (0.5.1 took it from 29 to 30,
-    0.5.5 from 30 to 33), and the older console refuses a database with migrations it does not
-    know. Roll back without `--keep-data`, which restores the database from the backup taken
+    0.5.5 from 30 to 33, 0.7.0 from 33 to 52), and the older console refuses a database with
+    migrations it does not know. Roll back without `--keep-data`, which restores the database from the backup taken
     before the upgrade (what was done in the console since is lost). From 0.5.5, when no backup
     records the database's schema or the database does not answer, `--keep-data` is refused too
     (`... whether syncd <old>'s console can start on the current database cannot be checked`),
@@ -277,6 +296,22 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
     the current release: once that is fixed, run syncdctl rollback again`. After an upgrade's own
     automatic rollback, the failed release's store has already been removed: fix the cause (often
     a full disk) and run `syncdctl rollback`, which restores the same backup.
+
+??? failure "After a package downgrade, `helm rollback` or a restore of the programs alone to 0.6.1 (or older), the console does not start: `migration 34 was previously applied but is missing`"
+    New in 0.7.0. 0.7.0 migrated the console's database from schema 33 to 52 (the governance
+    tables and the rest of migrations 34 to 52), and 0.6.1's console stops at start on a
+    database with migrations it does not know. It changes nothing in it, so the database is as
+    0.7.0 left it, and there is no partial rollback. Either go back to 0.7.0, or restore the
+    database taken before the upgrade: `sudo syncdctl restore
+    /var/lib/syncd/backups/<time>-upgrade-0.6.1-to-0.7.0` after a package downgrade, `syncdctl
+    rollback` on a bundle install (which does this itself), or on Kubernetes the database into an
+    empty database before `helm rollback`. The governance records go back to how they were before
+    the upgrade: what was requested, approved, reviewed or assigned since is gone. With the store
+    kept, 0.6.1 leaves the grants in it alone (access granted by the console is then neither
+    enforced nor reported, and holds again on 0.7.0), and refuses a configuration with 0.7.0's
+    settings (`grants`, publications to SQL, JDBC and REST targets, `external` connectors): publish
+    one without them first. See
+    [Rolling back once governance is in use](install.md#rolling-back-once-governance-is-in-use).
 
 ??? failure "After a rollback or a package downgrade to 0.4.1, the engine does not start: `the store has format 2, written by a newer syncd`"
     0.5.0 migrated the store to format 2, which 0.4.1 cannot read. `syncdctl rollback` restores
@@ -690,6 +725,67 @@ repository's `docs/RUNBOOK.md` has the same entries for each alert, and the supp
     token needs the new scope. Every role still reads the names (`GET /api/v1/environment-names`).
     See [Admin guide](admin-guide.md).
 
+??? failure "A scoped governance administrator gets 404 for a person, account or system, or 403: `<what> needs a governance role on everything, not on a scope`"
+    New in 0.7.0, on purpose. An administrator holding `governance_admin` on a governance scope
+    (`governance_admin@governance:<scope>`) reaches only the people and systems of that scope: on
+    every route, a person, account, entitlement, system or request outside it answers 404, as one
+    that does not exist. What has no scope of its own answers 403: campaigns and their definitions
+    (reads included), changes to roles, policies, workflows and lifecycle rules, the governance
+    reports, the risk score's settings, workgroups, scopes, registering systems, imports and
+    connected products. Give the work to an administrator on everything, or the role on
+    everything. See [Scopes](admin-guide.md#scopes).
+
+??? failure "Publishing is refused: `this version changes password synchronization's settings (a passwords block): publishing it needs manage_passwords on the engine (an admin), with a session`"
+    New in 0.7.0. A version whose `passwords` settings differ from the version published before
+    (or that cannot be read) is published only by an `admin` whose role reaches the engine,
+    signed in to the console with a session: a designer is refused. The capture agents' page
+    (**Password agents**, new in 0.7.0) is for the same administrators. Ask an administrator to publish it; versions that do
+    not touch `passwords` publish as before.
+
+??? failure "A role version cannot be approved: `a version is approved by someone other than its proposer`, or claiming an approval: `you asked for this access or it is for you: another member of the team takes it` (403)"
+    New in 0.7.0 (four eyes on roles, and approvals by a workgroup). The person who proposed a
+    role's version, or who created the API token that proposed it, cannot approve it: another
+    governance administrator does. A member of a workgroup cannot claim an approval of a request
+    they made or that is for them; another member takes it.
+
+??? warning "A campaign stays **preparing** (state `draft`)"
+    New in 0.7.0. Starting a campaign answers at once (202) with the campaign as a `draft`, while
+    its items are made in the background; it turns `active`, and its reviewers are told, once every
+    reviewer has their items. On a large catalog that takes a while (about a quarter of an hour
+    for a manager campaign over a million people's access, before the release's fixes; see
+    [Sizing the console for governance](availability-and-sizing.md#sizing-the-console-for-governance)).
+    A preparation that stopped (the console restarted, or another replica took over) is resumed
+    by the clock. If an attempt failed, the campaign's page says why and that it is tried again; a
+    campaign that could not start is `cancelled`, with the reason. An API client that waited for
+    `active` in the answer to `POST /api/v1/governance/campaigns` now polls the campaign.
+
+??? failure "A campaign report is refused: `the XLSX report holds at most 200000 items and this campaign has N: download the CSV, which has every item`"
+    New in 0.7.0: a campaign's report downloads as CSV at any size, but as Excel only up to
+    200,000 items and as PDF up to 20,000 (`the PDF report holds at most 20000 items ...`).
+    Download the CSV.
+
+??? failure "An API client breaks on `GET /api/v1/governance/entitlements`, or a list's `after` cursor is refused"
+    New in 0.7.0. The entitlements list answers a page, `{"entitlements": [...], "next_after":
+    "..."}`, with `q`, `ids`, `requestable`, `after` and `limit`, instead of a list capped at
+    5,000: read `entitlements`, and pass `next_after` as `after` until it is empty. The cursors
+    of the identity and account lists are opaque strings whose format changed: do not build them,
+    and start again from the first page after the upgrade.
+
+??? warning "A search in the identity or account list no longer finds a name by its middle"
+    New in 0.7.0. These searches match from the start of the login, name, mail or account name
+    (and of the first RDN's value), using indexes, so they stay fast with a million people:
+    `smi` finds `smith`, `ith` does not. Substring search remains among one person's accounts.
+
+??? warning "The governance dashboard's counts are a few minutes old"
+    New in 0.7.0: they are served from the last measurement, at most about five minutes old, and
+    the page shows its time. They are counted across every scope.
+
+??? warning "Time-limited access ended, and its assignment shows ended with a removal queued"
+    New in 0.7.0, on purpose: an assignment or role assignment ends in the console at its end
+    date, and the removal is queued to the engine. Before, it stayed pending once the engine had
+    ended the grant. The engine ends the grant at its end date by itself too, while the console is
+    down.
+
 ??? failure "A published configuration is refused: `engine.data_dir cannot be changed through the control API`, `the api section can only be changed on the engine host` or `engine.ha can only be changed on the engine host`"
     The version changes settings that stay with the engine host. Start from the running
     configuration (import it in the console), keep its `engine.data_dir`, `api` and `engine.ha`
@@ -786,10 +882,25 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
 
 ??? failure "A version is refused: `not published: connector <name> (<type>) needs the <pack> pack, which the license does not include`"
     Not the block: this happens in any state. The version uses a connector or setting of a pack
-    (Cloud and SaaS, Enterprise Database, Password Sync, High Availability, Extensibility) the
-    license does not include. Get the pack, or take the connector or setting out of the version.
-    A version with it that ran on the engine before may still be published again as a rollback.
-    See [Packs](licensing.md#packs).
+    (Cloud and SaaS, Enterprise Database, Password Sync, High Availability, Extensibility, and
+    from 0.7.0 Governance) the license does not include. Get the pack, or take the connector or
+    setting out of the version. A version with it that ran on the engine before may still be
+    published again as a rollback. From 0.7.0 a feature names itself the same way: `access granted
+    by governance (grants on a publication) needs the Governance pack, ...`, or `SQL database
+    tables as targets (a publication to postgres, mysql or sql_server) needs the Enterprise
+    Database pack, ...`. See [Packs](licensing.md#packs).
+
+??? failure "A governance change is refused: `not done: this needs the Governance pack, which the license does not include (License page)` (409)"
+    New in 0.7.0. The governance features are in the pack **Governance** (`governance`), which the
+    license does not include. Reads are never refused: what was recorded stays visible. During the
+    evaluation every pack is enabled, so this starts once a license without the pack is
+    installed. Get a license with it from the licensing portal (see [Packs](licensing.md#packs)).
+
+??? warning "A script that reads `syncd status` no longer matches the evaluation's `license:` line"
+    New in 0.7.0: during the evaluation the line names every pack it enables, and the list now
+    ends with `governance` (`license: EVALUATION (no license; packs core, enterprise-database,
+    password-sync, high-availability, extensibility, cloud-saas, governance)`). Match the start of
+    the line, or the new list.
 
 ??? warning "`SyncdLicenseDevelopmentKey`, or a build that says `DEVELOPMENT LICENSE KEY`"
     The build accepts the development license key from the source repository (a build made
@@ -1009,10 +1120,55 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
 
 ??? failure "`<call> sets passwords: in strict mode it needs a client certificate listed under api.access.passwords on the engine's host, or the control socket`"
     New in 0.5.0. In strict control API access, setting passwords (`syncd password set`, `agent
-    add` and `bind`, `rotate-key`, `rotate-agent-ca`) is a permission of its own. Run the command
-    with `sudo` on the engine's host, which uses the control socket, or list the caller's
-    certificate under `api.access.passwords`. See
+    add` and `bind`, `rotate-key`, `rotate-agent-ca`, and from 0.7.0 `password reset` and
+    `unlock`) is a permission of its own. Run the command with `sudo` on the engine's host, which
+    uses the control socket, or list the caller's certificate under `api.access.passwords`.
+
+    From 0.7.0 the console makes such calls too: `ResetPassword` and `UnlockAccount` for **My
+    password** and reset links, `AddPasswordAgent` and `BindPasswordAgent` for its **Password
+    agents** page. The console shows the refusal; list the console's certificate (`syncd console`)
+    under `api.access.passwords` on that engine's host and restart the engine. See
     [Control API access](operator-guide.md#control-api-access).
+
+??? failure "**My password**: `you signed in with a password, which proves nothing here: sign in again with single sign-on or a certificate`"
+    New in 0.7.0. A reset or an unlock on **My password** needs proof of who the person is other
+    than the password they forgot: a sign-in through single sign-on or with a certificate. Sign
+    out, and sign in that way. Without single sign-on or certificates, a manager's reset link is
+    the way (**My team**), once `reset_mail_attribute` is set in the governance settings.
+
+??? failure "**My password**: `sign in again first: a reset needs a sign-in less than 5 minutes old in which the identity provider had you sign in again (the page's sign-in link)`"
+    The session's proof is more than five minutes old, or the sign-in was not a fresh one. Use the
+    page's **Sign in again with single sign-on** (or **with SAML**): it asks the provider to
+    authenticate the person again (`prompt=login` and `max_age=0`, or SAML `ForceAuthn`). With a
+    certificate, the sign-in itself counts, for five minutes. **Sessions started before the
+    upgrade to 0.7.0 never count**: sign in again.
+
+??? failure "Single sign-on, signing in again for **My password**: `the sign-in is not fresh: the identity provider did not say when it authenticated you (auth_time), so this sign-in does not prove who you are: ask its administrator to send auth_time`"
+    New in 0.7.0, after the release's review: the console checks the provider's proof that it
+    authenticated the person again, the ID token's `auth_time` (OpenID Connect) or the assertion's
+    `AuthnInstant` (SAML), and refuses a provider that sends neither. Have the provider's
+    administrator send `auth_time` in the ID token (or `AuthnInstant` in the assertion). `the
+    identity provider did not have you sign in again (it last authenticated you at <time>): sign in
+    again there` means the provider reused its session instead of asking for credentials, and
+    the time it gave is older than the console's request (with a minute's leeway for the
+    clocks): the provider ignores `prompt=login` or `ForceAuthn`, which it must honour for
+    resets. `<auth_time or AuthnInstant> is in the future (check the clocks)`: the provider's
+    clock and the console's disagree by more than a minute. See
+    [Single sign-on](single-sign-on.md).
+
+??? failure "**My password** says `Password reset is not available here.`, or `password reset is off: no engine takes self-service changes (CONSOLE_SELF_SERVICE_ENGINE)`"
+    New in 0.7.0. Reset and unlock go to the engine `CONSOLE_SELF_SERVICE_ENGINE` names, which
+    needs `passwords.self_service` (see [Password synchronisation](password-sync.md)). `the engine
+    is older than password reset (0.7): upgrade it`: that engine runs a release before 0.7.0.
+
+??? failure "A reset link: `assisted resets are off: set reset_mail_attribute in the governance settings`, `<login> has no <attribute> to mail the link to`, `this link expired: ask for a new one`, or `this link was used already: ask for a new one`"
+    New in 0.7.0. A manager (for a direct report, on **My team**) or a holder of `reset_passwords`
+    sends a single-use link valid 15 minutes, at most three a person a day, to the address in the
+    projected attribute `reset_mail_attribute` names. Set it in the governance settings, make sure
+    the person has that attribute, and that mail is set up and allows the address's domain (`the
+    link cannot be mailed: ...`); `a reset link needs the console's public address
+    (CONSOLE_PUBLIC_URL)`. A link expired or used: send a new one. Nobody sends themselves a
+    link (`use My password`).
 
 ??? warning "`SyncdPasswordKeyOld`, or `SyncdPasswordAgentCertExpiring`"
     New in 0.5.0. The password key is more than a year old: rotate it with
@@ -1150,6 +1306,16 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
     `/var/lib/syncd/engine/engine.restored.yaml`. `syncd config diff engine.restored.yaml
     /etc/syncd/engine/engine.yaml` says what differs; publish the one you want.
 
+??? warning "After a restore, the console's log says `the engine's store was replaced; its grants are sent again`"
+    New in 0.7.0, and expected: the restored engine's store has a new generation, and the console
+    sends it every grant again (audited as `governance.delivery.redelivered`); the engine takes
+    those it holds as no change. Nothing needs doing. When the engine's files were put back
+    another way (a volume snapshot, a copied directory), or only the console's database was
+    restored, the console cannot tell: run `syncd-console governance redeliver --engine <name>`,
+    and when the database is older than the engine, end the grants it does not know with `syncd
+    grants --apply`. See
+    [The console and the engine at different points](operator-guide.md#the-console-and-the-engine-at-different-points).
+
 ## High availability
 
 ??? failure "Neither engine is active (`SyncdHaNoActive`, `NO ENGINE HOLDS THE LEASE`)"
@@ -1259,6 +1425,14 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
     send their tables again with an incremental snapshot: insert an `execute-snapshot` signal
     into its signal table (see Debezium's documentation for your connector). The engine skips
     what it already has. Until then, entities changed in that window may be out of date.
+
+??? warning "After a failover, grants are sent again: `the engine's store was replaced; its grants are sent again`"
+    New in 0.7.0, and expected. The engine that took over has a new store generation, and the
+    console sends it every grant again, so that a grant the old engine took after its last
+    snapshot is not lost; the engine takes those it already holds as no change. The earlier advice
+    to run `syncd-console governance redeliver` after a failover no longer applies. For access
+    granted in the console that still has not arrived, `sudo syncd grants` on the active engine
+    shows each grant's state and why.
 
 ## Webhooks, reports and Git sync
 
@@ -1602,6 +1776,25 @@ New in 0.5.0. How licensing works, its states and how to install a license are i
     log stream within 10s` is the same for the binary log request. Check the server, and the path
     to it, from the engine's host. A connection refused at once means nothing listens on the port.
 
+??? warning "A grant from the console is `refused` or `failed` (`syncd grants`, the assignment in the console)"
+    New in 0.7.0. `sudo syncd grants` lists each grant with its state (`pending`, `applied`,
+    `held`, `failed`, `refused`, `ended`) and why. `refused` grants were not taken, and the detail
+    says why: `publication <name> takes no grants` or `takes no membership grants
+    (grants.memberships)` (the publication's `grants` settings), `group <dn> is not under
+    grants.memberships.bases`, `group <dn> is one of the publication's computed groups: its filter
+    decides its members`, or `the entity holds N membership grants already, the most
+    grants.memberships.max_per_entity allows` (500 by default; from 0.7.0 ended grants no longer
+    count). `failed` is a write the target refused; the entity's next plan tries again. `held` is an
+    export held by a change window, a threshold, a canary or report mode
+    ([Held changes](#held-changes-and-change-safety)). See
+    [Governance](governance.md#setting-a-publication-up-for-grants).
+
+??? failure "Removing a granted member fails: `...: the group cannot lose its last member (set group_policy.placeholder_member on the publication to hold its place)`"
+    New in 0.7.0. The group is a `groupOfNames` (or another class that needs a member), and the
+    member the console's grant ended was its last. Set `group_policy.placeholder_member` on the
+    publication: the placeholder then takes the last member's place in the same change, and makes
+    way again for the next granted member. The grant stays `failed` until then.
+
 ??? warning "Dead letters keep growing (`SyncdDeadLetters`)"
     `sudo syncd dlq` lists each failed export with its DN and error. Errors from the target
     (schema, access rights, a missing parent entry) need fixing there or in the publication;
@@ -1718,6 +1911,23 @@ New in 0.6.0. How the files move is in [Air-gapped synchronisation](air-gap.md),
     break-glass flag. Other commands refused with `... needs the operate tier` come from a
     certificate listed under `read` only.
 
+??? failure "`syncd grants --apply`: `ApplyGrants needs the configure tier, and this client certificate has operate (api.access on the engine's host)`"
+    New in 0.7.0. Applying grants is in the `configure` tier, as applying a configuration is: the
+    console's certificate has it, the command line's and the control socket do not in strict
+    mode. The console sends grants itself; `--apply` is for tests and recovery. Listing them
+    (`syncd grants`) needs only `read`. To end a grant the console does not know (after the
+    console's database was restored to an earlier point), list the console's own grants first,
+    then apply the `removes` with a certificate listed under `configure`. `grant <id>: ...` names
+    a grant of the file the engine could not take (an entity `view:attribute=value` that matches
+    no entity, or several), and `<file> is not a grants file` one that does not parse.
+
+??? failure "`syncd inventory`: `--kind members needs --group`"
+    New in 0.7.0. A group's members are listed one group at a time: pass its DN (LDAP, Active
+    Directory) or its id (SCIM, Entra ID) as `--group`. `publication <name> has no
+    grants.inventory: nothing is listed`: set `grants.inventory` on the publication; `the dn of
+    <object> has no fixed end: set grants.inventory.account_bases`: say where its accounts are.
+    A certificate below the `operate` tier is refused.
+
 ??? failure "`this client certificate is not listed in api.access on the engine's host`"
     New in 0.5.0. In strict mode a certificate listed under no tier gets nothing, not even the
     status. Use the command line's own certificate (the default with `sudo`), or list the
@@ -1762,12 +1972,12 @@ New in 0.6.0. How the files move is in [Air-gapped synchronisation](air-gap.md),
 
 ??? failure "The pods do not start: `ImagePullBackOff`, or `exec format error`"
     `ImagePullBackOff`: the tag is not in the registry the values name. The newest published
-    images are 0.6.0's, on `ghcr.io/winllc` (`syncd:0.6.0`, `syncd-console:0.6.0` and their
-    `-fips` tags), signed with cosign; there is no `latest`. **There are no 0.6.1 images or
-    chart**: the tag's Container workflow failed building the amd64 binaries, so the job that
-    pushes and signs was skipped. A chart taken from the source repository at `v0.6.1`, or `image.*.tag: 0.6.1`, asks for tags that do not
-    exist: use chart 0.6.0 (`--version 0.6.0`), which loses nothing, since 0.6.1 changes only the
-    host installer. Check `image.engine.tag` and `image.console.tag` (the chart's `appVersion` by
+    images are 0.7.0's, on `ghcr.io/winllc` (`syncd:0.7.0`, `syncd-console:0.7.0` and their
+    `-fips` tags, amd64 and arm64), signed with cosign; there is no `latest`. **There are no
+    0.6.1 images or chart**: that tag's Container workflow failed building the amd64 binaries, so
+    the job that pushes and signs was skipped. A chart taken from the source repository at
+    `v0.6.1`, or `image.*.tag: 0.6.1`, asks for tags that do not exist: go to 0.7.0 (next entry),
+    or stay on 0.6.0. Check `image.engine.tag` and `image.console.tag` (the chart's `appVersion` by
     default), and on a cluster that cannot reach ghcr.io, mirror the images (see
     [Air-gapped clusters](install.md#air-gapped-clusters)) or build them (see
     [Getting the release](install.md#getting-the-release)), with `imagePullSecrets` if your
@@ -1777,6 +1987,19 @@ New in 0.6.0. How the files move is in [Air-gapped synchronisation](air-gap.md),
     From 0.5.0 the `-fips` images are built for both platforms too (0.4.1's were amd64 only).
     Schedule the pods on matching nodes (`nodeSelector: {kubernetes.io/arch: amd64}`), or build
     for the nodes' platform.
+
+??? failure "`helm install` or `helm upgrade` with `--version 0.7.0` fails: the chart is not found in `oci://ghcr.io/winllc/charts/syncd`"
+    Chart 0.7.0 is not published: the release's job that pushes and signs ran into GitHub's
+    Actions storage quota just before the chart step, after it had pushed and signed the images.
+    The newest published chart is 0.6.0. Chart 0.7.0's templates and values are the same as
+    0.6.0's (only `version` and `appVersion` differ), so either use chart 0.6.0 with the 0.7.0
+    images, `--version 0.6.0 --set image.engine.tag=0.7.0 --set image.console.tag=0.7.0`
+    (`0.7.0-fips` for FIPS), or install the chart from the source repository at tag `v0.7.0`
+    (`deploy/helm/syncd`). With chart 0.6.0 the `app.kubernetes.io/version` label and the
+    install's notes say 0.6.0; `kubectl -n syncd exec syncd-engine-0 -- syncd status` says
+    `engine 0.7.0`. CI has not run that combination (its kind tests use the chart from the
+    checkout). See [Upgrades](operator-guide.md#upgrades) and
+    [Install with Helm](install.md#install-with-helm).
 
 ??? failure "The engine fails at startup with the FIPS image: `not a FIPS build`, or `fips off` in its status"
     `SYNCD_FIPS_MODE=true` is refused by the standard images: use the `<version>-fips` tags for

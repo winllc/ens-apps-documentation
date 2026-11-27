@@ -10,11 +10,12 @@ there reads them in the order they were written and publishes them to its own
 directories.
 
 This page sets up both sides end to end, with the transfer between them, and covers
-monitoring, recovery, security and the limits as of 0.6.1. The connector itself (every
+monitoring, recovery, security and the limits as of 0.7.0. The connector itself (every
 file format detail and setting) is in [DSML files (air gap)](connectors.md#dsml-files-air-gap),
 and every key with its default in [Configuration](configuration.md#connectors-connectors).
-It describes syncd 0.6.1 (tag `v0.6.1`, commit `59cbf19`), whose DSML connector is
-0.6.0's unchanged. The source repository's own guide is `docs/connectors/dsml.md`, with
+It describes syncd 0.7.0 (tag `v0.7.0`, commit `6de2fa1`), whose DSML connector is
+0.6.0's unchanged: 0.7.0 only refuses governance's grants on a `dsml` target (see
+[Governance across the gap](#governance-across-the-gap)). The source repository's own guide is `docs/connectors/dsml.md`, with
 `examples/airgap-export.yaml` and `examples/airgap-import.yaml`.
 
 !!! note "What has been tested, and what has not"
@@ -707,7 +708,7 @@ changes are the record.
 
 ### When the connected side's numbers go back
 
-The far side remembers the name of the last file it read and, as of 0.6.1, reads only
+The far side remembers the name of the last file it read and, as of 0.7.0, reads only
 files whose names sort after it. The sequence number in the name is kept in the connected
 side's store. So whenever the connected side's store goes back in time, its next files
 carry numbers the far side has already passed, and **the far side passes over them
@@ -745,6 +746,15 @@ again (each applies the same the second time); with `move` or `delete` they are 
 source waits at a gap, and you move them back or send a snapshot, as after a restore. For a
 far-side pair, prefer `after_read: keep` and clear old files away yourself.
 
+## Governance across the gap
+
+From 0.7.0 the console's governance layer grants access through the engines' publications
+(see [Governance](governance.md)). A publication to a `dsml` target takes no grants: validation
+refuses `grants` on it ("grants cannot be taken by a dsml target: access granted across an air
+gap is the far side's to enforce"), and a grant sent for it is refused. Access to the far
+side's directories is governed there, by a console of its own, with its own license
+(see [syncd licensing](licensing.md#across-an-air-gap)): nothing about governance crosses the gap.
+
 ## Security
 
 | Concern | How it is handled |
@@ -764,7 +774,7 @@ device), the gap is the SC-7 boundary, the far side's checks are SI-10 input val
 and protection of the outbox, inbox and media is SC-28 and MP. The
 [Security](security.md) page covers the rest of syncd.
 
-## Limitations as of 0.6.1
+## Limitations as of 0.7.0
 
 - **Not tested** against a commercial DSML gateway, data diode transfer software or
   cross-domain solution: in the tests a script carries the files. Their file handling is

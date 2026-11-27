@@ -6,12 +6,18 @@ Entra ID, and since 0.5.0 REST and OData services and the HR services Workday, S
 SuccessFactors and UKG Pro, plus any database that Debezium Server can capture or that has
 a JDBC driver. Targets are LDAP directories, Active Directory, SaaS applications that
 speak SCIM 2.0, and Entra ID. Since 0.6.0 a `dsml` connector carries changes across an air
-gap as DSML v2 files: a target on the connected side, a source on the far side. In
-development (not in a release yet), PostgreSQL, MySQL, SQL Server, Oracle and Db2 tables
-are targets too: see [SQL tables as targets](#sql-tables-as-targets), and so are JSON APIs through
-request templates: see [REST services as targets](#rest-services-as-targets).
-For anything else, a connector can be written with the [connector SDK](connector-sdk.md)
-(in development).
+gap as DSML v2 files: a target on the connected side, a source on the far side. Since 0.7.0
+PostgreSQL, MySQL, SQL Server, Oracle and Db2 tables are targets too: see
+[SQL tables as targets](#sql-tables-as-targets), and so are JSON APIs through request
+templates: see [REST services as targets](#rest-services-as-targets). For anything else, a
+connector can be written with the [connector SDK](connector-sdk.md) (since 0.7.0).
+
+This page describes syncd 0.7.0 (tag `v0.7.0`, commit `6de2fa1`). Besides those targets,
+0.7.0 has the LDAP, Active Directory, SCIM, Entra ID, table, REST and SDK targets take the
+access the console's governance layer grants (`grants` on a publication; see
+[Governance](governance.md)), and list their accounts and groups for the console's
+entitlement catalog (`ListInventory`); a `dsml` target takes no grants. An SDK connector can
+also be a source; the other sources read as they did in 0.6.1.
 
 This page says how each connector reads, what it needs on the source side, and which
 settings matter. Every key is listed in [Configuration](configuration.md#connectors-connectors);
@@ -1802,8 +1808,7 @@ entries one carries; an object's sample shows its entries as the newest files ca
 
 ## SQL tables as targets
 
-*In development, not in a release yet; Enterprise Database pack (the feature
-`sql-targets`), whichever database.*
+*Since 0.7.0; Enterprise Database pack (the feature `sql-targets`), whichever database.*
 
 A publication to a `postgres`, `mysql` or `sql_server` connector, or to a `jdbc` connector
 (Oracle, Db2 and other databases, through the [JDBC bridge](#jdbc-bridge)), writes each
@@ -1844,12 +1849,23 @@ publications:
   value is a parameter.
 - Values travel as text and the database converts them to the column's type (`true` or
   `1` for a boolean or bit, digits for an integer); for PostgreSQL syncd reads each
-  column's type from the catalog and casts.
-- Each entity's changes are one transaction. The account needs `SELECT`, `INSERT`,
-  `UPDATE` and `DELETE` on the tables and read access to the catalog.
-  `syncd test-connection` and the engine's start check that the tables and columns exist.
-- Drift checks read rows back by key; the unmanaged pass and the governance inventory list
-  the table by key, and the groups as the membership table's distinct group names.
+  column's type from the catalog and casts to the type without its length, so a value too
+  long for a `varchar(8)` is refused by the database, not cut short. A column takes one
+  value: an attribute giving a list of more than one fails the export, none writes NULL.
+- **Transactions** (0.7.0's fixes after review). On PostgreSQL and MySQL the exports of a
+  batch share transactions, up to 50 entities each, each entity behind a savepoint of its
+  own: an entity that fails is rolled back alone, and the others commit together; should the
+  transaction itself be lost (the connection drops, a deadlock, the commit fails), every
+  entity in it fails. SQL Server, which ends the whole transaction on some errors, and the JDBC
+  bridge commit each entity on its own. An entity's membership grants run after it, each
+  on its own, with an outcome each. A statement that does not answer within 60 seconds
+  fails and the connection is opened again.
+- The account needs `SELECT`, `INSERT`, `UPDATE` and `DELETE` on the tables and read
+  access to the catalog. `syncd test-connection` and the engine's start check that the
+  tables and columns exist.
+- Drift checks read rows back by key, up to 200 at a time; the unmanaged pass and the
+  governance inventory list the table by key, 500 rows a page, and the groups as the
+  membership table's distinct group names.
 - Refused on such a publication: `dn`, `object_classes`, containers, moves, `writeback`,
   `adopt`, `passwords`, computed `groups`, `references`, `strip_unmanaged_groups`.
 
@@ -1886,11 +1902,14 @@ connectors:
 
 Tested end to end against PostgreSQL 16, MySQL 8.0 and SQL Server 2022, and through the
 bridge against Oracle Database 23ai Free, Db2 12.1 Community Edition and Apache Derby
-(`tests/e2e/sql-target.sh`); CI also runs it against MariaDB and SQL Server 2019.
+(`tests/e2e/sql-target.sh`); CI also runs it against MariaDB and SQL Server 2019. The shared
+transactions, the refusal of values too long for their column, and MySQL's reading of an
+update that changed nothing have tests of their own against PostgreSQL and MySQL. Not run
+against a production application's tables.
 
 ## REST services as targets
 
-*In development, not in a release yet; Cloud and SaaS pack, with the REST source.*
+*Since 0.7.0; Cloud and SaaS pack, with the REST source.*
 
 A publication to a `rest` connector writes one resource of a JSON API per entity through
 request templates in its `rest` block. Sign-in, API keys, client certificates, the rate
@@ -1927,8 +1946,12 @@ publications:
   are merged into a call's body; `types` makes a field a number, a boolean or a list.
 - An add finds the key first (`find`): a resource already there, or one a `409` says
   exists, is taken over and enabled rather than duplicated. An update sends what changed
-  with `PATCH`, or everything with `PUT`; a `404` creates the resource again. The
-  service's id is recorded with the entry.
+  with `PATCH` (each changed field with its whole new value, a multi-valued one included,
+  and a removed one as `null`), or everything with `PUT`; a `404` creates the resource
+  again. The service's id is recorded with the entry.
+- Entities are written side by side, up to the connection's `max_concurrency` (2 by
+  default) at once; the exports of one entity, or of one key (a new key taking an old one),
+  are written one after another, in order. `rate_limit` paces them all.
 - Only reads are retried after a lost connection or a `5xx`; `429` and `503` are waited out
   for every method.
 - Drift checks need `find` and `read`; the governance inventory and the unmanaged pass page
@@ -1990,6 +2013,7 @@ Actions before the release's own pull request:
 | REST source | syncd's fake HR service (`syncd-fakes rest`), whose clock runs an hour behind (`tests/e2e/rest-source.sh`) | A full read in pages, delta reads by the service's own time, a delete by tombstone, `429` and `503` with `Retry-After`, a full read that breaks off and deletes nothing, a restart resuming from the checkpoint |
 | Workday, SuccessFactors, UKG Pro | Fakes built from the vendors' published API shapes (`tests/e2e/hr-saas.sh`) | Workday's RaaS report with a refresh token and effective dates; SuccessFactors' OData entities joined into one person; UKG's personnel resources joined the same way |
 | DSML files, both sides (since 0.6.0) | Two engines (`tests/e2e/dsml-airgap.sh`): the connected side writing over SFTP to OpenSSH 9.6's `internal-sftp` (host key pinned, an Ed25519 key), the far side publishing to OpenLDAP 2.6 under another suffix. **The transfer is the test script copying files** (checksum, file, done marker), as a diode would: no DSML gateway or data diode product is tested | The first start (changes, then a snapshot); a modification, a rename, a leaver and group membership; two batches in one interval written as one file; a lost file holding the files after it until a reconciliation's snapshot supersedes it; a damaged file refused until a good copy arrives; a file without its done marker; the SFTP server down, the exports kept (none in the dead-letter queue) and written once it is back, with no gap in the numbering; the far side rebuilt from nothing, with an entry changed by hand put right from a snapshot; every file that crossed validated against `DSMLv2.xsd` |
+| Governance grants and inventory (since 0.7.0) | OpenLDAP 2.6 (`tests/e2e/grants.sh`, `inventory.sh`); tables, REST and SDK targets in their own scripts (see above) | Memberships, values and scopes granted and ended, a revoke, a one-member `groupOfNames` giving way to the placeholder member, the inventory's accounts, groups and members. Against Active Directory and Entra ID only in nightly jobs that need credentials, and have not run against a real domain or tenant; a nightly job runs the SCIM scenario against `scim2-server`. Not run against a hosted SCIM application |
 | Secrets from a vault | A double of HashiCorp Vault (`syncd-fakes vault`), with AppRole (`tests/e2e/secrets-vault.sh`) | Two OpenLDAP connections bound with passwords read from it, both passwords rotated, the connections cut and remade with the new ones without a restart, only references in the configuration, status and logs |
 | Active Directory conveniences | `syncd preview` against the running engine | The attributes computed from CSV records; `syncd validate` refusing the blocks on an LDAP target |
 | Initial passwords | OpenLDAP with PostgreSQL streaming (`tests/e2e/passwords.sh`) | A person provisioned with an initial password binds with it; a change captured later replaces it; `generate` creates every entry with a password; the counts in `syncd status`; no password in the engine's log; since 0.5.0 a directory on another host over `ldap://` refused unless `allow_cleartext` |
@@ -2041,7 +2065,7 @@ Not tested against a real server:
   needs them. HR and SaaS services are read through the REST reader since 0.5.0; Workday
   SOAP and SuccessFactors `$expand` are not built.
 - **Other targets**: files other than DSML, and APIs that take bodies other than
-  JSON (REST services with JSON bodies are targets in development).
+  JSON (since 0.7.0 REST services with JSON bodies are targets).
 - **DSML over anything but a directory or SFTP**: a DSML gateway's SOAP or HTTP endpoint
   is not called; files go through a directory or an SFTP server. Not tested against a
   commercial DSML gateway or a data diode's transfer software.

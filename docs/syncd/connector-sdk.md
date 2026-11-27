@@ -1,6 +1,7 @@
 # Connector SDK
 
-*In development, not in a release yet. Extensibility pack.*
+*New in syncd 0.7.0. Extensibility pack. This page describes syncd 0.7.0 (tag `v0.7.0`,
+commit `6de2fa1`).*
 
 When syncd has no connector for a system, one can be written by anyone, in any language
 with gRPC: a service implementing syncd's connector protocol
@@ -28,8 +29,10 @@ its entries in a JSON file and implements every call: start from it.
 - An add of a key that exists takes the entry over; a delete of an entry already gone,
   and a member already added or already removed, are fine.
 - An entry's error goes in its result; a gRPC status fails the whole call, and
-  `UNAVAILABLE` makes the engine treat the connector as down (exports wait in the
-  dead-letter queue).
+  `UNAVAILABLE` or `DEADLINE_EXCEEDED` makes the engine treat the connector as down
+  (exports wait in the dead-letter queue and are tried again); `UNAUTHENTICATED` names the
+  token.
+- Values are bytes: UTF-8 text unless the schema says `binary`.
 - The engine sends `authorization: Bearer <token>` when the connection has a token.
   Beyond the engine's own host, serve TLS and require a token or a client certificate.
 
@@ -43,7 +46,9 @@ connectors:
       endpoint: https://billing-connector.corp.example.com:50081
       token: { env: BILLING_CONNECTOR_TOKEN }
       ca_file: /etc/syncd/connector-ca.pem
-      # client_cert and client_key: mutual TLS
+      # client_cert: /etc/syncd/connector-client.pem    # mutual TLS
+      # client_key: { file: /etc/syncd/connector-client.key }
+      timeout_secs: 120           # one call
     objects:                      # as a source: object types, read in full
       - { type: User, anchor: userName }
 
@@ -51,22 +56,34 @@ publications:                     # as a target
   - name: people_to_billing
     view: people
     target: billing
-    resource: User                # the object type
+    resource: User                # the object type (User by default)
     external_id: e.login          # the key
     attributes: { displayName: e.display_name, email: e.mail }
     deprovision: disable
+    grants: { memberships: {}, inventory: {} }   # governance: granted memberships, the inventory
 ```
 
+- As a source, an object is read in full (`mode: scrape`, on its schedule). `anchor` names
+  an attribute; an entry without it is anchored on its key.
+- As a target, entries are named `name=<external_id>,objectType=<resource>` wherever syncd
+  shows them. `grants.memberships` takes no settings: the connector's `ChangeMembers` does
+  the work.
+
 Validation refuses an endpoint beyond loopback without `https://` and a token or a client
-certificate, and on a publication what the protocol cannot carry (`dn`, containers,
-`writeback`, `adopt`, `passwords`, computed groups, references).
+certificate, and on a publication what the protocol cannot carry (`dn`, `object_classes`,
+containers, moves, `writeback`, `adopt`, `passwords`, computed groups, references,
+`strip_unmanaged_groups`). Every key is in
+[Configuration](configuration.md#external-connectors-external).
 
 ## Checking a connector
 
-`syncd connector-test --endpoint <url> [--token-file F] [--group G]` runs a fixed sequence
+`syncd connector-test --endpoint <url> [--token-file F] [--ca-file F] [--client-cert F
+--client-key F] [--object-type T] [--group G] [--timeout-secs N]` runs a fixed sequence
 against a connector and reports each step: Info, DiscoverSchema, add, read, modify, list,
 disable, enable, membership add and remove (with `--group`), rename and delete. It needs
-no configuration file, writes one test entry and deletes it. **Run it, and send its
+no configuration file, writes one test entry (`syncd-test-<time>`, of `--object-type`,
+`User` by default) and deletes it; a connector that does not write gets the read steps
+only. **Run it, and send its
 output, before asking for support with a connector.**
 
 ## Tested, and not yet

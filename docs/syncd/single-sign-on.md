@@ -9,11 +9,16 @@ be used together, and local accounts keep working alongside them; an admin can t
 sign-in to [break-glass accounts](#break-glass-accounts). The sign-in page shows a "Sign in with
 &lt;label&gt;" button for each method that is configured.
 
-This page describes the code at syncd 0.6.1 (tag `v0.6.1`, commit `59cbf19`). 0.5.5 reads SAML
+This page describes the code at syncd 0.7.0 (tag `v0.7.0`, commit `6de2fa1`). 0.5.5 reads SAML
 responses in linear time with a deadline, holds the sign-in callbacks to the per-address limit,
 fetches CRLs once for every sign-in waiting on them, and revokes an account's API tokens when its
 password is reset; each is marked where it is described. 0.6.0 and 0.6.1 change nothing in
-single sign-on. Single sign-on is for people in a browser: other systems call the API with
+single sign-on. 0.7.0 adds the roles `governance_admin` and `participant` (see [Roles](#roles)),
+and a **fresh sign-in**: a person resetting their directory password in the console must have
+signed in again at the provider moments before, and the provider must say when, in the ID
+token's `auth_time` or the assertion's `AuthnInstant` (see
+[A fresh sign-in for a password reset](#a-fresh-sign-in-for-a-password-reset)). Single sign-on
+is for people in a browser: other systems call the API with
 [API tokens](#api-tokens-and-single-sign-on).
 
 !!! warning "What SAML and certificate sign-in were tested with"
@@ -244,7 +249,12 @@ addresses. Neither has been tried on a cluster.
 
 The console's roles are `admin`, `designer`, `operator`, `viewer` and `auditor`, and from 0.5.0
 each can be given on everything, on one environment or on named engines (see
-[Security](security.md#authorization)). The same role map syntax serves OpenID Connect
+[Security](security.md#authorization)). From 0.7.0 there are two more, for
+[governance](governance.md): `governance_admin`, on everything or on a governance scope
+(`governance_admin@governance:finance`), and `participant`, which reaches a person's own pages
+(their access, reviews, requests and approvals) and no engine. To let every employee reach
+those pages, make `participant` the default role (`CONSOLE_OIDC_DEFAULT_ROLE=participant`, or
+the SAML or certificate equivalent). The same role map syntax serves OpenID Connect
 (`CONSOLE_OIDC_ROLE_MAP`), SAML (`CONSOLE_SAML_ROLE_MAP`) and certificates (`ENS_X509_ROLE_MAP`). How scopes work in the console is in the [Admin guide](admin-guide.md#scopes).
 
 - A role map is a list of `value=role` entries, separated by commas, or by semicolons when a
@@ -514,6 +524,38 @@ Either way the console checks the certificate itself, at the sign-in endpoint:
 
 The settings are also listed in the [Configuration guide](configuration.md#certificate-sign-in-cacpiv), and the sign-in policy (consent banner, lockout, passwords) in the [Admin guide](admin-guide.md#sign-in-policy).
 
+## A fresh sign-in for a password reset
+
+From 0.7.0 a person who forgot their directory password, or locked their account, can set a
+new one, or unlock it, on the console's **My password** page (`/my/password`), once they have
+proved who they are another way than that password (see
+[Password synchronisation](password-sync.md#forgotten-passwords-and-locked-accounts)). A
+single sign-on proves it only when the provider authenticated the person again for it, and
+says so:
+
+- The page's **Sign in again** starts a sign-in with `fresh=true`. For OpenID Connect the
+  console asks the provider for `max_age=0` and `prompt=login`; for SAML it sends the
+  authentication request with `ForceAuthn="true"`.
+- The callback then **requires** the provider's statement of when it authenticated the
+  person: the ID token's `auth_time` claim (OpenID Connect), or the assertion's
+  `AuthnInstant` (SAML; the latest, when there are several). It must be after the console's
+  request (a minute's leeway for clocks), within the last five minutes, and not in the
+  future. A provider that sends neither, or an older time (it showed the person their old
+  session), has the sign-in refused, with the reason: `the sign-in is not fresh: the identity
+  provider did not say when it authenticated you (auth_time) ...`, or `... did not have you
+  sign in again ...`.
+- A reset or an unlock is allowed within five minutes of that proof. A certificate sign-in
+  (CAC/PIV) is its own proof, for five minutes from the sign-in. A session started with a
+  local password proves nothing here (`403`).
+- **Sessions from before the upgrade to 0.7.0 carry no such proof**: the person signs in
+  again from the page first.
+
+Check the provider before relying on it: OpenID Connect Core requires `auth_time` when
+`max_age` is asked for, and a SAML provider should honour `ForceAuthn`, but one that leaves the
+time out, or reuses the person's session anyway, has every fresh sign-in refused. The fresh sign-in is tested only in the console's
+own tests, against a provider and responses the tests make, not against Keycloak or any other
+real provider.
+
 ## API tokens and single sign-on
 
 [API tokens](api-reference.md#api-tokens) are for other systems, not people, and do not go
@@ -556,7 +598,10 @@ Every sign-in is recorded in the audit trail (`ens-audit/1`, category `authentic
 role assignments it gave (`roles`, a list, from 0.5.0; 0.4.1 recorded one `role`: update SIEM
 parsers), or `denied` with the reason (the provider refused, the state or request did not match
 this browser, the token or response was not valid, no role matched, the account is disabled, a
-local account has that name, the certificate was expired, revoked or of an issuer not allowed).
+local account has that name, the certificate was expired, revoked or of an issuer not allowed;
+from 0.7.0 also a fresh sign-in the provider did not prove, `the sign-in is not fresh: ...`).
+A password reset or unlock after a fresh sign-in is recorded as `password.reset` or
+`account.unlocked`, with the proof used.
 A certificate sign-in also records the certificate's subject, issuer, serial number and SHA-256
 fingerprint, and how revocation was checked. Each sign-in, by any method, also becomes the
 account's last sign-in, which the dashboard shows at the next one ("Your previous sign-in", with the

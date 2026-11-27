@@ -3,8 +3,8 @@
 This guide covers running syncd day to day: the services, starting and stopping them, checking
 health, reading logs, the `syncd` and `syncdctl` commands, who may use the control API, held
 changes, unmanaged entries, backups, the support bundle, an active/passive pair, the files of an
-air gap, monitoring, certificates, the master key and the password keys. It describes syncd 0.6.1
-(tag `v0.6.1`, commit `59cbf19`). [Running on Kubernetes](#running-on-kubernetes) covers the same for the Helm chart.
+air gap, monitoring, certificates, the master key and the password keys. It describes syncd 0.7.0
+(tag `v0.7.0`, commit `6de2fa1`). [Running on Kubernetes](#running-on-kubernetes) covers the same for the Helm chart.
 Installing and upgrading are in [Installation](install.md); the license is in
 [Licensing](licensing.md); what to do when something goes wrong is in
 [Troubleshooting](troubleshooting.md).
@@ -20,6 +20,22 @@ installation that did not finish. 0.6.0 adds the `dsml` connector for air gaps
 ([DSML files across an air gap](#dsml-files-across-an-air-gap)). 0.6.1 fixes the installer:
 `openssl`'s errors are shown, and finishing an installation issues the certificates and installs
 the units a first run did not.
+
+0.7.0 adds [governance](governance.md) to the console, and to the engine what governance asks of
+it: grants the console sends and the engine enforces, inventories of its targets for the
+entitlement catalog, and password reset and unlock. For an operator that means new commands
+(`syncd grants`, `syncd inventory`, `syncd password reset`, `unlock` and `policy`, and
+`syncd connector-test`; see [Commands](#commands)), new control API calls with their tiers
+([Control API access](#control-api-access)), the console's database at schema 52 (33 before),
+and the evaluation's `license:` line in `syncd status` ending with the pack `governance`
+([Upgrading from 0.6.1 to 0.7.0](install.md#upgrading-from-061-to-070)). The
+engine's store keeps its format (2) and gains a **generation**: after a restore or an HA
+takeover the console sees it change and sends the engine every grant again by itself
+([Backups](#the-console-and-the-engine-at-different-points), [Failover](#failover)). On
+Kubernetes the 0.7.0 images are published, but not chart 0.7.0 ([Upgrades](#upgrades)). The
+engine's governance work was tested end to end against OpenLDAP 2.6, Samba Active Directory (reset
+and unlock) and the project's stand-ins, not yet against a real Active Directory, Entra tenant,
+hosted SCIM application, ServiceNow or Jira.
 
 ## What runs where
 
@@ -39,7 +55,9 @@ and `postgresql.service`. From 0.4.0 two engines on two hosts can form an
 The console reaches out too, when you set it up to: the audit outputs (Splunk, syslog), webhook
 receivers and the pre-publish hook, a mail relay for scheduled reports and group reviews, a Git
 server for Git sync, a SAML identity provider's metadata (when given as a URL) and the OCSP responders and CRLs of
-certificate sign-in, and a KMS when its master key is wrapped by one. The engine reaches S3 or a
+certificate sign-in, and a KMS when its master key is wrapped by one; from 0.7.0, with
+governance, also the ticket systems of manual systems (ServiceNow, Jira or a webhook receiver)
+and connected products (the RSA operations portal, CertAlert). The engine reaches S3 or a
 backup directory for [off-host backups](#off-host-backups), and from 0.5.0 a Vault, AWS Secrets
 Manager or Azure Key Vault when its configuration refers to secrets there (`vault`,
 `aws_secret`, `azure_keyvault`), or a KMS that wraps its password-key passphrase; from 0.6.0 also
@@ -115,15 +133,15 @@ sudo syncd status                          # what the engine is doing
 `syncdctl status` prints:
 
 ```text
-release:   0.6.1
-previous:  0.6.0
+release:   0.7.0
+previous:  0.6.1
 engine:    active, control API answers
-store:     format 2 (syncd 0.6.1 reads up to 2)
+store:     format 2 (syncd 0.7.0 reads up to 2)
 console:   active, http://127.0.0.1:8080 answers
 certificates: valid until Nov  4 10:15:00 2036 GMT (ca.crt expires first)
 users:     https://syncd.example.com
 backups:
-  /var/lib/syncd/backups/20261121T101500Z-upgrade-0.6.0-to-0.6.1
+  /var/lib/syncd/backups/20261127T101500Z-upgrade-0.6.1-to-0.7.0
 ```
 
 From 0.5.5, on a host whose installation did not finish (installed with `--no-start`, or a first
@@ -163,11 +181,11 @@ that much behind. It also shows:
 
 | Line | What it says |
 |---|---|
-| `engine 0.6.1  up 3d2h  fips off`, `configuration version ...` | The version, uptime, FIPS mode and the configuration running |
+| `engine 0.7.0  up 3d2h  fips off`, `configuration version ...` | The version, uptime, FIPS mode and the configuration running |
 | `target <name> UNREACHABLE (since ... ago); failed exports wait in the dead-letter queue (a DSML target keeps its exports for the next file it writes)` | A target the engine cannot reach. The last part, in brackets, is new in 0.6.0; a script matching `target <name> UNREACHABLE` is unaffected. A `dsml` target that cannot write its file keeps the exports in its store and tries again within a minute: nothing goes to the dead-letter queue (see [DSML files across an air gap](#dsml-files-across-an-air-gap)) |
 | `configuration applied by CN=syncd console at 10.0.0.5:41234, 2h ago (signed by key ..., sha256 ...)`, or `configuration from the file on this host, not applied through the control API (...)` | Who applied the running configuration, when, and whether the console signed it (new in 0.5.0; see [Control API access](#control-api-access)) |
 | `control API access: strict (...)`, or `control API access: COMPATIBLE: every client certificate from the CA may apply configurations and approve changes; ...` | Who may use the control API (new in 0.5.0). `configurations: applied only when the console signed them` follows with `engine.require_signed_config` |
-| `license: GRACE (L-0001 for ..., 5000 managed identities, expires ...; packs ...)`, `license: N managed identities on this engine ...`, `license: installation ...` | The license's state, the managed identities counted and the installation id, then any message (new in 0.5.0; see [Licensing](licensing.md)). Absent on the passive engine of a pair |
+| `license: GRACE (L-0001 for ..., 5000 managed identities, expires ...; packs ...)`, `license: N managed identities on this engine ...`, `license: installation ...` | The license's state, the managed identities counted and the installation id, then any message (new in 0.5.0; see [Licensing](licensing.md)). Absent on the passive engine of a pair. During the evaluation (`license: EVALUATION (no license; packs ...)`) it names every pack, and from 0.7.0 the list ends with `governance`: a script that matches the whole line needs the new list |
 | `environment prod` | The environment the configuration was rendered for (see [Configuration as code](config-as-code.md)) |
 | `package gov-naming 1.2.0 (...)` | The rule packages in use |
 | `ha: pair idm, this engine idm1 is ACTIVE (lease postgres, held until in 12s)`, `ha: last snapshot taken 20s ago (1.5 MiB; 64.0 KiB new, 9 of 12 files held already), every 1m0s`, `ha: the passive engine follows the password queue` | An [active/passive pair](#high-availability): this engine's role, the lease, the snapshots and (from 0.5.0) whether the passive engine follows the queued password changes |
@@ -257,6 +275,10 @@ Useful engine log messages:
 | `computed group review is due: review it (syncd group review <publication> <group>)` | A group's `review_every` fell due (new in 0.5.0; again at a start while it stays due) |
 | `password queue: what the old active engine wrote after the snapshot was applied` | After a takeover, the new active engine had the password changes queued since the last snapshot (new in 0.5.0) |
 | `configuration file created from the initial one` | A container's first start copied `--initial-config` to the data volume |
+| `the store has a new generation` (with `generation`) | New in 0.7.0: a new store, a store restored from a backup, a takeover of a pair, or a snapshot swapped in. The console, seeing it, sends every grant again (see [The console and the engine at different points](#the-console-and-the-engine-at-different-points)) |
+| `forgot grants that ended a while ago` (with `grants`) | New in 0.7.0: grants that ended more than seven days ago, and whose end the console has read, are removed from the store |
+| `the group's last granted member is gone; its placeholder member holds its place`, `the group's placeholder member made way for a granted member` | New in 0.7.0: an LDAP group's last member granted by the console was removed, and the publication's `group_policy.placeholder_member` took its place, or left it for a new member |
+| `password reset; delivering it`, `password reset refused by the directory`, `account unlock` | New in 0.7.0: a reset or an unlock from the console's **My password** page, a reset link, or `syncd password reset` and `unlock`, with who proved it (`proof`), never the password |
 
 Useful console log messages:
 
@@ -277,6 +299,8 @@ Useful console log messages:
 | `single sign-on could not start` | The identity provider could not be reached or is misconfigured |
 | `a background task stopped; starting it again in N s` (with `task` and `why`) | New in 0.5.5: a background task (the mail outbox, the webhook sender, the engine status watcher, an audit output, ...) ended or panicked; it starts again after a wait that doubles from a second to a minute. `/healthz` names it while it keeps stopping |
 | `webhooks cannot be sent: their TLS configuration does not load; trying again in a minute` | `CONSOLE_WEBHOOKS_CA_FILE` does not load. Events queue meanwhile (new in 0.5.5; before, webhooks stopped until a restart) |
+| `governance delivery pass failed` | New in 0.7.0: sending grants to the engines, or reading back their states, failed; it is tried again within 10 seconds, and nothing is skipped |
+| `the engine's store was replaced; its grants are sent again` (with `engine`, `upserts`, `removes`) | New in 0.7.0: an engine reported a new store generation (a restore, a takeover), and every grant the console holds for it was queued again. Audited as `governance.delivery.redelivered` |
 
 **The console's own limits** (from 0.5.5). A page's request is given up after ten minutes: the page
 says `The console did not answer within 10 minutes. What was asked may still be under way: look
@@ -335,6 +359,9 @@ Running the engine:
 | `syncd restore --from DIR\|s3://... [--name NAME] [--replace]` | Restores a backup into the data directory, with the engine stopped (see [Restore](#restoring-an-off-host-backup)). Run it as the engine's user (`sudo -u syncd`): from 0.5.1 the files it puts in place are mode 0600. New in 0.4.0 | No: refused while it runs |
 | `syncd support-bundle [--out FILE\|-]` | Writes the engine's [support bundle](#support-bundle); `--out -` streams it to standard output (from 0.4.1). New in 0.4.0 | Yes (collects less without it) |
 | `syncd password set`, `password change`, `password queue [--limit N]`, `password agent add NAME --source C\|bind NAME --source C\|list\|revoke\|enroll\|renew` | Submit a password change, change a person's own password, list the changes waiting (who submitted each, never a password; new in 0.5.0), and manage the capture agents. From 0.5.0 a new agent needs `--source`, and `bind` binds an agent enrolled before 0.5.0. See [Password synchronisation](password-sync.md) | Yes (`agent enroll` and `agent renew --dir DIR` run on the agent's host) |
+| `syncd password reset --login L`, `password unlock --login L`, `password policy` | New in 0.7.0. `reset` sets a person's password without their current one, as the console does after a fresh sign-in or a reset link: it reads the new password, one line, from standard input, and the engine sets it as its service account in the self-service source (`passwords.self_service`) and delivers it to the other directories. `unlock` clears the person's lockout in that source and the directories their passwords go to, and prints `directory: DN: outcome` for each. `policy` prints the rules a new password must meet, the engine's and each directory's. The log and the audit name the caller (`syncd password reset by <user>`), never the password. See [Password synchronisation](password-sync.md) | Yes |
+| `syncd grants [--publication P] [--since T]`, `syncd grants --apply FILE` | New in 0.7.0. The grants the console gave, one per line (id, publication, entity, state and detail), or those whose state changed since `T` (RFC 3339); `no grants` when there are none. With `--apply`, submits grants from a JSON file (`{"upserts": [...], "removes": [...]}`), for tests and recovery: the console sends grants itself. Listing needs the `read` tier, `--apply` the `configure` tier. Ended grants are forgotten seven days after they ended, once the console has read that they did. See [Governance](governance.md#setting-a-publication-up-for-grants) | Yes |
+| `syncd inventory --publication P [--kind accounts\|groups\|members] [--group G]` | New in 0.7.0. What a publication's target holds for the entitlement catalog (`grants.inventory`): its accounts with the entity each was exported for, its groups, or one group's members (`--kind members` needs `--group`, a DN or a SCIM or Entra ID id). Reads the target, never writes it; `nothing listed` when it is empty. Needs the `operate` tier | Yes |
 | `syncd password rekey --passphrase-file FILE`, `rekey --forget-previous`; `password rotate-key [--retire [--key ID] [--force]]`; `password rotate-agent-ca [--retire]` | Change the password keys' passphrase, rotate the password key, rotate the agents' CA. New in 0.5.0. See [The password keys](#the-password-keys) | `rekey`: no (it works with the engine running or stopped); the rotations: yes |
 | `syncd secrets wrap --kms URI [--in FILE] --out FILE` | Wraps a passphrase with a KMS key (`awskms:...`, `azurekv:...`, `vaulttransit:<mount>/<key>`), for `SYNCD_PASSWORD_KEY_PASSPHRASE_KMS`. New in 0.5.0 | No |
 | `syncd license show`, `syncd license verify FILE [--installation ID]` | The license as the running engine sees it (state, usage, installation id); a license file checked with this build's keys, without the engine. New in 0.5.0. See [Licensing](licensing.md) | `show`: yes; `verify`: no |
@@ -356,6 +383,7 @@ Configuring and testing (mostly for designers):
 | `syncd preview FILE [--view V] [--samples N] [--random] [--live] [--reveal]` | Runs a configuration over a sample of source records (default 10, at most 100, of each view's first source) in a scratch store, and shows the entities and what each publication would write. `--live` reads the sources now instead of the engine's copies | Yes |
 | `syncd test-connection CONNECTOR` | Connects with a connector (and binds, for a directory) and shows what answered. From 0.6.0, for a `dsml` connector, signs in to the SFTP server and lists the directory, with how many files are there. Writes nothing | No |
 | `syncd discover CONNECTOR [CONTAINER] [--object O] [--samples N] [--random] [--reveal]` | Lists what a connector holds (tables, collections, directory entries); with a container (`schema.table`, a collection, a DN), its fields and a few records (default 5, at most 100). `--object` reads a configured object's records as the engine reads them. Writes nothing | No |
+| `syncd connector-test --endpoint URL [--token-file F] [--ca-file F] [--client-cert F --client-key F] [--object-type T] [--group G] [--timeout-secs N]` | New in 0.7.0. Runs the connector SDK's conformance sequence against a connector written with the SDK (`type: external`): Info, DiscoverSchema, add, read, modify, list, disable, enable, memberships, rename and delete, reporting each step. It writes a test entry (of `--object-type`, `User` by default) and deletes it, so point it at a test system. Needs no configuration. See [Connector SDK](connector-sdk.md) | No |
 
 `--reveal` shows the values of sensitive attributes. It needs mutual TLS (the default on an
 installed host).
@@ -405,7 +433,8 @@ For every command that needs the running engine (`status`, `reconcile`, `full-sy
 `check-drift`, `unmanaged`, `adopt`, `retry`, `discard`, `apply-config`, `simulate`, `preview`,
 `backup`, `support-bundle`, `license show`, `password set`, `password change`, `password queue`,
 `password rotate-key`, `password rotate-agent-ca`, `password agent add`, `bind`, `list` and
-`revoke`, and `config diff --running`):
+`revoke`, and `config diff --running`; from 0.7.0 also `grants`, `inventory`, `password reset`,
+`password unlock` and `password policy`):
 
 | Option | Variable | Meaning |
 |---|---|---|
@@ -446,7 +475,19 @@ New in 0.5.0. Every call of the control API has a tier, each including the one b
 | `read` | The status, the lists (dead letters, held changes, quarantine, data quality, unjoined records, queued passwords, agents), the running configuration, simulations, the reconciliation report |
 | `operate` | Runs (`reconcile`, `full-sync`, `check-drift`, `unmanaged`), `approve`, `retry`, `discard`, joins, `adopt`, group reviews, a person's own password change, revoking an agent, backups and HA snapshots of an engine that holds no password keys, connector checks and discovery, previews, and `--reveal` |
 | `operate` and `passwords` | Setting passwords and deciding who else can: `syncd password set`, `password agent add` and `bind`, `password rotate-key` and `rotate-agent-ca`, and the passive engine of a pair forwarding what agents sent it. From 0.5.1, on an engine that holds password keys (a password key or the agents' CA on disk), also what hands them out: backups, HA snapshots and following the password queue (`Backup`, `PullSnapshot`, `PullSnapshotFiles`, `FollowPasswordQueue`; `SnapshotManifest`, a list of files, stays at `operate`) |
-| `configure` | Applying a configuration (`ApplyConfig`: the console's publish, `syncd apply-config`) and installing a license on an engine |
+| `configure` | Applying a configuration (`ApplyConfig`: the console's publish, `syncd apply-config`) and installing a license on an engine; from 0.7.0 also the console's grants (`ApplyGrants`, `syncd grants --apply`) |
+
+0.7.0 adds calls to these tiers, and certificates keep the tiers they had: `ListGrantStates` and
+`GetPasswordPolicy` are `read`; `ListInventory` is `operate`; `ResetPassword` and
+`UnlockAccount` are `operate` and `passwords`, as the other calls that set passwords; and
+`ApplyGrants` is `configure`, so the console, whose certificate is listed under `configure`, sends
+grants, and the command line's certificate lists them but cannot apply them. The console's
+pages new in 0.7.0 that set passwords go through the same check: for **My password** and reset
+links (`ResetPassword`, `UnlockAccount`, to the engine `CONSOLE_SELF_SERVICE_ENGINE` names) and
+the **Password agents** page (`AddPasswordAgent`, `BindPasswordAgent`), the console's
+certificate (`syncd console`) must be listed under `api.access.passwords` on the engine's host,
+or the engine refuses (`ResetPassword sets passwords: in strict mode it needs a client
+certificate listed under api.access.passwords ...`).
 
 `api.access` in the host's `engine.yaml` says which client certificate (by common name, or
 `uri:` and a URI subject alternative name, or `*`) has which tier:
@@ -561,7 +602,7 @@ the console): syncdctl register`. Once the cause is fixed:
 
 ```bash
 sudo syncdctl register                                 # or run the installer again:
-sudo ./syncd-0.6.1-linux-x86_64/install.sh
+sudo ./syncd-0.7.0-linux-x86_64/install.sh
 ```
 
 From 0.6.1 either one issues the control API's certificates that are missing (under the CA
@@ -576,8 +617,8 @@ says `the installation did not finish: syncdctl register finishes it`.
 **A 0.6.0 install that stopped after `==> installing syncd 0.6.0`** (no `/etc/syncd/pki/ca.key`
 or `engine.key`, no `syncd.service`): 0.6.0's `openssl` failed, and what it said was not shown.
 0.6.0's own installer run again, or its `syncdctl register`, only starts the services, which
-cannot start without their keys and units. Run 0.6.1's installer (`install.sh` from the bundle),
-or install the 0.6.1 package and run `sudo syncdctl register`. If `openssl` fails again, its
+cannot start without their keys and units. Run the installer of 0.6.1 or later (`install.sh`
+from the bundle), or install that release's package and run `sudo syncdctl register`. If `openssl` fails again, its
 errors are shown, followed by `openssl could not make <what> (above)`. See
 [Troubleshooting](troubleshooting.md#installation-and-upgrade).
 
@@ -879,7 +920,9 @@ sudo -u syncd syncd restore --from s3://backups/syncd/prod --replace
 - **After the restore** (from 0.5.5), the snapshots an engine of a pair received or took of the
   old store are dropped, so the next start does not swap one in over the restored store, and that
   start reads PostgreSQL replication streams in full, since their slots have moved past the
-  backup.
+  backup. From 0.7.0 that start also gives the store a new generation, and the console sends the
+  engine every grant again (see
+  [The console and the engine at different points](#the-console-and-the-engine-at-different-points)).
 - **Sealed keys.** The password keys come back as they were backed up. When they are sealed, the
   engine needs the passphrase of the engine they came from; `syncd restore` says so when the
   passphrase it has is missing or does not open them (`the restored password key is sealed:
@@ -900,7 +943,7 @@ On Kubernetes, see [Backups on Kubernetes](availability-and-sizing.md#backups-on
 
 ```bash
 sudo syncdctl backup                  # stops syncd briefly; prints the backup's directory
-sudo syncdctl restore /var/lib/syncd/backups/20261121T101500Z-manual-0.6.1
+sudo syncdctl restore /var/lib/syncd/backups/20261127T101500Z-manual-0.7.0
 ```
 
 A backup is a directory under `/var/lib/syncd/backups`, readable by root only, named
@@ -947,6 +990,47 @@ A backup is a directory under `/var/lib/syncd/backups`, readable by root only, n
 
 What else to keep, and how to recover on a new host, is in
 [Sizing, availability and recovery](availability-and-sizing.md#disaster-recovery).
+
+### The console and the engine at different points
+
+New in 0.7.0, with governance. The console's database and each engine's store hold two halves of
+one record: the console what it decided (assignments, the grants made of them, and which of them
+each engine has been sent), the engine the grants it holds and enforces. Restore them **to the
+same point**: a host-local backup does (`syncdctl restore` always restores the database with the
+store), and so does an upgrade's rollback. An off-host engine backup (`syncd backup`,
+`engine.backup`) and a database backup of your own are taken at different moments.
+
+- **The engine restored to an earlier point** with `syncd restore` (or `syncdctl restore
+  --from`), the usual case: the restored engine's first start gives its store a new generation,
+  the console sees it at its next read of the grants' states (within about 10 seconds), and
+  sends that engine every grant it holds for it again, each standing one as an upsert and each
+  ended one as a remove. The engine takes what it holds already as no change. The console logs
+  `the engine's store was replaced; its grants are sent again` and audits
+  `governance.delivery.redelivered`. Nothing needs doing.
+- **The engine's files put back another way** (a copy of the data directory, a volume snapshot)
+  keep the generation they had, so the console does not know; **the console's database restored
+  alone** is the same. Send everything again by hand:
+
+    ```bash
+    sudo runuser -u syncd-console -- env -C / \
+      $(sudo grep -E '^[A-Za-z_][A-Za-z0-9_]*=' /etc/syncd/console.env) \
+      CONSOLE_DATA_DIR=/var/lib/syncd/console \
+      /opt/syncd/current/bin/syncd-console governance redeliver --engine <name>
+    ```
+
+    with the console's settings, as for the
+    [`syncd-console admin`](admin-guide.md#command-line-administration-syncd-console-admin)
+    commands. It prints `queued for <name>: N grants standing, N ended; a running console
+    delivers them`: every grant the console holds for that engine is queued again, the same way.
+    Also audited as `governance.delivery.redelivered`.
+- **The database restored to an earlier point than the engine**: the engine may hold grants the
+  console has no record of, and sending everything again does not remove them. List them with
+  `sudo syncd grants` and end them with `syncd grants --apply` (a file of `removes`), or restore
+  the engine to match.
+
+The console and the engine restored to different points, and redelivery after it, are tested
+(`redelivery_after_restores_to_different_points`, and a new store generation having every grant
+sent again).
 
 ## Support bundle
 
@@ -1111,6 +1195,20 @@ a third of the TTL; the stopped engine, started again, finds the lease held and 
 its host settings (`engine.data_dir`, `api`, `engine.ha`) are the same as its own, so publishing to
 the active engine is enough. Hosts whose host settings differ (another `api.listen`) keep their
 own: publish to both.
+
+**Grants** (from 0.7.0). The grants the console sent are in the store, so the snapshots carry
+them: after a failover the engine that took over applies a grant the old one took before its last
+snapshot, even one it had not exported yet. A grant taken in the last `snapshot_every_secs` before
+the old engine was lost is not in the snapshot; the engine that takes over starts with a new store
+generation, and the console, seeing it, sends it every grant again by itself (the log line `the
+engine's store was replaced; its grants are sent again`, audited as
+`governance.delivery.redelivered`). Nothing needs doing after a failover: the earlier advice to
+run `syncd-console governance redeliver` after one no longer applies, though the command still
+works for a restore by hand (see
+[The console and the engine at different points](#the-console-and-the-engine-at-different-points)).
+A grant carried over a failover is tested in `tests/e2e/ha-backup.sh` (OpenLDAP 2.6,
+PostgreSQL 16), and the console sending everything again on a new generation in its integration
+tests.
 
 ## Monitoring
 
@@ -1526,7 +1624,8 @@ kubectl -n syncd exec syncd-engine-0 -- syncd backup --to s3://backups/syncd/pro
 Every command in [The syncd command line](#the-syncd-command-line) works this way, with the
 secrets from `engine.envFromSecret` in the pod's environment, except `syncd apply-config` on a
 release installed with 0.5.0 or later, whose strict [control API access](#control-api-access) lets
-the socket read and operate but not apply a configuration. Through the socket `syncd backup` keeps
+the socket read and operate but not apply a configuration (nor, from 0.7.0, `syncd grants
+--apply`, which needs the same tier). Through the socket `syncd backup` keeps
 working on an engine that holds password keys. To restore into the volume, run `syncd restore` as
 the image's user (65532), as the pods do: the files it puts in place are mode 0600 (see
 [Backups on Kubernetes](availability-and-sizing.md#backups-on-kubernetes)). A release first installed before 0.5.0
@@ -1603,11 +1702,32 @@ set one, caps the CPUs the console shows the engine may use.
 ### Upgrades
 
 `helm upgrade` with the new chart version (see [Upgrade with Helm](install.md#helm-upgrade)).
-The newest published chart and images are 0.6.0, signed with cosign. 0.6.1's were not published:
-the tag's Container workflow failed building the amd64 binaries, so the job that pushes and signs
-was skipped. 0.6.1 changes only the host installer, so a Kubernetes install loses nothing by
-staying on chart 0.6.0. Back up first: the chart takes no backup. The engine migrates its store when it starts, if the new
-release changed its format, and the console migrates its database. `helm rollback` restores no data
+Where 0.7.0 stands:
+
+- **The images are published**, signed with cosign, each with its SBOM attestations:
+  `ghcr.io/winllc/syncd:0.7.0`, `ghcr.io/winllc/syncd-console:0.7.0` and their `-fips` tags,
+  for amd64 and arm64. The image SBOMs were not attached to the GitHub release this time: the
+  attestations are the copies there are.
+- **Chart 0.7.0 is not published.** The job that pushes and signs ran into GitHub's Actions
+  storage quota just before the chart step, so the newest published chart is still 0.6.0 (0.6.1
+  published no images or chart: its Container workflow failed building the amd64 binaries).
+  Chart 0.7.0 differs from 0.6.0 only in its `version` and `appVersion`: their templates and
+  values are the same. Until it is published, either install the chart from the source
+  repository at tag `v0.7.0` (`deploy/helm/syncd`), whose images default to 0.7.0, or upgrade
+  with chart 0.6.0 and the 0.7.0 images named:
+
+    ```bash
+    helm upgrade syncd oci://ghcr.io/winllc/charts/syncd --version 0.6.0 -n syncd -f syncd-values.yaml \
+      --set image.engine.tag=0.7.0 --set image.console.tag=0.7.0     # 0.7.0-fips for FIPS
+    ```
+
+    It renders the same resources as chart 0.7.0, except that the `app.kubernetes.io/version`
+    label and the chart's notes say 0.6.0; what runs is 0.7.0 (`syncd status` says `engine
+    0.7.0`). CI has not run that combination: its kind tests install the chart from the checkout.
+
+Back up first: the chart takes no backup. The engine migrates its store when it starts, if the new
+release changed its format (0.7.0 does not), and the console migrates its database (0.7.0: schema
+33 to 52, which an older console refuses). `helm rollback` restores no data
 (see [Rollback](install.md#on-kubernetes)).
 
 ### Certificates on Kubernetes
@@ -1734,8 +1854,13 @@ configuration in the console by importing the running one, which copies them.
 - **Once, after upgrading from 0.5.4:** point the console's monitoring at `/healthz`, and probes
   or load balancers of your own at `/livez`; make sure scripts that send control commands retry on
   `the engine is busy`, which they now meet more often.
+- **Once, after upgrading from 0.6.1:** change scripts that match the evaluation's whole
+  `license:` line (it now ends with `governance`); before using **My password** or reset links,
+  list the console's certificate under `api.access.passwords` on the self-service engine's host
+  ([Control API access](#control-api-access)). With governance in use, add to the daily check
+  that the console's log has no `governance delivery pass failed`.
 - **Before an upgrade:** read the release notes (store format changes, `SYNCD_HEALTH_TIMEOUT`,
-  what the new release refuses) and [Upgrading from 0.5.4 to 0.6.1](install.md#upgrading-from-054-to-061),
+  what the new release refuses) and the notes for your versions in [Upgrade](install.md#upgrade),
   check the room in `/var/lib/syncd/backups` (about the store's size again), and take an off-host
   backup.
 - **Regularly:** keep the master key and the password-key passphrase off the host, apart from the

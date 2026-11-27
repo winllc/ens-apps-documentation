@@ -4,7 +4,7 @@ A publication can say **when** its changes are applied, **how many** may go at o
 go first**. It can also run in a mode that writes nothing. Changes that wait are **held**. The
 engine can also act at a set time: an attribute that applies from a start date, a leaver who is
 disabled at once and deleted ninety days later, a group that expires. All of this is new in syncd
-0.4.0. This page describes syncd 0.6.1 (tag `v0.6.1`, commit `59cbf19`). 0.5.0 added group
+0.4.0. This page describes syncd 0.7.0 (tag `v0.7.0`, commit `6de2fa1`). 0.5.0 added group
 reviews that reach a person, `placeholder_member`, leavers stripped of groups syncd does not
 manage, unique `sAMAccountName`s, and held changes kept in the store; 0.5.1 checks deletion
 thresholds as strictly as the others, follows `effective()` dates in group filters and join
@@ -16,7 +16,12 @@ holds only its own deprovisions, an overdue change no longer releases the rest o
 groups follow their members' writes, and an entity added where a gone entity's entry is takes
 that entry over. 0.6.0 adds the `dsml` target (see [Air-gapped synchronisation](air-gap.md)),
 which takes the settings on this page except those that read the target back; 0.6.1 changes
-nothing here.
+nothing here. 0.7.0 adds database table, REST and SDK connector targets (see
+[Connectors](connectors.md#sql-tables-as-targets)), which take the settings on this page
+except moves (a staged leaver policy without `move_to`), `strip_unmanaged_groups` and computed
+groups; and memberships granted by the console's governance layer, whose last member in a
+`groupOfNames` or `groupOfUniqueNames` group gives way to `group_policy.placeholder_member`
+(see [Group lifecycle](#group-lifecycle)).
 
 Every setting on this page goes on a publication (or, for effective dates, in a rule).
 [Configuration](configuration.md) lists each key in one line; this page explains how they work
@@ -338,7 +343,9 @@ migrates the store to format 2 at its first start (each view keeps its own links
 entities), and a 0.4.1 engine refuses the migrated store, so a rollback from 0.5.0 to 0.4.1
 restores the backup taken before the upgrade (`syncdctl rollback`): timers and held changes go
 back to what they were then. 0.5.1 keeps format 2, and a 0.5.0 engine opens a 0.5.1 store. 0.5.2
-to 0.6.1 keep it too. A `dsml` target (0.6.0) keeps the exports waiting for its next file beside
+to 0.7.0 keep it too. 0.7.0 keeps the console's grants in column families of their own, which
+0.6.1 opens and leaves alone: after a rollback to 0.6.1 with the store kept, granted access is
+no longer enforced, and holds again on 0.7.0. A `dsml` target (0.6.0) keeps the exports waiting for its next file beside
 the data, which 0.5.5 ignores: before rolling such an engine back to 0.5.5, run `syncd reconcile`,
 which writes them out. See [Installation](install.md).
 
@@ -500,7 +507,7 @@ publications:
 | `on_expiry` | `report` | `report`, `empty` or `delete` |
 | `review_every` | none | A review is due this long after the creation or the last review |
 | `reviewers` | none | New in 0.5.0. Mail addresses the console writes to when the group's review falls due. Needs `review_every` |
-| `placeholder_member` | none | New in 0.5.0. A fixed DN written to the group while it has no other member and its entry is kept (`on_expiry: empty`, or `when_empty: keep`), for object classes that must have a member (`groupOfNames`, `groupOfUniqueNames`). Taken out again with the first real member. LDAP and Active Directory targets |
+| `placeholder_member` | none | New in 0.5.0. A fixed DN written to the group while it has no other member and its entry is kept (`on_expiry: empty`, or `when_empty: keep`), for object classes that must have a member (`groupOfNames`, `groupOfUniqueNames`). Taken out again with the first real member. LDAP and Active Directory targets. From 0.7.0 `group_policy`'s also serves groups the console grants members of (below) |
 
 ### Manual members and owners
 
@@ -572,6 +579,20 @@ Nothing changes in the target when a review falls due.
   `placeholder_member` is refused by the directory and dead-letters. Set `placeholder_member`, use
   `delete`, or an object class that allows an empty group.
 - `placeholder_member` has no console form field: write it in the configuration.
+
+### Groups the console grants members of
+
+From 0.7.0 the console's [governance](governance.md) layer can grant memberships of groups a
+publication does not compute (`grants.memberships`; see
+[Grants](configuration.md#grants-grants)). Such a group is not computed, so the lifecycle
+above does not apply to it, but the same rule of LDAP holds: a `groupOfNames` or
+`groupOfUniqueNames` group must keep a member. When the grant of its last member ends, the
+engine writes the publication's `group_policy.placeholder_member` in that member's place, in
+one modify, and takes the placeholder out again, in the same modify, when a member is granted.
+Without a placeholder the directory refuses the removal and the grant fails, its error saying
+how to set one: set `group_policy.placeholder_member` on a publication whose granted groups
+can empty. A `memberUid` group takes no placeholder. On such a publication the placeholder is
+checked as a fixed DN even when the publication computes no groups.
 
 ## Worked examples
 

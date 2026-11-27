@@ -1,8 +1,8 @@
 # Reports, lineage and data quality
 
 This page covers the evidence syncd gives operators and auditors, and the tools that keep bad
-data out of the targets. All of it is new in syncd 0.4.0; this page describes syncd 0.6.1 (tag
-`v0.6.1`, commit `59cbf19`). 0.5.0 added unmanaged entries, Excel exports, PDFs with an embedded
+data out of the targets. All of it is new in syncd 0.4.0; this page describes syncd 0.7.0 (tag
+`v0.7.0`, commit `6de2fa1`). 0.5.0 added unmanaged entries, Excel exports, PDFs with an embedded
 font and tagging, an hourly quality trend and a wider correlation search; 0.5.1 changes little
 here (see [Correlation assistance](#correlation-assistance) and the console's pages below), and
 0.5.2 changes only how records waiting for review are retried (see
@@ -11,7 +11,11 @@ report at 20,000 rows, tries a scheduled report that failed for a passing reason
 runs a quality check that reads other entities again when they change, and matches records
 waiting for review again in more cases. 0.6.0 adds the `dsml` target, which has no drift check
 or unmanaged-entries pass to report (see [Air-gapped synchronisation](air-gap.md)); 0.6.1
-changes nothing here.
+changes nothing here. 0.7.0 adds the [governance reports](#governance-reports), and the
+table, REST and SDK targets, which take drift checks and the unmanaged-entries pass (a REST
+target with `rest.find` and `rest.read`, and `rest.list`; see
+[Connectors](connectors.md#sql-tables-as-targets)); the engine's reports, lineage, history and
+quality checks are otherwise as they were.
 
 - **Reconciliation reports**: what each publication holds, what the last drift check found, what
   is held or dead-lettered, and (from 0.5.0) the target's unmanaged entries, as text, CSV, JSON,
@@ -20,8 +24,8 @@ changes nothing here.
 - **History retention**: how much entity history the engine keeps, and what it never prunes.
 - **Data-quality checks**: what good source data is, checked on every entity.
 - **Correlation assistance**: scored suggestions for source records that joined no entity.
-- **Governance reports** (in development, not in a release yet): ten reports of the
-  console's governance catalog, for auditors.
+- **Governance reports** (from 0.7.0): ten reports of the console's governance catalog, for
+  auditors.
 
 The audit trail itself is in the [Admin guide](admin-guide.md). From 0.5.0 its **Audit log** page
 filters by time, category, action, actor and outcome (server-side), and exports what it lists as
@@ -223,19 +227,23 @@ reach the mail server.
 
 ## Governance reports
 
-!!! warning "In development, not in a release yet"
-    Governance reports are built on the `ldap-sync-merge-view` branch
-    `claude/modest-mayer-onyb29`, after release 0.6.1, with the rest of
-    [Governance](governance.md).
-
-The governance reports read the console's catalog (what the last inventory of each system
+New in 0.7.0, with the rest of [Governance](governance.md). The governance reports read the console's catalog (what the last inventory of each system
 found, the assignments, campaigns, policies, requests and grants), not the engine. Each is
 a CSV, Excel or PDF file, from the **Governance reports** page (`/governance/reports`,
 `GET /api/v1/governance/reports/{report}?format=csv|xlsx|pdf`), for administrators,
 governance administrators and auditors (and `governance:read` tokens). Each download is
 recorded as `governance.report.exported`, before the file leaves; one that cannot be
 recorded is refused. A file holds at most `CONSOLE_REPORTS_MAX_ROWS` rows and says so when
-cut (`X-Syncd-Truncated: true` on a download).
+cut (`X-Syncd-Truncated: true` on a download). The reports read across everyone, so a
+governance administrator limited to a governance scope cannot download them (`403`).
+`campaign` (an id) limits `certification_status` to one campaign, and `days` (1 to 3660)
+limits `certification_status`, `request_history` and `provisioning_history` to campaigns
+started, requests made or grants instructed in the last so many days.
+
+A campaign's own evidence report (`GET /api/v1/governance/campaigns/{cid}/report`, see
+[Access certifications](governance.md#access-certifications)) is apart from these: it
+downloads as CSV at any size, written as it is read, while Excel is refused above 200,000
+items and PDF above 20,000.
 
 | Report (`report`) | One row per | Columns |
 |---|---|---|
@@ -255,8 +263,8 @@ cut (`X-Syncd-Truncated: true` on a download).
   does. **Held since** is when the inventory first saw it.
 - **Risk** is the entitlement's: its own, else 80 when privileged and 10 when not. See
   [Risk, access search and reports](governance.md#risk-access-search-and-reports).
-- **Provisioning history** has its times for grants made from this version on; earlier
-  grants show their last change as both instructed and applied (or failed).
+- **Provisioning history** gives each grant's times: when the console instructed it, and
+  when the engine applied it or it failed.
 - **Scheduled**: on the **Reports** page, a scheduled report is an engine's
   reconciliation report or one of these (`governance_report` in `/api/v1/reports`, with no
   engine). Governance reports are scheduled by those who read governance across the

@@ -6,8 +6,13 @@ PagerDuty. Webhooks are managed on **Integrations** (`/integrations`): administr
 test and delete them; auditors can look. Webhooks belong to the whole console: from 0.5.0, when
 roles can be limited to an environment or an engine, managing them takes `admin` on everything
 and seeing them `auditor` (or `admin`) on everything. They are for people with a session only: no
-[API token](api-reference.md#api-tokens) can see or change them. This page describes syncd 0.6.1
-(tag `v0.6.1`, commit `59cbf19`). 0.5.5 sends a webhook's events in order across a retry, pins a
+[API token](api-reference.md#api-tokens) can see or change them. This page describes syncd 0.7.0
+(tag `v0.7.0`, commit `6de2fa1`). 0.7.0 adds twelve `governance.*` events, raised by the
+console's [governance](governance.md) layer (see the table below), with their PagerDuty
+severities; a manual system's [ticket adapter](governance.md#ticket-systems) of the webhook
+kind posts its tasks (`type` `governance.fulfilment-task`) signed as webhooks are and under
+the same address rules, from its own settings, not from **Integrations**. Nothing changes for
+the other events. 0.5.5 sends a webhook's events in order across a retry, pins a
 host written with a trailing dot as written, refuses reserved address ranges, and has the status
 watcher wait for two failed looks before it says an engine is down. 0.6.0 and 0.6.1 change
 nothing for webhooks: no event is added.
@@ -51,18 +56,18 @@ delivery log.
 | `config.promoted` | A version was promoted to another environment's engines |
 | `config.unpublished-running` | From 0.5.0: an engine runs a configuration the console did not publish, applied by another client of its control API or edited on its host. Told once per configuration (see [Security](security.md#what-the-console-reports)) |
 | `license.state-changed` | From 0.5.0: the [license](licensing.md)'s state changed: a warning, the grace period, publishing blocked, or licensed again. Not tied to an engine. Told once per change |
-| `governance.campaign-started` | An [access review](governance.md#access-certifications) campaign started, by hand or on its schedule. Not tied to an engine (in development, not in a release yet) |
-| `governance.identity-terminated` | A governance administrator [terminated](governance.md#emergency-termination) a person everywhere at once. Not tied to an engine (in development) |
-| `governance.violation-opened` | A high or critical [policy](governance.md#policies) found a person in violation (new, or again after an exception ran out). Not tied to an engine (in development) |
-| `governance.review-overdue` | A reviewer's access-review task passed its due date with items undecided. Told once per task; their manager is mailed too. Not tied to an engine (in development) |
-| `governance.request-created` | An [access request](governance.md#access-requests) was submitted, by a person, a manager or a tool on someone's behalf (in development) |
-| `governance.request-approved` | Every approval step of a request was decided yes: it is being fulfilled (in development) |
-| `governance.request-rejected` | An approver rejected a request, or its approval timed out and was rejected (in development) |
-| `governance.request-completed` | A request is closed: fulfilled, failed or cancelled (`data.state`). A service desk closes its ticket on this one (see [Service-desk integration](service-desk.md)) (in development) |
-| `governance.task-created` | A task was given to someone: an approval, a review, a fulfilment or a violation to handle; no assignee means the governance administrators (in development) |
-| `governance.assignment-granted` | An assignment gave a person an entitlement (in development) |
-| `governance.assignment-revoked` | An assignment ended, or a revoke assignment was made: the person loses the entitlement (in development) |
-| `governance.grant-failed` | An engine refused or failed a grant it was sent (in development) |
+| `governance.campaign-started` | From 0.7.0: an [access review](governance.md#access-certifications) campaign started, by hand or on its schedule. Not tied to an engine |
+| `governance.identity-terminated` | From 0.7.0: a governance administrator [terminated](governance.md#emergency-termination) a person everywhere at once. Not tied to an engine |
+| `governance.violation-opened` | From 0.7.0: a high or critical [policy](governance.md#policies) found a person in violation (new, or again after an exception ran out). Not tied to an engine |
+| `governance.review-overdue` | From 0.7.0: a reviewer's access-review task passed its due date with items undecided. Told once per task; their manager is mailed too. Not tied to an engine |
+| `governance.request-created` | From 0.7.0: an [access request](governance.md#access-requests) was submitted, by a person, a manager or a tool on someone's behalf |
+| `governance.request-approved` | From 0.7.0: every approval step of a request was decided yes: it is being fulfilled |
+| `governance.request-rejected` | From 0.7.0: an approver rejected a request, or its approval timed out and was rejected |
+| `governance.request-completed` | From 0.7.0: a request is closed: fulfilled, failed or cancelled (`data.state`). A service desk closes its ticket on this one (see [Service-desk integration](service-desk.md)) |
+| `governance.task-created` | From 0.7.0: a task was given to someone: an approval, a review, a fulfilment or a violation to handle; no assignee means the governance administrators |
+| `governance.assignment-granted` | From 0.7.0: an assignment gave a person an entitlement |
+| `governance.assignment-revoked` | From 0.7.0: an assignment ended, or a revoke assignment was made: the person loses the entitlement |
+| `governance.grant-failed` | From 0.7.0: an engine refused or failed a grant it was sent |
 | `webhook.test` | **Send a test** on the Integrations page |
 
 The governance events are written in the same database transaction as the change they
@@ -157,6 +162,10 @@ sentence. `data` depends on the event:
 | `governance.review-overdue` | `campaign`, `name`, `task`, `reviewer`, `undecided`; `engine` is `null` |
 | `governance.identity-terminated` | `identity`, `login`, `reason`, `by`; `engine` is `null` |
 | `governance.violation-opened` | `violation`, `policy`, `name`, `severity`, `identity`, `login`; `engine` is `null` |
+| `governance.request-created`, `-approved`, `-rejected`, `-completed` | `request`, `state`, `beneficiary`, `requester`, `via_token`, `ticket`, `source`, `items`; `engine` is `null` |
+| `governance.task-created` | `task`, `kind`, `title`, `assignee` (`null` for the governance administrators), `campaign`, `request_item`, `due_at`; `engine` is `null` |
+| `governance.assignment-granted`, `-revoked` | `assignment`, `identity`, `login`, `entitlement_id`, `entitlement`, `system`, `effect`, `origin`, `origin_ref`, `ends_at`, `end_reason`; `engine` is `null` |
+| `governance.grant-failed` | `grant`, `assignment`, `login`, `state` (`failed` or `refused`), `detail`, `engine` (its name, as a field of `data`), `publication`, `kind`, `target`, `value`, `effect`; the event's own `engine` is `null` |
 | `webhook.test` | `webhook`, `sentBy` |
 
 A `hold.created` example:
@@ -202,6 +211,11 @@ fact set of the engine, the event and the time.
   the incident `target.down` opened.
 - The other `config.*` events and `webhook.test` trigger an `info` incident of their own, which
   nothing resolves. Nothing resolves the 0.5.0 events either: resolve them in PagerDuty.
+- From 0.7.0 `governance.violation-opened` triggers an `error` incident, and
+  `governance.review-overdue` and `governance.grant-failed` `warning` ones, one per violation,
+  task or grant (`syncd:console:violation:<id>`, `syncd:console:review_overdue:<task>`,
+  `syncd:console:grant:<id>`); nothing resolves them. The other governance events trigger an
+  `info` incident of their own.
 
 ```json
 {"routing_key":"<routing key>","event_action":"trigger","dedup_key":"syncd:prod:target:ad-users",
