@@ -4,8 +4,8 @@ This page summarises syncd's security controls and the settings that affect them
 console's sign-in, sessions, roles and API tokens, its HTTPS, the engine's control API,
 secrets, password synchronisation, webhooks and other outbound connections, files carried across
 an air gap, the audit trail, backups, high availability, the systemd hardening, the container
-images and Helm chart, and the supply chain. It describes syncd 0.6.1 (tag `v0.6.1`, commit
-`59cbf19`). 0.5.1 fixes what a review of 0.5.0 found; for the console that includes one critical
+images and Helm chart, and the supply chain. It describes syncd 0.7.0 (tag `v0.7.0`, commit
+`6de2fa1`). 0.5.1 fixes what a review of 0.5.0 found; for the console that includes one critical
 fix (0.5.0 showed the engine's environment secrets in the running configuration to every reader:
 see [Authorization](#authorization)) and several checks that refuse what 0.5.0 allowed (changes
 from another site, the API tokens of single sign-on accounts that stopped signing in, a version
@@ -18,12 +18,22 @@ revokes the account's API tokens, and a one-time password expires; read-only cal
 engine's control API no longer get its environment's secret values; and no audit output can be
 wedged. Each is marked where it is described. 0.6.0 adds the `dsml` connector, which carries
 identities across an air gap in files (see [DSML files across an air gap](#dsml-files-across-an-air-gap)),
-and moves `wasmi` to 2.0.2. 0.6.1 changes only the host installer.
+and moves `wasmi` to 2.0.2. 0.6.1 changes only the host installer. 0.7.0 adds the governance
+layer (see [Authorization](#authorization)), with grants delivered to the engines over the control
+API and new calls in its tiers ([Access tiers](#access-tiers)), password reset after a fresh
+sign-in or with a link, and unlock ([Password reset and unlock](#password-reset-and-unlock)), and
+moves `url` to 2.5.9 (RUSTSEC-2026-0592) and `wasmi` to 2.0.3 ([Supply chain](#supply-chain)). A
+review of the governance code before the release found defects, among them scoped
+administrators acting outside their scope, one person proposing and approving a role version, and
+a password reset accepting a silent single sign-on; 0.7.0 ships with them fixed, each with a test.
 
 The source repository's `SECURITY.md` says how to report a vulnerability (GitHub's private
 vulnerability reporting) and that fixes go to the latest minor version only; its
 `docs/SUPPORT.md` says what each kind of version number promises. 0.5.0 also adds a threat model
-of password synchronisation, `docs/security/password-sync-threat-model.md`, which is a draft.
+of password synchronisation, `docs/security/password-sync-threat-model.md`, which is a draft; 0.7.0
+adds password reset and unlock to it, and a threat model of governance,
+`docs/security/governance-threat-model.md`, a draft for sign-off. Neither is signed off, and no
+penetration test of either has been done.
 
 ## Trust model
 
@@ -151,7 +161,7 @@ From 0.4.0, scripts, pipelines and SIEM collectors call the console's API with a
 | Control | Implementation |
 |---|---|
 | The token | `sdt_` and 32 random bytes (base64url), from aws-lc-rs. Shown once, when it is created. The database keeps its SHA-256 and a four-character prefix; the token is never written to a log, the audit trail or a session |
-| Scopes | `engines:read`, `configs:read`, `configs:write`, `configs:publish`, `runs:run`, `audit:read`, `environments:read` (from 0.4.1), `admin`. Each needs a role of the creator, to be granted and at every use |
+| Scopes | `engines:read`, `configs:read`, `configs:write`, `configs:publish`, `runs:run`, `audit:read`, `environments:read` (from 0.4.1), from 0.7.0 `governance:read` (also the SCIM interface), `governance:write`, `governance:delegate` (the Directory Services Portal) and `governance:request` (a service-desk tool), and `admin`. Each needs a role of the creator, to be granted and at every use |
 | Limits | From 0.5.0 a token can be limited to an environment or to named engines. The creator must be an administrator of all the token reaches (everything, for a token without a limit). A limited token does nothing on the console as a whole (no audit pull or export, no Git sync), and an engine outside its limit answers `404` |
 | Never more than its creator, now | Each use reads the creator's account and role assignments (a good answer is reused for at most a minute and dropped when the account changes; a refusal never is): a creator that is gone or disabled refuses the token, a demoted creator's token loses what the new roles cannot do, and one whose creator was moved to another environment reaches nothing |
 | Endpoints that stay with people | Accounts, settings, tokens, webhooks, changes to environments, approvals (of versions and of WebAssembly modules), simulations, previews, connector checks, the object explorer and lineage, scheduled reports, the license, the support bundle and every sign-in take a session only: a token gets `403 insufficient_scope` |
@@ -251,22 +261,37 @@ the body is read; every operation of the API is declared once with its rule, so 
 without one. An API token is checked against its scopes, its limit and its creator's
 assignments.
 
-In development (governance, not in a release yet): a `governance_admin` may be held on a
-**governance scope** (`governance_admin@governance:<scope>`), a population chosen by a CEL
-filter over people and a list of systems. Every governance administration route then
-filters by the caller's scopes in the database, and answers `404` for a person, an
-assignment, an account, a request or a violation outside them, as for one that does not
-exist; workgroups, scopes and the identity sources are changed only at scope `all`. Team
-approvals never let a member decide a request they made or that is for them, and forwarding
-never gives a delegate a task about their own access. See
+From 0.7.0 two roles are about people rather than engines, and are held on everything only:
+`governance_admin` (governance: the catalog, assignments, campaigns, policies, roles, lifecycle
+rules, password reset links) and `participant` (their own access, requests, approvals and review
+tasks under `/my`, and nothing else; it sees no engine). Auditors read governance. Governance
+changes need the Governance pack in the license (`409`, naming the pack, otherwise; nothing is
+locked during the evaluation or the grace period), reads never.
+
+A `governance_admin` may instead be held on a **governance scope**
+(`governance_admin@governance:<scope>`), a population chosen by a CEL filter over people and a
+list of systems. Every governance route then filters by the caller's scopes in the database:
+a person, an account, an entitlement, a system or a request outside them answers `404`, as for
+one that does not exist, and what has no scope of its own answers `403`: campaigns (reading them
+included), changes to roles, policies, workflows and lifecycle rules, governance reports and the
+risk settings. Workgroups, scopes and the identity source are changed only at scope `all`.
+
+Four eyes in governance: a role version is approved by someone other than the person who
+proposed it; the requester and the beneficiary of a request are never chosen to approve it, and
+claiming a workgroup's approval of it is refused to them (`403`); forwarding never gives a
+delegate a task about their own access; a reviewer is never the subject of a certification item;
+and the person in violation of a policy does not approve their own exception. An administrator's
+override of an approval is allowed and audited (`governance.request.overridden`). See
 [Governance](governance.md#delegated-administration).
 
 The governance layer has its own threat model (`docs/security/governance-threat-model.md`
-in the source repository; a draft for the owner's sign-off): the trust boundaries
-(the console to the engines' `ApplyGrants`, the ingest endpoints, the participant role,
-delegated tokens, outbound products) and the abuse cases with the code that controls
-each: self-approval, a hostile inventory causing mass revocation, replayed webhooks and a
-compromised service-desk token. No penetration test of governance has been done.
+in the source repository). Its status at 0.7.0: **a draft for sign-off, not signed off**, and
+**no penetration test of governance has been done**. It covers the trust boundaries (the console
+to the engines' `ApplyGrants`, the ingest endpoints, the participant role, delegated tokens,
+outbound products) and the abuse cases with the code that controls each: self-approval, a
+hostile inventory causing mass revocation (an inventory that would mark more than
+`max_gone_percent` of a system's accounts gone is suspect and changes nothing), replayed
+webhooks and a compromised service-desk token.
 
 | Role | Can |
 |---|---|
@@ -274,7 +299,9 @@ compromised service-desk token. No penetration test of governance has been done.
 | `auditor` | What a viewer can, plus the audit trail (its verification, export and outputs), the lists of API tokens, webhooks and their deliveries, scheduled reports, and the environments' values (secret values never) |
 | `operator` | What a viewer can, plus runs (reconcile, full sync), approvals of held deletions and changes, group reviews, drift checks, unmanaged-entry checks and adopting an entry, dead-letter retry and discard, joining, unjoining and accepting correlation suggestions, and scheduled reports of their own |
 | `designer` | What a viewer can, plus validating, saving, importing, simulating, previewing, approving, publishing and promoting configuration versions, uploading and approving WebAssembly modules (never one's own), connector checks, and **Sync now** for Git |
-| `admin` | Everything, including accounts, sign-in settings, configuration approval, banners, registering and removing engines, environments and their values, API tokens, webhooks, the license, everyone's scheduled reports and the support bundle |
+| `admin` | Everything, including accounts, sign-in settings, configuration approval, banners, registering and removing engines, environments and their values, API tokens, webhooks, the license, everyone's scheduled reports and the support bundle. From 0.7.0 only an admin, with a session, publishes a version that changes a `passwords` block (`manage_passwords`) or manages the capture agents in the console |
+| `governance_admin` | From 0.7.0: governance (`govern`), reading it, and sending password reset links (`reset_passwords`); no engine and no configuration |
+| `participant` | From 0.7.0: their own page (`/my`): their access, requests, approvals and review tasks |
 
 | Scope | Written | Covers |
 |---|---|---|
@@ -535,10 +562,10 @@ missing from the table is refused to everyone):
 
 | Tier | What it allows |
 |---|---|
-| `read` | The status, the lists (dead letters, held changes, quarantine, data quality, unjoined records, queued password changes), the running configuration, simulations, the reconciliation report. From 0.5.5 the running configuration comes without its environment's secret values, and simulations run without them, below `configure` |
-| `operate` | Runs, approvals, drift and unmanaged-entry checks, adopting an entry, dead-letter actions, joins, group reviews, a person's own password change (the self-service page), revoking a capture agent, backups and HA snapshots, connector checks, schema discovery and previews, and sensitive values (`reveal`) |
-| `operate` and `passwords` | Setting a password of the caller's choosing, and deciding who else can: `SubmitPasswords`, adding or binding a capture agent, rotating the password key or the agent CA, and `ForwardPasswordIngest` (the passive engine of a pair speaking for agents). From 0.5.1, on an engine that holds password key material, also the calls that hand the keys out with the store: `Backup`, `PullSnapshot`, `PullSnapshotFiles` and `FollowPasswordQueue` |
-| `configure` | `ApplyConfig` (the console's publish, `syncd apply-config`) and `SetLicense` |
+| `read` | The status, the lists (dead letters, held changes, quarantine, data quality, unjoined records, queued password changes), the running configuration, simulations, the reconciliation report. From 0.5.5 the running configuration comes without its environment's secret values, and simulations run without them, below `configure`. From 0.7.0 also `ListGrantStates` (the grants' states, read back by the console) and `GetPasswordPolicy` |
+| `operate` | Runs, approvals, drift and unmanaged-entry checks, adopting an entry, dead-letter actions, joins, group reviews, a person's own password change (the self-service page), revoking a capture agent, backups and HA snapshots, connector checks, schema discovery and previews, and sensitive values (`reveal`). From 0.7.0 also `ListInventory` (the accounts, groups and members of a target, for the entitlement catalog) |
+| `operate` and `passwords` | Setting a password of the caller's choosing, and deciding who else can: `SubmitPasswords`, adding or binding a capture agent, rotating the password key or the agent CA, and `ForwardPasswordIngest` (the passive engine of a pair speaking for agents); from 0.7.0 `ResetPassword` and `UnlockAccount`. From 0.5.1, on an engine that holds password key material, also the calls that hand the keys out with the store: `Backup`, `PullSnapshot`, `PullSnapshotFiles` and `FollowPasswordQueue` |
+| `configure` | `ApplyConfig` (the console's publish, `syncd apply-config`) and `SetLicense`; from 0.7.0 `ApplyGrants` (access the governance layer grants and ends, which the engine writes to its targets) |
 
 `api.access` in `engine.yaml` names who has which tier:
 
@@ -558,7 +585,8 @@ api:
 - **Strict mode**: a certificate gets the tier it is listed under, and nothing, not even the
   status, when it is listed nowhere. Each refusal is logged with the caller and the RPC. Setting
   passwords is a permission of its own: a certificate must also be listed under `passwords`
-  (nobody is by default, and the console's certificate does not need to be). The control socket
+  (nobody is by default, and the console's certificate does not need to be, unless the console
+  is to reset passwords and unlock accounts, from 0.7.0). The control socket
   may set passwords (it is the engine's own user, who can read the password key itself); the
   plain-text loopback listener may not.
 - **Compatible mode**, or no `access` section: every certificate the client CA signed may do
@@ -732,7 +760,7 @@ synchronisation has been done; the plan makes both release gates for it.
 | Enrollment tokens | `syncd password agent add <name> --source <connector>` prints a one-time token, good for an hour. The engine keeps only its SHA-256 and compares in constant time. The agent makes its own key, which never leaves its host, and sends a signing request with the token; the token is then spent, and an earlier certificate of the same agent stops working |
 | Agent access | The ingest listener is mutual TLS with the agent CA. Every call but `Enroll` needs a certificate whose fingerprint the engine recorded and has not revoked. `syncd password agent revoke` refuses it at once; the check is the fingerprint, not a CRL. A revoked name cannot be enrolled again. From 0.5.0 **an agent speaks for the sources it is bound to only**: the engine opens each change an agent submits, in memory, and refuses one for another source before it is queued (`syncd_password_changes_refused_total`). An agent enrolled before 0.5.0 is bound to no source and may submit for any until it is bound (`syncd password agent bind`); the engine warns about it at every start. From 0.5.5 a revocation or a change of bindings is never undone by a submission under way: before, an agent's submission could put back a revocation made while it ran (one of 0.5.5's critical findings) |
 | Who submitted it | From 0.5.0 each queued change records its submitter: the agent, the person and control API caller of a self-service change, or the control API's caller. `syncd password queue`, the delivery log lines (`submitted_by=`), the entity's history and lineage show it. The DN that made the change in the source directory stays in the agent's own log |
-| Setting passwords through the control API | `SubmitPasswords` (`syncd password set`), adding and binding agents and the rotations: in strict mode a certificate must be listed under `api.access.passwords`, or the caller be on the control socket. In compatible mode, any control certificate can (see [The engine control API](#the-engine-control-api)) |
+| Setting passwords through the control API | `SubmitPasswords` (`syncd password set`), adding and binding agents and the rotations, and from 0.7.0 `ResetPassword` and `UnlockAccount` (`syncd password reset`, `syncd password unlock`): in strict mode a certificate must be listed under `api.access.passwords`, or the caller be on the control socket. In compatible mode, any control certificate can (see [The engine control API](#the-engine-control-api)) |
 | Passwords in memory | Opened in memory only, just before delivery, and zeroized when dropped. Never logged, never in `Debug` output, status, metrics, lineage or history. The LDAP library's encoding buffers are not zeroized, and there is no locked memory or core-dump suppression in the engine (the agent's sample unit sets `LimitCORE=0`) |
 | Echo suppression | A change captured right after syncd wrote the same password is dropped, recognised by a keyed hash kept for 10 minutes, with a random key per process; from 0.5.5 up to eight per account, kept across a configuration reload. The agent also drops what the account named in its `ignore_actor` set |
 | Writing to targets | Password Modify (RFC 3062), `userPassword` replace, or Active Directory's `unicodePwd`, which is refused unless the connection is LDAPS or StartTLS. From 0.5.0 **clear text to any LDAP directory is refused**: a configuration that delivers passwords, initial passwords or self-service changes to an LDAP directory on another host over `ldap://` without `starttls` no longer validates, unless `passwords: { allow_cleartext: true }` (with a warning at every start and in `syncd status`); loopback and `ldapi://` are exempt, and Active Directory never takes passwords without TLS. SCIM targets get `password` over HTTPS |
@@ -786,12 +814,51 @@ own directory password without a console account.
   time, whatever the password, on top of the per-address limit. From 0.5.5 each attempt counts
   before the bind, so guesses made in parallel cannot all pass the check.
 - The page is public: put it behind the same TLS as the console, and consider who may reach it.
-  There is no reset of a forgotten password.
+  A forgotten password is reset as below, from 0.7.0, not on this page.
 - From 0.5.1 a user name holding control characters is refused (`400`) before anything is asked,
   and recorded escaped.
 - `ChangeOwnPassword` needs only the `operate` tier, not `api.access.passwords`: the engine
   proves the person's current password before it changes anything. The source people sign in
   to is held to the clear-text rule above.
+
+### Password reset and unlock
+
+From 0.7.0 a person who forgot their password, or whose account is locked, can set a new one
+without the current password, after proving who they are another way. See
+[Password synchronisation](password-sync.md#forgotten-passwords-and-locked-accounts).
+
+- **A fresh sign-in.** The console's **My password** page resets and unlocks only within five
+  minutes of a sign-in that was not the directory password: single sign-on or SAML with the
+  provider authenticating the person again, or a client certificate. The console asks for it
+  (OpenID Connect: `max_age=0` and `prompt=login`; SAML: `ForceAuthn="true"`) and **requires the
+  provider's proof**: the ID token's `auth_time`, or the assertion's `AuthnInstant`, no older
+  than the console's request. A provider that sends neither is refused, with the reason. A
+  session started with a password is refused (`403`, audited), and sessions from before the
+  upgrade to 0.7.0 must sign in again before a reset. The account reset is the session's own.
+- **A link.** The person's manager, or a holder of `reset_passwords` (admins and governance
+  administrators), never for themselves, can have the console mail a link to the address in
+  the projected attribute `gov_settings.reset_mail_attribute`, within the allowed recipient
+  domains: 32 random bytes, valid 15 minutes, used once, at most three a day per person (`429`
+  for the fourth). Only its SHA-256 is stored. The token is in the URL's fragment
+  (`/password-reset#<token>`), so no server or proxy logs it, and the public endpoints that
+  take it are rate limited per address. The link needs `CONSOLE_PUBLIC_URL`.
+- **The engine** opens the request, sealed to its password key with an HPKE `info` of its own
+  (so it is never taken for a self-service change or a captured one), checks its policy, sets
+  the password in the `passwords.self_service` source with its own account (Active Directory's
+  `unicodePwd` over LDAPS or StartTLS only), and queues it, sealed, for the publications that
+  take passwords from that source. An unlock clears only the failed-sign-in lockout (Active
+  Directory's `lockoutTime`, ppolicy's non-permanent `pwdAccountLockedTime`, 389's
+  `accountUnlockTime` and `passwordRetryCount`); a disabled account, a permanent lock and
+  `nsAccountLock` are left alone.
+- **Access.** `ResetPassword` and `UnlockAccount` are password calls: in strict mode the
+  console's certificate must be listed under `api.access.passwords` for them, which it is not
+  by default. A console allowed them can reset anyone the self-service source holds.
+- **Audit:** `password.reset` (with the proof, and a link's initiator), `password.reset_link.created`,
+  `account.unlocked` (the outcome per directory). No security questions.
+- **Tested** end to end against OpenLDAP 2.6 with the password policy overlay and Samba Active
+  Directory; not against Microsoft Active Directory in a run so far (the nightly job skips
+  without its credentials). Covered by the password-sync threat model's draft (T-RS-1 to
+  T-RS-5), which is not signed off; no penetration test.
 
 ## The pre-publish hook
 
@@ -1016,13 +1083,17 @@ submitted the change). From 0.5.0 its status also says who applied the configura
 
 ## Backups
 
-- **Governance: restore the console and the engines to the same point.** The console's
-  database holds what governance decided and how far each engine has been sent; each
-  engine's store holds the grants it applies. A host-local backup and an upgrade's rollback
-  keep the two together. After restoring only one of them, run
-  `syncd-console governance redeliver --engine <name>` so the engine holds exactly what
-  the console says (audited as `governance.delivery.redelivered`); the same after an HA
-  failover, for grants taken in the last snapshot interval.
+- **Governance: restore the console and the engines to the same point.** From 0.7.0 the
+  console's database holds what governance decided and how far each engine has been sent;
+  each engine's store holds the grants it applies. A host-local backup and an upgrade's
+  rollback keep the two together. An engine whose store was replaced (a restore from a backup,
+  an HA takeover) reports a new **store generation**, and the console then sends it every grant
+  again on its own (audited as `governance.delivery.redelivered`), so a takeover no longer loses
+  the grants taken in the last snapshot interval. After restoring the console's database alone,
+  run `syncd-console governance redeliver --engine <name>`, the same by hand; when the database
+  went back further than the engine, the engine may hold grants the console has no record of:
+  list them with `syncd grants` and end them (see
+  [Rolling back once governance is in use](install.md#rolling-back-once-governance-is-in-use)).
 
 - **What a backup holds.** An engine backup (`syncd backup`, `engine.backup`) holds the store,
   which carries entity data, the configuration file, and every live password key and agent CA
@@ -1108,7 +1179,9 @@ between snapshots, and its ingest listener hands agents' calls to the active eng
 fingerprint of the certificate the agent presented; in strict mode the certificate it uses for
 that, and from 0.5.1 for pulling snapshots and following the queue from an engine that holds
 password keys, must be listed under `api.access.passwords`. An agent enrolled, or a key rotated, after the
-last snapshot is lost with the active engine.
+last snapshot is lost with the active engine. From 0.7.0 grants are in the store and so in the
+snapshots; a grant taken after the last snapshot is sent again by the console, which sees the
+new store generation of the engine that took over (see [Backups](#backups)).
 
 ## systemd hardening
 
@@ -1160,7 +1233,7 @@ the sign-in limit see client addresses.
   (`Cargo.lock`, a `Cargo.toml`, `deny.toml`, `.cargo/audit.toml`), which they gate. CI's
   `cargo-deny` job still checks licences, bans and sources on every pull request that changes
   code. Before, the advisories ran on every pull request and weekly. In 0.5.4, and still at
-  0.6.1:
+  0.7.0:
     - `libz-sys` is 1.1.33 in the lock file, for RUSTSEC-2026-0544 (a heap overflow). syncd does
       not build it: the RocksDB build leaves zlib out;
     - `chrono` and `chrono-tz` are reported unmaintained (RUSTSEC-2026-0543, RUSTSEC-2026-0555),
@@ -1169,8 +1242,12 @@ the sign-in limit see client addresses.
       0.15) depends on both. `chrono-tz`'s time zone rules stay as in its 0.10.4, so a zone whose
       rules change later is computed by the old ones until the planned move to `jiff`;
     - `wasmi`, which runs rule packages' WebAssembly functions, was 2.0.1 in 0.5.4 and 0.5.5
-      (2.0.0 was withdrawn from crates.io). From 0.6.0 it is 2.0.2: 2.0.1 was yanked upstream on
-      2026-11-17, and the advisory check refuses a yanked crate.
+      (2.0.0 was withdrawn from crates.io), and 2.0.2 in 0.6.0 and 0.6.1 (2.0.1 was yanked
+      upstream on 2026-11-17, and the advisory check refuses a yanked crate). From 0.7.0 it is
+      2.0.3: 2.0.2 was yanked upstream in turn. The example custom-functions module is byte for
+      byte what it was (`66671f41…`);
+    - `url` is 2.5.9 from 0.7.0 (0.6.1 had 2.5.8), for RUSTSEC-2026-0592, a stack overflow in
+      `Url::origin` on nested `blob:` URLs.
 
   From 0.6.0 the SFTP client of the `dsml` connector (`russh`) is built without RSA, so the `rsa`
   crate, whose timing advisory (RUSTSEC-2023-0071) has no fixed release, stays out of the build;
@@ -1181,17 +1258,17 @@ the sign-in limit see client addresses.
 - **Releases.** A release is built in CI from a `v*` tag (Rocky Linux 9, and Rocky Linux 8 for
   the RHEL 8 `.rpm`), after the package lifecycle tests and the upgrade test from the previous
   release pass. Releases are tagged from 0.5.0 on (`v0.5.0`, `v0.5.1`, `v0.5.2`, `v0.5.4`,
-  `v0.5.5`, `v0.6.0`, `v0.6.1`). For 0.5.4 the release job succeeded (on its second attempt): it
+  `v0.5.5`, `v0.6.0`, `v0.6.1`, `v0.7.0`). For 0.5.4 the release job succeeded (on its second attempt): it
   uploaded the files to the ENS licensing portal's release bucket (the **Downloads** page), then
   to the source repository's GitHub release, which holds every file (marked pre-release, with no
-  notes text); the images and chart were pushed to GHCR and signed with cosign. 0.5.5, 0.6.0 and
-  0.6.1 were published the same way, as final releases with their notes: the bundles, `.deb` and
-  `.rpm` files are on the GitHub release and the portal. The files of every release so far are
+  notes text); the images and chart were pushed to GHCR and signed with cosign. 0.5.5, 0.6.0,
+  0.6.1 and 0.7.0 were published the same way, as final releases with their notes: the bundles,
+  `.deb` and `.rpm` files are on the GitHub release and the portal. The files of every release so far are
   **not GPG-signed** (no release key was set), so there is no `SHA256SUMS.asc` and no apt or dnf
   repository yet. From 0.5.5 the release job refuses to publish without the signing key, before
   it publishes anything, unless the repository variable `ALLOW_UNSIGNED_RELEASE` is `true`: 0.5.5,
-  0.6.0 and 0.6.1 were published unsigned that way. 0.6.1's images and chart were not published
-  (see below). 0.5.2 was published as images and a chart only, its packages having failed to
+  0.6.0, 0.6.1 and 0.7.0 were published unsigned that way. 0.6.1's images and chart were not
+  published, and 0.7.0's chart was not (see below). 0.5.2 was published as images and a chart only, its packages having failed to
   build; there is no 0.5.3. For 0.5.1 the GitHub release held only the images' SBOMs. A release carries the x86_64
   and aarch64 bundles, `.deb` and `.rpm` (aarch64 only when the repository's arm64 runners are
   enabled, which from 0.5.0 is the default), the RHEL 8 `.rpm`, x86_64 and (from 0.5.0) aarch64 FIPS bundles, and from 0.5.0 the
@@ -1214,10 +1291,15 @@ the sign-in limit see client addresses.
     the pinned nfpm and check its SHA-256.
 - **Container images and chart.** A `v*` tag also pushes `ghcr.io/winllc/syncd:<version>`,
   `ghcr.io/winllc/syncd-console:<version>`, their `<version>-fips` variants and the chart
-  (`oci://ghcr.io/winllc/charts/syncd`). The newest published are **0.6.0's**, signed with
-  cosign. 0.6.1's were not published: the tag's Container workflow failed building the amd64
-  binaries, so its push-and-sign job was skipped. 0.6.1 changes only the host installer, so
-  0.6.0's images and chart are the ones to run on Kubernetes.
+  (`oci://ghcr.io/winllc/charts/syncd`). The newest published images are **0.7.0's** (and
+  `0.7.0-fips`), signed with cosign, with their SBOM attestations; the newest published chart is
+  **0.6.0's**. 0.6.1's images and chart were not published: the tag's Container workflow failed
+  building the amd64 binaries, so its push-and-sign job was skipped (0.6.1 changes only the host
+  installer). 0.7.0's push-and-sign job pushed and signed the images, then failed uploading a
+  file on GitHub's Actions storage quota, before the chart; the images' SPDX SBOMs were not
+  attached to the GitHub release either. Until chart 0.7.0 is published, run the chart from the
+  source repository at `v0.7.0`, or chart 0.6.0 with the 0.7.0 image tags, whose templates and
+  values are the same (see [Installation](install.md#1-install-the-chart)).
     - **Multi-arch:** `linux/amd64` and `linux/arm64` (amd64 alone when the arm64 runners are
       off); from 0.5.0 the FIPS images too. Tagged by version only (no `latest`).
     - **Signed:** each image and the chart are signed with cosign (keyless, the release
@@ -1228,7 +1310,7 @@ the sign-in limit see client addresses.
     - **Scanned:** on every pull request CI builds the standard and FIPS images, amd64 and (with
       arm64 runners) arm64, and scans the amd64 ones, standard and FIPS, with Trivy; a fixable
       HIGH or CRITICAL finding fails the build. Accepted risks are listed in `.trivyignore`, each with its reason, who accepted
-      it and until when. At 0.5.4, and still at 0.6.1, it holds one: CVE-2026-84782 (OpenSSL's
+      it and until when. At 0.5.4, and still at 0.7.0, it holds one: CVE-2026-84782 (OpenSSL's
       DTLS, in the distroless base's `libssl3`, which syncd does not link), accepted until
       2026-12-08; the fix is not in the distroless image yet.
     - **Pinned:** the base images are referenced by digest, and Dependabot proposes updates.
@@ -1269,6 +1351,11 @@ is not validated, and the settings a STIG deployment needs.
       be, with an expiry, one per system, revoked when unused; `CONSOLE_API_SSO_CREATOR_MAX_IDLE`
       left on
 - [ ] Webhooks limited with `CONSOLE_WEBHOOKS_ALLOWED_HOSTS`, and private networks left blocked
+- [ ] With governance: governance administrators scoped to their part of the people where they
+      can be, the console's certificate under `api.access.passwords` only if it is to reset
+      passwords and unlock accounts, and the single sign-on provider checked to send `auth_time`
+      (OpenID Connect) or `AuthnInstant` (SAML) on a forced sign-in, without which resets are
+      refused
 - [ ] The control API on loopback with mTLS (as packaged), `local_control` and `local_reveal` off,
       and the `syncd` group kept to administrators
 - [ ] An upgraded engine switched to strict access (`sudo syncdctl api-access strict`), and,

@@ -1,10 +1,14 @@
 # Migrating from IdentityIQ
 
-!!! warning "In development, not in a release yet"
-    The import is built on the `ldap-sync-merge-view` branch `claude/modest-mayer-onyb29`,
-    after release 0.6.1, with the rest of [Governance](governance.md). **It has been tested
-    on hand-written exports only**, written to IdentityIQ 8.x's documented shape; no real
-    export has been imported. Plan for the first real run to need changes.
+This page describes syncd 0.7.0 (tag `v0.7.0`, commit `6de2fa1`), the first release with the
+import, with the rest of [Governance](governance.md). The review before the release changed
+nothing in the import itself; it held the parallel run to a scoped governance
+administrator's people (see [Delegated administration](governance.md#delegated-administration)).
+
+!!! warning "Tested on hand-written exports only"
+    The import has been tested on hand-written exports, written to IdentityIQ 8.x's
+    documented shape; no real export has been imported. Plan for the first real run to need
+    changes.
 
 syncd's governance layer takes over what an IdentityIQ (IIQ) deployment decides: who holds
 what, why, who approved it and when it was reviewed. The move is made with one command,
@@ -26,7 +30,7 @@ applications:                 # IIQ application -> syncd governance system
   Active Directory: Directory
   Workday: HR
 login_attribute: name         # the IIQ identity attribute that is the person's login
-unmapped_applications: manual # unmapped applications become manual systems (or: skip)
+unmapped_applications: manual # unmapped applications become manual systems (default: skip)
 ```
 
 | Option | |
@@ -57,8 +61,10 @@ and makes nothing twice.
 | Workgroups | Workgroups and their members | |
 | Workflows, rules, forms, e-mail templates, quick links, task definitions | Nothing | Listed by name, type and size: rewrite by hand (rules as CEL) |
 
-Every imported role version waits for a person other than the importer to approve it on
-the **Roles** page; a business role is approved after the IT roles it includes.
+Every imported role version waits for a person to approve it on the **Roles** page (its
+proposer is recorded as `iiq-import`); a business role is approved after the IT roles it
+includes. The import is recorded in the audit trail as `governance.iiq.imported`, with the
+counts per class.
 
 ## The parallel run
 
@@ -72,6 +78,9 @@ shows, per system:
 - **Imported, absent from the target**: imported assignments whose access the target does
   not hold. This is what syncd would add at cutover.
 - **Totals**: holdings, unexplained, imported assignments, missing.
+
+Each list shows up to 500 rows; the totals count them all. A governance administrator scoped
+to some people sees only theirs.
 
 ## Cutover
 

@@ -1,14 +1,17 @@
 # Service-desk integration
 
-!!! warning "In development, not in a release yet"
-    The request API for tools is built on the `ldap-sync-merge-view` branch
-    `claude/modest-mayer-onyb29`, after release 0.6.1, with the rest of
-    [Governance](governance.md).
+This page describes syncd 0.7.0 (tag `v0.7.0`, commit `6de2fa1`), the first release with the
+request API for tools, with the rest of [Governance](governance.md). The review before the
+release changed nothing in this flow; it held the same routes to the scope of a scoped
+governance administrator who calls them (see
+[Delegated administration](governance.md#delegated-administration)).
 
 A service-desk tool can take access requests in its own forms and hand them to syncd, which
 runs the approvals, the policy checks and the provisioning, and tells the tool when it is
 done. The tool needs one API token with the `governance:request` scope; the approvals still
 happen in syncd, by the people its workflows name. No tool approves on anyone's behalf.
+Asking needs the Governance pack in the license (the evaluation enables every pack);
+reading a request back does not.
 
 ## The flow
 

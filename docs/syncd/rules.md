@@ -12,7 +12,11 @@ configurations. The YAML keys are listed in
 [Configuration](configuration.md#views-views); where the values come from is in
 [Connectors](connectors.md).
 
-It describes syncd 0.6.1 (tag `v0.6.1`, commit `59cbf19`). 0.5.5 fixes rules: timestamps read
+It describes syncd 0.7.0 (tag `v0.7.0`, commit `6de2fa1`). 0.7.0 adds two functions,
+`granted()` and `grants()`, which read the access the console's governance layer granted (see
+[Governance](#governance)), and moves the custom-function runtime to `wasmi` 2.0.3; the
+example module's bytes, and so its pin, are 0.6.1's. Nothing else in the rule language
+changes. 0.5.5 fixes rules: timestamps read
 ASCII digits only, the comprehensions take time in proportion to the list, `lookup()` gives its
 default for a key that is not set, and a publication's filter, mapping or group filter that
 fails keeps what is in the target. (Its cron fix concerns objects' schedules; see
@@ -239,6 +243,26 @@ Computed attributes only. See [Reading other entities](#reading-other-entities).
 | `refs(e.reference)` | Every entity a multi-valued reference points at. | `refs(e.manager).map(m, m.mail)` |
 | `reports(e)` | The entities whose `manager` reference points at this one. | `size(reports(e))` |
 | `referrers(e, "reference")` | The entities whose given reference points at this one: a person's groups, when the groups' view declares `member` as a reference to the people's. See [Computing memberOf from groups](#computing-memberof-from-groups). | `referrers(e, "member").map(g, g.dn)` |
+
+### Governance
+
+New in 0.7.0. A publication's `filter` and `attributes` only, on a publication with
+[`grants`](configuration.md#grants-grants). They read the grants the console's
+[governance](governance.md) layer sent the engine for the entity in that publication, as of
+the moment the entity is planned; the engine plans the entity again when a grant starts or
+ends.
+
+| Function | What it does | Example |
+|---|---|---|
+| `granted(key)` | Whether the entity holds a scope grant with this key now. | `e.status == "active" \|\| granted("account")` |
+| `grants(name)` | The values granted to the entity under this name now: a list, sorted and without duplicates, empty when there are none. | `grants("eduPersonEntitlement")` |
+
+- The key or name must be a string literal, not empty; anything else does not compile.
+- Anywhere else (a flow, a computed attribute, a group filter, a data-quality check) and in
+  previews and rule tests, `granted()` is false and `grants()` empty: they compile, and read
+  nothing.
+- A scope grant usually brings a person into a publication's scope who the filter would
+  otherwise leave out: when it ends, the entity leaves scope and is deprovisioned as any other.
 
 ### Binary
 
@@ -1169,7 +1193,7 @@ views:
 - **Pinned.** `wasm` needs `sha256`; a module whose bytes differ is refused when the
   configuration is read (`syncd validate`, `syncd run`, the console's check and publish). The
   example module's bytes follow syncd's version, so its pin changes with releases: the one above
-  is 0.6.1's (0.5.5 and 0.6.0 pinned `732b8651…`), and a package file of your own that pins the
+  is 0.6.1's and 0.7.0's (0.5.5 and 0.6.0 pinned `732b8651…`), and a package file of your own that pins the
   example module needs the value of the release it was built with.
   `from` is relative to the package file (to the configuration for an inline package).
   Without `from`, the console fills the module in from its module store by its hash (see
@@ -1193,7 +1217,7 @@ views:
 
 The runtime is **wasmi**, an interpreter (the product plan named Wasmtime, whose JIT cannot
 run under the units' `MemoryDenyWriteExecute=yes`): 2.0.2 since 0.6.0, after 2.0.1 was yanked
-upstream, with the same interface. A call costs about 5 µs for the
+upstream, and 2.0.3 since 0.7.0, after 2.0.2 was, each with the same interface. A call costs about 5 µs for the
 example's check digit on a release build, against about 0.1 µs for a built-in such as
 `upper()`: keep the library's functions for what they do.
 

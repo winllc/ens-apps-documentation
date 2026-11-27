@@ -6,7 +6,15 @@ losing the host or the cluster's volume, and how to go back to the previous rele
 commands themselves are in the [Operator guide](operator-guide.md#backups). For the suite-wide
 picture, see [Sizing, availability and recovery](../availability-and-sizing.md).
 
-It describes syncd 0.6.1 (tag `v0.6.1`, commit `59cbf19`). For this page, 0.5.5 changes how an
+It describes syncd 0.7.0 (tag `v0.7.0`, commit `6de2fa1`). For this page, 0.7.0 adds
+governance: the console's database grows with the people and access it governs
+([Sizing the console for governance](#sizing-the-console-for-governance)), the engine keeps the
+grants the console sends in its store and the snapshots carry them, and a store that was replaced
+(a takeover, a restore) has every grant sent again
+([What happens on failover](#what-happens-on-failover),
+[The console and the engines restored to different points](#the-console-and-the-engines-restored-to-different-points)).
+The console's schema goes from 33 to 52, which a rollback to 0.6.1 restores
+([Rolling back an upgrade](#rolling-back-an-upgrade)); the store's format stays 2. 0.5.5 changes how an
 HA pair fences its writes and what a takeover means for Debezium sources
 ([High availability](#high-availability)), makes the engine's startup budget a Helm value and
 documents growing its volume ([Sizing on Kubernetes](#sizing-on-kubernetes)), and changes the
@@ -32,8 +40,11 @@ Neither changes the store's format or the console's schema.
     nothing new; the extra work of its first full sync (claiming `unique()` values) was not
     measured. 0.5.2 measured its faster joins in release builds on 4 vCPU, at 200,000 people and
     some at 1,000,000 (see [Joins and first reads](#joins-and-first-reads)); 0.5.4, 0.5.5, 0.6.0
-    and 0.6.1 measured nothing new. Start with these figures, watch the signals named here, and
-    adjust.
+    and 0.6.1 measured nothing new. 0.7.0 measured the console's governance layer at 10,000,
+    100,000 and 1,000,000 people, against a stand-in engine, before the fixes made after the
+    release's review (see [Sizing the console for governance](#sizing-the-console-for-governance));
+    nothing of the engine's governance work (grants, inventories, SQL and REST targets) was
+    measured. Start with these figures, watch the signals named here, and adjust.
 
 ### What drives the size
 
@@ -53,6 +64,9 @@ Neither changes the store's format or the console's schema.
 | Backups | A store checkpoint (hard links, little disk) under the data directory while the archive is streamed; no temporary copy of the archive. CPU for the zstd compression | `engine.backup.every_secs` |
 | HA snapshots | From 0.5.0 a snapshot is a store checkpoint with a manifest of its files (sizes and SHA-256). The active engine keeps the newest two under `<data_dir>/ha/snapshots/` as hard links to the store's files, so they take the space of the files the store has replaced since. The passive engine keeps the newest one it received, a full store beside its own. The first is sent whole; after it, only the files the passive engine lacks (11 KB instead of 431 KB in the end-to-end test at 3,000 people). Larger stores were not measured | `engine.ha.snapshot_every_secs` (60; 300 before 0.5.0) |
 | HA password queue | From 0.5.0 the passive engine keeps a copy of the active one's password queue in `<data_dir>/ha/password-queue.replica`, sealed as in the store | `engine.ha.password_replication_wait_ms` (2000) |
+| Grants (from 0.7.0) | Each grant the console sends is kept in the store, in column families of its own, with an index by when its state changed; the snapshots and backups carry them. Grants that ended are forgotten seven days after they ended, once the console has read that they did. The console sends them 500 to a call (the engine takes up to 2,000). Not measured on the engine | A publication's `grants` |
+| Inventories (from 0.7.0) | For the console's entitlement catalog, the engine reads a publication's target a page at a time (its accounts, its groups, each group's members) and keeps nothing of it. How long it takes is the target's time to list everything; by default the console asks for each system once a day | A publication's `grants.inventory` |
+| SQL and REST targets (from 0.7.0) | A publication to PostgreSQL or MySQL writes up to 50 entities per transaction, each behind a savepoint; SQL Server and the JDBC bridge commit each entity on its own. A REST target writes entities side by side, up to the connection's `max_concurrency` (2 by default), in order for each entity. The database or the service usually sets the pace. Not measured | The connection's `max_concurrency` (REST) |
 | Unmanaged entries | From 0.5.0, after each scheduled drift check, a read-only paged search of the target for entries no publication exported, and of its privileged groups; the result is kept in the store. Not measured | A publication's `unmanaged` (`scheduled: false` turns it off) |
 | Custom functions in WebAssembly | From 0.5.0, an interpreter (wasmi) runs a package's module: about 5.4 µs a call (release build). Each call is limited in fuel and each instance in memory | `engine.wasm_functions`: `fuel` (10,000,000), `memory_mb` (16) |
 | The queue between sources and the engine | Up to 10 000 changes, each a whole record. A few tens of MiB for people; much more for sources that send large groups (thousands of members per entry) while the engine is busy | |
@@ -220,6 +234,57 @@ How to check and adjust:
 - **Sources keeping up.** `SyncdSourceStalled`, and for PostgreSQL sources the replication slot's
   retained WAL (`pg_replication_slots`), so the database's disk doesn't fill.
 
+### Sizing the console for governance
+
+New in 0.7.0. With [governance](governance.md) in use the console's database holds the people of
+the identity view, every account, group and membership of the entitlement catalog, the campaigns'
+items, requests, violations and their history, so it is no longer small. The source repository's
+`docs/GOVERNANCE-BENCHMARKS.md` measures the console's share at three sizes: N people, each with one
+account in one system and ten group memberships (groups of about 1,000 members), on a shared
+4 vCPU VM (Intel Xeon, 2.1 GHz, 15.7 GiB) with PostgreSQL 16 on the same VM at its default
+settings (`shared_buffers` 160 MB, `work_mem` 4 MB), release builds:
+
+| Measure | 10,000 people | 100,000 people | 1,000,000 people |
+|---|---|---|---|
+| Projection (the first pass over the identity view) | 3.0 s | 29.5 s | 320 s (5.3 min) |
+| Projection, nothing changed | 2.1 s | 21.1 s | 230 s (3.8 min) |
+| Full inventory of one system (accounts, groups, every group's members) | 9.8 s | 110 s (1.8 min) | 1,990 s (33 min) |
+| A manager campaign over all access (items) | 5.4 s (100,000) | 49.7 s (1,000,000) | 884 s (14.7 min) (10,000,000) |
+| Policy scan of 50 policies, first (45,000 violations opened) | 15.9 s | 29.4 s | 67.9 s |
+| Policy scan, again | 8.2 s | 31.3 s | 53.5 s |
+| Grants, from the console's outbox to applied | 3,979 / s | 4,050 / s | 4,048 / s |
+| A reviewer's page (100 items), 95th percentile | 3.0 ms | 3.7 ms | 4.3 ms |
+| Access search (who holds a group), 95th percentile | 130 ms | 39 ms | 18 ms |
+| **Console database size** | **0.23 GB** | **1.17 GB** | **10.1 GB** |
+
+!!! warning "What these figures are, and are not"
+    - **Measured before the fixes made after the release's review**, which changed how unchanged
+      projections and inventories, campaign starts, dashboard counts and grant read-back read and
+      write (commits `7aaafb9` for 10,000 and 100,000, `a940085` for 1,000,000). None has been
+      measured again since; the release notes single out the 1,000,000-person figures.
+    - **The engine is a stand-in** that answers from memory: the projection, inventory and grants
+      are the console's and its database's share. A real engine reading Active Directory adds the
+      directory's time to an inventory.
+    - **Not on the reference hardware** (16 vCPU nodes with NVMe, the database on a host of its
+      own), and not with PostgreSQL tuned for a database of 10 GB. The same build run twice on
+      the shared VM differed by up to 15 % on the long measures.
+
+Reading them:
+
+- **Linear to 100,000 people; two steps grow faster at 1,000,000.** The inventory and the
+  campaign grow about 18 times for ten times the people, writing tens of millions of rows into a
+  database whose default `shared_buffers` holds little of its indexes. Until a tuned run says
+  otherwise, plan at 1,000,000 people for a full inventory of about half an hour per system and a
+  campaign over everyone's access of about a quarter of an hour, on hardware like this.
+- **The pages people wait on do not slow down**: a reviewer's page stays under 5 ms and an access
+  search under 40 ms from 100,000 people up.
+- **Size PostgreSQL for the database**: about 1 to 1.2 GB per 100,000 people at ten memberships each,
+  growing with the memberships, and from 1,000,000 people a server set up for 10 GB or more
+  (shared buffers of a quarter of its memory, a larger `max_wal_size`), as the benchmark suggests
+  and has not yet measured. Backups, and the `pg_dump` an upgrade takes, grow with it.
+- **The console's own memory** with governance was not measured: the chart's
+  `console.resources` (below) were set before governance.
+
 ### Sizing on Kubernetes
 
 The [Helm chart](install.md#install-with-helm) gives the engine's pod:
@@ -231,7 +296,7 @@ The [Helm chart](install.md#install-with-helm) gives the engine's pod:
 | `engine.persistence.size` | `10Gi` | The store and its history; the volume also holds the configuration file. Allow about half the store's size again for a simulation's copy. For a pair, each engine has a volume of this size, and needs room for snapshots as well: about the store's size again on the passive one |
 | `engine.startupProbe` | `periodSeconds: 5`, `failureThreshold: 120` | New in chart 0.5.5: how long the engine may take to start (10 minutes by default) before Kubernetes restarts it. The control API listens once the store is open, and after a release that changes the store's format, once it is migrated: raise `failureThreshold` for such an upgrade of a large store |
 | `engine.minReadySeconds` | `0` | New in chart 0.5.5: how long a new engine pod must stay ready before it counts as available. A rollout of a pair moves on to the other pod only then |
-| `console.resources` | 100m CPU, `128Mi` requested; `512Mi` limit | Enough for the console alone |
+| `console.resources` | 100m CPU, `128Mi` requested; `512Mi` limit | Enough for the console alone without governance; with it, not measured (see [Sizing the console for governance](#sizing-the-console-for-governance)): watch the pod's memory against the limit |
 
 The memory limit acts as `MemoryMax` does on a host: past it the kernel stops the engine, and
 Kubernetes restarts the pod from its last commit. The engine reports the limit as
@@ -371,7 +436,14 @@ again:
   and send a snapshot, as [When the connected side's numbers go back](air-gap.md#when-the-connected-sides-numbers-go-back)
   says;
 - the reconciliation finds what is already in the targets: an LDAP entry already there is updated
-  in place, a SCIM or Entra ID resource is adopted.
+  in place, a SCIM or Entra ID resource is adopted;
+- grants from the console (from 0.7.0) are in the store, so the snapshot carries those the old
+  engine took before it, and the new active engine applies them, exported or not. One taken
+  after the last snapshot is not in it: the engine that took over starts with a new store
+  generation, and the console, seeing it at its next read of the grants' states, sends it every
+  grant again (the engine takes those it holds as no change). Nothing needs doing by hand. The
+  first is tested end to end (`tests/e2e/ha-backup.sh`), the second in the console's integration
+  tests.
 
 So nothing is lost, Debezium sources and `dsml` targets aside, but a takeover after a long
 interval has more to read and reconcile. From 0.5.0
@@ -408,8 +480,9 @@ to the active engine is enough. When they differ, it runs its own: publish to bo
   [Installation](install.md#an-activepassive-pair-on-hosts)).
 - **Tested on Kubernetes in kind only.** From 0.5.0 a `kind-ha` CI job installs a pair, fails it
   over and hands it over, once with a PostgreSQL lease and once with a Kubernetes Lease; it passed
-  in the run that published the 0.6.0 images and chart, whose publishing waits for it. 0.6.1's run
-  failed before it, and published no images or chart. No cloud cluster was used. The pair is
+  in the runs that built the 0.6.0 and 0.7.0 images, whose publishing waits for it. 0.6.1's run
+  failed before it, and published no images or chart; 0.7.0's published its images but not its
+  chart. No cloud cluster was used. The pair is
   tested end to end on hosts.
 - **Debezium sources after a takeover** resume from Debezium's own position, not the snapshot's:
   catch up with an incremental snapshot (above).
@@ -460,7 +533,10 @@ Deployment can be rescheduled anywhere, as it keeps nothing in its pod.
   expiry are kept in the store, and acted on at their time whether the engine ran throughout or
   was restarted (or, in a pair, failed over).
 - **The console is not in the data path.** If the console or its database is down, the engine
-  keeps synchronising; only management (publishing, approvals, the live status page) waits. A
+  keeps synchronising; only management (publishing, approvals, the live status page) waits. From
+  0.7.0 the grants the console gave are held and enforced by the engine, and end at their end
+  date, while the console is down; new assignments, requests, reviews and revocations wait for it,
+  and so does reading back what the engine did with each grant. A
   pair is the exception when its lease is in the console's database; from 0.5.0, a pair on
   Kubernetes can keep it in a Lease object instead.
 - **The license never stops sync.** From 0.5.0 an expired license, or none past the evaluation
@@ -480,13 +556,13 @@ still be running, or both engines export.
 
 | Item | Holds | Back it up with |
 |---|---|---|
-| The engine store, `/var/lib/syncd/engine` | Entities, their source records, checkpoints of each source, what was exported, dead letters, held changes, timers, history; the password keys (from 0.5.0 also previous ones, `password.key.<id>`) and the agents' CA (and a previous one during a rotation) when passwords are on | `syncd backup --to` or `engine.backup` (the running engine, a consistent checkpoint), or `syncdctl backup` (stops the engine while it copies). A copy of the files taken while the engine runs is not consistent |
-| The console's database | Accounts, role assignments, settings, registered engines, configuration versions, the audit trail, API tokens, webhooks, environments, scheduled reports, the HA lease; from 0.5.0 also the installation id, the license and its usage history, the configuration signing key and the WebAssembly modules | `syncdctl backup --to` (`pg_dump` beside the engine's archive), `syncdctl backup`, or your database's own backups |
+| The engine store, `/var/lib/syncd/engine` | Entities, their source records, checkpoints of each source, what was exported, dead letters, held changes, timers, history; the password keys (from 0.5.0 also previous ones, `password.key.<id>`) and the agents' CA (and a previous one during a rotation) when passwords are on; from 0.7.0 the grants the console sent, and the store's generation | `syncd backup --to` or `engine.backup` (the running engine, a consistent checkpoint), or `syncdctl backup` (stops the engine while it copies). A copy of the files taken while the engine runs is not consistent |
+| The console's database | Accounts, role assignments, settings, registered engines, configuration versions, the audit trail, API tokens, webhooks, environments, scheduled reports, the HA lease; from 0.5.0 also the installation id, the license and its usage history, the configuration signing key and the WebAssembly modules; from 0.7.0 the governance records (`gov_*` tables): people, the catalog, assignments and the grants made of them with what each engine was sent, requests, approvals, reviews, policies and their violations, roles | `syncdctl backup --to` (`pg_dump` beside the engine's archive), `syncdctl backup`, or your database's own backups |
 | The master key, `/var/lib/syncd/console/master.key` (or `CONSOLE_MASTER_KEY`) | Decrypts the stored engine client keys, webhook addresses and secrets, secret environment values and, from 0.5.0, the configuration signing key. With `CONSOLE_MASTER_KEY_KMS` (new in 0.5.0) the file holds it wrapped, and the KMS key is needed to open it | `syncdctl backup` (host-local), `syncdctl backup --to` from 0.4.1 (`<name>.console-master.key`), and a copy kept apart from the backups. `engine.backup` and `syncd backup` do not include it |
 | The password-key passphrase (the file `SYNCD_PASSWORD_KEY_PASSPHRASE_FILE` names), when the password keys are sealed | Opens the sealed password keys and agents' CA key, in the store and in every backup and snapshot. With `SYNCD_PASSWORD_KEY_PASSPHRASE_KMS` (new in 0.5.0) the file holds it wrapped, and the KMS key is needed to open it | A copy kept apart from the backups: a restore needs it. Keep the file outside `/etc/syncd`, for example in `/etc/syncd-keys/`: from 0.5.0 `syncdctl backup --to` leaves a passphrase file inside `/etc/syncd` out of its archive, with a warning |
 | `/etc/syncd` | `console.env`, `engine.env` (secrets, S3 keys, how to reach a vault), `engine/engine.yaml`, and the control API's CA and certificates; from 0.5.0, a license installed with `syncdctl license install` (`license.lic`) and the console's signing key for signed configurations (`pki/console-signing.pub`) | `syncdctl backup --to` (`<name>.etc.tar.gz`), `syncdctl backup`, or your configuration management. It holds secrets |
 | nginx's configuration and certificate, or the console's own (`CONSOLE_TLS_CERT`) | HTTPS for the console | Your configuration management |
-| The release | The bundle or package you installed | Keep the download, with `SHA256SUMS` (and `SHA256SUMS.asc` for a signed release; 0.5.0, 0.5.1, 0.5.4, 0.5.5, 0.6.0 and 0.6.1 are unsigned). The portal's **Downloads** page keeps earlier versions too, as does the GitHub release. On Kubernetes, the newest published images and chart are 0.6.0's, signed with cosign; 0.6.1 published none |
+| The release | The bundle or package you installed | Keep the download, with `SHA256SUMS` (and `SHA256SUMS.asc` for a signed release; 0.5.0, 0.5.1, 0.5.4, 0.5.5, 0.6.0, 0.6.1 and 0.7.0 are unsigned). The portal's **Downloads** page keeps earlier versions too, as does the GitHub release. On Kubernetes, the newest published images are 0.7.0's, signed with cosign, and the newest published chart is 0.6.0's (chart 0.7.0 was not published, and 0.6.1 published neither): keep the chart you install from, or its source at the tag |
 | A `dsml` connector's files (from 0.6.0) | On the connected side, the target's sequence number and the exports waiting for its next file, which are in the store; the files written, in the outbox and on their way. On the far side, the source's checkpoint (the last file read, each writer's last sequence number), in its store | The store's backups carry the sequence number, the waiting exports and the checkpoint. A store restored from a backup carries on from them as they were then: read [Recovery](air-gap.md#recovery) in the air-gap guide (on the connected side, [When the connected side's numbers go back](air-gap.md#when-the-connected-sides-numbers-go-back)) before restoring either side |
 | People, accounts, groups | The source systems and the target directories | Their own backups. The engine reads the sources again |
 | The audit trail | Also in your SIEM, when the console sends it there (the journal, `ENS_AUDIT_*`) | The SIEM's own retention |
@@ -611,6 +687,29 @@ and start it, with the pair's password-key passphrase if the keys are sealed: it
 and pulls a snapshot, with nothing to restore. To restore a pair
 from a backup, stop both engines, restore on one, start that one first, then the other.
 
+### The console and the engines restored to different points
+
+New in 0.7.0, with governance. The console's database and each engine's store hold two halves of
+one record: the console what it decided (assignments, the grants made of them, and which of them
+each engine has been sent), the engine the grants it holds and enforces. Restore them **to the
+same point** where you can: a host-local backup (`syncdctl backup`, and the one an upgrade
+takes) holds both from the same moment, and `syncdctl restore` and `syncdctl rollback` restore
+them together. An off-host engine backup (`syncd backup`, `engine.backup`) and a database backup
+of your own are taken at different moments, and so are the engine's volume and the database on
+Kubernetes.
+
+| Restored | What happens | What to do |
+|---|---|---|
+| The engine, with `syncd restore` (or `syncdctl restore --from`), to an earlier point than the database | The restored store starts with a new generation. The console sees it at its next read of the grants' states and sends that engine every grant it holds for it again, standing ones as upserts, ended ones as removes (`governance.delivery.redelivered` in the audit trail). The engine takes what it holds already as no change | Nothing |
+| The engine's files put back another way (a volume snapshot, a copy of the data directory) | The store keeps the generation it had, so the console does not know it was replaced | `syncd-console governance redeliver --engine <name>`, which queues every grant for that engine again in the same way |
+| The database alone, to an earlier point than the engine | The engine may hold grants the console has no record of; sending everything again does not remove them | `syncd-console governance redeliver --engine <name>` sends what the console holds; list the engine's grants with `syncd grants` and end the ones the console does not know with `syncd grants --apply` (a file of `removes`), or restore the engine to match |
+| Both, from one host-local backup | They agree | Nothing |
+
+The same holds for an HA takeover, which also gives the store a new generation (see
+[What happens on failover](#what-happens-on-failover)). Restores to different points, and the
+redelivery after them, are tested in the console's integration suite. What to run, and where, is in
+[The console and the engine at different points](operator-guide.md#the-console-and-the-engine-at-different-points).
+
 ### Backups on Kubernetes
 
 The chart takes no backups, and `syncdctl` does not run there. Back up these:
@@ -662,7 +761,12 @@ is kept by `helm uninstall`.
       snapshot (its `dataSource`) before installing, so the StatefulSet uses it. With the release
       installed, scale the engine to 0 and delete the claim first.
 4. `helm install` (or `helm upgrade`) the **same chart version** that took the backups, then check:
-   `kubectl -n syncd exec syncd-engine-0 -- syncd status`, sign in, and **Verify chain**.
+   `kubectl -n syncd exec syncd-engine-0 -- syncd status`, sign in, and **Verify chain**. With
+   governance (from 0.7.0), an engine restored with `syncd restore` has a new store generation,
+   and the console sends it every grant again by itself; after a volume snapshot, run
+   `kubectl -n syncd exec deploy/syncd-console -- syncd-console governance redeliver --engine
+   <name>`. A database restored to an earlier point than the store needs the steps in
+   [The console and the engines restored to different points](#the-console-and-the-engines-restored-to-different-points).
 
 The volume keeps the files' owner, uid 65532, which is what the images run as, so no `chown` is
 needed. The engine then catches up from its checkpoints, as on a host. For a pair, restore into
@@ -731,6 +835,22 @@ sudo syncdctl rollback
   console files in beside the live ones, and restores the data before it switches the programs
   back, so a rollback whose restore fails can be run again. The automatic rollback of a failed
   upgrade removes the failed release's store first, and needs no more room than the backup took.
+
+**From 0.7.0 to 0.6.1**, the console's schema changed (33 to 52, migrations 34 to 52: the
+governance tables, and those of the integration API, roles, delegation, the IdentityIQ import and
+connected products), so the rollback restores the console's database from the backup taken
+before the upgrade, and with it the governance records as they were then: what was requested,
+approved, reviewed or assigned since, and the grants the console sent since, are gone.
+`--keep-data` is refused: 0.6.1's console refuses a database 0.7.0 migrated (`migration 34 was
+previously applied but is missing`) and changes nothing in it, so there is no partial rollback.
+The store's format is the same (2), and the store comes back from the same backup, so the two
+agree. Kept instead (a package downgrade with the store left as it is), the store still holds the
+grants in column families 0.6.1 opens and leaves alone: granted access is no longer enforced or
+reported, and holds again once 0.7.0 runs. 0.6.1 also refuses a configuration with 0.7.0's
+settings (`grants` on a publication, `passwords.self_service.policy_dn`, publications to SQL,
+JDBC and REST targets, `external` connectors): publish one without them before rolling back
+with the store kept. See [Rolling back 0.7.0 to 0.6.1](install.md#rolling-back-070-to-061) and
+[Rolling back once governance is in use](install.md#rolling-back-once-governance-is-in-use).
 
 **From 0.6.1 to 0.6.0**, nothing changes: the store's format (2), the console's schema (33) and
 the configuration are the same, so the console's database is kept, and `--keep-data`, a package
@@ -808,7 +928,10 @@ the engine's volume nor the console's database, nor any Secret. A rollback to a 
 cannot read the store's format leaves the engine refusing to start (`the store has format N,
 written by a newer syncd`), and a console older than its database's schema may not start either:
 restore the backups taken before the upgrade (see [Backups on Kubernetes](#backups-on-kubernetes)),
-then roll back. From chart 0.6.0 to 0.5.5, nothing needs restoring, but run `syncd reconcile` in
+then roll back. From the 0.7.0 images back to 0.6.0 (there are no 0.6.1 images), restore the
+console's database into an empty database from before the upgrade (0.6.0's console refuses the
+schema 0.7.0 migrated), with the engine's store from the same time, and publish a configuration
+without 0.7.0's settings first if you keep the store. From chart 0.6.0 to 0.5.5, nothing needs restoring, but run `syncd reconcile` in
 the engine's pod first when a `dsml` target has exports waiting, and publish a configuration
 without a `dsml` connector (there is no chart 0.6.1 to roll back from). From chart 0.5.5 to 0.5.4,
 restore the console's database into an empty database, and the engine's store from the same

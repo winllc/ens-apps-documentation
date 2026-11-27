@@ -1,10 +1,35 @@
 # Governance
 
-!!! warning "In development, not in a release yet"
-    This page describes the governance layer as it is being built on the
-    `ldap-sync-merge-view` branch `claude/modest-mayer-onyb29`, after release 0.6.1. It is
-    not in a release, and the Governance pack is not issued in licenses yet. What is built
-    is listed below.
+This page describes syncd 0.7.0 (tag `v0.7.0`, commit `6de2fa1`), the first release with the
+governance layer. Its writes need the **Governance** pack (`governance`), new in 0.7.0; during
+the evaluation every pack is enabled, this one too (see [Licensing](licensing.md#packs)). What
+has not been run against real systems yet is listed under [Tested, and not
+yet](#tested-and-not-yet).
+
+!!! note "Changed by the review before the release"
+    This page was first written from the development branch. The review before 0.7.0 changed
+    these, and the page now describes them as released:
+
+    - After an engine's failover or restore the console sends every grant again on its own;
+      `syncd-console governance redeliver` is no longer needed after a failover
+      ([After a failover or a restore](#after-a-failover-or-a-restore)).
+    - Starting a campaign answers `202` with the campaign as a `draft`, prepared in the
+      background ([Access certifications](#access-certifications)).
+    - Scoped governance administrators get 404 outside their scope on every route, and 403 on
+      what has no scope ([Delegated administration](#delegated-administration)).
+    - Assignments and role assignments end in the console at their end date.
+    - The engine forgets ended grants seven days after they ended; ended grants and revokes
+      no longer count against `max_per_entity`.
+    - A granted group's last member gives way to the publication's
+      `group_policy.placeholder_member`.
+    - People and accounts are searched from the start of a login, name, mail or account
+      name; list cursors changed. `GET /api/v1/governance/entitlements` returns a page.
+    - The dashboard's counts are at most about five minutes old; Excel and PDF campaign
+      reports have size limits.
+    - Four eyes on role versions compares people, a token counting as its creator; a team's
+      approval cannot be claimed or handed on by its requester or beneficiary.
+    - SCIM: `meta.lastModified`, at most 10,000 group members a response,
+      `excludedAttributes=members`.
 
 Governance answers who should have what, and why. The console decides; the engine
 carries the decision out and keeps it, so access is enforced, and ends on time, while
@@ -26,7 +51,7 @@ the console is down.
 
 | Part | Where |
 |---|---|
-| Grants the engine enforces: `grants` on a publication, `granted()` and `grants()` in its filter and attributes, `ApplyGrants` and `ListGrantStates`, `syncd grants` | The engine |
+| Grants the engine enforces on LDAP, Active Directory, Entra ID, SCIM, SQL and REST targets: `grants` on a publication, `granted()` and `grants()` in its filter and attributes, `ApplyGrants` and `ListGrantStates`, `syncd grants` | The engine |
 | Roles `governance_admin` and `participant`; permissions `govern`, `view_governance`, `participate` | The console |
 | The identity source and its projection | Console: Governance page |
 | Systems, entitlements, assignments | Console: Governance settings (`/governance/settings`) and Assignments pages; API under `/api/v1/governance` |
@@ -40,7 +65,7 @@ the console is down.
 | Manual systems: CSV imports, fulfilment tasks for the system's owner, tickets in ServiceNow, Jira or a webhook receiver | Console: Governance (Import CSV), Fulfilment, My tasks |
 | Roles: versions a second person approves, membership rules, requests for roles, certifications of roles, role mining | Console: Roles (`/governance/roles`), Role mining |
 | Access history and search, risk scores, the governance report set, the summary dashboard | Console: Governance (`/governance`), Access search, Reports, Risk; see [Risk, access search and reports](#risk-access-search-and-reports) |
-| The Governance pack | Licensing |
+| The Governance pack (`governance`): grants (`grants` on a publication) and the console's governance writes | Licensing |
 
 ## Setting a publication up for grants
 
@@ -66,9 +91,14 @@ publications:
 
 | Setting | Default | |
 |---|---|---|
-| `grants.memberships.bases` | none (required on LDAP and Active Directory) | Groups outside them are refused. Not used on SCIM and Entra ID targets, whose groups are named by id |
-| `grants.memberships.member_attribute` | `member` | `member`, `uniqueMember` or `memberUid` |
-| `grants.memberships.max_per_entity` | 500 | Membership grants beyond it are refused |
+| `grants.memberships.bases` | none (required on LDAP and Active Directory) | Groups outside them are refused. LDAP and Active Directory only: SCIM and Entra ID name a group by its id |
+| `grants.memberships.member_attribute` | `member` | `member`, `uniqueMember` or `memberUid`. LDAP and Active Directory only |
+| `grants.memberships.max_per_entity` | 500 | Standing membership grants beyond it are refused. An ended grant and a revoke hold no membership and do not count |
+| `grants.memberships.table`, `entity_column`, `group_column` | none | SQL targets only, all three: the table listing who is in which group, one row per member and group |
+
+On a SQL target (PostgreSQL, MySQL, SQL Server, or Oracle and Db2 through the JDBC bridge) a
+granted membership is a row of that table; on a REST target it is the `members` calls of the
+publication's `rest` block. See [Connectors](connectors.md).
 
 A `dsml` target takes no grants: access granted across an air gap is the far side's to
 enforce. One of the publication's own computed groups cannot be granted: its filter
@@ -86,9 +116,39 @@ decides its members.
   comes back.
 - Each grant succeeds or fails on its own: a missing group fails that grant, not the
   person's export.
+- A `groupOfNames` or `groupOfUniqueNames` group must keep a member. When a grant's end
+  would remove its last member, the publication's `group_policy.placeholder_member` takes
+  its place in the same modify, and an add to a group holding the placeholder takes the
+  placeholder out. Without one, that removal fails and says so: set one where granted
+  groups can empty.
+- The engine forgets an ended grant seven days after it ended, once the console has read
+  that it ended (at most 1,000 at each `ApplyGrants`). Ending it again is still answered
+  `ended`.
 
 `syncd grants` lists the grants and their states; `syncd grants --apply FILE` submits a
 JSON file of grants, for tests and recovery.
+
+### After a failover or a restore
+
+The engine's store has a **generation**, renewed whenever the engine runs on a store that
+replaced its own: an HA takeover, a restore from a backup, a snapshot swapped in.
+`ApplyGrants` and `ListGrantStates` answer it. When an engine answers a generation other
+than the one the console recorded, the console sends it every grant again on its own, each
+standing one as an upsert and each ended one as a remove (audited as
+`governance.delivery.redelivered`); the engine takes what it holds already as no change. So
+a grant the active engine took in its last snapshot interval before it failed reaches the
+engine that took over, with nothing to run.
+
+After restoring the console's database alone, or to do the same by hand:
+
+```sh
+sudo -u syncd syncd-console governance redeliver --engine <name>
+```
+
+When the database was restored to an earlier point than the engine, the engine may hold
+grants the console has no record of: list them with `syncd grants` on the engine and end
+them there, or restore the engine to match. Restoring both to the same point (a host-local
+backup, an upgrade's rollback) needs neither.
 
 ## Setting the console up
 
@@ -102,9 +162,13 @@ JSON file of grants, for tests and recovery.
    without regard to case), display name, mail, manager, status, and up to 20 more. The
    console never asks the engine for sensitive values.
 4. Register each governed publication as a system, and its entitlements.
-5. On the **Assignments** page, find a person and give them an entitlement, with a
-   reason. Its state follows the engine: `pending`, then `active`, or `failed` with the
-   engine's reason. Ending it has the engine remove what it added.
+5. On the **Assignments** page, find a person (the search matches the start of a login,
+   name or mail address) and give them an entitlement, with a reason. Its state follows the engine: `pending`, then `active`, or `failed` with the
+   engine's reason. Ending it has the engine remove what it added. An assignment (or a role
+   assignment) with an end date ends in the console at that date too: the governance clock,
+   once a minute, ends it, queues the removal (on a manual system, opens a removal task) and
+   records `governance.assignment.revoked` (`governance.role.unassigned`), while the engine's
+   own timer ends the grant on time.
 
 A projection pass that would mark more than `max_gone_percent` (10 % by default) of the
 people gone stops and changes nothing, and records `governance.projection.halted`: an
@@ -133,12 +197,16 @@ The engine reads the target and never writes it.
 Each account is linked to its person: the engine's own export links it (`managed`);
 otherwise a correlation rule may match exactly one person (`rule`); otherwise someone
 links it on the **Catalog** page (`manual`, kept by later runs). Accounts nobody owns are
-listed there for review.
+listed there for review. The Catalog's search matches the start of an account's name, or of
+its DN's first value (`jdoe` finds `uid=jdoe,ou=People,...`); within one person's accounts,
+any part of the name.
 
 Each holding is **explained** when an open assignment gives it, or when a rule of the
 engine's configuration decides the group (a computed group). On go-live, what was found
 in place is unexplained; on a person's "What they hold" card, **Adopt** records it as the
-baseline (an assignment with origin `import`), without changing the system. Ending an
+baseline (an assignment with origin `import`), without changing the system
+(`POST .../assignments/adopt-all` adopts every unexplained holding of a system, a person or
+an entitlement at once). Ending an
 adopted membership later has the engine remove it once.
 
 A run that would mark more than 20 % of a system's accounts gone marks nothing and is
@@ -156,7 +224,8 @@ says what is reviewed and by whom:
   only) or **what the role holds** (revoking proposes a version without it, which somebody
   other than the reviewer approves), for the roles chosen or every active role. When that reviewer is missing or is the person reviewed, the
   person's manager reviews, then the definition's **fallback reviewer**. Nobody reviews
-  their own access; a campaign with an item nobody can review does not start.
+  their own access; a campaign with an item nobody can review does not start (it is
+  cancelled, saying why).
 - **Scope**: some systems or all, privileged entitlements only, only access nothing
   explains, and the people a CEL expression selects, over `login`, `display_name`, `mail`,
   `status` and the projected attributes (for example `e.department == "Finance"`).
@@ -167,7 +236,19 @@ says what is reviewed and by whom:
   an optional schedule (start every so many days).
 
 Starting a campaign snapshots the [catalog](#the-entitlement-catalog) as the last inventory
-read it: run an inventory first. **Preview** gives the counts without starting anything.
+read it: run an inventory first. **Preview** gives the counts without starting anything; the
+start dialog runs it when asked, not on opening.
+
+**A campaign is prepared in the background.** Starting one (`POST
+/api/v1/governance/campaigns`) answers `202 Accepted` at once, with the campaign in the state
+`draft`; the pages show it as *preparing*. Its items are written a few reviewers at a time.
+A draft is in nobody's queue, no reminder reads it and nothing in it can be decided. When
+every reviewer has their items the campaign becomes `active`, its due date counted from
+then, and the reviewers are mailed. A campaign with nothing to review, or an item nobody can
+review, becomes `cancelled`, with why (`prepare_error`). A preparation that stopped (the
+console restarted, another replica took over) is resumed by the governance clock. A
+lifecycle rule's review of one mover starts at once. A campaign's progress by reviewer is
+paged (**More reviewers**; `GET .../campaigns/{cid}/reviewers`).
 
 What each decision does:
 
@@ -182,14 +263,19 @@ A revocation needs a reason, and so does keeping a privileged entitlement.
 When a campaign closes (by hand, or by itself seven days after its due date), undecided
 items take the definition's default and queued revocations are carried out. Each
 revocation is confirmed twice: by the engine's grant states, then by the next inventory of
-its system. If the inventory still finds the access, the revocation is marked failed,
+its system. If the inventory still finds the access although the grants say the engine
+carried the revocation out, the revocation is marked failed,
 `governance.review.revocation_failed` is recorded, and a task appears under **Needs
-attention** on the Access reviews page. **Sign off** is possible once every revocation is
-confirmed or failed; after it, the database refuses any change to the campaign's items.
+attention** on the Access reviews page. A revocation the engine has not carried out yet
+(an engine that is down, a change window) stays `sent` for a later inventory, and a later
+inventory that no longer finds the access of a failed one marks it applied and closes its
+task. **Sign off** is possible once every revocation is confirmed or failed; after it, the
+database refuses any change to the campaign's items.
 
-The campaign's report (CSV, Excel or PDF) has one row per item: person, account,
-entitlement, system, explained, privileged, reviewer, decision, who decided and when, the
-reason, and the revocation's state.
+The campaign's report has one row per item: person, account, entitlement, system,
+explained, privileged, reviewer, decision, who decided and when, the reason, and the
+revocation's state. CSV downloads at any size (streamed); Excel is refused above 200,000
+items and PDF above 20,000, saying so.
 
 Reviewers are mailed when a campaign starts, on each reminder day while items are
 undecided, and their manager once when their task is overdue. Mail goes only to the
@@ -259,7 +345,10 @@ an entitlement directly, or through another role, keeps it when the role goes.
 
 What a role holds changes only by a **version**: someone proposes it (**Propose a change**:
 entitlements, included roles, a membership rule, a comment) and **somebody else approves
-it**. The proposer cannot, and the database refuses it besides. The role's page shows a
+it**. The proposer cannot, and the database refuses it besides. Proposer and approver are
+compared as people: a change made through an API token counts as the token's creator's, so
+nobody proposes in a session and approves with their own token (role mining's **Make a
+role** counts the same way). The role's page shows a
 proposed version beside the one in effect: what it removes struck through, what it adds
 marked new. A role is a draft until its first version is approved.
 
@@ -352,7 +441,8 @@ exception runs out it is open again. One no longer found is **remediated**.
 The owner (on **My policy violations**) or a governance administrator either **removes
 access** (each entitlement chosen is removed as a certification revocation removes it) or
 **grants an exception** until a date, at most the policy's longest exception. Nobody excepts
-their own violation.
+or remediates their own violation; through an API token, the token's creator is who is
+checked.
 
 When access is **asked for**, the request is checked against every enabled policy the
 person would newly violate:
@@ -361,7 +451,7 @@ person would newly violate:
 |---|---|
 | Block | Refused, naming the policy |
 | Warn | Goes ahead; every approver sees the warning |
-| Require an exception | Gains an approval step for the policy's owner; their approval grants the exception |
+| Require an exception | Gains an approval step for the policy's owner (a workgroup that owns it, or, with no owner, the default workflow's fallback approver); their approval grants the exception. Such a policy's owner cannot be cleared |
 
 A role is checked by everything it expands to. Giving an assignment or a role directly that
 would violate a policy is refused unless the call says `override_policy` with a reason,
@@ -384,7 +474,9 @@ Lifecycle) act on these, each once per event:
 A rule may have a condition: CEL over the person as `e`, and for a change
 `e.previous_<attribute>` too. For example a mover rule on **changed** with
 `e.department != e.previous_department`. Every installation starts with one rule: leavers'
-assignments end. **What they did** lists each run.
+assignments end. **What they did** lists each run. Events are handled every 30 seconds, in
+batches, leavers' before the rest, so a leaver never waits behind a crowd of joiners;
+events no enabled rule triggers on are set aside at once.
 
 A person who **returns** gets back what rules give (with roles); access they had asked for is
 not restored: they ask again.
@@ -508,8 +600,8 @@ change (**Risk** page, `/governance/risk`):
 
 Access a rule decides counts in neither of the last two. A person's card on
 **Assignments** shows the four parts. The score puts the riskiest people first in a
-reviewer's queue, is shown to approvers with its parts, and can scope a campaign
-("Risk score above").
+reviewer's queue (by their score when the campaign started), is shown to approvers with its
+parts, and can scope a campaign ("Risk score above").
 
 **The entitlement import** (`POST /api/v1/governance/entitlements/import`, CSV) describes
 entitlements the catalog already holds, in bulk: columns `system` and `entitlement` (its
@@ -524,13 +616,19 @@ accounts report lists.
 
 **Reports.** Ten reports of the catalog, as CSV, Excel or PDF, from the **Governance
 reports** page (`/governance/reports`) or on a schedule from the **Reports** page. Each
-download is recorded as `governance.report.exported`. Their columns are listed under
+download is recorded as `governance.report.exported`, and holds at most
+`CONSOLE_EXPORTS_MAX_ROWS` rows (200,000 by default; a capped file carries
+`X-Syncd-Truncated: true`). The certification status report takes `campaign` (one
+campaign's rows), and it and the request and provisioning history reports take `days` (the
+last so many days). Their columns are listed under
 [Governance reports](reports-and-data-quality.md#governance-reports).
 
-**The summary.** `/governance` now shows people, unlinked accounts, unexplained access,
+**The summary.** `/governance` shows people, unlinked accounts, unexplained access,
 open violations by severity, campaigns in progress and how much is decided, approvals
 past their timeout, failed grants and high-risk people, with their daily trend and the
-ten riskiest people. The identity source and systems are on **Governance settings**
+ten riskiest people. The counts are served from the last measurement, at most about five
+minutes old, and the page shows when they were counted ("Counts as of ..."; `measured_at`
+in the API). The identity source and systems are on **Governance settings**
 (`/governance/settings`).
 
 ## SecurID tokens and certificates
@@ -577,7 +675,8 @@ entitlement, a role or a policy in place of a person (**Change the owner**, or
 `POST /api/v1/governance/owner`). A step that asks the owner then asks the team, as does a
 step whose approver is `workgroup:<id>`: every member sees the approval, the first to decide
 settles it and is recorded as the approver, and a member who asked for the access, or whom
-it is for, is refused. Fulfilment tasks of a system a team owns, and violation tasks of a
+it is for, is refused (403) whether they approve, reject, claim it or hand it to someone
+else: another member decides. Fulfilment tasks of a system a team owns, and violation tasks of a
 policy it owns, are the team's: a member **claims** one, which takes it off the others'
 lists, and can **release** it. Reviews go to one person: the workgroup's owner reviews what
 the team owns.
@@ -590,9 +689,24 @@ person. Review tasks are not forwarded.
 **Governance scopes** (`/governance/scopes`) limit a governance administrator to some
 people (a CEL filter, such as `e.department == "Finance"`, refreshed after each projection)
 and some systems. Give the role on the **Users** page as `governance_admin` on a governance
-scope (in role maps, `governance_admin@governance:finance`). Such an administrator sees and
-changes only people and systems inside it; anything else answers 404. Lists of campaigns,
-roles, policies, workflows, reports and the dashboard are not filtered by scope yet.
+scope (in role maps, `governance_admin@governance:finance`). Such an administrator is held to
+it on every route:
+
+- **404 outside the scope**: people (and what they hold, terminating and reinstating them),
+  their assignments, accounts, systems, entitlements and their members, requests, fulfilment
+  tasks, violations, role members, portals reporting changes, lifecycle runs, the access
+  search, the parallel run and the dashboard's riskiest people. An owner or a person named
+  in a change who is outside the scope answers 404 too.
+- **403, whatever the scope**: what has no scope of its own or reaches everyone. Campaigns
+  and changes to campaign definitions (campaigns' reads included), the administrators'
+  tasks, changes to roles (versions, rule simulations, role mining), policies (simulations
+  and scans too), workflows and lifecycle rules, registering a system, imports (a system's
+  CSV, the entitlement import), ticket systems, connected products, workgroups and scopes,
+  the governance reports, and the risk settings and scoring.
+
+Definitions (roles, policies, workflows, lifecycle rules, campaign definitions, products)
+are still listed to a scoped administrator, and the dashboard's counts are across every
+scope.
 
 **Identity sources**: besides the settings' own (named `primary`), an admin can add other
 engines' or views' people (`/api/v1/governance/identity-sources`). Each is projected on its
@@ -604,28 +718,29 @@ own; one person in two sources is two people.
 |---|---|---|
 | `GET /api/v1/governance/settings` | governance readers, `governance:read` | The identity source |
 | `PUT /api/v1/governance/settings` | admins | Change it |
-| `GET /api/v1/governance/identities`, `/identities/{gid}` | governance readers | People, by login (`q`, `status`, `min_risk`, `after`, `limit`), with their risk score and its parts |
+| `GET /api/v1/governance/identities`, `/identities/{gid}` | governance readers | People (`q`: the start of a login, name or mail; `status`, `min_risk`, `after`: the opaque `next_after` of the page before, `limit` up to 500), with their risk score and its parts |
 | `GET`, `POST /api/v1/governance/systems` | readers; writers, `governance:write` | Systems |
-| `GET`, `POST /api/v1/governance/entitlements` | readers; writers | Entitlements |
+| `GET`, `POST /api/v1/governance/entitlements` | readers; writers | Entitlements. `GET` answers a page, `{entitlements, next_after}` (`system`, `q`, `ids` up to 500, `requestable`, `after`, `limit` 1 to 500, 100 by default), not a list |
 | `GET`, `POST /api/v1/governance/assignments` | readers; writers | Assignments (`identity`, `open`) |
 | `POST /api/v1/governance/assignments/{aid}/end` | writers | End one, with a reason |
-| `GET /api/v1/governance/accounts` | readers | Accounts found (`system`, `identity`, `link`, `kind`, `q`, `gone`) |
+| `GET /api/v1/governance/accounts` | readers | Accounts found (`system`, `identity`, `link`, `kind`, `gone`, `after`, `limit`; `q`: the start of the account's name or of its DN's first value, any part of the name with `identity`) |
 | `PATCH /api/v1/governance/accounts/{acid}` | writers | An account's kind (`person`, `service`, `unknown`) and a service account's owner |
 | `POST /api/v1/governance/accounts/{acid}/link`, `/unlink` | writers | Link an account to a person by hand, or unlink it |
 | `PATCH /api/v1/governance/entitlements/{eid}` | writers | Describe an entitlement: name, description, owner, privileged, requestable, risk (`risk_default` to go back) |
 | `POST /api/v1/governance/entitlements/import` | writers | Describe entitlements in bulk, from CSV |
 | `GET /api/v1/governance/search/access` | readers | Who holds what, now or `at` a past time (`entitlement`, `identity`, `system`, `explained`, `cursor`, `limit`) |
 | `GET`, `PUT /api/v1/governance/risk/settings`; `POST /api/v1/governance/risk/score` | readers; writers | How the risk score is made; score everyone now |
-| `GET /api/v1/governance/dashboard` | readers | The summary: counts now, daily trend (`days`), the riskiest people |
-| `GET /api/v1/governance/reports`; `GET .../reports/{report}?format=csv\|xlsx\|pdf` | readers | The governance report set, and one report as a file |
+| `GET /api/v1/governance/dashboard` | readers | The summary: counts as last measured (`measured_at`, at most about five minutes old), daily trend (`days`), the riskiest people |
+| `GET /api/v1/governance/reports`; `GET .../reports/{report}?format=csv\|xlsx\|pdf` (`campaign`, `days`) | readers | The governance report set, and one report as a file |
 | `GET /api/v1/governance/entitlements/{eid}/members` | readers | Who holds it, explained or not |
 | `GET /api/v1/governance/identities/{gid}/access` | readers | What a person holds everywhere |
 | `POST /api/v1/governance/systems/{sid}/inventory` | writers | Run a system's inventory now |
 | `GET /api/v1/governance/inventory-runs` | readers | Inventory runs, newest first |
 | `POST /api/v1/governance/assignments/adopt` | writers | Adopt up to 1,000 holdings found in place |
+| `POST /api/v1/governance/assignments/adopt-all` | writers | Adopt every unexplained holding a filter selects (`system_id`, `identity_id`, `entitlement_id`, with a `reason`) |
 | `GET`, `POST /api/v1/governance/campaign-definitions`; `PUT`, `DELETE .../{did}` | readers; writers | Campaign definitions |
 | `POST /api/v1/governance/campaign-definitions/{did}/preview` | readers | What a campaign would hold now |
-| `GET`, `POST /api/v1/governance/campaigns`; `GET .../{cid}` | readers; writers | Campaigns, and one with its progress by reviewer |
+| `GET`, `POST /api/v1/governance/campaigns`; `GET .../{cid}`, `.../{cid}/reviewers` | readers; writers | Campaigns; starting one answers `202` with a `draft`; one campaign, and its progress by reviewer a page at a time |
 | `POST /api/v1/governance/campaigns/{cid}/reassign`, `/close`, `/sign-off` | writers | Move a reviewer's items, close, sign off |
 | `GET /api/v1/governance/campaigns/{cid}/report?format=csv\|xlsx\|pdf` | readers | The evidence report |
 | `GET /api/v1/governance/tasks`; `POST .../tasks/{tid}/done` | readers; writers | Tasks for the governance administrators |
@@ -635,7 +750,7 @@ own; one person in two sources is two people.
 | `GET /api/v1/governance/requests`, `.../{rid}`; `POST .../{rid}/override` | readers; writers | Requests, and overriding their approvers |
 | `POST /api/v1/governance/requests`; `GET .../{rid}/state`; `GET /api/v1/governance/entitlements/lookup` | administrators, or `governance:delegate` | Asking on a person's behalf (`on_behalf_of`) |
 | `GET /api/v1/governance/catalog`; `POST /api/v1/governance/requests`; `GET /api/v1/governance/requests/{rid}` | `governance:request` (a service-desk tool), or `governance:delegate` | What can be requested; asking on a person's behalf with a ticket; reading back its own requests ([Service-desk integration](service-desk.md)) |
-| `GET /api/v1/scim/v2/Users`, `/Groups`, ... | `governance:read` | People and roles over SCIM 2.0, read-only ([API reference](api-reference.md#scim-20-read-only)) |
+| `GET /api/v1/scim/v2/Users`, `/Groups`, ... | `governance:read` | People and roles over SCIM 2.0, read-only ([API reference](api-reference.md#scim-20-read-only)). `meta.lastModified` is when the person's data last changed; a group's members come at most 10,000 to a response (more is refused, `tooMany`), and `excludedAttributes=members` leaves them out |
 | `GET`, `POST /api/v1/governance/ingest-sources`; `POST /api/v1/governance/ingest/dsp` | readers, writers; the portal's signature | Portals reporting group changes |
 | `GET /api/v1/my/catalog`, `GET`, `POST /api/v1/my/requests`, `GET .../{rid}`, `POST .../{rid}/cancel` | every signed-in role | Asking, and one's requests |
 | `GET /api/v1/my/approvals`, `POST .../{tid}/approve`, `/reject`, `/delegate`; `GET /api/v1/my/team` | every signed-in role | Approving, and a manager's team |
@@ -656,7 +771,7 @@ own; one person in two sources is two people.
 | `GET`, `POST /api/v1/governance/roles/{rid}/members`; `POST .../members/{maid}/end` | readers; writers | Who holds a role (`all` for ended ones too); give it (`override_policy`), take it |
 | `POST /api/v1/governance/role-mining`; `GET /api/v1/governance/role-candidates`; `POST .../{cid}/accept`, `/dismiss` | writers; readers | Role mining |
 | `GET /api/v1/my/identity`, `/my/access` | every signed-in role | The signed-in person, and what they hold |
-| `GET /api/v1/my/password`; `POST /api/v1/my/password/reset`, `/my/account/unlock` | every signed-in role, after a fresh single sign-on | Reset one's password, unlock one's account ([Password synchronisation](password-sync.md#forgotten-passwords-and-locked-accounts)) |
+| `GET /api/v1/my/password`; `POST /api/v1/my/password/reset`, `/my/account/unlock` | every signed-in role, within five minutes of a sign-in the identity provider proves fresh (`auth_time`, `AuthnInstant`) or a client certificate | Reset one's password, unlock one's account ([Password synchronisation](password-sync.md#forgotten-passwords-and-locked-accounts)) |
 | `POST /api/v1/governance/identities/{gid}/password-reset-link` | the person's manager, or `reset_passwords` | Mail the person a single-use reset link |
 | `POST /api/v1/password-reset/check`, `/password-reset` | anyone with the link | The public reset page |
 | `GET`, `POST /api/v1/governance/workgroups`; `PUT`, `DELETE .../{wid}`; `POST /api/v1/governance/owner` | readers; writers on everything | Workgroups, and who owns a system, an entitlement, a role or a policy |
@@ -680,7 +795,7 @@ a license lapses.
 | `governance.assignment.granted`, `governance.assignment.revoked` | authorization |
 | `governance.entitlement.updated`, `governance.account.linked`, `governance.account.unlinked` | configuration |
 | `governance.campaign_definition.saved`, `governance.campaign_definition.deleted` | configuration |
-| `governance.campaign.created`, `governance.campaign.closed`, `governance.campaign.approved` (sign-off) | authorization |
+| `governance.campaign.created`, `governance.campaign.started` (once its preparation is done), `governance.campaign.closed`, `governance.campaign.approved` (sign-off) | authorization |
 | `governance.review.decided` (one per submission), `governance.review.delegated` | authorization |
 | `governance.review.revocation_failed` | system |
 | `governance.workflow.updated`, `governance.ingest_source.saved` | configuration |
@@ -705,6 +820,8 @@ a license lapses.
 | `governance.task.claimed`, `governance.delegation.updated` | authorization |
 | `governance.product.connected`, `governance.product.removed` | configuration |
 | `governance.offboard.requested`, `.completed`, `.failed` | authorization |
+| `governance.iiq.imported` ([Migrating from IdentityIQ](migrating-from-iiq.md)) | data |
+| `governance.delivery.redelivered` (every grant of an engine sent again: a new store generation, or `syncd-console governance redeliver`) | system |
 
 ## Password reset links
 
@@ -726,9 +843,13 @@ account held (from when to when, as the inventory saw it).
 
 ## Tested, and not yet
 
-- The engine's grants: unit tests, and an end-to-end script against OpenLDAP 2.6. Not run
-  yet against Active Directory, SCIM providers or Microsoft Graph.
-- The console: integration tests against PostgreSQL with a stand-in engine (an
+- The engine's grants: unit tests, and an end-to-end script against OpenLDAP 2.6 (with a
+  one-member `groupOfNames` and its placeholder). On SQL targets, end-to-end tests against
+  PostgreSQL, MySQL, MariaDB and SQL Server, and through the JDBC bridge against Oracle
+  23ai Free and Db2 12.1; on REST targets, against a stand-in application only. Not run yet
+  against a real Active Directory, SCIM provider or Microsoft Graph.
+- The console: 173 integration tests against PostgreSQL (four, which need a real system or
+  a long run, ignored), most with a stand-in engine (an
   assignment becomes a grant and is delivered; ending it removes it; a participant
   reaches only their own page; a projection that would lose most people stops; an
   inventory fills the catalog, links accounts, adopts found access, and stops when a run
@@ -736,9 +857,12 @@ account held (from when to when, as the inventory saw it).
 - The inventory: an end-to-end script against OpenLDAP 2.6; not yet against Active
   Directory, SCIM providers or Microsoft Graph.
 - Certifications: integration tests (a manager campaign end to end with the stand-in
-  engine, revocations at the close, the clock). A campaign of 200,000 items starts in about
-  9 seconds; a page of a reviewer's queue answers in about 25 ms. Not yet an end-to-end
-  script with OpenLDAP.
+  engine, revocations at the close, the clock; a preparation stopped after one reviewer,
+  invisible until the clock finishes it; a campaign that cannot start cancelled; the
+  counters against the items). Before the review moved preparation to the background, a
+  campaign of 200,000 items was made in about 9 seconds in one request, and a page of a
+  reviewer's queue answered in about 25 ms (a debug build); not measured since. Not yet an
+  end-to-end script with OpenLDAP.
 - Requests: integration tests (an approval chain to applied access, no self-approval,
   rejection, a manager for a report, end dates and limits, timeouts, overrides, the portal's
   signed webhook and delegated requests), and the portal's own test of governed mode against a
@@ -768,8 +892,10 @@ account held (from when to when, as the inventory saw it).
   report arrives through the mail outbox). Not yet with a real inventory schedule over
   days.
 - Delegated administration: integration tests (an administrator scoped to one department
-  lists only its people, gets 404 outside it and cannot assign there; a team approves, a
-  member who asked is refused, a claimed task leaves the others' lists and returns on
+  lists only its people, gets 404 outside it and cannot assign there; a walk of the
+  governance writes as a scoped administrator against records outside the scope changes
+  nothing, and the same routes work inside it; a team approves, a member who asked is
+  refused, also when handing it on, a claimed task leaves the others' lists and returns on
   release; an approval goes to the delegate while the approver is away; a person moves
   between scopes after the projection).
 - SecurID tokens and certificates: integration tests against stand-ins that answer as the
@@ -784,15 +910,21 @@ account held (from when to when, as the inventory saw it).
   50 policies 68 seconds; grants are applied at about 4,000 a second, and a page of a
   reviewer's queue answers in 4.3 ms at the 95th percentile. Up to 100,000 people each
   measure grows no faster than the people; from 100,000 to 1,000,000 the inventory and the
-  campaign grow about 18 times. Not yet run on the reference hardware, with PostgreSQL
-  tuned for that size, or with a real engine reading a real directory.
+  campaign grow about 18 times. **These figures were measured before the fixes after the
+  review** (campaign preparation in the background, counters, paged lists, batched writes)
+  and have not been measured again. Not yet run on the reference hardware, with PostgreSQL
+  tuned for that size, or with a real engine reading a real directory. See
+  `docs/GOVERNANCE-BENCHMARKS.md` in the source repository.
 - Resilience: integration tests of two console replicas on one database with the one
   delivering killed in the middle of a batch (1,500 grants, none lost or applied twice),
   of the console and the engine restored to different points, and of an older console
   refusing a database a newer one migrated; an end-to-end script of engine failover after a
   grant and of backup and restore against OpenLDAP. The failover found that a grant the
-  active engine takes in its last snapshot interval before it dies is not on the standby:
-  run `syncd-console governance redeliver --engine <name>` after a failover.
+  active engine takes in its last snapshot interval before it dies is not on the standby;
+  the console now sends every grant again when the engine's store generation changes (see
+  [After a failover or a restore](#after-a-failover-or-a-restore)). That is tested with the
+  stand-in engine and the store's own tests; the end-to-end failover script does not
+  exercise it.
 - Real systems: scripts for Active Directory (grants to a nested group, inventory, reset
   and unlock), an Entra tenant, a SCIM application and ServiceNow and Jira, run nightly
   where their credentials are set. The Entra and SCIM scripts pass against stand-ins; none

@@ -162,12 +162,15 @@ each connector's pack.
 | Pack | Connectors | Features |
 |---|---|---|
 | Core | Active Directory, LDAP (OpenLDAP, 389 DS, Ping), PostgreSQL, MySQL and MariaDB, CSV files, DSML files (air gap; from 0.6.0) | The rule engine and the console, rule packages, data-quality checks, unmanaged-entry reports, secrets from Vault, AWS or Azure, SAML and X.509 sign-in, scoped roles, drift checks |
-| Enterprise Database | SQL Server, MongoDB, Debezium (Oracle, Db2 and others), the JDBC bridge | SQL tables as targets (`sql-targets`; in development) |
+| Enterprise Database | SQL Server, MongoDB, Debezium (Oracle, Db2 and others), the JDBC bridge | [SQL tables as targets](connectors.md#sql-tables-as-targets) (`sql-targets`, from 0.7.0: a publication to a `postgres`, `mysql`, `sql_server` or `jdbc` connector, also for PostgreSQL and MySQL, which are Core as sources) |
 | Cloud and SaaS | Microsoft Entra ID, SCIM 2.0, REST and OData, Workday, SAP SuccessFactors, UKG Pro | Entra ID certificate, federated and managed-identity sign-in |
 | Password Sync | | Capture agents, self-service, password delivery, initial passwords, password key and agent CA rotation |
 | High Availability | | Active/passive pairs, with the PostgreSQL, file and Kubernetes Lease backends |
-| Extensibility | [External connectors](connector-sdk.md) (in development) | [Custom functions in WebAssembly](rules.md#custom-functions-in-webassembly) |
-| Governance (in development, not issued yet) | | [Grants from the governance layer](governance.md) (`grants` on a publication); the console's governance pages |
+| Extensibility | [External connectors](connector-sdk.md) (`external`, from 0.7.0) | [Custom functions in WebAssembly](rules.md#custom-functions-in-webassembly) |
+| Governance (`governance`, from 0.7.0) | | [Grants from the governance layer](governance.md) (`grants` on a publication); the console's governance changes: the catalog, assignments, requests and approvals, certifications, policies, roles, lifecycle rules, manual systems, delegation |
+
+REST targets need no pack of their own: the `rest` connector is in Cloud and SaaS, as a source
+and as a target.
 
 What the license does not include is **locked**: the console's editor marks the connector type
 and won't add one, the Studio marks WebAssembly functions, validation names the setting and its
@@ -175,6 +178,26 @@ pack, and saving and publishing such a configuration are refused. Without a usab
 evaluation and its grace period) nothing is locked. A configuration that already runs keeps
 running when a new license leaves a pack out, and may be published again as a rollback; a change
 to it needs the pack, or the locked parts removed.
+
+### The Governance pack
+
+New in 0.7.0, a seventh pack, id `governance`. It covers two things:
+
+- **On the engine,** `grants` on a publication. A configuration with a `grants` section is locked
+  without the pack like any other feature (above), and an engine refuses every grant for a
+  publication without `grants`, so the console cannot deliver access to it either.
+- **In the console,** governance changes (the catalog, assignments, certifications, requests,
+  policies, roles, lifecycle rules, manual systems, connected products, delegation): the console
+  refuses them, with `409` and a message naming the pack (`not done: this needs the Governance
+  pack, which the license does not include`), and likewise once the license blocks changes (its
+  grace period over). **Reads are never refused**: what governance recorded stays visible, its
+  reports included, whatever the license says.
+
+Granted access already delivered keeps being enforced, and ends on time, when a new license
+leaves the pack out: the engine runs its published configuration, grants included, whatever the
+license says. During the evaluation every pack is enabled, Governance included, and nothing is
+locked during the grace period. `syncd status` during the evaluation names the packs it enables,
+and from 0.7.0 the list ends with `governance`.
 
 ## Watching it
 

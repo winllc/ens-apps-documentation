@@ -73,7 +73,7 @@ key is an error, not a silently ignored setting.
 | `attributes` | map | empty | Schema hints shared by every view and connector. |
 | `connectors` | list | empty | The systems syncd reads and writes, and the objects it reads from each. |
 | `views` | list | empty | Merged views: which sources feed them, how records join, attribute flows, precedence, computed attributes, correlation hints, data-quality checks. |
-| `publications` | list | empty | What each view writes to a directory, a SCIM application, Entra ID or (since 0.6.0) DSML files. |
+| `publications` | list | empty | What each view writes to a directory, a SCIM application, Entra ID, (since 0.6.0) DSML files or (since 0.7.0) a database table, a REST service or a connector written with the SDK; and (since 0.7.0) the access the console's governance layer may grant there (`grants`). |
 | `passwords` | map | see [Passwords](#passwords-passwords) | The engine's password key, how long a captured change may wait, the capture agents' listener, self-service. |
 | `packages` | list | empty | Rule packages: shared functions and lookup tables; see [Packages](#packages-packages). |
 
@@ -344,7 +344,16 @@ directory is fixed whatever a configuration says.
   publication does not publish `TRUNCATE`, and since 0.5.1 a streamed query whose watched
   table's replica identity leaves out the watched column, are warned about in the log; see
   [Connectors](connectors.md#postgresql).
-- **Rolling back.** 0.6.1 changes nothing in the configuration: a configuration it accepts
+- **Rolling back.** 0.7.0 adds settings and renames or removes nothing: `grants` on a
+  publication (see [Grants](#grants-grants)) and the `grants()` and `granted()` rule
+  functions; `passwords.self_service.policy_dn`, and `self_service` serving resets and unlocks;
+  publications to `postgres`, `mysql` and `sql_server` connectors (`table`, `key`,
+  `account_state`, `grants.memberships.table`), to `jdbc` connectors, and to `rest` connectors
+  (the publication's `rest` block); and the `external` connector type. 0.6.1 refuses a
+  configuration that uses any of them, so before rolling back to 0.6.1 with the store kept,
+  publish a configuration without them. Grants are kept in the store apart, and 0.6.1 leaves
+  them alone: after such a rollback, granted access is no longer enforced or reported, and
+  holds again on 0.7.0. 0.6.1 changes nothing in the configuration: a configuration it accepts
   works on 0.6.0. 0.6.0 adds the `dsml` connector type and its settings, and renames or removes
   nothing; 0.5.5 refuses a configuration with a `dsml` connector, so before rolling back to 0.5.5
   with the store kept, publish a configuration without it (and run `syncd reconcile` first on an
@@ -625,7 +634,7 @@ settings that match the type, the objects it reads, and an optional deletion thr
 | Key | Type | Default | What |
 |---|---|---|---|
 | `name` | text | required | Unique; views and publications refer to it. |
-| `type` | enum | required | `postgres`, `mysql` (MySQL 8 and MariaDB 10.5+), `sql_server` (SQL Server 2016+ and Azure SQL Managed Instance), `mongodb`, `ldap`, `active_directory`, `debezium`, `jdbc`, `csv` (a delimited file), `scim` (a SCIM 2.0 application, as a target), `entra` (Microsoft Entra ID through Microsoft Graph); since 0.5.0, as sources, `rest` (a REST or OData service), `workday`, `successfactors` (SAP SuccessFactors) and `ukg` (UKG Pro); since 0.6.0 `dsml` (DSML v2 files in a directory or on an SFTP server, across an air gap: a target on one side, a source on the other). |
+| `type` | enum | required | `postgres`, `mysql` (MySQL 8 and MariaDB 10.5+), `sql_server` (SQL Server 2016+ and Azure SQL Managed Instance), `mongodb`, `ldap`, `active_directory`, `debezium`, `jdbc`, `csv` (a delimited file), `scim` (a SCIM 2.0 application, as a target), `entra` (Microsoft Entra ID through Microsoft Graph); since 0.5.0, as sources, `rest` (a REST or OData service), `workday`, `successfactors` (SAP SuccessFactors) and `ukg` (UKG Pro); since 0.6.0 `dsml` (DSML v2 files in a directory or on an SFTP server, across an air gap: a target on one side, a source on the other); since 0.7.0 `external` (a connector written with the [connector SDK](connector-sdk.md), called over gRPC). |
 | `connection` | map | required | The settings for the type, below. Settings of another type are refused. |
 | `objects` | list | empty | The object types read from it. A connector used only as a target needs none; a `scim` connector takes none. |
 | `deletion_threshold` | map | unset | Safety limit for deletes detected in one import run: `percent` and/or `count`. A run that deletes more than either is held until an operator approves it. Since 0.5.1 one without either (`{}`), or with a `percent` outside 0 to 100, is refused. |
@@ -637,7 +646,8 @@ deletion_threshold:
 ```
 
 Publication targets are `ldap`, `active_directory`, `scim`, `entra` and (since 0.6.0) `dsml`
-connectors. See
+connectors, and since 0.7.0 `postgres`, `mysql`, `sql_server` and `jdbc` (a table), `rest`
+(through request templates) and `external` connectors. See
 [Connectors](connectors.md) for what each does, and for which [license
 pack](licensing.md#packs) each type belongs to.
 
@@ -701,6 +711,10 @@ as before 0.5.0.
 | `password` | secret | unset | |
 | `operation_timeout_secs` | integer | `900` | Seconds one call to the bridge (the next batch of rows, a describe) may take before it fails. 1 to 86400. |
 | `properties` | map | empty | Driver properties (`sslConnection: "true"`, `currentSchema: HR`). A `password` or `pwd` property is refused. |
+
+Since 0.7.0 a `jdbc` connector can also be a publication's target (a table of Oracle, Db2 or
+another JDBC database), through bridge 0.2.0 or later; see
+[SQL tables as targets](connectors.md#sql-tables-as-targets).
 
 ### CSV files (`csv`)
 
@@ -854,7 +868,9 @@ three are tested against syncd's fake Microsoft Graph. See
 
 ### REST and HR services (`rest`, `workday`, `successfactors`, `ukg`)
 
-Since 0.5.0. Sources only, read page by page as JSON. `rest` is the generic reader;
+Since 0.5.0, as sources, read page by page as JSON; since 0.7.0 a `rest` connector (not
+the presets) is also a publication's target, through the publication's `rest` block (see
+[REST services as targets](connectors.md#rest-services-as-targets)). `rest` is the generic reader;
 `workday`, `successfactors` and `ukg` are presets of it that fill in their service's
 paths, paging, delta filter and token endpoint, and what the configuration sets wins. See
 [REST and HR services](connectors.md#rest-and-odata-services) for how they read, and for
@@ -871,7 +887,7 @@ what they have been tested against (fakes only).
 | `tls.client_certificate_file`, `tls.client_key` | path, secret | | Mutual TLS: the client certificate (PEM, its chain after it) and its key. They go together. |
 | `headers` | map | empty | Headers sent with every request; not secrets, and not `Authorization`. |
 | `rate_limit` | integer | `10` | Requests per second at most, over every object of the connector; `0` for no ceiling. |
-| `max_concurrency` | integer | `2` | Requests in flight at once, over every object of the connector. 1 to 64. |
+| `max_concurrency` | integer | `2` | Requests in flight at once, over every object of the connector. 1 to 64. As a target (0.7.0), also how many entities are written side by side; the exports of one entity (or one key) are written one after another, in order. |
 | `timeout_secs` | integer | `60` | Seconds one request may take. 1 to 3600. |
 | `max_retries` | integer | `5` | How often a request answered `429` or `503`, or not answered, is tried again (after `Retry-After` or a growing pause) before the read fails. |
 
@@ -918,6 +934,25 @@ what they have been tested against (fakes only).
 
 JSON paths are a subset of JSONPath: `$`, `.name`, `['odd name']`, `[n]`, `[*]`, and
 `[?(@.field=='value')]` (or `!=`).
+
+As a target, a publication to a `rest` connector carries its own `rest` block (`name`, `key`,
+`id`, and the `create`, `read`, `update`, `delete`, `disable`, `enable`, `find`, `list` and
+`members` request templates); see [REST services as targets](connectors.md#rest-services-as-targets).
+
+### External connectors (`external`)
+
+Since 0.7.0. A connector written with the [connector SDK](connector-sdk.md): a gRPC service
+the engine calls, as a source (read in full) and as a target.
+
+| Key | Type | Default | What |
+|---|---|---|---|
+| `endpoint` | URL | required | The connector: `http://127.0.0.1:50081`, or `https://host:port`. Beyond loopback it must be `https://` with a `token` or a client certificate. |
+| `token` | secret | unset | Sent as `authorization: Bearer <token>`. |
+| `ca_file` | path | Mozilla root set | CA certificates trusted for an `https://` endpoint. |
+| `client_cert`, `client_key` | path, secret | unset | Mutual TLS: the client certificate (PEM) and its key. They go together, with `https://` only. |
+| `timeout_secs` | integer | `120` | Seconds one call may take. |
+
+Its objects are the connector's object types (`type`), read with `mode: scrape` only.
 
 ### Objects
 
@@ -1243,18 +1278,26 @@ quality:
 A publication writes a view's entities to a target: an LDAP directory, Active Directory, a
 SCIM application, Entra ID or, since 0.6.0, DSML files for a directory across an air gap (as
 to a directory, without what needs to read it back; see [DSML files](#dsml-files-dsml)).
+Since 0.7.0 it can also write rows of a database table, resources of a REST service, or the
+entries of a connector written with the SDK (see
+[Tables, REST services and SDK connectors](#tables-rest-services-and-sdk-connectors)), and take
+access granted by the console's governance layer (see [Grants](#grants-grants)).
 
 | Key | Type | Default | What |
 |---|---|---|---|
 | `name` | text | required | Unique. |
 | `view` | text | required | The view to publish. |
-| `target` | text | required | An `ldap`, `active_directory`, `scim`, `entra` or (since 0.6.0) `dsml` connector. |
+| `target` | text | required | An `ldap`, `active_directory`, `scim`, `entra` or (since 0.6.0) `dsml` connector; since 0.7.0 also `postgres`, `mysql`, `sql_server`, `jdbc`, `rest` or `external`. |
 | `filter` | CEL over `e` | all entities | Which entities are in scope. Entities leaving scope are deprovisioned. Since 0.5.5 a filter that fails on an entity (an error, not an absent attribute) leaves its entry as it is; 0.5.4 deprovisioned it. |
 | `dn` | template | required for directories | The entry's DN; see [DN template](#dn-template). Not used for SCIM and Entra targets. |
 | `object_classes` | list | required for directories | The entry's object classes. Not used for SCIM and Entra targets. |
 | `resource` | text | `User` | SCIM and Entra targets: the resource type (`User`, `Group`, or for SCIM one of the provider's resource types). See [below](#scim-and-entra-id-publications). |
-| `external_id` | CEL over `e` | | SCIM and Entra targets, required: the value that names the resource, in place of `dn`. |
-| `key` | `userPrincipalName`, `employeeId` | `userPrincipalName` | Entra targets: the user property `external_id` gives. |
+| `external_id` | CEL over `e` | | SCIM and Entra targets, required: the value that names the resource, in place of `dn`. Since 0.7.0 required on table, REST and SDK targets too: the key. |
+| `key` | `userPrincipalName`, `employeeId` | `userPrincipalName` | Entra targets: the user property `external_id` gives. Since 0.7.0, on a table target: the key column. |
+| `table` | text | | Since 0.7.0. Table targets: the table each entity is a row of, `table` or `schema.table`. |
+| `account_state` | map | unset | Since 0.7.0. Table targets: `{ column, enabled, disabled }`, the column saying whether the account is enabled and its two values. Needed for a `deprovision` that disables. |
+| `rest` | map | | Since 0.7.0. REST targets, required: the request templates. |
+| `grants` | map | unset | Since 0.7.0. What the console's governance layer may grant to this publication's entities; without it, grants for the publication are refused. See [Grants](#grants-grants). |
 | `licenses` | map | unset | Entra targets: the Microsoft 365 licences each user holds. |
 | `attributes` | map | required | Target attribute to a CEL expression over `e`. For SCIM, SCIM paths; for Entra, Graph property names. Since 0.5.5 a mapping that fails keeps the value exported before; 0.5.4 cleared it in the target. |
 | `dn_attributes` | map | empty | Values only the DN template uses, not exported: name to CEL over `e`. |
@@ -1445,7 +1488,7 @@ a predicate as a member.
 | `on_expiry` | `report`, `empty`, `delete` | `group_policy`'s, else `report` | At expiry: report it, remove every member, or delete the entry. Needs an expiry. `delete` needs a `deprovision` that deletes (`delete`, or a staged `delete_after`) and is subject to the deletion threshold. |
 | `review_every` | span | `group_policy`'s, else never | A review is due this long after creation or the last review (`syncd group review`, the console's **Review** button). |
 | `reviewers` | list of mail addresses | `group_policy`'s | Since 0.5.0. Who the console mails when the group's review falls due (with its mail settings, to domains in `CONSOLE_REPORTS_RECIPIENT_DOMAINS`). Needs `review_every`. |
-| `placeholder_member` | DN | `group_policy`'s | Since 0.5.0. A member written to the group while it has no other, when its entry is kept (an expired group with `on_expiry: empty`, an empty one with `when_empty: keep`), for classes that must have a member (`groupOfNames`, `groupOfUniqueNames`). Taken out again with the first real member. A fixed DN. LDAP and Active Directory targets only: a SCIM or Entra group may be empty. |
+| `placeholder_member` | DN | `group_policy`'s | Since 0.5.0. A member written to the group while it has no other, when its entry is kept (an expired group with `on_expiry: empty`, an empty one with `when_empty: keep`), for classes that must have a member (`groupOfNames`, `groupOfUniqueNames`). Taken out again with the first real member. A fixed DN. LDAP and Active Directory targets only: a SCIM or Entra group may be empty. Since 0.7.0 `group_policy.placeholder_member` also stands in for the last member of a group the console granted (see [Grants](#grants-grants)). |
 
 ```yaml
 groups:
@@ -1477,7 +1520,7 @@ setting wins. See [Group lifecycle](change-safety.md#group-lifecycle).
 | `on_expiry` | `report`, `empty` or `delete`. |
 | `review_every` | Span between reviews. |
 | `reviewers` | Mail addresses told when a review falls due. Since 0.5.0. |
-| `placeholder_member` | The member a kept group without members holds. Since 0.5.0. |
+| `placeholder_member` | The member a kept group without members holds. Since 0.5.0. Since 0.7.0 also the member written in place of a group's last member granted by the console, when that grant ends (`groupOfNames` and `groupOfUniqueNames` need a member; not for `memberUid`), and taken out again when a member is granted. Set one where granted groups can empty: without it the directory refuses the removal and the grant fails, saying how to set one. Since 0.7.0 checked as a fixed DN on a publication with no computed groups too. |
 
 Since 0.5.0 a due review reaches a person: a timer brings it due on time, the console
 mails the `reviewers` and sends the `group.review-due` webhook event (whether or not
@@ -1679,6 +1722,53 @@ A SCIM or Entra target names resources, not entries in a tree. See
   deprovision: disable
 ```
 
+### Tables, REST services and SDK connectors
+
+Since 0.7.0. These targets name entries by a key, as SCIM does, not by a DN: `external_id`
+gives the key, and `dn`, `object_classes`, containers, a `deprovision` that moves,
+`writeback`, `adopt`, `passwords`, computed `groups`, `references` and
+`strip_unmanaged_groups` are refused.
+
+- **A table** (`postgres`, `mysql`, `sql_server`, `jdbc`): `table`, `key` (the column),
+  `external_id` (its value), `attributes` (column to CEL, one value each) and `account_state`.
+  Rows are named `<key>=<value>,table=<table>`. See
+  [SQL tables as targets](connectors.md#sql-tables-as-targets).
+- **A REST service** (`rest`): the publication's `rest` block; entries are named
+  `<rest.key>=<value>,resource=<rest.name>`. See
+  [REST services as targets](connectors.md#rest-services-as-targets).
+- **An SDK connector** (`external`): `resource` (the object type, `User` by default) and
+  `external_id`; entries are named `name=<value>,objectType=<resource>`. See
+  [Connector SDK](connector-sdk.md).
+
+### Grants (`grants`)
+
+Since 0.7.0. What a publication takes from the console's [governance](governance.md) layer,
+which sends grants with `ApplyGrants`: a group membership, a value the publication's
+`attributes` read with [`grants("name")`](rules.md#governance), or a key its `filter` tests
+with [`granted("key")`](rules.md#governance). Without `grants`, every grant for the
+publication is refused; with it, value and scope grants are taken, and memberships need
+`memberships`.
+
+| Key | Type | Default | What |
+|---|---|---|---|
+| `memberships` | map | unset | Group memberships the publication does not compute may be granted. Without it, membership grants are refused. |
+| `memberships.bases` | list of DNs | required on LDAP and Active Directory | The subtrees whose groups may be granted: a grant naming a group elsewhere is refused. Not used on SCIM and Entra targets (a group is named by its id), nor on table, REST and SDK targets. |
+| `memberships.member_attribute` | text | `member` | LDAP and Active Directory targets: `member`, `uniqueMember` or `memberUid`. |
+| `memberships.max_per_entity` | integer | `500` | The most groups one entity may be granted in this publication, 1 to 5,000; grants beyond it are refused. Grants that ended, revokes and refused grants do not count. |
+| `memberships.table`, `entity_column`, `group_column` | text | | Table targets, required with `memberships`: the table listing memberships, one row per member and group. |
+| `inventory` | map | unset | What `ListInventory` reads of the target for the console's entitlement catalog: every account, every group and each group's members. |
+| `inventory.account_bases`, `group_bases` | list of DNs | the `dn`'s fixed end; `memberships.bases` | LDAP and Active Directory targets: where the accounts and the groups are. |
+| `inventory.group_classes` | list | `group` (Active Directory); `groupOfNames`, `groupOfUniqueNames`, `posixGroup` | LDAP and Active Directory targets: a group's object classes. |
+| `inventory.attributes`, `entitlement_attributes` | lists | empty | Further attributes returned for each account, and those whose values are entitlements (`eduPersonEntitlement`): at most 20 together. |
+
+On a REST target, `memberships` takes no settings (the `rest.members` templates say how),
+and `inventory` needs `rest.list` (and `rest.members.groups` and `rest.members.list`). On an
+SDK target, `memberships` takes no settings either: the connector's `ChangeMembers` does the
+work. A `dsml` target takes no grants. A group the publication computes cannot be granted.
+On a `groupOfNames` or `groupOfUniqueNames` group, the removal of the last member the console
+granted writes the publication's `group_policy.placeholder_member` in its place (see
+[Group lifecycle](#group-lifecycle)).
+
 ## Passwords (`passwords`)
 
 The engine's side of password synchronisation. Delivery is on when at least one
@@ -1699,6 +1789,7 @@ publication has `passwords`. See
 | `self_service.login` | text | | The attribute people type as their user name (`uid`, `sAMAccountName`, `mail`). |
 | `self_service.min_length` | integer | `12` | The shortest new password. At least `8`. |
 | `self_service.min_classes` | integer | `3` | How many of lower case, upper case, digits and other characters it needs. At most `4`. |
+| `self_service.policy_dn` | DN | the one `pwdPolicy` entry under the naming context | Since 0.7.0. The OpenLDAP password policy overlay's policy entry whose rules the pages show beside the engine's (`GetPasswordPolicy`). Active Directory's domain policy is read without it. |
 | `allow_cleartext` | boolean | `false` | Since 0.5.0. Let passwords go to an LDAP directory in the clear: one reached with `ldap://` and without `starttls`, beyond this host. Without it, such a directory is refused as a target of password delivery and of initial passwords, and as the self-service source. Active Directory never takes passwords in the clear. |
 | `rotation_overlap_days` | integer | `7` | Since 0.5.0. After a rotation (`syncd password rotate-key`, `rotate-agent-ca`), how many days the replaced password key keeps opening what was sealed to it, and the replaced agent CA stays trusted, before the engine retires them. At least `1`, and no shorter than `ttl_secs`. |
 
@@ -1715,7 +1806,13 @@ passwords:
 ```
 
 The console's self-service page also needs `CONSOLE_SELF_SERVICE_ENGINE`, and since
-0.4.1 shows the engine's `min_length` and `min_classes`.
+0.4.1 shows the engine's `min_length` and `min_classes`. Since 0.7.0 `self_service` is also
+what a password reset and an unlock go through (`ResetPassword`, `UnlockAccount`: the
+console's *My password* page and reset links, `syncd password reset` and `unlock`): the
+engine sets the new password in the `source`, as the connector's own account, and delivers
+it like a change; an unlock clears the lockout there and in the directories the source's
+passwords are delivered to. See
+[Password synchronisation](password-sync.md#forgotten-passwords-and-locked-accounts).
 
 **Sealing the keys.** Without a passphrase the two key files are plain, protected by
 their mode only: the engine warns at start that `the password keys are stored in the
@@ -1798,8 +1895,10 @@ Export reconciliations and drift checks run on intervals (`reconcile_interval_se
 configurations 0.5.0 accepted (the items marked "since 0.5.1" below): check yours with the new
 binary's `syncd validate` before the upgrade. 0.5.2 and 0.5.4 refuse nothing new; 0.5.4 adds two
 warnings (below). 0.5.5 refuses a little more (marked "since 0.5.5") and warns about more; 0.6.0
-adds the rules of the `dsml` type; 0.6.1 changes nothing. Beyond the per-key rules above, a
-configuration is refused when:
+adds the rules of the `dsml` type; 0.6.1 changes nothing; 0.7.0 adds the rules of its new
+settings (marked "since 0.7.0") and refuses nothing 0.6.1 accepted, except that a
+`group_policy.placeholder_member` on a publication without computed groups must now be a fixed
+DN. Beyond the per-key rules above, a configuration is refused when:
 
 - `version` is not `1`;
 - since 0.5.1, two computed attributes of a view, two flows of one source, or two attributes
@@ -1893,6 +1992,28 @@ configuration is refused when:
   `<publication>.sAMAccountName`;
 - a SCIM or Entra publication has no `external_id`, or has `dn`, `object_classes`,
   containers, a moving `deprovision`, `writeback` or `adopt`;
+- since 0.7.0, a publication to a table has no `table`, `key` or `external_id`, a table,
+  column or key name that is not letters, digits and `_` (not starting with a digit; the
+  table optionally `schema.table`), an attribute named as the key column, an `account_state`
+  whose two values are the same, or disables accounts without `account_state`; a publication
+  to a REST target has no `rest` block or `external_id`, a template with an unknown
+  placeholder or method, attributes without `rest.update`, a `deprovision` without its request
+  (`rest.delete`, or `rest.disable` and `rest.enable`), `drift` without `rest.find` and
+  `rest.read`, `unmanaged` or `grants.inventory` without `rest.list`, or
+  `grants.memberships` without `rest.members`; a publication to an `external` connector has
+  no `external_id`; and any of these three carries what it cannot take (`dn`,
+  `object_classes`, containers, a moving `deprovision`, `writeback`, `adopt`, `passwords`,
+  computed `groups`, `references`, `dn_attributes`, `strip_unmanaged_groups`);
+- since 0.7.0, an `external` connector's `endpoint` is not a URL, or is beyond loopback
+  without `https://` and a `token` or client certificate, has `client_cert` without
+  `client_key` (or the other way round), or an object that is not `mode: scrape`;
+- since 0.7.0, `grants` is on a `dsml` target; `grants.memberships.max_per_entity` is not 1
+  to 5,000; on LDAP or Active Directory `memberships` has no `bases`, or a base is not a fixed
+  DN; on a table, `memberships` lacks `table`, `entity_column` or `group_column`, or names
+  the same column twice; `memberships` settings of another kind of target are set;
+  `inventory` bases or `group_classes` are on a target other than LDAP or Active Directory,
+  its bases are not fixed DNs, it asks for more than 20 further attributes, or (LDAP and
+  Active Directory) it has no `group_bases` and `memberships.bases` is empty;
 - a package is listed twice, has a bad version or pin, or a `requires` the listed version
   does not meet; its `wasm` module is not pinned by a SHA-256, does not match it, is
   larger than 1 MiB, or cannot be read;
@@ -2536,11 +2657,17 @@ The images (`ghcr.io/winllc/syncd` and `ghcr.io/winllc/syncd-console`) and the H
 (`oci://ghcr.io/winllc/charts/syncd`) run the same two programs with the settings on this
 page. This section is a reference for what differs; [Install](install.md) has the
 procedure. They are pushed to GHCR, signed, when a `v*` tag is built in the repository's
-`release` environment. The latest published are the 0.6.0 images (and their `-fips` variants)
-and chart, signed with cosign, with SBOM attestations. The 0.6.1 images and chart were not
-published: the tag's `Container` run failed building the amd64 binaries, and its push-and-sign
-job was skipped. 0.6.1 changes only the host installer, so a Kubernetes install loses nothing
-by staying on chart 0.6.0.
+`release` environment. The latest published images are 0.7.0's
+(`ghcr.io/winllc/syncd:0.7.0`, `ghcr.io/winllc/syncd-console:0.7.0` and their `-fips`
+variants, for amd64 and arm64), signed with cosign, with SBOM attestations. **The 0.7.0 chart
+was not published**: an artifact upload in the push-and-sign job failed on GitHub Actions'
+storage quota, just before the chart step. The latest published chart is still 0.6.0. The
+chart's templates and values are the same at 0.6.0 and 0.7.0 (only its `version` and
+`appVersion` differ), so chart 0.6.0
+runs 0.7.0 with `image.engine.tag` and `image.console.tag` set to `0.7.0` (or `0.7.0-fips`);
+or install the chart from the source at tag `v0.7.0` (`deploy/helm/syncd`), which defaults
+to the 0.7.0 images. The 0.6.1 images and chart were not published either: that tag's
+`Container` run failed building the amd64 binaries, and its push-and-sign job was skipped.
 
 The images are built for `linux/amd64` and `linux/arm64` (unless a release was built with
 the arm64 jobs switched off). The `<version>-fips` images, for the same platforms since
@@ -2633,9 +2760,10 @@ system. Their base images are pinned by digest.
 
 ### Helm chart values
 
-The chart's `values.yaml`, by key. The chart's version is the release's: use `0.6.0`, the latest
-published (see above). 0.5.5 adds `engine.startupProbe` and `engine.minReadySeconds`, and points
-the console's probes at `/livez`; 0.6.0 adds no values, and neither did 0.5.2 or 0.5.4.
+The chart's `values.yaml`, by key. The chart's version is the release's; `0.6.0` is the latest
+published, and runs 0.7.0 with the image tags set (see above). 0.5.5 adds
+`engine.startupProbe` and `engine.minReadySeconds`, and points the console's probes at
+`/livez`; 0.6.0 and 0.7.0 add no values, and neither did 0.5.2 or 0.5.4.
 
 | Key | Default | What |
 |---|---|---|

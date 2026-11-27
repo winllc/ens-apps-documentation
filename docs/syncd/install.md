@@ -6,7 +6,7 @@
 |---|---|---|
 | [Offline bundle](#install-from-the-bundle) | Any Linux distribution with systemd (glibc 2.34 or newer), x86_64 or aarch64, including hosts with no internet access | `install.sh`, then `syncdctl` |
 | [Package](#install-from-a-package) | Debian and Ubuntu (`.deb`); RHEL, Rocky, Alma 9 and newer and Fedora (`.rpm`); RHEL, Rocky, Alma 8 (`.el8.rpm`). Downloaded from the ENS licensing portal; the signed apt and dnf repositories are not published yet | `apt` or `dnf`, then `syncdctl install` |
-| [Helm chart](#install-with-helm) | Kubernetes, from the container images (amd64 and arm64; FIPS images for amd64) | `helm install` |
+| [Helm chart](#install-with-helm) | Kubernetes, from the container images (amd64 and arm64, and FIPS images for both). Chart 0.7.0 is not published yet: see [Install with Helm](#install-with-helm) | `helm install` |
 
 syncd has two parts:
 
@@ -59,6 +59,19 @@ The requirements for the [Helm chart](#install-with-helm) are listed with it.
 | **Java 17 or newer** *(only for the JDBC bridge)* | To read databases syncd has no driver of its own for (Db2, Informix, Oracle, ...). See [The JDBC bridge](#the-jdbc-bridge). |
 | **The source and target systems** | Network access from the engine's host to the databases and directories it reads and writes, and the accounts it uses. See [Connectors](connectors.md). |
 
+**Supported platforms.** The source repository's `docs/SUPPORT.md` ("Supported platforms at
+0.7.0") gives, for each platform, the release file, where it is built and what CI tests; 0.7.0
+changes none of it from 0.6.1. Tested: the bundle and the `.deb` on Ubuntu 24.04 x86_64 (install,
+and the upgrade from the previous release, under systemd), the `.rpm` on Rocky Linux 9 x86_64 and
+aarch64 and the `.el8.rpm` on Rocky Linux 8 (the package's install, upgrade and removal, in a
+container without systemd), and PostgreSQL 16 and 13 for the console. Ubuntu 22.04, Debian 12,
+Ubuntu 24.04 on aarch64, Fedora and RHEL 10 take the same files but are not tested, and the FIPS
+bundle is checked by starting its engine in FIPS mode only. The targets new in 0.7.0 were tested
+against PostgreSQL 16, MySQL 8.0, MariaDB, SQL Server 2019 and 2022, and, through the JDBC
+bridge, Oracle Database 23ai Free and Db2 12.1; REST targets and SDK connectors against stand-ins
+only (a fake REST service, the SDK's reference connector). The release's `TESTED-0.7.0.md` lists
+every row.
+
 ## Getting the release
 
 Download the bundles and packages from the **Downloads** page of the ENS licensing portal, like
@@ -75,18 +88,28 @@ files, with `SHA256SUMS`, to the portal's release bucket (`syncd/<version>/`), f
 **Downloads** page serves them. With the release signing key set, it also signs `SHA256SUMS` and
 the `.rpm` files and publishes the apt and dnf repositories.
 
-!!! warning "0.5.0 to 0.6.1: unsigned, and no package repositories yet"
-    0.5.0, 0.5.1, 0.5.4, 0.5.5, 0.6.0 and 0.6.1 are tagged (14, 15, 18, 19, 20 and 20
-    November 2026), and their files are on the portal's **Downloads** page and on the source
+!!! warning "0.5.0 to 0.7.0: unsigned, and no package repositories yet"
+    0.5.0, 0.5.1, 0.5.4, 0.5.5, 0.6.0, 0.6.1 and 0.7.0 are tagged (14, 15, 18, 19, 20, 20 and
+    26 November 2026), and their files are on the portal's **Downloads** page and on the source
     repository's GitHub releases. They were built without the release signing key: there is no
     `SHA256SUMS.asc`, the `.rpm` files are not signed, and the apt and dnf repositories were not
     published (`https://winllc.github.io/ldap-sync-merge-view` has none). Install and upgrade
     from the downloaded files, and check them against `SHA256SUMS` (see
     [Verifying a release](#verifying-a-release)), which shows that a file is complete, not who
     built it. From 0.5.5 the release job refuses to publish without the signing key unless the
-    maintainers set the repository variable `ALLOW_UNSIGNED_RELEASE`; they did, for 0.5.5, 0.6.0
-    and 0.6.1.
+    maintainers set the repository variable `ALLOW_UNSIGNED_RELEASE`; they did, for 0.5.5, 0.6.0,
+    0.6.1 and 0.7.0.
 
+    - **0.7.0** (26 November, tag `v0.7.0`, commit `6de2fa1`) adds identity governance and new
+      targets. Its bundles, packages (the RHEL 8 `.rpm` included), the `syncd-capture`
+      packages, SBOMs, `SHA256SUMS` and `TESTED-0.7.0.md` are published, with its notes on the
+      GitHub release. Its container images, `0.7.0` and `0.7.0-fips` for amd64 and arm64, are on
+      ghcr.io, signed with cosign, with their SBOM attestations. **Its Helm chart was not
+      published**: the tag's `Container` run pushed and signed the images, then stopped when an
+      upload ran into GitHub's Actions storage quota, before the chart; the images' SPDX SBOMs
+      were not attached to the GitHub release either. Until chart 0.7.0 is published, install the
+      chart from the source repository at the tag, or chart 0.6.0 with the 0.7.0 images (see
+      [Install the chart](#1-install-the-chart)).
     - **0.6.1** (20 November) fixes the installer only. Its bundles, packages, SBOMs,
       `SHA256SUMS` and `TESTED-0.6.1.md` are published, with its notes on the GitHub release.
       **Its container images and Helm chart were not published**: the tag's `Container` run
@@ -103,8 +126,8 @@ the `.rpm` files and publishes the apt and dnf repositories.
     - **0.5.0 and 0.5.1.** Their GitHub releases, marked pre-release, were made by hand; 0.5.1's
       holds only the images' SPDX SBOMs, not the bundles or the packages.
 
-    The 0.6.0, 0.5.5, 0.5.4, 0.5.2 and 0.5.1 images and charts are on ghcr.io, signed with
-    cosign.
+    The 0.7.0 images, and the 0.6.0, 0.5.5, 0.5.4, 0.5.2 and 0.5.1 images and charts, are on
+    ghcr.io, signed with cosign.
 
 | File | For |
 |---|---|
@@ -116,8 +139,8 @@ the `.rpm` files and publishes the apt and dnf repositories.
 | `syncd-capture_<version>_amd64.deb`, `syncd-capture_<version>_arm64.deb`, `syncd-capture-<version>-1.x86_64.rpm`, `syncd-capture-<version>-1.aarch64.rpm`, `syncd-capture-<version>-1.el8.x86_64.rpm` | The password capture agent alone, for the directory servers' hosts (see [The capture agent's package](#the-capture-agents-package)). New in 0.5.0 |
 | `syncd-<version>.cdx.json`, `syncd-console-<version>.cdx.json`, `syncd-capture-<version>.cdx.json` | The software bill of materials of the engine, of the console and of the capture agent (CycloneDX JSON) |
 | `SHA256SUMS` | The checksums of every file above |
-| `SHA256SUMS.asc` | The release signing key's GPG signature over `SHA256SUMS`. Not in 0.5.0 to 0.6.1, which are unsigned |
-| `sbom-syncd-<version>[-fips]-<arch>.spdx.json`, `sbom-syncd-console-<version>[-fips]-<arch>.spdx.json` | The SPDX bill of materials of each container image and platform, attached to the source repository's GitHub release (not on the **Downloads** page). Not in `SHA256SUMS`: each is also a signed attestation on its image. New in 0.5.0; none for 0.6.1, whose images were not published |
+| `SHA256SUMS.asc` | The release signing key's GPG signature over `SHA256SUMS`. Not in 0.5.0 to 0.7.0, which are unsigned |
+| `sbom-syncd-<version>[-fips]-<arch>.spdx.json`, `sbom-syncd-console-<version>[-fips]-<arch>.spdx.json` | The SPDX bill of materials of each container image and platform, attached to the source repository's GitHub release (not on the **Downloads** page). Not in `SHA256SUMS`: each is also a signed attestation on its image. New in 0.5.0; none for 0.6.1, whose images were not published, and none on 0.7.0's GitHub release (its images carry them as attestations only) |
 | `TESTED-<version>.md` | What CI ran the release against, row by row with the results. On the source repository's GitHub release only, not in `SHA256SUMS` |
 
 - **aarch64.** From 0.5.0 the aarch64 bundles and packages, and the arm64 images, are built by
@@ -137,7 +160,7 @@ the `.rpm` files and publishes the apt and dnf repositories.
 
 ### Verifying a release
 
-New in 0.4.0. Check what you downloaded before you install it. For 0.5.0 to 0.6.1, which
+New in 0.4.0. Check what you downloaded before you install it. For 0.5.0 to 0.7.0, which
 are unsigned, only step 2 applies: it shows that each file is complete and matches the `SHA256SUMS`
 you downloaded with it, and the **Downloads** page shows each file's SHA-256 as well.
 
@@ -160,11 +183,11 @@ sha256sum -c SHA256SUMS --ignore-missing
 - **`.rpm` signatures.** From 0.5.0 the `.rpm` files of a signed release carry the same key's
   signature, which `dnf` checks when it installs from the repository. To check a downloaded
   file: `sudo rpm --import syncd-release.asc && rpm -K syncd-*.rpm` (`digests signatures OK`).
-  The `.rpm` files of 0.5.0 to 0.6.1 carry no signature.
+  The `.rpm` files of 0.5.0 to 0.7.0 carry no signature.
 - **A release without `SHA256SUMS.asc`** was published without the signing key (the release
-  workflow's summary says so), as 0.5.0 to 0.6.1 were. Its checksums still show that a file is
+  workflow's summary says so), as 0.5.0 to 0.7.0 were. Its checksums still show that a file is
   complete, not who built it.
-- **The bundle alone:** `sha256sum -c syncd-0.6.1-linux-x86_64.tar.gz.sha256`. Inside the bundle,
+- **The bundle alone:** `sha256sum -c syncd-0.7.0-linux-x86_64.tar.gz.sha256`. Inside the bundle,
   every file is listed in `MANIFEST.sha256`, and the installer checks the release against it
   before it copies anything, so a damaged archive is refused even without these steps.
 - **SBOMs.** The two CycloneDX files list the crates and the web console's packages each
@@ -179,8 +202,10 @@ images, installs them in a kind cluster (one release, and an HA pair failed over
 kind), and, on a `v*` tag only and once those have passed, pushes them to the GitHub container
 registry and signs them. Its runs for the `v0.6.0`, `v0.5.5`, `v0.5.4`, `v0.5.2` and `v0.5.1`
 tags pushed and signed those releases' images, their FIPS variants and the chart. Its run for
-`v0.6.1` failed building the amd64 binaries and published nothing, so the newest images and
-chart are 0.6.0's (0.6.1 changes only the host installer):
+`v0.6.1` failed building the amd64 binaries and published nothing (0.6.1 changes only the host
+installer). Its run for `v0.7.0` pushed and signed the 0.7.0 images and their FIPS variants, with
+their SBOM attestations, but stopped on GitHub's Actions storage quota before the chart: the
+newest images are 0.7.0's, and the newest chart is 0.6.0's:
 
 | What | Where |
 |---|---|
@@ -188,8 +213,8 @@ chart are 0.6.0's (0.6.1 changes only the host installer):
 | The console's image | `ghcr.io/winllc/syncd-console:<version>` (with the web UI, `git` and `ssh`), and `<version>-fips` |
 | The Helm chart | `oci://ghcr.io/winllc/charts/syncd`, version `<version>` |
 
-- **Tags.** Each release is tagged with its version, for example `0.6.0`, and its FIPS variant
-  `0.6.0-fips`. There is no `latest`. The chart's version and `appVersion` are the release's.
+- **Tags.** Each release is tagged with its version, for example `0.7.0`, and its FIPS variant
+  `0.7.0-fips`. There is no `latest`. The chart's version and `appVersion` are the release's.
 - **Platforms.** A tag holds `linux/amd64` and `linux/arm64`, unless the release was built with
   `ARM64_RUNNERS` set to `false`. `docker buildx imagetools inspect
   ghcr.io/winllc/syncd:<version>` lists a tag's platforms. From 0.5.0 the `-fips` tags are built
@@ -213,7 +238,7 @@ chart are 0.6.0's (0.6.1 changes only the host installer):
 
 ```bash
 # A tag's digest (the image index: every platform)
-docker buildx imagetools inspect ghcr.io/winllc/syncd:0.6.0
+docker buildx imagetools inspect ghcr.io/winllc/syncd:0.7.0
 
 # The image's signature, and its SBOM attestations
 cosign verify ghcr.io/winllc/syncd@<digest> \
@@ -237,10 +262,10 @@ the images (see [Air-gapped clusters](#air-gapped-clusters)).
 **Images you build yourself**, from the source repository:
 
 ```bash
-docker build -f deploy/container/Dockerfile --target engine -t registry.example.com/syncd:0.6.1 .
-docker build -f deploy/container/Dockerfile --target console -t registry.example.com/syncd-console:0.6.1 .
+docker build -f deploy/container/Dockerfile --target engine -t registry.example.com/syncd:0.7.0 .
+docker build -f deploy/container/Dockerfile --target console -t registry.example.com/syncd-console:0.7.0 .
 # The FIPS variant
-docker build -f deploy/container/Dockerfile --target engine -t registry.example.com/syncd:0.6.1-fips \
+docker build -f deploy/container/Dockerfile --target engine -t registry.example.com/syncd:0.7.0-fips \
   --build-arg FEATURES=syncd/fips,syncd-console/fips .
 ```
 
@@ -271,13 +296,13 @@ production.
 ## Install from the bundle
 
 ```bash
-sha256sum -c syncd-0.6.1-linux-x86_64.tar.gz.sha256
-tar -xzf syncd-0.6.1-linux-x86_64.tar.gz
-sudo ./syncd-0.6.1-linux-x86_64/install.sh --local-database
+sha256sum -c syncd-0.7.0-linux-x86_64.tar.gz.sha256
+tar -xzf syncd-0.7.0-linux-x86_64.tar.gz
+sudo ./syncd-0.7.0-linux-x86_64/install.sh --local-database
 ```
 
-On aarch64, use `syncd-0.6.1-linux-aarch64.tar.gz`. For FIPS mode, use
-`syncd-0.6.1-linux-x86_64-fips.tar.gz` (or, from 0.5.0, `syncd-0.6.1-linux-aarch64-fips.tar.gz`)
+On aarch64, use `syncd-0.7.0-linux-aarch64.tar.gz`. For FIPS mode, use
+`syncd-0.7.0-linux-x86_64-fips.tar.gz` (or, from 0.5.0, `syncd-0.7.0-linux-aarch64-fips.tar.gz`)
 and add `--fips`.
 
 `install.sh` runs `bin/syncdctl install` with the options you give it. On a host where syncd is
@@ -366,9 +391,9 @@ left as they are.
 ## Install from a package
 
 ```bash
-sudo apt install ./syncd_0.6.1_amd64.deb            # Debian, Ubuntu (arm64: syncd_0.6.1_arm64.deb)
-sudo dnf install ./syncd-0.6.1-1.x86_64.rpm         # RHEL, Rocky, Alma 9+, Fedora (aarch64: syncd-0.6.1-1.aarch64.rpm)
-sudo dnf install ./syncd-0.6.1-1.el8.x86_64.rpm     # RHEL, Rocky, Alma 8
+sudo apt install ./syncd_0.7.0_amd64.deb            # Debian, Ubuntu (arm64: syncd_0.7.0_arm64.deb)
+sudo dnf install ./syncd-0.7.0-1.x86_64.rpm         # RHEL, Rocky, Alma 9+, Fedora (aarch64: syncd-0.7.0-1.aarch64.rpm)
+sudo dnf install ./syncd-0.7.0-1.el8.x86_64.rpm     # RHEL, Rocky, Alma 8
 sudo syncdctl install --local-database              # or --database-url ...
 ```
 
@@ -394,7 +419,7 @@ release published with the signing key and with GitHub Pages set up; until then 
 answers 404 (see [Getting the release](#getting-the-release)).
 
 !!! warning "Not published yet"
-    0.5.0 to 0.6.1 were released without the signing key, so no repository has been published
+    0.5.0 to 0.7.0 were released without the signing key, so no repository has been published
     and the commands below do not work yet. Install and upgrade from the files on the portal's
     **Downloads** page, as in [Install from a package](#install-from-a-package).
 
@@ -437,9 +462,9 @@ servers people change their passwords in (OpenLDAP, 389 Directory Server). It is
 engine's host, and the bundle's `install.sh` is not for a directory server:
 
 ```bash
-sudo apt install ./syncd-capture_0.6.1_amd64.deb       # from the repositories, once published: apt install syncd-capture
-sudo dnf install ./syncd-capture-0.6.1-1.x86_64.rpm    # from the repositories, once published: dnf install syncd-capture
-                                                       # RHEL 8: ./syncd-capture-0.6.1-1.el8.x86_64.rpm
+sudo apt install ./syncd-capture_0.7.0_amd64.deb       # from the repositories, once published: apt install syncd-capture
+sudo dnf install ./syncd-capture-0.7.0-1.x86_64.rpm    # from the repositories, once published: dnf install syncd-capture
+                                                       # RHEL 8: ./syncd-capture-0.7.0-1.el8.x86_64.rpm
 ```
 
 It installs the agent (`/usr/bin/syncd-capture`), a sample `/etc/syncd-capture/capture.conf`
@@ -744,7 +769,12 @@ before: `read` (status, lists, simulations, reports), `operate` (runs, approvals
 actions, joins, backups and HA snapshots, revealing values), and `configure` (applying a
 configuration). Setting passwords through the API (`syncd password set`, adding or binding a
 capture agent) needs `passwords` on top of `operate`, which no certificate has by default; on the
-engine's host, `sudo syncd password ...` goes through the control socket, which may.
+engine's host, `sudo syncd password ...` goes through the control socket, which may. From 0.7.0
+so do `ResetPassword` and `UnlockAccount`: for the console's **My password** page and the reset
+links to reset passwords and unlock accounts on an engine in strict mode, list the console's
+certificate (`syncd console`) under `api.access.passwords`. The new governance calls need no
+change: `ApplyGrants` is `configure`, which the console's certificate has, `ListGrantStates` is
+`read` and `ListInventory` is `operate`.
 
 From 0.5.1, on an engine that holds password keys (a password key or the agents' CA on disk),
 what hands them out needs `passwords` too: backups, HA snapshots and following the password
@@ -947,8 +977,8 @@ changes it. On Kubernetes, `engine.ha.enabled` does all of this (see
 ## Install with Helm
 
 The chart (`deploy/helm/syncd` in the source repository, published as
-`oci://ghcr.io/winllc/charts/syncd`; 0.6.0 is the newest there, as 0.6.1's was not
-published) runs the two
+`oci://ghcr.io/winllc/charts/syncd`; 0.6.0 is the newest there, as 0.6.1's and 0.7.0's were
+not published) runs the two
 [container images](#container-images-and-the-helm-chart):
 
 - **The engine** is a StatefulSet with **one replica**, or two with `engine.ha.enabled` (an
@@ -1011,12 +1041,27 @@ console:
         hosts: [syncd.example.com]
 ```
 
-Then install:
+Then install. Chart 0.7.0 is not published yet (see [Getting the release](#getting-the-release));
+until it is, install one of these, both of which run the published 0.7.0 images:
 
 ```bash
+# The chart from a checkout of the source repository at the tag v0.7.0
+git checkout v0.7.0
+helm install syncd ./deploy/helm/syncd --namespace syncd -f syncd-values.yaml --wait
+
+# Or chart 0.6.0 from ghcr.io, with the 0.7.0 images
 helm install syncd oci://ghcr.io/winllc/charts/syncd --version 0.6.0 \
-  --namespace syncd -f syncd-values.yaml --wait
+  --namespace syncd -f syncd-values.yaml --wait \
+  --set image.engine.tag=0.7.0 --set image.console.tag=0.7.0
 ```
+
+Chart 0.7.0 changes nothing in chart 0.6.0 but its version and `appVersion`: the templates and
+values are the same (`git diff v0.6.0 v0.7.0 -- deploy/helm`), and the image tags default to
+the `appVersion`. Chart 0.6.0 with both tags set to `0.7.0` (`0.7.0-fips` for the
+[FIPS images](#fips-images)) therefore renders the same resources, except that their
+`app.kubernetes.io/version` label and the notes Helm prints say 0.6.0. CI has not run that
+combination: its kind tests install the chart from the checkout. Once chart 0.7.0 is
+published, install it as `oci://ghcr.io/winllc/charts/syncd --version 0.7.0`.
 
 Or install from a checkout of the source repository, with images you built and pushed:
 
@@ -1707,7 +1752,7 @@ kubectl -n syncd get lease syncd -o yaml     # holderIdentity, renewTime, leaseT
     New in 0.5.0, a `kind-ha` CI job installs a pair in kind, turns HA on for an existing
     release, and fails it over by lease expiry and by deleting the active pod, once with the
     PostgreSQL lease and once with the Kubernetes lease. It passed in the `Container` workflow's
-    run for the `v0.6.0` tag, whose publishing waits for it, so the Kubernetes Lease backend has
+    runs for the `v0.6.0` and `v0.7.0` tags, whose publishing waits for it, so the Kubernetes Lease backend has
     met a real API server (kind's). No cloud cluster (EKS, AKS, GKE, OpenShift) was used. The
     pair itself is tested end to end on hosts. Try a failover on a test cluster before you rely on
     it.
@@ -1716,8 +1761,8 @@ kubectl -n syncd get lease syncd -o yaml     # holderIdentity, renewTime, leaseT
 
 ```yaml
 image:
-  engine: { tag: 0.6.0-fips }
-  console: { tag: 0.6.0-fips }
+  engine: { tag: 0.7.0-fips }
+  console: { tag: 0.7.0-fips }
 engine:
   env:
     - { name: SYNCD_FIPS_MODE, value: "true" }
@@ -1757,8 +1802,11 @@ On upgrade, the engine migrates its store if the new release changed its format 
 again. The engine pod has 10 minutes to open its store and listen (its startup probe) before
 Kubernetes restarts it (from 0.5.5 `engine.startupProbe` sets this: raise `failureThreshold` for
 a large store and a release whose notes say it migrates the store; `engine.minReadySeconds` makes
-a new engine pod stay ready that long before it counts as available). `helm rollback` and its limits are in [Rollback](#rollback). What changes
-from chart 0.5.4 to 0.6.0 (0.6.1's chart was not published) is in
+a new engine pod stay ready that long before it counts as available). `helm rollback` and its limits are in [Rollback](#rollback). Chart 0.7.0
+is not published yet: upgrade to 0.7.0 with the chart from the tag, or chart 0.6.0 with the 0.7.0
+image tags, as in [Install the chart](#1-install-the-chart). What changes from chart 0.6.0 to
+0.7.0 is in [Upgrading from 0.6.1 to 0.7.0](#upgrading-from-061-to-070), from
+chart 0.5.4 to 0.6.0 (0.6.1's chart was not published) in
 [Upgrading from 0.5.4 to 0.6.1](#upgrading-from-054-to-061), from chart 0.5.1 or 0.5.2 to 0.5.4 in
 [Upgrading from 0.5.1 or 0.5.2 to 0.5.4](#upgrading-from-051-or-052-to-054), from 0.5.0 to 0.5.1 in
 [Upgrading from 0.5.0 to 0.5.1](#upgrading-from-050-to-051), from
@@ -1792,18 +1840,23 @@ the console Secret alone loses the master key (see
 
 ### Air-gapped clusters
 
-1. On a connected host, get the chart: `helm pull oci://ghcr.io/winllc/charts/syncd --version
-   0.6.0` gives `syncd-0.6.0.tgz`. Verify it and the images with cosign there (see
-   [Verifying the images and the chart](#verifying-the-images-and-the-chart)).
-2. Copy `ghcr.io/winllc/syncd:0.6.0` and `ghcr.io/winllc/syncd-console:0.6.0` (or the `-fips`
+1. On a connected host, get the chart. Until chart 0.7.0 is published: `helm package
+   deploy/helm/syncd` in a checkout of the tag `v0.7.0` gives `syncd-0.7.0.tgz`, or `helm pull
+   oci://ghcr.io/winllc/charts/syncd --version 0.6.0` gives `syncd-0.6.0.tgz`, to install with
+   the 0.7.0 image tags (see [Install the chart](#1-install-the-chart)). Verify the images, and a
+   chart you pulled, with cosign there (see
+   [Verifying the images and the chart](#verifying-the-images-and-the-chart)); a chart you
+   packaged yourself carries no signature.
+2. Copy `ghcr.io/winllc/syncd:0.7.0` and `ghcr.io/winllc/syncd-console:0.7.0` (or the `-fips`
    tags) into your registry, for example with `skopeo copy --all` (every platform) or `docker
    pull`, `docker tag` and `docker push`. The chart uses no other image.
 3. Install from the file, with your registry:
 
 ```bash
-helm install syncd ./syncd-0.6.0.tgz --namespace syncd -f syncd-values.yaml \
+helm install syncd ./syncd-0.7.0.tgz --namespace syncd -f syncd-values.yaml \
   --set image.engine.repository=registry.example.gov/winllc/syncd \
   --set image.console.repository=registry.example.gov/winllc/syncd-console
+# with syncd-0.6.0.tgz, add: --set image.engine.tag=0.7.0 --set image.console.tag=0.7.0
 ```
 
 Add `imagePullSecrets` if your registry needs them.
@@ -1879,6 +1932,93 @@ Run it with a restart policy (systemd `Restart=always`, or a container with
 On Kubernetes, upgrade with `helm upgrade` (see [Upgrade with Helm](#helm-upgrade)). On a host,
 upgrade as in [Bundle installs](#bundle-installs) or [Package installs](#package-installs). Read
 what changes first.
+
+### Upgrading from 0.6.1 to 0.7.0
+
+Upgrade as usual, with `syncdctl upgrade`, `apt` or `dnf` (with the downloaded files: the
+repositories are not published). 0.7.0 adds identity governance (see [Governance](governance.md)),
+SQL tables, REST services, JDBC databases and SDK connectors as targets, and password reset and
+unlock. Nothing of it runs until it is set up, but the console's database schema changes, so a
+rollback loses what was done in the console since the upgrade. The release build installed 0.6.1,
+upgraded it to 0.7.0 and rolled it back, on the bundle, the `.deb`, the Rocky Linux 9 `.rpm`
+(x86_64 and aarch64) and the RHEL 8 `.rpm`.
+
+**On Kubernetes**, upgrade from chart 0.6.0 (0.6.1's was not published). Chart 0.7.0 is not
+published yet: use the chart from the source repository at the tag `v0.7.0`, or chart 0.6.0 with
+`image.engine.tag` and `image.console.tag` set to `0.7.0` (or `0.7.0-fips`), which renders the
+same resources (see [Install the chart](#1-install-the-chart)). The chart takes no backup: dump
+the console's database first.
+
+- **The console's database: schema 33 to 52.** The console applies migrations 34 to 52 when it
+  first starts: the `gov_*` tables of governance, the tables of the integration API, roles,
+  delegation, the IdentityIQ import and the connected products, and what the review before the
+  release changed (fresh sign-ins, delivery by row, end dates, counters, indexes). A rollback to
+  0.6.1 restores the database backup the upgrade took, and with it the governance records as
+  they were: what was requested, approved, reviewed or assigned since is gone. 0.6.1's console
+  refuses a database 0.7.0 migrated (`migration 34 was previously applied but is missing`) and
+  changes nothing in it (see [Rolling back once governance is in use](#rolling-back-once-governance-is-in-use)).
+- **The store's format stays 2.** Grants are kept in column families of their own
+  (`grants/<publication>`, `granted/<publication>`, `grant_index`, `grant_changes`), created when
+  first written, which 0.6.1 opens and leaves alone: after a rollback with the store kept, granted
+  access is no longer enforced or reported, and holds again back on 0.7.0. The store also gets a
+  **generation**, a random value written at its first start on 0.7.0 and again whenever the
+  engine runs on a store that replaced its own (a restore, an HA takeover).
+- **The configuration** gains, and nothing is renamed or removed:
+    - `grants` on a publication (`memberships`, `inventory`), and the rule functions
+      `grants(name)` and `granted(key)`, which only a publication's filter and attributes see;
+    - `passwords.self_service.policy_dn`, and password reset and unlock through the
+      `passwords.self_service` source;
+    - publications to `postgres`, `mysql`, `sql_server` and `jdbc` connectors (`table`, with
+      `key`, `external_id` and `account_state`; membership rows in `grants.memberships.table`),
+      to `rest` connectors (the `rest` block on the publication), and the `external` connector
+      type (a connector written with the [SDK](connector-sdk.md), over gRPC).
+
+    0.6.1 refuses a configuration that uses any of them: before rolling back with the store kept,
+    publish a configuration without them.
+- **Licensing.** The governance features are in a new pack, **Governance** (`governance`): a
+  configuration with `grants`, and the console's governance changes, need it. SQL tables as
+  targets are in Enterprise Database, external connectors in Extensibility, REST targets in
+  Cloud and SaaS. Without a license (the evaluation) every pack is enabled, as before, and
+  nothing is locked during the grace period (see [syncd licensing](licensing.md#packs)).
+- **Grants are sent again on their own after a store change.** When an engine reports a store
+  generation other than the one the console recorded (a restore of its store, an HA takeover),
+  the console queues every grant for that engine again (audited as
+  `governance.delivery.redelivered`). The first generation an engine reports, after the
+  upgrade, queues nothing. `syncd-console governance redeliver --engine <name>` still does the
+  same by hand, for the console's database restored alone (see
+  [Rolling back once governance is in use](#rolling-back-once-governance-is-in-use)).
+- **Behaviour changes:**
+    - `syncd status` during the evaluation names the packs it enables, and the list now ends
+      with `governance`: a script matching the whole line needs the new list.
+    - **The engine's control API** has new calls: `ApplyGrants` (the `configure` tier),
+      `ListGrantStates` and `GetPasswordPolicy` (`read`), `ListInventory` (`operate`), and
+      `ResetPassword` and `UnlockAccount` (`operate`, and `api.access.passwords` in strict mode,
+      as the other password calls). Certificates keep the tiers they had: in strict mode, list
+      the console's certificate under `api.access.passwords` only if the console is to reset
+      passwords and unlock accounts (see [Control API access](#control-api-access)).
+    - **Publishing a version that changes a `passwords` block** (the top-level one or a
+      publication's) needs the new `manage_passwords` permission on the engine, which admins
+      hold, with a session: a designer, or an API token, is refused (`403`). Before, whoever
+      could publish could change password synchronisation's settings.
+    - **Two new roles**, `governance_admin` and `participant`, and new API token scopes
+      (`governance:read`, `governance:write`, `governance:delegate`, `governance:request`).
+      Existing accounts and tokens keep what they had.
+- **Helm.** No new values: chart 0.7.0's templates and values are chart 0.6.0's.
+- **Files.** Nothing new on the host; `/etc/syncd` stays as you left it. The custom-functions
+  example module is byte for byte 0.6.1's (`66671f41…`).
+- **Dependencies:** `url` 2.5.9 (RUSTSEC-2026-0592) and `wasmi` 2.0.3 (2.0.2 was yanked
+  upstream). See [Security, supply chain](security.md#supply-chain).
+- **Known limitations:** governance has not been run against a real Active Directory, Entra
+  tenant, hosted SCIM application, ServiceNow or Jira (the nightly jobs exist and skip without
+  credentials); the benchmark's figures at 1,000,000 people were measured before the fixes made
+  after the pre-release review and not measured again; the governance threat model is not
+  signed off, no penetration test has been done, and the screen-reader pass of the reviewer's
+  and requester's pages has not been done. 0.6.1's limitations still apply.
+
+**From 0.6.0**, the same applies: 0.6.1 changed only the host installer. **From 0.5.5 or
+older**, upgrade to 0.6.1 first ([Upgrading from 0.5.4 to 0.6.1](#upgrading-from-054-to-061)): the
+source repository's `docs/SUPPORT.md` supports one minor version at a time, and an upgrade across
+several in one step is not tested.
 
 ### Upgrading from 0.5.4 to 0.6.1
 
@@ -1971,7 +2111,7 @@ repositories are not published). Three releases since 0.5.4, and one step: upgra
   engine for up to 5 s per request; after an HA takeover, Debezium sources resume from
   Debezium's own position, so have Debezium send the tables again with an incremental
   snapshot; MySQL and SQL Server sources look up changed keys one at a time; DSML's are in
-  [Air-gapped synchronisation](air-gap.md#limitations-as-of-061).
+  [Air-gapped synchronisation](air-gap.md#limitations-as-of-070).
 
 **From 0.5.1 or 0.5.2**, read [Upgrading from 0.5.1 or 0.5.2 to 0.5.4](#upgrading-from-051-or-052-to-054)
 too; **from 0.5.0**, also [Upgrading from 0.5.0 to 0.5.1](#upgrading-from-050-to-051).
@@ -2413,8 +2553,8 @@ Upgrade as below, with `syncdctl upgrade`, `apt` or `dnf`. What to know first:
 Either command upgrades:
 
 ```bash
-sudo syncdctl upgrade syncd-0.6.1-linux-x86_64.tar.gz
-sudo ./syncd-0.6.1-linux-x86_64/install.sh        # on a host that runs syncd
+sudo syncdctl upgrade syncd-0.7.0-linux-x86_64.tar.gz
+sudo ./syncd-0.7.0-linux-x86_64/install.sh        # on a host that runs syncd
 ```
 
 The new release's own `syncdctl` runs the upgrade:
@@ -2453,7 +2593,7 @@ check counts on that much room in `/var/lib/syncd/backups`, and a tenth more.
 | Option | Effect |
 |---|---|
 | `--no-rollback` | Leaves a failed upgrade in place for investigation |
-| `--skip-db-backup` | Leaves the console's database out of the backup: when `pg_dump` is not installed, or cannot dump the server. From 0.5.1 it always leaves it out (0.5.0 only when `pg_dump` was missing). Without the dump, a schema change by the new release cannot be undone: since 0.5.5 the upgrade says so before it starts, its own rollback then leaves the new release in place, and `syncdctl rollback` refuses until the database is back at its old schema (restore it from a backup of your own first). Upgrading from 0.5.4 changes the schema (30 to 33) |
+| `--skip-db-backup` | Leaves the console's database out of the backup: when `pg_dump` is not installed, or cannot dump the server. From 0.5.1 it always leaves it out (0.5.0 only when `pg_dump` was missing). Without the dump, a schema change by the new release cannot be undone: since 0.5.5 the upgrade says so before it starts, its own rollback then leaves the new release in place, and `syncdctl rollback` refuses until the database is back at its old schema (restore it from a backup of your own first). Upgrading from 0.5.4 changes the schema (30 to 33), and upgrading from 0.6.1 (33 to 52) |
 | `--reinstall` | Installs the same version again |
 | `--yes` | Asks no questions |
 
@@ -2474,8 +2614,8 @@ strict pair that delivers passwords to 0.5.1, list the passive engine's certific
 Upgrade with the package manager:
 
 ```bash
-sudo apt install ./syncd_0.6.1_amd64.deb
-sudo dnf upgrade ./syncd-0.6.1-1.x86_64.rpm          # RHEL 8: ./syncd-0.6.1-1.el8.x86_64.rpm
+sudo apt install ./syncd_0.7.0_amd64.deb
+sudo dnf upgrade ./syncd-0.7.0-1.x86_64.rpm          # RHEL 8: ./syncd-0.7.0-1.el8.x86_64.rpm
 # From the package repositories, once they are published:
 sudo apt update && sudo apt install syncd
 sudo dnf upgrade syncd
@@ -2492,7 +2632,7 @@ itself: a failed health check fails the package's configuration step and names t
   package's script does this, whatever the installed release).
 - **Without a working `pg_dump`**, leave the database out of the backup with
   `SYNCD_SKIP_DB_BACKUP=1` in the package manager's environment:
-  `sudo SYNCD_SKIP_DB_BACKUP=1 apt install ./syncd_0.6.1_amd64.deb`, or the same with `dnf`.
+  `sudo SYNCD_SKIP_DB_BACKUP=1 apt install ./syncd_0.7.0_amd64.deb`, or the same with `dnf`.
   0.5.0's `syncdctl`, which takes the backup when you upgrade from 0.5.0, honours it only when
   `pg_dump` is not installed at all.
 - **To go back,** install the previous package version (`sudo apt install syncd=<version>`,
@@ -2547,16 +2687,45 @@ is refused: install the older package, then `syncdctl restore` the backup named
 
 ### Rolling back once governance is in use
 
-In development (governance, not in a release yet). Governance keeps its records in the
-console's database, and each release that adds governance tables changes the schema, so
-a rollback restores the database dumped before the upgrade, and with it the governance
-records as they were then: requests, approvals, review decisions and assignments made
-since the upgrade are gone, as are the grants the console sent since. An older console
-refuses a database a newer one migrated and changes nothing in it (it stops at start with
-`migration <n> was previously applied but is missing`): there is no partial rollback.
-The engine store comes back from the same backup, so the two agree; after restoring only
-one of them, run `syncd-console governance redeliver --engine <name>` (see
-[Security, backups](security.md#backups)).
+From 0.7.0 governance keeps its records in the console's database (`gov_*` tables), and a
+release that adds governance tables changes the schema, so a rollback restores the database
+dumped before the upgrade, and with it the governance records as they were then: requests,
+approvals, review decisions and assignments made since the upgrade are gone, as are the grants
+the console sent since. An older console refuses a database a newer one migrated and changes
+nothing in it (it stops at start with `migration <n> was previously applied but is missing`):
+there is no partial rollback. Restore the backup, or stay on the newer release.
+
+The engine store comes back from the same backup, so the two agree. When only one of them is
+restored:
+
+- **The engine's store alone** (an off-host engine backup, `syncd restore`): the engine starts
+  with a new store generation, and the console sends it every grant again on its own (audited
+  as `governance.delivery.redelivered`); the engine takes what it holds already as no change.
+- **The console's database alone, to the same point as the engine or later:** queue every grant
+  again by hand, `sudo -u syncd syncd-console governance redeliver --engine <name>`, which a
+  running console delivers.
+- **The console's database to an earlier point than the engine:** the engine may hold grants
+  the console has no record of. List them with `syncd grants` on the engine and end them there,
+  or restore the engine to match.
+
+See [Security, backups](security.md#backups).
+
+### Rolling back 0.7.0 to 0.6.1
+
+- **The console's database is restored**, since 0.7.0 changed its schema (33 to 52): `syncdctl
+  rollback` does this from the backup taken before the upgrade, and everything done in the
+  console since is lost, governance's records included. `syncdctl rollback --keep-data` is
+  refused, and 0.6.1's console does not start on the newer database, so a package downgrade
+  needs `syncdctl restore` of that backup too.
+- **The engine store** comes back from the same backup. Its format is the same (2): 0.6.1 would
+  open 0.7.0's store and leave the grants alone, but granted access is then no longer enforced,
+  and the database cannot stay, so keep both from the backup.
+- **0.6.1 refuses 0.7.0's settings.** Where the configuration file is kept (on Kubernetes, the
+  file on the engine's volume), publish a configuration without `grants`, `policy_dn`, the
+  publications to SQL, JDBC and REST targets and the `external` connectors first.
+- **On Kubernetes** there are no 0.6.1 images: `helm rollback` goes back to chart and images
+  0.6.0, which have 0.6.1's schema (33) and store format, after the console's database is
+  restored (see [On Kubernetes](#on-kubernetes)).
 
 ### Rolling back 0.6.1, 0.6.0 or 0.5.5
 
@@ -2672,6 +2841,13 @@ newer release changed neither the store's format nor the console's schema. Other
 backups taken before the upgrade first: the older engine refuses a store format it cannot read.
 See [Backups on Kubernetes](availability-and-sizing.md#backups-on-kubernetes).
 
+From 0.7.0 (the chart from the tag, or chart 0.6.0 with the 0.7.0 images) to chart 0.6.0, the
+console's schema changed (33 to 52): restore the console's database dump taken before the upgrade
+into an empty database (drop and create it first), and the engine's volume from the same time,
+so that the store and the database agree. The store's format is the same (2): where the volume
+is kept, publish a configuration without 0.7.0's settings first, since 0.6.0 refuses them (see
+[Rolling back 0.7.0 to 0.6.1](#rolling-back-070-to-061)).
+
 From chart 0.5.4 to 0.5.2 or 0.5.1, neither changed: `helm rollback` is enough (see
 [Rolling back 0.5.4 to 0.5.2 or 0.5.1](#rolling-back-054-to-052-or-051)).
 
@@ -2716,9 +2892,9 @@ and `syncd store-format` prints it (`--supported`: the newest format this `syncd
 Stores written by 0.2.1 and older record no format: they are format 1. 0.3.0 started recording
 it. **0.5.0 moved it to format 2**, which keeps a link from each source record to its entity for
 every view that reads it, where format 1 kept one for all views; 0.5.0 and newer migrate a
-format-1 store at their first start, and 0.4.1 and older refuse a format-2 one. 0.5.1, 0.5.2 and
-0.5.4 keep format 2. New column families, such as those 0.4.0 adds and 0.5.1's
-`unique_values/<view>`, are not a format change.
+format-1 store at their first start, and 0.4.1 and older refuse a format-2 one. 0.5.1 to 0.7.0
+keep format 2. New column families, such as those 0.4.0 adds, 0.5.1's `unique_values/<view>` and
+0.7.0's grants, are not a format change.
 
 ## Uninstall
 
@@ -2741,7 +2917,7 @@ That stops and disables the services; `/etc/syncd` and `/var/lib/syncd` stay.
 
 - [ ] You verified the download: `sha256sum -c SHA256SUMS --ignore-missing`, and for a signed
       release `gpg --verify SHA256SUMS.asc SHA256SUMS` against the release key's fingerprint
-      (0.5.0 to 0.6.1 are unsigned).
+      (0.5.0 to 0.7.0 are unsigned).
 - [ ] `sudo syncdctl status` shows the engine `active, control API answers` and the console
       `active, http://127.0.0.1:8080 answers`.
 - [ ] The console is served over HTTPS (its own certificate, or nginx with

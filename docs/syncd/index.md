@@ -18,21 +18,42 @@ It has two parts:
 
 !!! info "Source of truth"
     Everything in this section comes from the `ldap-sync-merge-view` source repository
-    (version 0.6.1, the tag `v0.6.1` at commit `59cbf19`): the engine and console code, the packaging under `deploy/packaging/`, the
+    (version 0.7.0, the tag `v0.7.0` at commit `6de2fa1`): the engine and console code, the packaging under `deploy/packaging/`, the
     container images and Helm chart under `deploy/container/` and `deploy/helm/`, and
     the repository's `docs/`. Where the code and a README disagree, these pages follow the
     code and say so.
 
 !!! info "Releases"
-    The latest release is 0.6.1 (20 November 2026). Its bundles and packages, with their SBOMs
+    The latest release is 0.7.0 (26 November 2026). Its bundles and packages, with their SBOMs
     and `SHA256SUMS`, are on the ENS licensing portal's **Downloads** page and on the GitHub
-    release. **0.6.1's container images and Helm chart were not published** (the tag's image build
-    failed): on Kubernetes use chart and images 0.6.0, which lose nothing, since 0.6.1 changes only
-    the host installer. 0.6.0 and 0.5.5 are published in full, images and charts included, signed
-    with cosign. 0.5.2 was published as images and a chart only, and nothing was published as
-    0.5.3. The release files are not yet GPG-signed (no `SHA256SUMS.asc`), so the signed apt and
+    release, and its container images (`0.7.0` and `0.7.0-fips`, amd64 and arm64) are on
+    `ghcr.io`, signed with cosign. **Its Helm chart was not published** (the release run stopped
+    on GitHub's storage quota before the chart): until it is, use chart 0.6.0 with
+    `image.engine.tag` and `image.console.tag` set to `0.7.0` (chart 0.7.0 changes only its
+    version), or the chart from the source repository at the tag `v0.7.0` (`deploy/helm/syncd`);
+    see [Install the chart](install.md#1-install-the-chart). The newest
+    published chart is 0.6.0. 0.6.1's images and chart were not published either (0.6.1 changed
+    only the host installer). 0.6.0 and 0.5.5 are published in full, images and charts included,
+    signed with cosign. 0.5.2 was published as images and a chart only, and nothing was published
+    as 0.5.3. The release files are not yet GPG-signed (no `SHA256SUMS.asc`), so the signed apt and
     dnf repositories are not published yet: install from the files. See
     [Getting the release](install.md#getting-the-release).
+
+!!! tip "New in 0.7.0: identity governance"
+    The console gains a governance layer, made to replace an IdentityIQ deployment: who holds
+    what in each target (the entitlement catalog), access requests with approval workflows,
+    certification campaigns, separation-of-duties and rule policies, roles, joiner, mover and
+    leaver rules, manual systems with tickets, risk scores and reports, delegated
+    administration, and an import from IdentityIQ. What it decides reaches the targets as
+    **grants** the engine enforces, and ends on time, while the console is down. The engine also
+    writes to new targets (SQL tables, REST services, Oracle and Db2 tables through the JDBC
+    bridge, connectors written with the SDK), and resets forgotten passwords and unlocks
+    accounts. Governance is in a new license pack, **Governance**. Not yet run against a real
+    Active Directory, Entra tenant, hosted SCIM application, ServiceNow or Jira (the tests exist
+    and skip without credentials); its threat model is not signed off and no penetration test
+    has been done. See [Governance](governance.md), and read
+    [Upgrading from 0.6.1 to 0.7.0](install.md#upgrading-from-061-to-070) first: the console's
+    schema goes from 33 to 52, and a rollback loses what governance recorded since.
 
 !!! tip "New in 0.6.0: synchronising across an air gap"
     A new connector type, `dsml`, moves identities between networks that are not connected,
@@ -96,20 +117,21 @@ It has two parts:
 | Area | What syncd does |
 |---|---|
 | **Sources** | PostgreSQL, MySQL and MariaDB, Microsoft SQL Server, MongoDB, CSV and flat files, OpenLDAP and other LDAP directories, Active Directory, Entra ID, REST and OData services with presets for Workday, SAP SuccessFactors and UKG Pro, plus Oracle, Db2 and other databases through a Debezium Server sidecar or the JDBC bridge. See [Connectors](connectors.md). |
-| **Targets** | OpenLDAP, 389 Directory Server / Red Hat Directory Server, Ping / UnboundID and other LDAP directories, Active Directory (with Exchange addresses, account control, home paths, UPN and `sAMAccountName` helpers), Entra ID through Microsoft Graph (users, groups, licences, app roles), and SaaS applications through SCIM 2.0. |
+| **Targets** | OpenLDAP, 389 Directory Server / Red Hat Directory Server, Ping / UnboundID and other LDAP directories, Active Directory (with Exchange addresses, account control, home paths, UPN and `sAMAccountName` helpers), Entra ID through Microsoft Graph (users, groups, licences, app roles), and SaaS applications through SCIM 2.0. From 0.7.0 also the tables of PostgreSQL, MySQL and MariaDB, SQL Server, and Oracle, Db2 and other databases through the JDBC bridge ([SQL tables as targets](connectors.md#sql-tables-as-targets)), JSON REST services ([REST services as targets](connectors.md#rest-services-as-targets)), and connectors written with the [connector SDK](connector-sdk.md). |
 | **Air gaps** | Since 0.6.0, DSML v2 files carry the changes across a gap between networks: written on the connected side in order, numbered and checksummed, read on the far side in order with gaps held and snapshots to resynchronise, in a directory or over SFTP with pinned host keys. See [Air-gapped synchronisation](air-gap.md). |
 | **Full reads and live streams** | Each source object is read in full on a schedule (scrape), read incrementally (delta), or streamed from the source's change log: PostgreSQL logical replication, the MySQL binlog, SQL Server change data capture or change tracking, MongoDB change streams, LDAP syncrepl or a changelog, Active Directory DirSync, Entra ID delta queries. A stream resumes from its checkpoint after a restart. |
 | **Correlation and merge** | Join rules link the records from each source that describe one entity. Attribute precedence decides which source wins for each attribute, and the console's correlation review shows the links and the records left unjoined. |
 | **Computed attributes** | Rules written in CEL, compiled to native code, with a function library, multi-step transforms, lookup tables, cross-entity references and computed groups. Effective dates, versioned rule packages shared between configurations, custom functions in WebAssembly, and data-quality checks. Each rule carries its own test cases, golden-file tests cover whole publications, and a configuration whose tests fail cannot be published. See [Computed attributes and rules](rules.md). |
 | **Publishing** | Publications write a view's entities to a target: DN templates, attribute mapping, renames and moves (including entries someone else moved or renamed in the target, found again by its own id), group membership with referential integrity, a staged leaver policy (disable, strip groups, move, delete, each after its own delay) with rehires restored, group lifecycle (manual members, owners, expiry), drift detection, reconciliation and write-back of changes made in the target. Target profiles for Active Directory, OpenLDAP, 389 Directory Server / Red Hat Directory Server and Ping / UnboundID. |
-| **Passwords** | Initial passwords set as accounts are created (on Active Directory with `unicodePwd`), people changing their own password on the console's self-service page, and password changes captured on OpenLDAP and 389 Directory Server by the `syncd-capture` agent and delivered to every linked target, encrypted end to end, with the engine's keys sealed at rest and rotated on demand. See [Password synchronisation](password-sync.md). |
+| **Passwords** | Initial passwords set as accounts are created (on Active Directory with `unicodePwd`), people changing their own password on the console's self-service page, and password changes captured on OpenLDAP and 389 Directory Server by the `syncd-capture` agent and delivered to every linked target, encrypted end to end, with the engine's keys sealed at rest and rotated on demand. From 0.7.0 a forgotten password is reset, and a locked account unlocked, after a fresh single sign-on or with a link the person's manager sends. See [Password synchronisation](password-sync.md). |
+| **Governance** | From 0.7.0: the entitlement catalog (accounts, groups and members read from each target, linked to people), assignments, access requests with approval workflows, certification campaigns, separation-of-duties and rule policies, roles with versions a second person approves, joiner, mover and leaver rules, manual systems with CSV imports and tickets (ServiceNow, Jira, a webhook), access history, risk scores and ten reports, delegated administration, a read-only SCIM interface, governance webhooks, and an import from IdentityIQ. Assignments reach the targets as grants the engine enforces and reports back. See [Governance](governance.md). |
 | **Change safety** | Per publication: change windows, deletion, modification and add thresholds, canary publishing, and a report mode that writes nothing. Changes that wait are held and re-planned, never replayed. See [Change safety and lifecycle](change-safety.md). |
 | **Safe configuration changes** | Every configuration is a version: compiled by the engine as you type, compared with any other version or with what the engine runs, previewed on sample records, simulated against a copy of the engine's store to show what each target would receive, optionally approved by a second person (four eyes), then published, optionally only with a change ticket or a change-management system's approval. Configuration as code: semantic diff, environments, Git sync and promotion between environments. A configuration that does not start rolls back by itself. See [Configuration as code](config-as-code.md). |
 | **Evidence** | Reconciliation reports (CSV, Excel, PDF, scheduled by e-mail or to a share), one person's lineage (JSON, PDF), [target entries no publication manages and privileged-group members syncd does not account for](reports-and-data-quality.md#unmanaged-entries-and-unaccounted-privileged-members), history retention, and the ENS audit trail with Splunk, syslog and file outputs. See [Reports, lineage and data quality](reports-and-data-quality.md) and [Audit logging](../audit-logging.md). |
 | **Licensing** | Managed identities and packs, in a signed file from the ENS licensing portal, checked offline. Running sync never stops because of a license: only publishing configuration changes can be blocked, after warnings and a grace period. See [Licensing](licensing.md). |
 | **Operations** | Live status of every source and publication, the engine's CPU and memory, entities held back by a failing rule (quarantine), a dead-letter queue for failed exports with retry and discard, threshold approvals, Prometheus metrics with shipped alert rules, signed webhooks (JSON, Slack, Teams, PagerDuty), scoped API tokens, off-host and scheduled backups to a directory or S3, a support bundle, and a command line (`syncd`, `syncdctl`) for everything the console does. |
 | **Object explorer** | Search a view, then see an entity's source records, merged attributes and where each value came from, and what each target received. Sensitive attributes are hidden unless a permitted role reveals them, and every look is audited. |
-| **Console security** | Local accounts, OpenID Connect and SAML 2.0 single sign-on and X.509 client certificates (CAC/PIV), with roles from the provider's groups; five roles, each held on everything, one environment or named engines; a notice-and-consent banner, session, lockout and password policies, break-glass local sign-in, the ENS hash-chained audit trail, classification banners, and an optional FIPS 140-3 mode. On the engine, access tiers for the control API and configurations signed by the console. |
+| **Console security** | Local accounts, OpenID Connect and SAML 2.0 single sign-on and X.509 client certificates (CAC/PIV), with roles from the provider's groups; five roles, each held on everything, one environment or named engines, and from 0.7.0 two governance roles; a notice-and-consent banner, session, lockout and password policies, break-glass local sign-in, the ENS hash-chained audit trail, classification banners, and an optional FIPS 140-3 mode. On the engine, access tiers for the control API and configurations signed by the console. |
 | **Installation** | One Linux host with systemd: an offline bundle, a `.deb`, or an `.rpm` (RHEL 8 and RHEL 9+ builds), also from signed apt and dnf repositories; `syncdctl` installs, upgrades with automatic rollback, sets up an active/passive pair, installs the license, renews certificates, backs up and restores. Or Kubernetes: container images and a Helm chart with production settings (single sign-on, HTTPS, NetworkPolicies, alert rules). Either way, two engines can run as an active/passive pair. |
 
 ## Architecture at a glance
@@ -133,7 +155,7 @@ flowchart LR
     end
 
     PG[(PostgreSQL<br/>console database)]
-    T[(Targets<br/>LDAP, Active Directory,<br/>Entra ID, SCIM apps)]
+    T[(Targets<br/>LDAP, Active Directory,<br/>Entra ID, SCIM apps,<br/>SQL tables, REST services)]
     OUT[/DSML outbox<br/>to an air gap/]
     P[Prometheus]
     W[SIEM, chat,<br/>paging, S3]
@@ -145,10 +167,10 @@ flowchart LR
     DBZ --> E
     CSV -->|inbox| E
     ENS -->|Graph delta| E
-    E -->|LDAP, Graph, SCIM writes| T
+    E -->|LDAP, Graph, SCIM, SQL, REST writes| T
     IN -->|files in order| E
     E -->|DSML files| OUT
-    C -->|"gRPC control API, mTLS"| E
+    C -->|"gRPC control API, mTLS:<br/>configurations, grants"| E
     C --> PG
     B -->|HTTPS| N --> C
     P -->|/metrics| E
@@ -180,7 +202,7 @@ flowchart LR
 | Console UI | React 19, TypeScript, Vite, TanStack Router and Query, Tailwind CSS, Monaco editor |
 | Cryptography | rustls with aws-lc-rs; the AWS-LC FIPS module in a FIPS build |
 | JDBC bridge (optional) | Java 17+, run separately, with your databases' JDBC drivers |
-| Delivery | Bundles for x86_64 and aarch64, each also as a FIPS bundle, `.deb` and `.rpm` packages (RHEL 8 and 9+) and, once releases are signed, apt and dnf repositories, the `syncd-capture` agent package for directory servers, CycloneDX SBOMs, and `SHA256SUMS` (GPG-signed once the release key is set); systemd units `syncd` and `syncd-console`. arm64 builds need the release workflow's arm64 runners, on by default. Container images `ghcr.io/winllc/syncd` and `ghcr.io/winllc/syncd-console` (amd64 and arm64, with `-fips` variants; distroless, Trivy-scanned, cosign-signed with SPDX attestations) and the Helm chart `oci://ghcr.io/winllc/charts/syncd`. Published on a release tag: the files to the ENS licensing portal's release bucket, the images and chart to `ghcr.io`. From 0.5.4 the GitHub release carries the same files. The GPG signature and the apt and dnf repositories need the release key, which every release so far (0.5.0 to 0.6.1) was built without |
+| Delivery | Bundles for x86_64 and aarch64, each also as a FIPS bundle, `.deb` and `.rpm` packages (RHEL 8 and 9+) and, once releases are signed, apt and dnf repositories, the `syncd-capture` agent package for directory servers, CycloneDX SBOMs, and `SHA256SUMS` (GPG-signed once the release key is set); systemd units `syncd` and `syncd-console`. arm64 builds need the release workflow's arm64 runners, on by default. Container images `ghcr.io/winllc/syncd` and `ghcr.io/winllc/syncd-console` (amd64 and arm64, with `-fips` variants; distroless, Trivy-scanned, cosign-signed with SPDX attestations) and the Helm chart `oci://ghcr.io/winllc/charts/syncd`. Published on a release tag: the files to the ENS licensing portal's release bucket, the images and chart to `ghcr.io`. From 0.5.4 the GitHub release carries the same files. The GPG signature and the apt and dnf repositories need the release key, which every release so far (0.5.0 to 0.7.0) was built without. 0.7.0's chart was not published (above) |
 
 ## Roles
 
@@ -195,6 +217,8 @@ engine outside every assignment does not exist for that account.
 | **operator** | What a viewer can, plus run and control engines: full syncs, reconciliations, drift checks, approving held changes, dead-letter retry and discard, group reviews, joins, unjoins and accepted suggestions in correlation review, and scheduled reports |
 | **viewer** | Read engines, status, configurations, environment names and the object explorer |
 | **auditor** | What a viewer can, plus the audit log, the lists of API tokens and webhooks with their delivery logs, and environment values |
+| **governance_admin** | From 0.7.0: governance (the catalog, assignments, campaigns, policies, roles), on every person or, held as `governance_admin@governance:<scope>`, on part of them; no engine and no configuration |
+| **participant** | From 0.7.0: their own access, requests, approvals and review tasks (`/my`), and nothing else |
 
 A role does not include another: a designer cannot run engines, and an operator cannot publish,
 unless the account holds both roles. Accounts, settings, webhooks, Git sync, engine registration
@@ -213,6 +237,10 @@ exact permissions.
 | [Connectors](connectors.md) | Designers | Each source and target type, what it needs on the other side, and its settings |
 | [Computed attributes and rules](rules.md) | Designers | The rule language, the function library, transforms, lookups, references, computing memberOf from groups, effective dates, rule packages, test cases |
 | [Password synchronisation](password-sync.md) | Designers, security reviewers | Initial passwords, self-service changes, capture on directory servers, password agents, key rotation, delivery |
+| [Governance](governance.md) | Governance administrators, designers | From 0.7.0: grants, the entitlement catalog, certifications, requests, roles, policies, lifecycle, manual systems, reports, delegated administration |
+| [Service-desk integration](service-desk.md) | Integrators | From 0.7.0: access requests taken by a service-desk tool and handed to syncd |
+| [Migrating from IdentityIQ](migrating-from-iiq.md) | Whoever moves from IdentityIQ | From 0.7.0: the import, its report and a parallel run |
+| [Connector SDK](connector-sdk.md) | Integrators | From 0.7.0: writing a connector for a system syncd has none for |
 | [Change safety and lifecycle](change-safety.md) | Designers, operators | Change windows, thresholds, canaries, report mode, held changes, timers, leaver stages, group lifecycle |
 | [Configuration as code](config-as-code.md) | Designers, platform teams | Semantic diff, environments, Git sync, promotion, golden-file tests in CI |
 | [Reports, lineage and data quality](reports-and-data-quality.md) | Operators, auditors | Reconciliation and scheduled reports, lineage export, history retention, data-quality checks, correlation suggestions |

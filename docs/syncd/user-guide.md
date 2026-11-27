@@ -6,9 +6,12 @@ can do depends on your roles; each section says which role an action needs. Acco
 policy, banners, engine registration, API tokens, webhooks, environments and the audit trail are in
 the [Admin guide](admin-guide.md); the license and the **License** page are in
 [Licensing](licensing.md). People who only want to change their own directory password use the
-[self-service page](#changing-your-directory-password-password), which needs no console account.
+[self-service page](#changing-your-directory-password-password), which needs no console account;
+from 0.7.0, people who forgot it use [My password](#my-password-mypassword). The governance pages
+administrators use are in [Governance](governance.md); the pages everyone uses under **My
+access** are here.
 
-It describes syncd 0.6.1 (tag `v0.6.1`, commit `59cbf19`). New screens since 0.4.1 are
+It describes syncd 0.7.0 (tag `v0.7.0`, commit `6de2fa1`). New screens since 0.4.1 are
 [Unmanaged entries](#unmanaged-entries-enginesidunmanaged),
 [Custom functions](#custom-functions-enginesidfunctions), the **Promote** dialog and the
 **License** page; 0.5.0 also added a message of the day and your previous sign-in on the
@@ -22,23 +25,37 @@ report of more than 20,000 rows, and refuses a second publish to an engine at on
 waiting for the first (see [Errors you may see](#errors-you-may-see)). 0.6.0 adds the
 **DSML files (air gap)** connector type, with its form and **Browse the files** (see
 [Visual: forms](#visual-forms) and [Air-gapped synchronisation](air-gap.md)). 0.6.1 changes
-nothing on screen.
+nothing on screen. 0.7.0 adds governance: **Governance** and **My access** in the navigation,
+with the roles `governance_admin` and `participant`, who see no engines
+([Roles at a glance](#roles-at-a-glance)); [My password](#my-password-mypassword);
+[requests](#requesting-access-myrequest) and [reviews](#access-reviews-myreviews), whose
+campaigns start as **preparing**; the **Password agents** page of an engine, for administrators;
+new connector types for SQL, JDBC and REST targets and connectors written with the SDK
+([Visual: forms](#visual-forms)). A version that changes the `passwords` settings is now
+published by an administrator only (see [Errors you may see](#errors-you-may-see)).
 
 ## Roles at a glance
 
 | You can | Role needed |
 |---|---|
-| Look at everything below: engines, status, held changes, metrics, dead letters, data quality, unmanaged entries, custom function modules, configuration versions, the Studio, the object explorer, correlation suggestions; download reports and lineage | Any role |
+| Look at everything below: engines, status, held changes, metrics, dead letters, data quality, unmanaged entries, custom function modules, configuration versions, the Studio, the object explorer, correlation suggestions; download reports and lineage | Any role but **governance_admin** and **participant** |
 | Edit, check, save, preview, simulate, import, approve, publish and promote configuration; run connector checks; upload and approve modules of custom functions; sync from Git | **designer** or **admin** |
 | Run reconciliations, full syncs, drift checks and unmanaged-entry checks; adopt an entry; approve held-back deletes and held changes; review groups; retry and discard dead letters; join, unjoin and accept suggestions; schedule reports | **operator** or **admin** |
 | See the scheduled reports | **operator**, **auditor** or **admin** |
 | Reveal sensitive attribute values | A role listed in `CONSOLE_REVEAL_ROLES` (by default **admin** only) |
+| Publish a version that changes the `passwords` settings; manage an engine's **Password agents** | **admin**, signed in (new in 0.7.0) |
+| Use **My access**: your own access, requests, approvals, reviews, tasks and **My password** | Any role on everything (new in 0.7.0) |
+| The **Governance** pages | **governance_admin** or **admin**; **auditor** on everything to read them (new in 0.7.0). See [Governance](governance.md) |
 
 Since 0.5.0 an account can hold several roles, and each can be limited to one environment or one
 engine (`operator on prod`, `designer on engine hr-1`): you see only the engines your roles reach,
 and on each engine's pages only the actions your roles allow there. An engine outside your roles
 does not appear anywhere: its page says "No engine with id N", as for an id never used. Git sync's card and **Sync
 now** need a role on everything.
+
+From 0.7.0 two roles see no engines at all: **participant**, an employee who uses **My access**
+only, and **governance_admin**, who runs governance. Signed in with one of them, you start on
+**Governance** or **My access** instead of **Engines**.
 
 A designer cannot run engines, and an operator cannot change configuration, unless they hold both
 roles. Buttons your roles cannot use are not shown, and the server refuses the request if it is sent
@@ -134,12 +151,45 @@ password was changed**, it may take a minute to work everywhere you sign in.
 If the page says "Password changes are not available here", it is not turned on: ask your
 administrator. How it works is in [Password synchronisation](password-sync.md#people-changing-their-own-password).
 
+Since 0.7.0 the page also says what to do when you have forgotten your password: **My password**
+below, or a reset link from your manager.
+
+### My password (`/my/password`)
+
+New in 0.7.0. When you have **forgotten** your directory password, or locked your account with
+too many failed sign-ins, **My password** (from **My access**) sets a new one, or unlocks the
+account, once you have proved who you are another way. It needs a console account that signs in
+through single sign-on or with a certificate; the password is set for your account's user name,
+in every directory your password is delivered to.
+
+1. **Prove it is you.** A sign-in with a password proves nothing here, and a single sign-on
+   counts for five minutes only. Choose **Sign in again with single sign-on** (or **Sign in again
+   with SAML**): your identity provider asks for your credentials once more, and you come back to
+   the page. With a certificate, your sign-in itself counts, for five minutes. The card then says
+   until when you can go on. A session from before the upgrade to 0.7.0 does not count: sign in
+   again.
+2. **Set a new password**, twice. The hint gives the rules a new password must meet, the
+   engine's and each directory's (length, kinds of character, history). **Set the new password**;
+   once it says **Your password was reset**, it may take a minute to work everywhere you sign in.
+3. **Locked out?** **Unlock my account**, with the same proof, clears the lock in each directory,
+   and shows for each **Directory**, **Account** and **Outcome** (`unlocked`, `not locked`, `not
+   supported`, or the error).
+
+"Password reset is not available here. Ask your service desk." means it is not set up. If the
+identity provider does not prove it asked you again, the sign-in is refused with the reason (see
+[Troubleshooting](troubleshooting.md#passwords)). Without single sign-on or a certificate, ask
+your manager: on **My team** a manager sends a direct report a **reset link**, mailed to an
+address that does not depend on the forgotten password, which works once, within 15 minutes, on
+a page that needs no console account.
+
 ## The page layout
 
-- **Header**: the syncd logo (back to **Engines**), the navigation (**Engines**; **Users** and
+- **Header**: the syncd logo (back to **Engines**), the navigation (**Engines** for roles that see
+  engines; from 0.7.0 **Governance** for governance administrators, administrators and auditors on
+  everything, and **My access** for every role on everything; **Users** and
   **License** for administrators of everything; **Audit log** for administrators and auditors;
-  **Reports** for administrators, operators and auditors; **Integrations** for administrators and
-  auditors), a **FIPS** badge when the console runs in FIPS mode, your name and your role (or
+  **Reports** for administrators, operators and auditors, and from 0.7.0 governance administrators;
+  **Integrations** for administrators and auditors), a **FIPS** badge when the console runs in FIPS mode, your name and your role (or
   how many roles you hold, listed on hover), and **Sign out**. On a narrow window the header wraps
   onto several lines.
 - **License banner**: while the license needs attention, a banner under the header says so on every
@@ -201,8 +251,11 @@ The header shows the engine's address, its version, uptime, the configuration it
 **FIPS** if it runs in FIPS mode, with buttons to **Metrics**, **Explore**, **Correlation**,
 **Data quality**, **Unmanaged entries**, **Configuration**, **Dead letters** and **Custom
 functions**, the report downloads **Report CSV**, **Excel** and **PDF** (see
-[Downloading the reconciliation report](#downloading-the-reconciliation-report)), and **Remove
-engine** for administrators of everything.
+[Downloading the reconciliation report](#downloading-the-reconciliation-report)), **Password
+agents** for administrators whose role reaches the engine (new in 0.7.0: the capture agents that
+may submit password changes, to add, bind to their sources and revoke; see
+[Admin guide → Password agents](admin-guide.md#password-agents)), and **Remove engine** for
+administrators of everything.
 
 The page follows the engine's **live status stream**: it updates by itself, about once a second.
 If the stream drops, a red notice says it is reconnecting and the last status stays on screen,
@@ -547,9 +600,9 @@ auditors every field is read-only.
 | Item | The form covers |
 |---|---|
 | **Engine and attributes** | Multi-valued and sensitive attributes, seconds between full reads and between reconciliations, the longest retry wait, entity history (days and entries per entity), worker shards, store cache, data directory. The control API (`api`) is set on each engine host and is not edited here |
-| **Connector** | **Connection** settings for its type (PostgreSQL, MySQL / MariaDB, SQL Server, MongoDB, LDAP directory, Active Directory, Debezium Server, JDBC bridge, CSV / flat file, SCIM 2.0, Entra ID, new in 0.5.0 the REST / OData API, Workday, SAP SuccessFactors and UKG Pro sources, whose fields, paging and delta settings are edited in the YAML, and new in 0.6.0 **DSML files (air gap)**), its **Objects** (what is read and how: scrape, delta or stream; for directory objects read by delta or stream, **Renamed container check (s)**, default 60, 0 off; for a CSV file, its columns, delimiter, encoding, done file and what a bad row does; for DSML files, **Base DN**, **Scope**, **Filter** and **Attributes**, read as the files arrive) and **Deletion safety**. A DSML connector's **Connection** has the **Location** (a directory on the engine's host, or `sftp://`, which brings up **Host keys**, **Password**, **Private key (Ed25519, ECDSA)**, **Key passphrase** and **Timeout (seconds)**), the **File name prefix**, the **Directory server the files are for**, **Seconds of changes per file**, **Done files**, **Snapshots at full reconciliations** and **Largest file (bytes)**, and under **Reading** the two **Files read** settings (which names are read, and what becomes of a file once read), **Seconds between looks**, **A file missing from the sequence**, **Require checksums** and **An empty snapshot empties the source** |
+| **Connector** | **Connection** settings for its type (PostgreSQL, MySQL / MariaDB, SQL Server, MongoDB, LDAP directory, Active Directory, Debezium Server, JDBC bridge, CSV / flat file, SCIM 2.0, Entra ID, new in 0.5.0 the REST / OData API, Workday, SAP SuccessFactors and UKG Pro sources, whose fields, paging and delta settings are edited in the YAML, new in 0.6.0 **DSML files (air gap)**, and new in 0.7.0 **JDBC bridge (Oracle, Db2, Informix, ...)** and **External connector (connector SDK)**, with its **Endpoint**, **Token**, **CA file**, **Client certificate** and **Client key**), its **Objects** (what is read and how: scrape, delta or stream; for directory objects read by delta or stream, **Renamed container check (s)**, default 60, 0 off; for a CSV file, its columns, delimiter, encoding, done file and what a bad row does; for DSML files, **Base DN**, **Scope**, **Filter** and **Attributes**, read as the files arrive) and **Deletion safety**. A DSML connector's **Connection** has the **Location** (a directory on the engine's host, or `sftp://`, which brings up **Host keys**, **Password**, **Private key (Ed25519, ECDSA)**, **Key passphrase** and **Timeout (seconds)**), the **File name prefix**, the **Directory server the files are for**, **Seconds of changes per file**, **Done files**, **Snapshots at full reconciliations** and **Largest file (bytes)**, and under **Reading** the two **Files read** settings (which names are read, and what becomes of a file once read), **Seconds between looks**, **A file missing from the sequence**, **Require checksums** and **An empty snapshot empties the source** |
 | **View** | **Sources** (each with its join rules and attribute flows), **Computed attributes** (steps, value mode, error policy and test cases; for **assign once**, **Keep for good, by key**), **References**, **Lookup tables**, **Precedence**, and a **Dependency graph** |
-| **Publication** | Target directory, view, which entities (a CEL filter), DN and container, object classes and attributes, DN attributes, references, **Create missing containers** (and, with it, **Remove containers left empty**), **Leaving scope** (delete, disable, move, disown, or deprovision in stages, and the deletion thresholds), **Groups** and their **Group policy** (manual members, owner, expiry, review), **Active Directory** (account control, home folder, UPN, sAMAccountName, Exchange addresses), **Existing entries**, **Drift** and **Change safety** (change window, modification and add thresholds, canary, report mode). For SCIM and Entra ID targets: the resource type, how resources are matched, and licences |
+| **Publication** | Target directory, view, which entities (a CEL filter), DN and container, object classes and attributes, DN attributes, references, **Create missing containers** (and, with it, **Remove containers left empty**), **Leaving scope** (delete, disable, move, disown, or deprovision in stages, and the deletion thresholds), **Groups** and their **Group policy** (manual members, owner, expiry, review), **Active Directory** (account control, home folder, UPN, sAMAccountName, Exchange addresses), **Existing entries**, **Drift** and **Change safety** (change window, modification and add thresholds, canary, report mode). For SCIM and Entra ID targets: the resource type, how resources are matched, and licences. New in 0.7.0, for a SQL database target (PostgreSQL, MySQL / MariaDB, SQL Server, or JDBC): the **Table**, its **Key column** and **Key value**, and the **Enabled column** with its enabled and disabled values; for a REST target: the **Resource kind**, its **Key attribute**, **Id in an answer**, and the requests (**Create**, **Update**, **Delete**, **Read**, **Disable**, **Enable**, **Find by key**, **List**); for an external connector, the **Object type**. A publication's `grants` (for [governance](governance.md#setting-a-publication-up-for-grants)) are edited in the YAML |
 
 New connectors, views and publications start from a template for their type, with placeholders to
 fill in. A connector type the license does not include is marked **(locked: &lt;pack&gt; pack)** in
@@ -967,6 +1020,12 @@ suggestions shown, before you accept. How scoring and hints work is in
 
 ## Requesting access (`/my/request`)
 
+New in 0.7.0, with [governance](governance.md). **My access** (`/my`) shows what you hold and
+why, and links to **Request access**, **My requests**, **My approvals**, **My team**, **My
+reviews**, **My policy violations**, **My password**, **My tasks** and **While I am away**.
+Notices at the top say when requests wait for your approval, access waits for you to give or
+remove, or reviews wait for you.
+
 1. **Request access**, from My access. A manager chooses whom it is for: themselves or a
    direct report.
 2. Search for what you need; **Add** each item. Items you hold, or asked for already, say so.
@@ -977,12 +1036,19 @@ suggestions shown, before you accept. How scoring and hints work is in
 
 Approvers find their work on **My approvals**: **Approve**, **Reject** (a comment is
 required), or **Hand to someone else**. Nobody is asked to approve a request they made or
-benefit from. Managers see their reports' access on **My team**.
+benefit from. An approval that goes to a team (a workgroup) shows to every member until one
+claims it; a member cannot claim one of a request they made or that is for them ("you asked for
+this access or it is for you: another member of the team takes it"). Managers see their reports'
+access on **My team**, and can send each a password reset link there (see
+[My password](#my-password-mypassword)).
 
 ## Access reviews (`/my/reviews`)
 
 When an [access certification](governance.md#access-certifications) names you as a
-reviewer, you are mailed, and **My access** says reviews are waiting. **My reviews** lists
+reviewer, you are mailed, and **My access** says reviews are waiting. Since 0.7.0 a campaign is
+prepared in the background once it is started: until every reviewer has their items it shows as
+**preparing** to its administrators, with how many items so far, and reaches nobody's list; then
+it starts and tells its reviewers. On a large catalog that takes a while. **My reviews** lists
 your tasks, one per campaign, with how many items you have decided and when they are due.
 
 1. Open a task. Each item is one person holding one entitlement in one system, with why
@@ -1029,16 +1095,19 @@ the engine found at its last checks. Sensitive attributes are named, never shown
 
 ### Scheduled reports (`/reports`)
 
-**Reports** in the navigation (administrators, operators and auditors) lists the reports sent on a
-schedule for the engines your roles reach: the engine and publication, the schedule and hour (UTC), the format, where it goes (e-mail
+**Reports** in the navigation (administrators, operators and auditors, and from 0.7.0 governance
+administrators) lists the reports sent on a schedule for the engines your roles reach, and the
+governance reports (marked **governance**) to those who read governance: the engine and publication, the schedule and hour (UTC), the format, where it goes (e-mail
 addresses, a share), its owner, the **Next run** and the **Last run** (**sent**, with the time and
 row count, or **not sent** with the reason). Notices at the top say when e-mail or the share is not
 set up.
 
-Operators and administrators choose **New scheduled report**:
+Operators and administrators choose **New scheduled report**, and from 0.7.0 so do those who read
+governance on everything, for governance reports:
 
 | Field | Meaning |
 |---|---|
+| **Report** | New in 0.7.0, for those who read governance on everything (administrators, governance administrators, auditors): **An engine's reconciliation report**, or one of the governance reports (**Governance: …**), which takes no engine or publication |
 | **Engine** | The engine reported on |
 | **Publication** | One publication, or empty for all of them |
 | **Format** | CSV, Excel (.xlsx) or PDF |
@@ -1086,3 +1155,11 @@ again 15 minutes later, until the next scheduled run.
 | "the audit log cannot be written, so this was not done" | The console refuses actions it cannot record; tell your administrator |
 | **unreachable** on an engine | The console cannot reach the engine's control API; see [Troubleshooting](troubleshooting.md) |
 | A command refused with the active engine's name | The engine is the passive one of an HA pair: use the active engine's page |
+| "this version changes password synchronization's settings (a passwords block): publishing it needs manage_passwords on the engine (an admin), with a session" | Since 0.7.0 a version that changes `passwords` is published by an administrator only; ask one |
+| "you signed in with a password, which proves nothing here: sign in again with single sign-on or a certificate" | **My password** (since 0.7.0) needs a sign-in another way than the password you forgot |
+| "sign in again first: a reset needs a sign-in less than 5 minutes old in which the identity provider had you sign in again (the page's sign-in link)" | Use the page's **Sign in again** link; a sign-in counts for five minutes, and one from before 0.7.0 not at all |
+| "the sign-in is not fresh: …" | The identity provider did not prove it asked for your credentials again (`auth_time`, `AuthnInstant`): tell your administrator (see [Troubleshooting](troubleshooting.md#passwords)) |
+| "&lt;what&gt; needs a governance role on everything, not on a scope", or a person or system that answers 404 | Since 0.7.0: your `governance_admin` role is limited to a governance scope, which reaches only its people and systems; campaigns, role and policy changes, reports and settings are for a role on everything |
+| "a version is approved by someone other than its proposer" | A role's version (since 0.7.0) is approved by another person than the one who proposed it |
+| "the XLSX report holds at most 200000 items and this campaign has N: download the CSV, which has every item" | Since 0.7.0 a campaign's Excel report holds at most 200,000 items and its PDF 20,000; the CSV has every item |
+| "not done: this needs the Governance pack, which the license does not include (License page)" | The license leaves governance out: what was recorded stays readable, changes are refused |

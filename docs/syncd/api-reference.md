@@ -1,9 +1,18 @@
 # API reference
 
-syncd has these programmable interfaces. This page describes syncd 0.6.1 (tag `v0.6.1`, commit
-`59cbf19`). 0.5.5 adds `GET /livez`, makes `GET /healthz` answer 503 naming a background task
-that cannot work, pages the configuration versions (`limit`, `before`), holds the rule preview to
-designers, revokes an account's API tokens when its password is reset, and on the engine's control
+syncd has these programmable interfaces. This page describes syncd 0.7.0 (tag `v0.7.0`, commit
+`6de2fa1`). 0.7.0 adds 179 operations to the console's API: the [governance](governance.md)
+API (126 under `/api/v1/governance`, 32 under `/api/v1/my`; see [Governance](#governance)),
+a read-only [SCIM 2.0 server](#scim-20-read-only) (15), the public password reset page's two
+calls and four for capture agents under `/api/v1/engines/{id}`. It also adds the roles
+`governance_admin` and `participant` and the scopes `governance:*`, and on the engine's
+control API `ApplyGrants`, `ListGrantStates`, `ListInventory`, `GetPasswordPolicy`,
+`ResetPassword` and `UnlockAccount`, and the connector protocol of the
+[connector SDK](connector-sdk.md). Of the routes 0.6.1 had, only two change: the single
+sign-on starts take `fresh`, and publishing (or promoting) a version that changes password
+settings needs `manage_passwords`. 0.7.0 adds no Prometheus metric. 0.5.5 adds `GET /livez`,
+makes `GET /healthz` answer 503 naming a background task that cannot work, pages the
+configuration versions (`limit`, `before`), holds the rule preview to designers, revokes an account's API tokens when its password is reset, and on the engine's control
 API refuses more commands while the engine is busy, caps listings at 10,000 entries and leaves
 secret values out of what callers below the configure tier read. 0.6.0 and 0.6.1 change no
 interface: 0.6.0's `dsml` connector is configured like any other.
@@ -153,10 +162,10 @@ makes the last call from the command line (see [Configuration as code](config-as
 | `runs:run` | operator or admin | Start runs and drift checks, approve held deletions and changes, review groups, accept correlation suggestions, retry and discard dead letters, and from 0.5.0 check for unmanaged entries and adopt one |
 | `audit:read` | auditor or admin | The audit log, its verification, the pull API, the export and the outputs' status |
 | `environments:read` | auditor or admin | From 0.4.1: the environments with their plain values, the names of their secret ones, and their engines. Before 0.4.1 `configs:read` read them; a script that reads values with a `configs:read` token needs this scope now |
-| `governance:read` | governance administrator, auditor or admin | Governance: identities, systems, entitlements, assignments and their states, reports, the access search, and the [SCIM server](#scim-20-read-only) (in development) |
-| `governance:write` | governance administrator or admin | Change governance: systems, entitlements, assignments (in development) |
-| `governance:delegate` | governance administrator or admin | The Directory Services Portal: ask on a person's behalf, look entitlements up; everything `governance:request` allows (in development) |
-| `governance:request` | governance administrator or admin | A service-desk tool: `GET /api/v1/governance/catalog`, `POST /api/v1/governance/requests` with `on_behalf_of` and a ticket, and `GET /api/v1/governance/requests/{id}` for the requests it made (see [Service-desk integration](service-desk.md)) (in development) |
+| `governance:read` | governance administrator, auditor or admin | From 0.7.0. Governance: identities, systems, entitlements, assignments and their states, reports, the access search, and the [SCIM server](#scim-20-read-only) |
+| `governance:write` | governance administrator or admin | From 0.7.0. Change governance: systems, entitlements, assignments, campaigns |
+| `governance:delegate` | governance administrator or admin | From 0.7.0. The Directory Services Portal: ask on a person's behalf, look entitlements up; everything `governance:request` allows |
+| `governance:request` | governance administrator or admin | From 0.7.0. A service-desk tool: `GET /api/v1/governance/catalog`, `POST /api/v1/governance/requests` with `on_behalf_of` and a ticket, and `GET /api/v1/governance/requests/{id}` for the requests it made (see [Service-desk integration](service-desk.md)) |
 | `admin` | admin | Everything above |
 
 The tables below give each endpoint's scope in the **Token** column; `—` means session only.
@@ -226,8 +235,9 @@ curl -sS -b cookies.txt -X POST https://syncd.example.com/api/v1/auth/logout
 | 403 | `forbidden` | The caller's roles cannot do this on any engine (from 0.5.1 recorded as `access.denied` for a signed-in account, at most once a minute per session), the engine refused the call (its listener, or from 0.5.0 its [access tier](#access-tiers)), with the consent banner on a sign-in without an acknowledgement, a password change with a wrong current password (from 0.5.1 also any on a locked account), or from 0.5.1 a change made with the session cookie from another site |
 | 403 | `insufficient_scope` | An API token outside its scopes, beyond its creator's role now, or on an endpoint for people. With `WWW-Authenticate: Bearer error="insufficient_scope"` |
 | 403 | `password_change_required` | The account must set a new password first |
-| 404 | `not_found` | No such engine, version, entity, webhook, report or endpoint; from 0.5.0 also an engine outside every assignment of the caller, or outside a token's limit |
+| 404 | `not_found` | No such engine, version, entity, webhook, report or endpoint; from 0.5.0 also an engine outside every assignment of the caller, or outside a token's limit; from 0.7.0 a person, account, entitlement, system or request outside a scoped governance administrator's scope (see [Governance](#governance)) |
 | 409 | `conflict` | A name in use, a newer version saved meanwhile, the last admin or break-glass account, a simulation already running, a publish the pre-publish hook or the golden tests refused (with the reason), a promotion of a version never published, from 0.5.0 a publish the license does not allow (publishing blocked, or a pack the license lacks), and from 0.5.1 a publish that waited 150 seconds for another publish to the same engine, or an import of a running configuration that holds a secret value and does not parse |
+| 410 | `gone` | From 0.7.0: a password reset link used already, or expired |
 | 429 | `too_many_requests` | Over the sign-in or self-service limit (from 0.5.1 also the password change, which is held to the sign-in limit) |
 | 429 | `rate_limited` | An API token over its requests per minute, with `Retry-After` |
 | 503 | `engine_unavailable` | The engine cannot be reached, failed, or is busy with a long operation |
@@ -236,7 +246,9 @@ curl -sS -b cookies.txt -X POST https://syncd.example.com/api/v1/auth/logout
 
 - Lists are paged with a cursor: `before` / `next_before` (audit log, entity history), `after` /
   `next_after` (entities), or `after` / `next` (held changes, correlation suggestions, the pull
-  API), with `limit`.
+  API), with `limit`. From 0.7.0 the governance lists page with `after` / `next_after` too;
+  their cursors are opaque strings: pass `next_after` back as received, and do not build or
+  keep one (the format changed before the release, and may again).
 - `reveal=true` (or `"reveal": true` in a body) asks for sensitive attribute values. It needs a role
   in `CONSOLE_REVEAL_ROLES` (default `admin`) through an assignment that reaches the engine (from
   0.5.0 an entry there can carry a scope, `auditor@prod`), is audited, and is refused (and
@@ -255,6 +267,7 @@ assignments reach.
 | GET | `/api/v1/system` | Version, development and FIPS mode, the single sign-on label, who may sign in locally, whether configuration approval is required, the banners, and the publish policy (the ticket pattern, whether a pre-publish hook is asked). From 0.5.0 also the SAML and certificate sign-in labels when configured, the consent banner's text when it is on, and the password policy for a new local password |
 | GET | `/api/v1/self-service` | Whether the self-service password page is on, and from 0.4.1 the engine's policy for a new password (`min_length`, `min_classes`; absent when the engine cannot be asked; read at most once a minute) |
 | POST | `/api/v1/self-service/password` | A person changes their own directory password: `{"login", "current_password", "new_password"}`. See [Self-service password change](#self-service-password-change) |
+| POST | `/api/v1/password-reset/check`, `/api/v1/password-reset` | From 0.7.0: the public reset page, for a person with a link their manager (or a holder of `reset_passwords`) had mailed: the link's token in the body, never the URL. A link is good for 15 minutes and once (`410` used or expired, `404` unknown); limited per address. See [Password synchronisation](password-sync.md#forgotten-passwords-and-locked-accounts) |
 | GET | `/api/openapi.json` | The OpenAPI document |
 | GET | `/healthz` | `ok` while the console runs and its background tasks work. From 0.5.5, `503` with a plain-text body, `unwell` and a line per background task that is not working: `<task>: waiting to start again (<why>)`, `<task>: stopped N times in 10 minutes (<why>)`, or `<task>: <what keeps it from working>` (for example `webhook sender: its TLS configuration does not load: ...`). The tasks include `mail outbox`, `webhook sender`, `engine status watcher`, `scheduled reports`, `git sync`, `session purge`, `audit head log`, `audit retention` and `audit output <name>`. For monitoring |
 | GET | `/livez` | New in 0.5.5: `ok` while the console serves requests, whatever its background tasks do. For liveness and readiness probes and load balancers; the Helm chart's probes use it |
@@ -273,10 +286,10 @@ Session only.
 | GET | `/api/v1/auth/message-of-the-day` | signed in | From 0.5.0: `{"message": {"text", "set_by", "set_at"}}`, or `{"message": null}`. From 0.5.1 refused until a forced password change is done |
 | POST | `/api/v1/auth/password` | signed in | Change the password (`current_password`, `new_password`); the one call open during a forced change. Signs out the account's other sessions. From 0.5.1 held to the sign-in limit per address (`429`), and a wrong current password counts toward the lockout (`403`, the account locked once it reaches it) |
 | POST | `/api/v1/auth/password/skip` | signed in | Development mode only: keep the current password |
-| GET | `/api/v1/auth/oidc/login` | none | Start single sign-on (`next`: where to go after); 404 when it is not configured |
+| GET | `/api/v1/auth/oidc/login` | none | Start single sign-on (`next`: where to go after); 404 when it is not configured. From 0.7.0 `fresh=true` asks the provider to have the person sign in again (`max_age=0`, `prompt=login`), and the callback then requires the ID token's `auth_time`: the proof a password reset needs (see [Single sign-on](single-sign-on.md#a-fresh-sign-in-for-a-password-reset)) |
 | GET | `/api/v1/auth/oidc/callback` | none | Where the identity provider sends the browser back. See [Single sign-on](single-sign-on.md) |
 | GET | `/api/v1/auth/saml/metadata` | none | From 0.5.0: the console's SAML metadata, to register it at the provider; 404 when SAML is not configured |
-| GET | `/api/v1/auth/saml/login` | none | From 0.5.0: start a SAML sign-in (a redirect to the provider); 404 when it is not configured |
+| GET | `/api/v1/auth/saml/login` | none | From 0.5.0: start a SAML sign-in (a redirect to the provider); 404 when it is not configured. From 0.7.0 `fresh=true` sends `ForceAuthn="true"`, and the assertion's `AuthnInstant` is then required |
 | POST | `/api/v1/auth/saml/acs` | none | From 0.5.0: the assertion consumer service the provider posts back to; sets the cookie |
 | POST | `/api/v1/auth/x509/login` | none | From 0.5.0: sign in with this connection's client certificate, or the one a trusted proxy passes on; 404 when certificate sign-in is not configured, 403 with the reason when the certificate is missing or refused |
 | GET | `/api/v1/users` | admin | List accounts, each with its `assignments`, whether it is locked, and from 0.5.0 its last sign-in (`last_sign_in_at`, `last_sign_in_method`) |
@@ -319,6 +332,10 @@ Session only.
 | POST | `/api/v1/engines/{id}/unmanaged/adopt` | operator | `runs:run` | From 0.5.0: `{"publication", "dn", "entity_id"}`: make an entry already in the target the entry of an entity that has none in the publication yet (moved to the entity's DN when it is elsewhere, given the exported attributes, managed from then on) |
 | POST | `/api/v1/engines/{id}/dead-letters/retry` | operator | `runs:run` | Export dead letters again now (all, a publication's, or one entity's) |
 | POST | `/api/v1/engines/{id}/dead-letters/discard` | operator | `runs:run` | Remove one dead letter without retrying it |
+| GET | `/api/v1/engines/{id}/password-agents` | admin (`manage_passwords`) | — | From 0.7.0: the engine's capture agents, with their sources, enrollment, certificate expiry, last seen and counts |
+| POST | `/api/v1/engines/{id}/password-agents` | admin (`manage_passwords`) | — | From 0.7.0: add a capture agent, or a new enrollment token for one: the token is in the answer, once, with the agent CA's certificate. Audited as `password.agent.added` |
+| POST | `/api/v1/engines/{id}/password-agents/{name}/bind` | admin (`manage_passwords`) | — | From 0.7.0: the sources the agent may submit changes for (`password.agent.bound`) |
+| POST | `/api/v1/engines/{id}/password-agents/{name}/revoke` | admin (`manage_passwords`) | — | From 0.7.0: revoke the agent; its certificate is refused from then on (`password.agent.revoked`) |
 
 Registrations are audited as `engine.register`, replacements and environment moves as
 `engine.update`, and a replacement over a client key the master key no longer opens as
@@ -357,7 +374,7 @@ See [Reports, lineage and data quality](reports-and-data-quality.md) for the sug
 | POST | `/api/v1/engines/{id}/configs/{version}/packages/check` | any | `configs:read` | Compare each package read from a file with the file at the Git branch head now |
 | POST | `/api/v1/engines/{id}/configs/{version}/simulate` | designer | — | Dry-run the version on the engine: what each target would receive (`samples`, `reveal`). Nothing is applied |
 | POST | `/api/v1/engines/{id}/configs/{version}/approve` | designer | — | Approve a version for publishing, as someone other than its author: from 0.5.1 not its `accountable` person either (`403`) |
-| POST | `/api/v1/engines/{id}/configs/{version}/publish` | designer | `configs:publish` | Publish, with an optional body `{"ticket", "note"}`: rendered for the engine's environment, checked against the ticket pattern, approval, test cases, the license (from 0.5.0) and the pre-publish hook, then signed by the console (from 0.5.0) and sent; the engine validates, saves, reloads and runs a full sync. Returns once the engine runs it (up to 60 seconds). With Git sync, the golden-file tests in the repository (`tests/golden` beside the configuration) run too, and a failure refuses the publish (409). From 0.5.0 they are read at the **version's own Git commit**, not the branch head; a version saved before 0.5.0 is checked at the branch head, with a note. From 0.5.1 tests that cannot be read from Git count as failing. This covers Git auto-publish and promotion as well. From 0.5.1 one publish to an engine runs at a time, across consoles sharing the database; one that waits more than 150 seconds for another is refused (409) |
+| POST | `/api/v1/engines/{id}/configs/{version}/publish` | designer | `configs:publish` | Publish, with an optional body `{"ticket", "note"}`: rendered for the engine's environment, checked against the ticket pattern, approval, test cases, the license (from 0.5.0) and the pre-publish hook, then signed by the console (from 0.5.0) and sent; the engine validates, saves, reloads and runs a full sync. Returns once the engine runs it (up to 60 seconds). With Git sync, the golden-file tests in the repository (`tests/golden` beside the configuration) run too, and a failure refuses the publish (409). From 0.5.0 they are read at the **version's own Git commit**, not the branch head; a version saved before 0.5.0 is checked at the branch head, with a note. From 0.5.1 tests that cannot be read from Git count as failing. This covers Git auto-publish and promotion as well. From 0.5.1 one publish to an engine runs at a time, across consoles sharing the database; one that waits more than 150 seconds for another is refused (409). From 0.7.0 a version whose password settings (the `passwords` block, or a publication's) differ from the version published before needs `manage_passwords` on the engine (an admin) with a session: a designer or a token is refused (`403`); promotion is held to the same |
 | POST | `/api/v1/configs/promote` | designer | `configs:publish` | `{"engine", "version", "to", "ticket", "note", "dry_run"}`: publish a version published on one engine to every engine of another environment, each through its own gates. The caller's roles must let it read the source engine and publish to every engine of the target environment: a promotion is not carried out in part (from 0.5.1 the refusal counts the engines the caller cannot see, rather than naming them). From 0.5.0 `"dry_run": true` only shows what would happen (the same checks of the caller's roles, each target engine's diff summary), saving, publishing and recording nothing: the console's **Promote** button shows it before the caller confirms. The answer lists each engine's outcome; 409 when the version was never published or no engine runs in that environment |
 | GET | `/api/v1/engines/{id}/configs/{version}/export` | any | `configs:read` | An export file of the version (without the `engine` and `api` sections), with a SHA-256 of the configuration. From 0.5.1 a version with `{{ env.* }}` placeholders can be exported, the placeholders kept |
 | POST | `/api/v1/engines/{id}/configs/import-file` | designer | `configs:write` | Import an export file as a new draft, keeping this engine's `engine` and `api` sections (from 0.5.1 with their secret values put back as placeholders); returns what the host must provide. From 0.5.1 checked as a save is: rendered for the engine's environment, packages and modules read (a module written into the file is refused), the license and the size limit |
@@ -486,9 +503,62 @@ Here "admin" is `admin` on everything. Installing, replacing and removing are au
 (`license.upload`, `license.replace`, `license.remove`), and each change of state as
 `license.state` and the webhook event `license.state-changed`.
 
+### Governance
+
+From 0.7.0. The governance layer's routes, `/api/v1/governance/...` for administrators and
+readers and `/api/v1/my/...` for every signed-in person, are listed with who may call each in
+[Governance](governance.md#api); the OpenAPI document has each with its schemas. Writes need
+the Governance pack; reads never do. What a client needs to know beyond the list:
+
+- **Roles.** `governance_admin` (on everything, or on a governance scope:
+  `governance_admin@governance:<scope>`) administers governance; auditors and admins read it;
+  `participant`, and every other role, reaches its own `/api/v1/my/...` pages and no engine.
+  Tokens take the `governance:*` scopes above.
+- **A scoped governance administrator** gets `404`, in the same words as an id never used, for
+  a person, account, entitlement, system or request outside the scope, on every route, and
+  finds none of them in lists. What has no scope of its own is `403` (`… needs a governance
+  role on everything, not on a scope`): campaigns and their definitions, reads included; the
+  administrators' tasks; changes to roles, policies, workflows and lifecycle rules, role
+  mining, policy simulations and scans; the governance reports; the risk score's settings
+  and scoring everyone; registering a system, importing accounts or the entitlement catalog;
+  connected products, ticket adapters, workgroups, governance scopes and owners of roles and
+  policies.
+- **`GET /api/v1/governance/entitlements` answers a page**, `{"entitlements": [...],
+  "next_after": "..."}`, with `system`, `q` (part of the name, native id or value), `ids`
+  (up to 500, comma-separated), `requestable`, `after` and `limit` (1 to 500, 100 by
+  default). A client that reads the answer as an array needs the change.
+- **Starting a campaign** (`POST /api/v1/governance/campaigns`) answers `202` with the
+  campaign in the state `draft` while its items are prepared in the background, reviewer by
+  reviewer; it turns `active` when ready, and each reviewer is told then, or `cancelled`
+  (with `prepare_error`) when there is nothing to review or nobody to review it. A
+  preparation that stopped (a restart) is resumed by the console's clock. Poll
+  `GET .../campaigns/{cid}` for the state.
+- **Searches** in the identity and account lists (`q` on `/governance/identities` and
+  `/governance/accounts`) match the **start** of a login, name or mail address, or of an
+  account's name or its DN's first value (`jdoe` finds `uid=jdoe,ou=People,...`), using
+  indexes; with `identity` (one person's accounts) `q` matches any part of the name.
+- **The dashboard** (`GET /api/v1/governance/dashboard`) gives the counts of the last
+  measurement, made every few minutes, with its time (`measured_at`).
+- **A campaign's report** (`GET .../campaigns/{cid}/report`) downloads as CSV at any size;
+  `xlsx` is refused above 200,000 items and `pdf` above 20,000.
+- **Assignments and role assignments end in the console at their end date**, and their
+  removal is queued to the engine.
+- **Delivery to the engines** is at least once: each grant is sent with `ApplyGrants` and its
+  state read back with `ListGrantStates`. When an engine reports a new store generation (a
+  failover, a restore, a new store), the console sends it every grant again by itself;
+  `syncd-console governance redeliver --engine <name>` does the same by hand.
+- **Approvals and claims**: the person who proposed a role version cannot approve it, and
+  a member of a workgroup who asked for the access, or whom it is for, cannot claim or decide
+  its approval (`403`).
+- **Password reset** (`/api/v1/my/password`, `/my/password/reset`, `/my/account/unlock`)
+  needs a session started less than five minutes before by single sign-on in which the
+  provider had the person sign in again (`fresh`, above), or by a client certificate; a
+  session started with a password is refused (`403`). See
+  [Single sign-on](single-sign-on.md#a-fresh-sign-in-for-a-password-reset).
+
 ### SCIM 2.0, read-only
 
-In development, not in a release yet. Governance's people and roles, for systems that read
+From 0.7.0. Governance's people and roles, for systems that read
 identities over SCIM 2.0 (RFC 7643 and 7644), under `/api/v1/scim/v2`, with a `governance:read`
 token as a bearer token (or a governance reader's session). Answers are
 `application/scim+json`.
@@ -505,8 +575,15 @@ token as a bearer token (or a governance reader's session). Answers are
 - **Filters:** `userName eq "…"`, `externalId eq "…"`, `displayName co "…"`; on groups,
   `displayName eq` and `co`. Anything else is refused with 400 and `scimType: invalidFilter`.
 - **Paging:** `startIndex` (from 1) and `count` (100 by default, at most 1,000); the answer
-  has `totalResults`, `startIndex` and `itemsPerPage`. Sorting, `attributes` and ETags are
-  not supported.
+  has `totalResults`, `startIndex` and `itemsPerPage`. `totalResults` is counted once per
+  filter every 30 seconds, so a client reading page after page gets the same total. Sorting
+  and ETags are not supported.
+- **`meta.lastModified`** of a person is when the person's data last changed (`meta.created`
+  when governance first saw them).
+- **A group's members** come at most 10,000 to a response: a `/Groups` page (or one group)
+  whose groups have more is refused with 400 and `scimType: tooMany`.
+  `excludedAttributes=members`, or `attributes` without `members`, leaves the members out;
+  `attributes` decides nothing else, every other attribute is always returned.
 
 ### Webhooks
 
@@ -556,10 +633,10 @@ compatible mode; see [Security](security.md#access-tiers).
 
 | Tier | Calls |
 |---|---|
-| `read` | `GetStatus`, `WatchStatus`, `ListDeadLetters`, `ListQuarantined`, `ListQuality`, `ListHeld`, `GetConfig`, `SimulateConfig`, `SearchEntities`, `GetEntity`, `GetEntityHistory`, `GetLineage`, `ListUnjoined`, `SuggestJoins`, `ReconciliationReport`, `GetPasswordKey`, `ListPasswordAgents`, `ListQueuedPasswords` |
-| `operate` | `StartRun`, `ApproveDeletions`, `CheckDrift`, `CheckUnmanaged`, `AdoptEntry`, `RetryDeadLetters`, `DiscardDeadLetter`, `JoinRecord`, `UnjoinRecord`, `AcceptJoins`, `ReviewGroup`, `PruneHistory`, `ChangeOwnPassword`, `RevokePasswordAgent`, `Backup`, `PullSnapshot`, `SnapshotManifest`, `PullSnapshotFiles`, `FollowPasswordQueue`, `TestConnector`, `DiscoverSchema`, `PreviewConfig`; and `reveal` on any call that takes it |
-| `operate`, and in strict mode `api.access.passwords` (or the control socket) | `SubmitPasswords`, `AddPasswordAgent`, `BindPasswordAgent`, `RotatePasswordKey`, `RotatePasswordAgentCa`, `ForwardPasswordIngest`; from 0.5.1, on an engine that holds password key material, also `Backup`, `PullSnapshot`, `PullSnapshotFiles` and `FollowPasswordQueue` (`KEY_RPCS`), which hand the keys out |
-| `configure` | `ApplyConfig`, `SetLicense` |
+| `read` | `GetStatus`, `WatchStatus`, `ListDeadLetters`, `ListQuarantined`, `ListQuality`, `ListHeld`, `GetConfig`, `SimulateConfig`, `SearchEntities`, `GetEntity`, `GetEntityHistory`, `GetLineage`, `ListUnjoined`, `SuggestJoins`, `ReconciliationReport`, `GetPasswordKey`, `ListPasswordAgents`, `ListQueuedPasswords`; from 0.7.0 `ListGrantStates`, `GetPasswordPolicy` |
+| `operate` | `StartRun`, `ApproveDeletions`, `CheckDrift`, `CheckUnmanaged`, `AdoptEntry`, `RetryDeadLetters`, `DiscardDeadLetter`, `JoinRecord`, `UnjoinRecord`, `AcceptJoins`, `ReviewGroup`, `PruneHistory`, `ChangeOwnPassword`, `RevokePasswordAgent`, `Backup`, `PullSnapshot`, `SnapshotManifest`, `PullSnapshotFiles`, `FollowPasswordQueue`, `TestConnector`, `DiscoverSchema`, `PreviewConfig`; from 0.7.0 `ListInventory`; and `reveal` on any call that takes it |
+| `operate`, and in strict mode `api.access.passwords` (or the control socket) | `SubmitPasswords`, `AddPasswordAgent`, `BindPasswordAgent`, `RotatePasswordKey`, `RotatePasswordAgentCa`, `ForwardPasswordIngest`; from 0.5.1, on an engine that holds password key material, also `Backup`, `PullSnapshot`, `PullSnapshotFiles` and `FollowPasswordQueue` (`KEY_RPCS`), which hand the keys out; from 0.7.0 `ResetPassword` and `UnlockAccount` |
+| `configure` | `ApplyConfig`, `SetLicense`; from 0.7.0 `ApplyGrants` (only the console grants access) |
 
 On top of the tier, each listener keeps its own limits:
 
@@ -610,6 +687,12 @@ On top of the tier, each listener keeps its own limits:
 | `RotatePasswordKey`, `RotatePasswordAgentCa` | From 0.5.0: a new password key, or a new agent CA; the one replaced keeps working until it is retired (`retire`, or by the engine after `passwords.rotation_overlap_days`) |
 | `ForwardPasswordIngest` | From 0.5.0: the passive engine of a pair hands on what a capture agent sent to its ingest listener, with the fingerprint of the agent's certificate |
 | `ChangeOwnPassword` | A person's own password change, sealed to the password key (the console's self-service page). `UNAUTHENTICATED` for a wrong user name or password, `FAILED_PRECONDITION` for the policy, `RESOURCE_EXHAUSTED` after too many failures |
+| `ResetPassword` | From 0.7.0: a new password for a person who proved who they are to the console another way (a fresh single sign-on, a reset link), sealed to the password key. The engine sets it in the `passwords.self_service` source as its own account and delivers it like a change. `NOT_FOUND` for an unknown login, `FAILED_PRECONDITION` when the policy or the directory refuses the password |
+| `UnlockAccount` | From 0.7.0: clears a person's failed-sign-in lockout in the self-service source and in each directory a publication delivers its passwords to (Active Directory's `lockoutTime`, the ppolicy overlay's `pwdAccountLockedTime`, 389 Directory Server's `accountUnlockTime`), with an answer per directory (`unlocked`, `not locked`, `not supported` or the error). An account disabled on purpose stays disabled |
+| `GetPasswordPolicy` | From 0.7.0: the policy a new password must meet: the engine's (`passwords.self_service`), each directory's own (history, lockout), and the strictest of them |
+| `ApplyGrants` | From 0.7.0: grants from the console's governance layer (memberships, values, scopes, each with a start and an end) and the ids of grants to end; the entities they touch are planned and exported at once. Answers where each stands (`pending`, `applied`, `failed`, `refused`, `ended`). The same grant sent again changes nothing: delivery is at least once |
+| `ListGrantStates` | From 0.7.0: the grants whose state changed at or after a time, a page at a time (`limit` 1,000 by default, at most 10,000; `after` the previous page's `next_after`), with the engine's **store generation**, which changes whenever the store is replaced (a fresh store, a restore, an HA takeover, a snapshot swapped in): the console then sends every grant again |
+| `ListInventory` | From 0.7.0: a page of a publication's target for the entitlement catalog (`grants.inventory`): its accounts (each with the entity it was exported for, and its state), its groups, or one group's members. Reads the target, never writes it |
 | `Backup` | A consistent backup of the running engine (store checkpoint, configuration file, password key and agent CA, as they are on disk: sealed when a passphrase is set) as a streamed `tar.zst`, its manifest last |
 | `PullSnapshot` | The active engine's newest store snapshot, whole, for the passive engine of an HA pair |
 | `SnapshotManifest`, `PullSnapshotFiles` | From 0.5.0: the newest snapshot's manifest (every file with its size and SHA-256), and the files of it the passive engine lacks |
@@ -627,7 +710,9 @@ stopping, or is the passive engine of a pair,
 
 The `syncd` command line wraps these calls (`syncd status`, `dlq`, `held`, `reconcile`,
 `full-sync`, `approve`, `retry`, `discard`, `check-drift`, `apply-config`, `group review`,
-`correlation suggest`, `lineage`, `report`, `unmanaged`, `adopt`, `password ...`, `backup`, ...).
+`correlation suggest`, `lineage`, `report`, `unmanaged`, `adopt`, `password ...`, `backup`, ...;
+from 0.7.0 `grants` (and `grants --apply FILE`, which needs the configure tier), `inventory`,
+and `password reset`, `unlock` and `policy`).
 From 0.5.0 `syncd apply-config` is refused on an engine in strict mode (`ApplyConfig needs the
 configure tier`), and on one that requires signed configurations. `syncd quarantine`
 reads the store directly (read-only), not through the API. On the engine's host the command line
@@ -639,7 +724,13 @@ operates and sets passwords there, and applies no configuration); on Kubernetes,
 
 The source also defines `syncd.bridge.v1.JdbcBridge` (`proto/syncd/bridge/v1/jdbc.proto`), the
 protocol between the engine and the JDBC bridge. It is internal to that connector; see
-[Connectors](connectors.md).
+[Connectors](connectors.md). From 0.7.0 it also writes, for tables as targets (a `Transaction`
+call; bridge 0.2.0 or later).
+
+From 0.7.0 the source defines `syncd.connector.v1` (`proto/syncd/connector/v1/connector.proto`),
+the protocol a connector written with the SDK serves and the engine calls (`Info`,
+`DiscoverSchema`, `List`, `Read`, `Apply`, `Members`, `ChangeMembers`). Unlike the bridge's,
+it is meant for others to implement; see [Connector SDK](connector-sdk.md).
 
 ## Password ingest API (gRPC)
 

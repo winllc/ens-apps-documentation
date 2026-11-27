@@ -15,7 +15,7 @@ In syncd 0.4.1 the golden tests from Git gate every publish (the API, Git auto-p
 promotion, not only the editor), `syncd config promote` prints each engine's diff summary, and
 `syncd test` finds golden files one directory level down, as the console does.
 
-This page describes syncd 0.6.1 (tag `v0.6.1`, commit `59cbf19`). 0.5.0 added:
+This page describes syncd 0.7.0 (tag `v0.7.0`, commit `6de2fa1`). 0.5.0 added:
 
 - **Each version's own Git commit.** The console keeps the commit a version came from, and reads
   its golden tests and package files there, not at the branch head (see
@@ -74,6 +74,22 @@ may print two more warnings, about rules that read other entities and find nothi
 0.6.0 adds the `dsml` connector type (see [Air-gapped synchronisation](air-gap.md)). A 0.5.5
 engine refuses a configuration with a `dsml` connector, so promote one only to an environment
 whose engines all run 0.6.0 or later. 0.6.1 changes nothing here.
+
+0.7.0 adds settings (see [Changing the configuration](configuration.md#changing-the-configuration),
+"Rolling back"): `grants` on a publication and the `grants()` and `granted()` rule functions,
+`passwords.self_service.policy_dn`, publications to database tables, JDBC databases and REST
+services, and the `external` connector type. A 0.6.1 engine refuses a configuration that uses
+any of them, so promote one only to an environment whose engines all run 0.7.0. For this way
+of working:
+
+- **A version that changes password synchronisation's settings** (the top-level `passwords`
+  block, or a publication's `passwords`, compared with the version published before it) is
+  published, or promoted, only by someone with `manage_passwords` on the engine (an admin),
+  with a session: an API token, and a designer, are refused (`403`) with the reason. Keep
+  such changes apart from the others in a pipeline that publishes with a token. Git
+  auto-publish is not held to this check.
+- **`syncd config diff`** compares the new settings like any other; an `external`
+  connection's `token` and `client_key` are secrets and are redacted.
 
 Rule packages, functions and lookup tables shared between configurations, fit the same way of
 working; see [Rule packages](#rule-packages) below and [Computed attributes and rules](rules.md).
